@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "note": "同步测试基线——只降不升；再生成: python scripts/count_sync_tests.py --write-baseline",
+  "trees": {
+    "backend": 0
+  }
+}
