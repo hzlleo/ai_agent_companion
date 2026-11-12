@@ -1,16 +1,21 @@
 """chat 域 Model Classes——会话回合 / 会话状态 / 消息组装结果（Unit 文件）。
 
-P0 会话状态约定（锁定决策）：
+会话状态约定（P1 记忆层落地后）：
 
-    - **历史内存态**：会话回合列表仅存活于 :class:`ChatSessionStateModel`
-      对象内（每会话对象一份）；持久化随 P1 记忆层（memory 域）落地，
-      本模块不落库；
+    - **历史内存态 + 可选持久化**：会话回合列表存活于
+      :class:`ChatSessionStateModel` 对象内；``ChatService`` 绑定持久化
+      服务（``session_id`` 非空）时，reply / stream_reply 的用户与助手
+      回合同步落 ``ff_chat_messages``（消息行经 memory 域
+      ``ChatSessionService`` 追加）；未绑定时行为与纯内存态一致
+      （P0 兼容——既有测试面零变更）；
     - **卡片快照**：会话创建时从人格注册表快照 chara card（运行期管理面
-      编辑不热更到在途会话——会话以创建时刻的正典为准，文档化决策）；
-    - **token 预算近似上限**：P0 不引入 tokenizer，以「回合数滑动窗口 +
+      编辑不热更到在途会话——会话以创建时刻的正典为准，文档化决策；
+      resume 恢复时按会话归属人格重取**当前**卡片）；
+    - **token 预算近似上限**：无 tokenizer，以「回合数滑动窗口 +
       单回合字符上限」两个结构性上限近似 token 预算（防无限膨胀的
-      in-memory 历史拖爆上下文窗口）；世界书条目预算的 token 估算见
-      service 层 ``estimate_text_tokens``。
+      in-memory 历史拖爆上下文窗口）；持久化消息不受滑动窗口约束
+      （全量记录——内存窗口只是上下文组装面）；世界书条目预算的
+      token 估算见 service 层 ``estimate_text_tokens``。
 
 时间字段全部 epoch 毫秒（``core.time_utils.now_ms``）。
 """
@@ -50,13 +55,15 @@ class ChatTurnModel(BaseModel):
 
 
 class ChatSessionStateModel(BaseModel):
-    """人格感知聊天会话状态（P0 内存态——每会话对象一份）。
+    """人格感知聊天会话状态（内存态——每会话对象一份；P1 可选持久化）。
 
     Attributes:
         persona_id: 绑定人格主键（人格注册表 ``ff_personas.id``）。
         persona_name: 绑定人格注册名（展示 / 日志面）。
         display_name: 绑定人格展示名。
         card: 人格卡片快照（会话创建时刻的 chara card v2 正典）。
+        session_id: 持久化会话主键（``ff_chat_sessions.id``；None = 纯
+            内存态——未绑定持久化服务或创建时未提供数据库会话）。
         turns: 会话回合列表（时间序——追加式）。
         max_history_turns: 历史回合数上限（滑动窗口：超出丢最老回合）。
         max_turn_chars: 单回合字符上限（超长输入截断保护）。
@@ -66,6 +73,9 @@ class ChatSessionStateModel(BaseModel):
     persona_name: str = Field(min_length=1, description="绑定人格注册名")
     display_name: str = Field(default="", description="绑定人格展示名")
     card: CharaCardModel = Field(description="人格卡片快照（chara card v2）")
+    session_id: int | None = Field(
+        default=None, description="持久化会话主键（None=纯内存态）"
+    )
     turns: list[ChatTurnModel] = Field(default_factory=list, description="会话回合列表")
     max_history_turns: int = Field(default=64, ge=2, description="历史回合数上限（滑动窗口）")
     max_turn_chars: int = Field(default=2000, ge=1, description="单回合字符上限（截断保护）")

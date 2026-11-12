@@ -45,6 +45,7 @@ from packages.harness.llm.llm_models import (
     ChatRequestParams,
     ChatResponseModel,
     ChatStreamChunkModel,
+    EmbeddingsResponseModel,
     LlmUsageEvent,
     TokenUsageModel,
 )
@@ -184,6 +185,78 @@ class LlmGateway:
             request_id=request_id,
         ):
             yield chunk
+
+    # ------------------------------------------------------------------
+    # 角色门面（embeddings）
+    # ------------------------------------------------------------------
+
+    async def embed_by_role(
+        self,
+        texts: Sequence[str],
+        *,
+        persona_id: str | None = None,
+        request_id: str | None = None,
+    ) -> EmbeddingsResponseModel:
+        """按 embed 角色批量向量化（角色解析 → 条目直连链）。
+
+        调用链与 ``chat_by_role`` 同构（wire 构建 → entry_gate → client
+        → 用量发射）；差异仅传输面（POST /embeddings）与 purpose（恒
+        ``embed``——usage 域枚举既有成员）。
+
+        Args:
+            texts: 待向量化文本列表（非空——空输入 ``VALIDATION_ERROR``）。
+            persona_id: 人格 ID（None = 读请求上下文；无人格上下文则
+                用量记录 persona_id 为空——系统调用）。
+            request_id: 请求追踪 ID（None = 读请求上下文）。
+
+        Returns:
+            归一向量化响应（vectors 与输入同序同长）。
+
+        Raises:
+            BusinessException: embed 角色未绑定（``MODEL_NOT_FOUND``）；
+                条目熔断中（``LLM_REQUEST_FAILED``）；传输失败（见
+                client 映射表）。
+        """
+        entry = self._resolve_role(ModelRole.EMBED)
+        resolved_persona = persona_id if persona_id is not None else persona_id_var.get()
+        resolved_request_id = request_id if request_id is not None else request_id_var.get()
+        client = self._build_client(entry)
+        entry_pool = self._require_entry_pool()
+        breaker = entry_pool.get_entry_breaker(entry)
+        started_ms = now_ms()
+        try:
+            async with entry_pool.entry_gate(entry):
+                try:
+                    response = await client.embeddings(texts)
+                except BusinessException:
+                    breaker.record_failure()
+                    raise
+                breaker.record_success()
+            await self._emit_usage(
+                entry=entry,
+                purpose="embed",
+                persona_id=resolved_persona,
+                request_id=resolved_request_id,
+                status="success",
+                usage=response.usage,
+                ts_ms=started_ms,
+                latency_ms=now_ms() - started_ms,
+                error_code=None,
+            )
+            return response
+        except BusinessException as exc:
+            await self._emit_usage(
+                entry=entry,
+                purpose="embed",
+                persona_id=resolved_persona,
+                request_id=resolved_request_id,
+                status="error",
+                usage=None,
+                ts_ms=started_ms,
+                latency_ms=now_ms() - started_ms,
+                error_code=str(exc.code),
+            )
+            raise
 
     # ------------------------------------------------------------------
     # 条目直连（look_at 回退链 / 显式条目调用）

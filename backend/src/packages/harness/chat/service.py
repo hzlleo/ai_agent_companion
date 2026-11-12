@@ -26,8 +26,18 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
 优先于上下文变量——与 ``bind_persona_context`` 语义等价，选直传因其
 可测性与可读性）。
 
-P0 内存态：会话历史仅存活于会话状态对象（持久化随 P1 记忆层落地，
-见 chat_models 模块 docstring）。
+会话持久化（P1 记忆层——**可选绑定，缺省关闭**）：
+
+    - 构造注入 ``session_service``（memory 域 ``ChatSessionService``）
+      后，``create_session(db_session=...)`` 同步落 ``ff_chat_sessions``
+      行并在状态上携带 ``session_id``；
+    - 绑定 + 已落库时，``reply / stream_reply`` 的用户与助手回合经
+      ``session_scope`` 逐条落 ``ff_chat_messages``（seq 递增；开场白
+      不落库——正典确定性回放，resume 后幂等重现）；
+    - ``resume_session(session_id)`` 把持久化会话（含全量消息）回放进
+      内存态（回合重放进历史；卡片按会话归属人格重取当前正典）；
+    - 未绑定持久化服务（P0 形态）时行为与既有完全一致——既有测试面
+      零变更。
 """
 
 from __future__ import annotations
@@ -52,12 +62,14 @@ from packages.harness.chat.prompts import (
 )
 from packages.harness.config.model_entry import ModelRole
 from packages.harness.core.errors import BusinessException, ErrorCode
+from packages.harness.database.session import session_scope
 from packages.harness.llm.gateway import LlmGateway
 from packages.harness.llm.llm_models import (
     ChatMessageModel,
     ChatMessageRole,
     ChatResponseModel,
 )
+from packages.harness.memory.service import ChatSessionService
 from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
     CharaBookModel,
@@ -65,7 +77,7 @@ from packages.harness.persona.chara_card import (
     CharaCardModel,
 )
 from packages.harness.persona.dtos import PersonaRecordDTO
-from packages.harness.persona.service import PersonaService
+from packages.harness.persona.service import PersonaService, bind_persona_context
 
 __all__ = [
     "ChatService",
@@ -276,10 +288,11 @@ def compose_messages(state: ChatSessionStateModel) -> MessageCompositionResult:
 
 
 class ChatService:
-    """人格感知聊天会话服务（组装 + 网关调用 + 会话内存态维护）。
+    """人格感知聊天会话服务（组装 + 网关调用 + 会话内存态维护 + 可选持久化）。
 
-    构造注入（测试 / 装配友好）：网关与人格服务均可显式注入；测试注入
-    fake 网关记录组装消息断言组装契约（零真实网络）。
+    构造注入（测试 / 装配友好）：网关 / 人格服务 / 会话持久化服务均可
+    显式注入；测试注入 fake 网关记录组装消息断言组装契约（零真实网络）。
+    ``session_service=None``（缺省）即 P0 纯内存形态——持久化可选。
     """
 
     def __init__(
@@ -287,6 +300,7 @@ class ChatService:
         *,
         gateway: LlmGateway,
         persona_service: PersonaService | None = None,
+        session_service: ChatSessionService | None = None,
     ) -> None:
         """初始化服务。
 
@@ -294,9 +308,13 @@ class ChatService:
             gateway: LLM 网关（chat 角色调用面）。
             persona_service: 人格注册表服务（激活人格查找；None = 现场
                 构造无状态默认实例）。
+            session_service: 会话持久化服务（None = 纯内存态——P0 兼容；
+                绑定后 create_session(db_session=...) 落库、reply /
+                stream_reply 逐回合持久化、resume_session 可用）。
         """
         self._gateway = gateway
         self._persona_service = persona_service if persona_service is not None else PersonaService()
+        self._session_service = session_service
 
     # ------------------------------------------------------------------
     # 会话生命周期
@@ -307,16 +325,23 @@ class ChatService:
         *,
         persona: PersonaRecordDTO | None = None,
         db_session: AsyncSession | None = None,
+        title: str | None = None,
     ) -> ChatSessionStateModel:
-        """创建聊天会话（快照人格正典 + 绑定 persona 轴）。
+        """创建聊天会话（快照人格正典 + 绑定 persona 轴；持久化可选）。
+
+        持久化条件：``session_service`` 已绑定 **且** ``db_session`` 已
+        提供（二者缺一即纯内存态——P0 兼容）；落库经
+        ``bind_persona_context`` 绑定人格上下文（PersonaMixin 自动注入）。
 
         Args:
             persona: 显式人格记录（CLI / 测试直供形态；优先于查库）。
             db_session: 数据库会话（``persona`` 未给时用于查找当前激活
-                人格）。
+                人格；持久化服务绑定时兼作会话落库通道）。
+            title: 持久化会话标题（None / 空 = 缺省「未命名会话」）。
 
         Returns:
-            新建的 :class:`ChatSessionStateModel`（空回合列表）。
+            新建的 :class:`ChatSessionStateModel`（空回合列表；持久化
+            时携带 ``session_id``）。
 
         Raises:
             BusinessException: 既未提供人格也未提供数据库会话
@@ -341,7 +366,64 @@ class ChatService:
             display_name=record.display_name,
             card=record.card,
         )
+        if self._session_service is not None and db_session is not None:
+            async with bind_persona_context(record.id):
+                summary = await self._session_service.create_session(
+                    db_session, title=title
+                )
+            state.session_id = summary.id
+            logger.info(
+                "聊天会话已落库: persona_id={}, session_id={}", record.id, summary.id
+            )
         logger.info("聊天会话已创建: persona_id={}, persona_name={}", record.id, record.name)
+        return state
+
+    async def resume_session(
+        self, session_id: int, *, db_session: AsyncSession
+    ) -> ChatSessionStateModel:
+        """恢复持久化会话到内存态（消息回放进历史；卡片重取当前正典）。
+
+        人格作用域契约：会话行经 PersonaMixin 自动过滤——**调用方须先
+        绑定目标人格上下文**（``bind_persona_context``）；他人格会话
+        不可见（``NOT_FOUND``）。
+
+        Args:
+            session_id: 持久化会话主键（ff_chat_sessions.id）。
+            db_session: 数据库会话（会话读取 + 人格正典重取）。
+
+        Returns:
+            恢复后的 :class:`ChatSessionStateModel`（携带 session_id +
+            回放回合列表）。
+
+        Raises:
+            BusinessException: 持久化服务未绑定（``INTERNAL_ERROR``）；
+                会话不存在 / 他人格会话 / 会话归属人格已删除
+                （``NOT_FOUND``）。
+        """
+        if self._session_service is None:
+            raise BusinessException(
+                code=ErrorCode.INTERNAL_ERROR,
+                message="会话持久化服务未绑定，无法恢复会话",
+            )
+        detail = await self._session_service.get_session(db_session, session_id)
+        persona = await self._persona_service.get(db_session, int(detail.persona_id))
+        state = ChatSessionStateModel(
+            persona_id=persona.id,
+            persona_name=persona.name,
+            display_name=persona.display_name,
+            card=persona.card,
+            session_id=detail.id,
+        )
+        for message in detail.messages:
+            state.turns.append(
+                ChatTurnModel(role=message.role, content=message.content, ts_ms=message.ts_ms)
+            )
+        logger.info(
+            "聊天会话已恢复: session_id={}, persona_id={}, turns={}",
+            detail.id,
+            persona.id,
+            len(state.turns),
+        )
         return state
 
     def opening(self, state: ChatSessionStateModel) -> str:
@@ -372,20 +454,24 @@ class ChatService:
         """单轮回复（非流式）：追加用户回合 → 组装 → 网关 chat_by_role。
 
         失败语义：网关异常原样上抛（用户回合保留在历史——调用方决定重试
-        或提示；半成品回合不入历史的策略见 ``stream_reply``）。
+        或提示；持久化绑定且已落库时用户回合同样保留在库——重试即重新
+        生成，不重复落用户消息）。
 
         Args:
             state: 会话状态。
             user_text: 用户输入（空白拒绝）。
 
         Returns:
-            人格回复文本（已追加为 assistant 回合）。
+            人格回复文本（已追加为 assistant 回合；持久化绑定且已落库
+            时用户 + 助手回合均落 ``ff_chat_messages``）。
 
         Raises:
             BusinessException: 输入为空（``VALIDATION_ERROR``）；模型返回
-                空回复（``LLM_CALL_FAILED``）；网关链路异常（透传）。
+                空回复（``LLM_CALL_FAILED``）；网关链路异常（透传）；
+                持久化写入失败（透传——append-only 日志不静默丢行）。
         """
-        self._append_user_turn(state, user_text)
+        user_turn = self._append_user_turn(state, user_text)
+        await self._persist_turn(state, user_turn)
         result = compose_messages(state)
         response: ChatResponseModel = await self._gateway.chat_by_role(
             ModelRole.CHAT,
@@ -400,7 +486,8 @@ class ChatService:
                 message="模型返回空回复",
                 details={"persona_id": state.persona_id},
             )
-        state.append_turn(ChatMessageRole.ASSISTANT, content)
+        assistant_turn = state.append_turn(ChatMessageRole.ASSISTANT, content)
+        await self._persist_turn(state, assistant_turn)
         return content
 
     async def stream_reply(
@@ -411,7 +498,8 @@ class ChatService:
         增量语义：逐块 ``yield chunk.content``（空增量块跳过）；流自然
         结束后聚合全文追加为 assistant 回合。消费方提前终止
         （``GeneratorExit``）时**不追加助手回合**——半截回复不入历史
-        （文档化决策；用户回合保留，重试即重新生成）。
+        （文档化决策；持久化面同语义——半截助手回合不落库；用户回合
+        已落，重试即重新生成）。
 
         Args:
             state: 会话状态。
@@ -422,9 +510,11 @@ class ChatService:
 
         Raises:
             BusinessException: 输入为空（``VALIDATION_ERROR``）；流结束但
-                聚合全文为空（``LLM_CALL_FAILED``）；网关链路异常（透传）。
+                聚合全文为空（``LLM_CALL_FAILED``）；网关链路异常（透传）；
+                持久化写入失败（透传）。
         """
-        self._append_user_turn(state, user_text)
+        user_turn = self._append_user_turn(state, user_text)
+        await self._persist_turn(state, user_turn)
         result = compose_messages(state)
         parts: list[str] = []
         async for chunk in self._gateway.stream_by_role(
@@ -444,7 +534,8 @@ class ChatService:
                 message="模型流式回复为空",
                 details={"persona_id": state.persona_id},
             )
-        state.append_turn(ChatMessageRole.ASSISTANT, content)
+        assistant_turn = state.append_turn(ChatMessageRole.ASSISTANT, content)
+        await self._persist_turn(state, assistant_turn)
 
     # ------------------------------------------------------------------
     # 会话观测 / 维护
@@ -474,20 +565,46 @@ class ChatService:
     # 内部
     # ------------------------------------------------------------------
 
-    def _append_user_turn(self, state: ChatSessionStateModel, user_text: str) -> None:
+    def _append_user_turn(self, state: ChatSessionStateModel, user_text: str) -> ChatTurnModel:
         """追加用户回合（空白输入拒绝——边界校验）。
 
         Args:
             state: 会话状态。
             user_text: 用户输入。
 
+        Returns:
+            已追加的 :class:`ChatTurnModel`（持久化面消费）。
+
         Raises:
             BusinessException: 输入为空 / 纯空白（``VALIDATION_ERROR``）。
         """
         try:
-            state.append_turn(ChatMessageRole.USER, user_text)
+            return state.append_turn(ChatMessageRole.USER, user_text)
         except ValueError as exc:
             raise BusinessException(
                 code=ErrorCode.VALIDATION_ERROR,
                 message="用户输入不能为空",
             ) from exc
+
+    async def _persist_turn(self, state: ChatSessionStateModel, turn: ChatTurnModel) -> None:
+        """持久化单回合（持久化绑定 + 会话已落库时；否则 no-op）。
+
+        经 ``session_scope`` 独立短事务写入（CLI / API 入口零 Session
+        透传负担）；人格上下文按会话归属人格绑定（消息行非 PersonaMixin
+        ——上下文为会话行更新面服务）。失败原样上抛（append-only 日志
+        不静默丢行——文档化决策）。
+
+        Args:
+            state: 会话状态（``session_id`` 为 None 时 no-op）。
+            turn: 待落库回合。
+        """
+        if self._session_service is None or state.session_id is None:
+            return
+        async with session_scope() as db_session, bind_persona_context(state.persona_id):
+            await self._session_service.append_message(
+                db_session,
+                state.session_id,
+                role=turn.role,
+                content=turn.content,
+                ts_ms=turn.ts_ms,
+            )

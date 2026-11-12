@@ -11,9 +11,9 @@
 | llm（模型网关：多 provider / roles 路由 / 用量埋点） | [llm.md](llm.md) | 已交付（P0-4） |
 | usage（token 用量记录与多维聚合） | [usage.md](usage.md) | 已交付（P0-4） |
 | persona（chara card / 注册表 / 切换复制 / L-M-S 状态） | [persona.md](persona.md) | 已交付（P0-5，含首个 app 层：personas 管理 API + 共享异常处理器） |
-| chat（会话循环 / prompt 组装 / 世界书 / 控制台 CLI） | [chat.md](chat.md) | 已交付（P0-6） |
-| app 装配（create_app + lifespan + health 存活面） | [chat.md](chat.md#app-装配appmainpy--appapihealthpy) | 已交付（P0-6，随 chat 域文档建档） |
-| memory（三层记忆 / 梦境 / SeekDB 检索） | memory.md | P1 交付 |
+| chat（会话循环 / prompt 组装 / 世界书 / 控制台 CLI / 会话持久化） | [chat.md](chat.md) | 已交付（P0-6 + P1-1 持久化与恢复） |
+| app 装配（create_app + lifespan + health 存活面） | [chat.md](chat.md#app-装配appmainpy--appapihealthpy) | 已交付（P0-6，随 chat 域文档建档；P1-1 并入 memories 路由） |
+| memory（三层记忆：情景 / 策展 / 工作层存储 + 管理 API） | [memory.md](memory.md) | 已交付（P1-1 存储 / 持久化 / API；检索与梦境随 P1-2/3） |
 | duty / scheduler（值班轮与中央调度） | duty.md | P3 交付 |
 | tools / multimodal / voice（工具层与辅助模型客户端） | tools.md | P3-P4 交付 |
 | channels / safety（平台通道 / 审批与红线） | channels.md | P3 交付 |
