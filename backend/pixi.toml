@@ -114,6 +114,10 @@ gen-examples = { cmd = "python ../scripts/generate_examples.py", description = "
 # 交互式配置向导（基于 .example 模板生成 .env / config.yaml /
 # extensions_config.json；--dry-run 预览 / --non-interactive 默认值）。
 setup = { cmd = "python src/packages/harness/config/wizard.py", description = "交互式配置向导（--dry-run 预览 / --non-interactive 用默认值）" }
+# 控制台聊天 REPL（P0-6 用户可见交付面）：启动全栈（日志 → 配置 → 公共池
+# → 数据库 → 网关）后与当前激活人格流式对话；会话命令 /quit /clear /
+# /history /help；无激活人格时打印创建/激活指引并以退出码 1 结束。
+chat = { cmd = "python src/packages/harness/chat/cli.py", description = "控制台聊天 REPL（与当前激活人格流式对话；命令 /quit /clear /history /help；前置：经 /api/v1/personas 激活一个人格）" }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Feature: dev — 后端开发/测试工具（在 runtime 基础上叠加）
