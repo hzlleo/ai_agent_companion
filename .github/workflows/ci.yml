@@ -1,17 +1,18 @@
 name: CI
 
-# CI: Test infrastructure — backend tests + gates + lint + typecheck.
+# CI: backend 全量验证 —— 单 job 一次 pixi install，后续步骤复用同一环境。
+#
+# 结构说明：
+#   测试 / 覆盖率门 / 工程门禁 / lint / typecheck 在同一 job 内串行执行，
+#   共享一次环境安装——安装耗时远大于各检查本身的耗时（秒级），拆分并行
+#   无收益且成倍放大下载挂起面；失败步骤在 job 日志内逐级定位。
 #
 # Triggers:
-#   - Pull request targeting master or develop
-#   - Push to master / develop
+#   - Pull request targeting main or develop
+#   - Push to main / develop
+#   - workflow_dispatch 手动触发
 #
-# Jobs:
-#   backend-test — cd backend && pixi install + tests-all + coverage gates + 工程门禁集
-#   lint         — cd backend && pixi run lint（ruff）
-#   typecheck    — cd backend && pixi run typecheck（mypy）
-#
-# frontend-test / docker 树测试 job 在对应子项目落地后追加（见 docs/README.md 路线图）。
+# frontend / docker 树测试在对应子项目落地后追加独立 job（见 docs/README.md 路线图）。
 # 所有 pixi 命令均通过 `cd backend &&` 在子项目目录执行（根项目无 Python/Node）。
 
 on:
@@ -30,13 +31,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ─── Backend: pytest + per-module coverage ≥80% + 工程门禁 ────────────────
-  backend-test:
-    name: Backend tests + coverage + gates
+  backend:
+    name: Backend (tests + gates + lint + typecheck)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: .
     steps:
       - uses: actions/checkout@v4
 
@@ -45,65 +42,24 @@ jobs:
         with:
           pixi-version: latest
           manifest-path: backend/pixi.toml
+          run-install: false
           cache: true
           cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
 
-      - name: Install backend environment (pixi install)
-        run: cd backend && pixi install
+      - name: Install backend environment (single install, reused by all steps below)
+        run: cd backend && pixi install --locked
 
-      - name: Run all backend tests (unit + integration, pixi run tests-all)
+      - name: Tests (unit + integration)
         run: cd backend && pixi run tests-all
 
-      - name: Coverage gates — per-module ≥80% enforce (pixi run coverage-gates)
+      - name: Coverage gates (per-module >= 80%, enforce)
         run: cd backend && pixi run coverage-gates
 
-      - name: Engineering gates — comments / sync-test ratchet / noqa freeze
+      - name: Engineering gates (comments / sync-test ratchet / noqa freeze)
         run: pixi run gates
 
-  # ─── Lint: backend ruff ────────────────────────────────────────────────────
-  lint:
-    name: Lint (ruff)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: .
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up pixi
-        uses: prefix-dev/setup-pixi@v0.8.1
-        with:
-          pixi-version: latest
-          manifest-path: backend/pixi.toml
-          cache: true
-          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-
-      - name: Install backend environment (pixi install — includes ruff)
-        run: cd backend && pixi install
-
-      - name: Backend lint (ruff check src/)
+      - name: Lint (ruff)
         run: cd backend && pixi run lint
 
-  # ─── Typecheck: backend mypy ───────────────────────────────────────────────
-  typecheck:
-    name: Typecheck (mypy)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: .
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up pixi
-        uses: prefix-dev/setup-pixi@v0.8.1
-        with:
-          pixi-version: latest
-          manifest-path: backend/pixi.toml
-          cache: true
-          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-
-      - name: Install backend environment (pixi install — includes mypy)
-        run: cd backend && pixi install
-
-      - name: Backend typecheck (mypy src/)
+      - name: Typecheck (mypy)
         run: cd backend && pixi run typecheck
