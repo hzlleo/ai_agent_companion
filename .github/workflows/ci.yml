@@ -37,17 +37,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up pixi
+      - name: Set up pixi (single locked install, lock-keyed cache; reused by all steps below)
         uses: prefix-dev/setup-pixi@v0.8.1
         with:
           pixi-version: latest
           manifest-path: backend/pixi.toml
-          run-install: false
           cache: true
           cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-
-      - name: Install backend environment (single install, reused by all steps below)
-        run: cd backend && pixi install --locked
 
       - name: Tests (unit + integration)
         run: cd backend && pixi run tests-all
