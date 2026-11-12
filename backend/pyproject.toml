@@ -1,0 +1,144 @@
+# Python 项目元数据 + 运行时依赖 + 工具链配置（ruff / pytest / mypy）
+# 依赖单一数据源：运行时依赖 + dev 工具均在此声明，pixi 通过 editable install 读取。
+#
+# 本工程环境管理约定：
+#   - pixi 仅管理 Python 解释器 + 系统工具（见 backend/pixi.toml）；
+#   - 全部 Python 包依赖（运行时 + dev extras）在此声明；
+#   - P0 决策：NO Redis——缓存走 core 进程内 TTL 缓存（harness/core/cache.py）。
+
+[project]
+name = "ai-agent-companion-backend"
+version = "0.1.0"
+description = "自建「大肥鱼」式 AI 陪伴智能体 - 后端（模型无关 / 编排自持 / 多人格）"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiomysql>=0.2",
+    "aiosqlite>=0.20",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.6",
+    "loguru>=0.7",
+    "httpx>=0.28",
+    "alembic>=1.14",
+    "tenacity>=8.2",
+    "pyyaml>=6.0",
+]
+
+# dev 工具：pixi default 环境（feature.dev）通过 editable install extras=["dev"] 读取。
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=4.0",
+    "ruff>=0.15",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["app*", "packages*"]
+# namespaces 默认 true——packages/ 与 packages/harness/ 均为 PEP 420 命名空间包
+# （无 __init__.py，root .gitignore 拦截 packages/__init__.py）。
+
+# ---------------------------------------------------------------------------
+# Ruff: 静态检查 + 格式化
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+# 规则集：
+#   E  - pycodestyle errors
+#   F  - pyflakes
+#   W  - pycodestyle warnings
+#   I  - isort
+#   N  - pep8-naming
+#   UP - pyupgrade
+#   B  - flake8-bugbear
+#   A  - flake8-builtins
+#   C4 - flake8-comprehensions
+#   SIM - flake8-simplify
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM"]
+ignore = [
+    "E501",   # 行长度由 formatter 统一控制
+    "N818",   # BusinessException 命名已固化在接口契约中，不改为 Error 后缀
+    "UP046",  # PEP 695 type params 是风格偏好，Generic[T] 仍完全正确
+    "UP047",  # 同上，泛型函数风格偏好
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI 的 Depends/Query/Body 等在默认参数中调用是官方推荐模式，需豁免 B008
+# （app 层落地后生效；core 层当前无 FastAPI 依赖）。
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.params.Depends",
+    "fastapi.Query",
+    "fastapi.Body",
+    "fastapi.Path",
+    "fastapi.File",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ---------------------------------------------------------------------------
+# Pytest: asyncio auto mode（全量原生异步——同步测试棘轮零容忍，见根 scripts/）
+# ---------------------------------------------------------------------------
+# testpaths 与 backend/pixi.toml tasks 保持一致：
+#   - src/tests                    — 单元（unit/）+ 集成（integration/）测试
+#   - src/packages/harness        — harness 域包内嵌测试（后续 chunk 落地）
+# 覆盖率参数（--cov / --cov-fail-under）由 pixi 各测试任务按 scope 分别指定，
+# 不放在 addopts 中全局生效（逐模块门禁由 coverage-gates 承担）。
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# pytest-asyncio 显式化事件循环作用域（消除 PytestDeprecationWarning）：
+#   - function 级 per-test 循环隔离（默认行为显式声明，防上游默认漂移）；
+#   - function 级 async fixture 回退语义与 unset 时代一致。
+asyncio_default_test_loop_scope = "function"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = [
+    "src/tests",
+    "src/packages/harness",
+]
+# pythonpath 仅含 backend/src——harness 命名空间包在 PYTHONPATH 范围内。
+pythonpath = ["src"]
+
+# ---------------------------------------------------------------------------
+# Mypy: 静态类型检查
+# ---------------------------------------------------------------------------
+# 严格模式配置（独立 `pixi run typecheck` 触发；不并入 lint task——分工与
+# 根 pixi.toml / CI 的 lint(ruff) + typecheck(mypy) 两任务契约一致）。
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = false  # FastAPI decorators
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+show_error_codes = true
+# packages 是 PEP 420 namespace package（__init__.py 不存在）。
+# --explicit-package-bases + mypy_path 确保 mypy 按目录前缀解析模块名，
+# 避免 "Source file found twice under different module names" 错误。
+explicit_package_bases = true
+mypy_path = "src"
+# 测试代码不纳入 mypy 严格门：类型门聚焦 src 生产面（基线零 noqa/type:ignore），
+# 测试质量由 pytest + sync-ratchet/coverage 门禁保障。
+exclude = [
+    'src/tests/',
+]
