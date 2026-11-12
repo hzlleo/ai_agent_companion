@@ -1,0 +1,63 @@
+# ai_agent_companion .gitignore
+# === 运行时数据 ===
+**/data/
+**/logs/
+**/*.log
+
+# === 敏感配置（example 文件入库，真实配置严禁入库） ===
+**/.env
+**/config.yaml
+**/extensions_config.json
+
+# === Python ===
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
+**/*.so
+**/.Python
+**/*.egg-info/
+**/*.egg
+**/build/
+**/dist/
+**/.venv/
+**/venv/
+# PEP 420 namespace 包：backend/src/packages/ 不应有 __init__.py
+# （保持 packages 命名空间跨目录拼接）
+backend/src/packages/__init__.py
+
+# === Pixi ===
+**/.pixi/
+
+# === 测试 / 静态检查缓存 ===
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+**/htmlcov/
+**/coverage/
+**/.coverage
+**/.coverage.*
+**/coverage.xml
+**/coverage.json
+**/lcov
+**/dump.rdb
+frontend/test-results/
+**/node_modules/
+
+# === Alembic 迁移（迁移文件必须入库，仅忽略缓存） ===
+**/alembic/versions/__pycache__/
+
+# === IDE / 工具 ===
+**/.idea/
+**/.vscode/
+**/*.swp
+**/*.swo
+**/.playwright-mcp/
+**/.codegraph
+
+# === 研究产物 / 内部规划 ===
+**/.omo/
+**/.opencode/
+**/.zcode/
+**/.live-test/
+artifacts/
+**/tests-logs.log

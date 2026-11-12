@@ -1,0 +1,52 @@
+# ai_agent_companion — 根 Pixi 配置（薄编排层）
+#
+# 职责：跨项目任务调度。无 Python/Node 依赖——具体环境在子项目中：
+#   backend/pixi.toml  — 后端独立 pixi 项目（Python 3.12 + dev 工具 + 全部 backend tasks）
+#   frontend/pixi.toml — 前端独立 pixi 项目（React 19 + Vite 6；P2 落地）
+#
+# 根项目仅提供跨项目 task，通过 `cd <子项目> && pixi run <task>` 委托执行。
+# 不直接调用 python/npm（根项目无 Python/Node 二进制）。
+#
+# 用法：
+#   pixi install              # 安装根环境（无依赖，几乎空 lock）
+#   pixi run setup            # 交互式配置生成（委托 backend pixi 的 setup）
+#   pixi run test-all         # 后端全量测试（frontend 落地后并入）
+#   pixi run lint-all         # 全量 lint
+#   pixi run typecheck        # 后端 mypy
+#   pixi run coverage-gates   # 按模块覆盖率门禁（≥80%）
+#   pixi run gates            # 工程门禁集（注释/同步测试棘轮/noqa 冻结）
+#
+# 子项目命令（在子项目目录执行）：
+#   cd backend && pixi run tests-all     # 后端全量测试
+#   cd backend && pixi run lint          # ruff 检查
+#   cd backend && pixi run typecheck     # mypy 检查
+#   cd backend && pixi run chat          # 控制台聊天 CLI（P0-6 落地）
+
+[workspace]
+name = "ai-agent-companion"
+version = "0.1.0"
+description = "自建「大肥鱼」式 AI 陪伴智能体（模型无关 / 编排自持 / 多人格）"
+channels = ["https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/", "conda-forge"]
+platforms = ["linux-64"]
+
+# 无 [dependencies] / [pypi-dependencies]：根项目不安装 Python/Node，
+# 具体环境在 backend/pixi.toml（+ 后续 frontend/pixi.toml）子项目中独立管理。
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tasks — 跨项目委托任务（根项目无 Python/Node，全部通过 pixi run 委托到子项目；
+# 需要 python 的根级脚本一律经 backend pixi 环境的 python 执行）
+# ═══════════════════════════════════════════════════════════════════════════════
+[tasks]
+# 交互式配置生成：委托 backend pixi 的 setup（config 三件套生成器 + 向导落地后生效）
+setup = { cmd = "cd backend && pixi run setup", description = "交互式配置生成（委托 backend pixi 环境）" }
+# 后端全量测试（unit + integration；frontend 落地后扩展为前后端链）
+test-all = { cmd = "cd backend && pixi run tests-all", description = "后端全量测试（unit + integration）" }
+# 全量 lint：后端 ruff（frontend lint-frontend 落地后并入）
+lint-all = { cmd = "cd backend && pixi run lint", description = "全量 lint（当前仅后端 ruff）" }
+# 后端 mypy 类型检查
+typecheck = { cmd = "cd backend && pixi run typecheck", description = "后端 mypy 类型检查" }
+# 按模块覆盖率门禁：harness 子包包级 + app 层分组 ≥80%（enforce 模式）
+coverage-gates = { cmd = "cd backend && pixi run coverage-gates", description = "按模块覆盖率门禁（≥80% enforce）" }
+# 工程门禁集：中文注释门 + 同步测试棘轮 + noqa/type:ignore 冻结
+# （脚本在根 scripts/，经 backend pixi 环境的 python 执行）
+gates = { cmd = "cd backend && pixi run comment-gates && pixi run sync-test-ratchet && pixi run noqa-freeze", description = "工程门禁集（注释门 / 同步测试棘轮 / noqa 冻结）" }
