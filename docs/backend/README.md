@@ -10,7 +10,7 @@
 | pools（manager/http/llm 共享池 + 熔断） | [pools.md](pools.md) | 已交付（P0-3） |
 | llm（模型网关：多 provider / roles 路由 / 用量埋点） | [llm.md](llm.md) | 已交付（P0-4） |
 | usage（token 用量记录与多维聚合） | [usage.md](usage.md) | 已交付（P0-4） |
-| persona（chara card / 注册表 / 切换复制 / L-M-S 状态） | persona.md | P0-5 交付 |
+| persona（chara card / 注册表 / 切换复制 / L-M-S 状态） | [persona.md](persona.md) | 已交付（P0-5，含首个 app 层：personas 管理 API + 共享异常处理器） |
 | chat（会话循环 / charter / 控制台 CLI） | chat.md | P0-6 交付 |
 | memory（三层记忆 / 梦境 / SeekDB 检索） | memory.md | P1 交付 |
 | duty / scheduler（值班轮与中央调度） | duty.md | P3 交付 |
