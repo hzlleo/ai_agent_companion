@@ -142,3 +142,11 @@ mypy_path = "src"
 exclude = [
     'src/tests/',
 ]
+
+# 第三方库缺 stubs（types-PyYAML 未入依赖清单——锁定决策不新增依赖）：
+# 忽略 import-untyped / import-not-found。
+[[tool.mypy.overrides]]
+module = [
+    "yaml",
+]
+ignore_missing_imports = true

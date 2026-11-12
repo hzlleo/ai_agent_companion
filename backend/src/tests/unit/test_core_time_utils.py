@@ -112,7 +112,9 @@ class TestFormatDurationMs:
             format_duration_ms(150_228, unit_ms="ms", unit_seconds="s", unit_minutes="min")
             == "2min30s"
         )
-        assert format_duration_ms(850, unit_ms="ms", unit_seconds="s", unit_minutes="min") == "850ms"
+        assert (
+            format_duration_ms(850, unit_ms="ms", unit_seconds="s", unit_minutes="min") == "850ms"
+        )
         assert (
             format_duration_ms(120_000, unit_ms="ms", unit_seconds="s", unit_minutes="min")
             == "2min"

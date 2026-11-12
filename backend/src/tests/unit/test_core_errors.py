@@ -26,9 +26,7 @@ from packages.harness.core.errors import (
 
 
 class TestBusinessExceptionConstruction:
-    async def test_default_code_is_internal_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_default_code_is_internal_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """缺省构造：code=INTERNAL_ERROR；resolver 未注册时 message 回退 code 字符串。
 
         monkeypatch 显式置空 resolver——全量运行时 ``core.i18n`` 已在收集期

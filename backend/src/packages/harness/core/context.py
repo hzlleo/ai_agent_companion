@@ -46,9 +46,7 @@ request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 )
 
 # 当前用户（智能体属主）ID；None 表示未认证 / 系统级操作
-user_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "user_id", default=None
-)
+user_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("user_id", default=None)
 
 # 当前会话（chat session）ID；None 表示非会话上下文
 session_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(

@@ -228,9 +228,7 @@ class TestAsyncTTLCacheDecorator:
         decorator = async_ttl_cache(prefix="x", ttl=-5)
         assert decorator.ttl == 0.0
 
-    async def test_degrades_on_cache_read_failure(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_degrades_on_cache_read_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """缓存读异常 best-effort 吞掉 → 直通原函数（不阻断业务）。"""
         import packages.harness.core.cache as cache_module
 
@@ -250,9 +248,7 @@ class TestAsyncTTLCacheDecorator:
         assert await _compute(2) == 20
         assert calls == [2, 2]
 
-    async def test_degrades_on_cache_write_failure(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_degrades_on_cache_write_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """缓存写异常 best-effort 吞掉 → 结果照常返回（不阻断业务）。"""
         import packages.harness.core.cache as cache_module
 

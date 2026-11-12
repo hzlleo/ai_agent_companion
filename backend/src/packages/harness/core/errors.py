@@ -163,6 +163,9 @@ class ErrorCode(StrEnum):
     # --- 配置 ---
     CONFIG_INVALID = ("CONFIG_INVALID", 422)
 
+    # --- 人格上下文（database PersonaMixin 自动隔离的守卫面） ---
+    PERSONA_CONTEXT_REQUIRED = ("PERSONA_CONTEXT_REQUIRED", 500)
+
     # --- LLM 调用（远程 OpenAI 兼容端点；llm/ 网关 chunk 消费） ---
     LLM_CALL_FAILED = ("LLM_CALL_FAILED", 503)
     LLM_PROVIDER_NOT_SUPPORTED = ("LLM_PROVIDER_NOT_SUPPORTED", 422)

@@ -295,9 +295,7 @@ class AsyncTTLCache:
                 try:
                     cached = await cache.get(cache_key)
                 except Exception as exc:  # best-effort: 缓存读失败不阻断业务
-                    logger.opt(exception=True).debug(
-                        "缓存读取失败: key={}, err={}", cache_key, exc
-                    )
+                    logger.opt(exception=True).debug("缓存读取失败: key={}, err={}", cache_key, exc)
                     cached = None
 
                 if cached is not None:
@@ -310,9 +308,7 @@ class AsyncTTLCache:
                 try:
                     await cache.set(cache_key, result, ttl_seconds=self.ttl)
                 except Exception as exc:  # best-effort: 缓存写失败不阻断业务
-                    logger.opt(exception=True).debug(
-                        "缓存写入失败: key={}, err={}", cache_key, exc
-                    )
+                    logger.opt(exception=True).debug("缓存写入失败: key={}, err={}", cache_key, exc)
 
             return result
 

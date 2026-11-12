@@ -1,0 +1,88 @@
+# ai_agent_companion 功能配置模板
+#
+# 用法：复制为 config.yaml 并按需调整；或运行 `pixi run setup` 交互式生成。
+# 分层加载链（优先级从低到高）：代码默认值 < .env < 进程环境变量；
+# 本文件承载结构化配置（llm 模型注册表 / 角色绑定 / 多模态回退链），
+# 与 env 面不重叠。
+#
+# 所有配置键必须 lowercase_with_underscores。
+# 敏感信息（API Key、密码）不写在此文件，统一走 .env（条目经
+# api_key_env 指向环境变量名）。
+#
+# 本文件由 `pixi run gen-examples` 从 LlmModelEntry / LlmConfig /
+# MultimodalFallbackConfig 自动生成。
+# 不要手动编辑——请修改配置类的 Field(description=...) 后重新生成。
+
+# ===========================================================================
+# llm — LLM 模型配置列表（多 provider OpenAI 兼容注册表）
+# 每个 model 定义一个可调用的端点；api_key_env 指向 .env 中的变量名
+# （本地免鉴权端点可留空）；roles 声明该条目承接的角色。
+# LlmModelEntry 字段 schema:
+#   name (str): 条目唯一标识（角色绑定引用）
+#   provider (str): provider 类型
+#   base_url (str): API 基础 URL（含 /v1）
+#   api_key_env (str): API Key 环境变量名（空=免鉴权）
+#   model (str): 模型名（provider model 参数）
+#   roles (list[ModelRole]): 条目承接的角色集
+#   concurrency (int | None): 条目并发上限（None=全局默认）
+#   multimodal (bool): 是否支持多模态输入
+#   角色值域: chat, duty, dream, look_at, embed
+# ===========================================================================
+llm:
+  models:
+    - name: "main-chat"
+      provider: "openai_compatible"
+      base_url: "https://api.example.com/v1"
+      api_key_env: "MAIN_CHAT_API_KEY"
+      model: "glm-5.3"
+      roles: ["chat", "duty"]
+      concurrency: 4
+    - name: "dream-writer"
+      provider: "openai_compatible"
+      base_url: "https://api.example.com/v1"
+      api_key_env: "DREAM_WRITER_API_KEY"
+      model: "glm-5.3-mini"
+      roles: ["dream"]
+      concurrency: 2
+    - name: "local-vision"
+      provider: "openai_compatible"
+      base_url: "http://127.0.0.1:8001/v1"
+      api_key_env: ""  # 本地免鉴权端点
+      model: "qwen2.5-vl-7b"
+      roles: ["look_at"]
+      concurrency: 2
+      multimodal: true
+    - name: "local-embed"
+      provider: "openai_compatible"
+      base_url: "http://127.0.0.1:8002/v1"
+      api_key_env: ""  # 本地免鉴权端点
+      model: "bge-m3"
+      roles: ["embed"]
+      concurrency: 4
+
+  # 显式角色绑定（角色 → 条目名；优先于条目自身 roles 声明）。
+  # 示例（当前示例条目的 roles 声明已覆盖全部角色，无需显式绑定）：
+  # role_bindings:
+  #   chat: "main-chat"
+  role_bindings: {}
+
+  # ===========================================================================
+  # multimodal_fallback — look_at 角色非多模态时的回退链
+  # （本地视觉端点 → 远程多模态端点，本地优先；两级均可选）
+  # MultimodalFallbackConfig 字段 schema:
+#   local (LlmModelEntry | None): 本地视觉端点（回退链第一级，低延迟）
+#   remote (LlmModelEntry | None): 远程多模态端点（回退链第二级，兜底）
+  # ===========================================================================
+  multimodal_fallback:
+    local:
+      name: "local-vision-fallback"
+      base_url: "http://127.0.0.1:8001/v1"
+      api_key_env: ""  # 本地免鉴权端点
+      model: "qwen2.5-vl-7b"
+      multimodal: true
+    remote:
+      name: "remote-vision-fallback"
+      base_url: "https://api.example.com/v1"
+      api_key_env: "REMOTE_VISION_API_KEY"
+      model: "glm-4.6v"
+      multimodal: true

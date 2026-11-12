@@ -74,6 +74,11 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh-CN": "配置不合法（详见 details）",
         "en": "Invalid configuration (see details)",
     },
+    # --- 人格上下文 ---
+    "PERSONA_CONTEXT_REQUIRED": {
+        "zh-CN": "缺少人格上下文（persona_id 未设置），无法执行人格作用域操作",
+        "en": "Persona context is required (persona_id is not set) for persona-scoped operations",
+    },
     # --- LLM 调用 ---
     "LLM_CALL_FAILED": {
         "zh-CN": "LLM 调用失败，请稍后重试",

@@ -17,6 +17,8 @@
 #   cd backend && pixi run lint                   # ruff 静态检查
 #   cd backend && pixi run typecheck              # mypy 类型检查
 #   cd backend && pixi run coverage-gates         # 按模块覆盖率门禁（≥80% enforce）
+#   cd backend && pixi run gen-examples           # 再生成三件套示例模板
+#   cd backend && pixi run setup                  # 交互式配置向导
 #
 # 任务名契约：tests-unit / tests-integration / tests-all / lint / typecheck /
 # coverage-gates / comment-gates / sync-test-ratchet / noqa-freeze 为跨树契约
@@ -105,6 +107,13 @@ sync-test-ratchet = { cmd = "python ../scripts/count_sync_tests.py --enforce", d
 # noqa / type:ignore 增量冻结门（任务名契约——根 pixi gates 链调用）：
 # backend 生产面基线零——严禁任何 noqa / type:ignore 抑制注释。
 noqa-freeze = { cmd = "python ../scripts/noqa_freeze_check.py", description = "noqa / type:ignore 增量冻结门禁（backend 基线 0，只减不增）" }
+# 配置模板再生成（从 Pydantic 配置类内省生成三件套 .example——幂等
+# byte-stable；根 scripts/generate_examples*.py 经 backend pixi 环境执行，
+# activation 的 PYTHONPATH 使 packages.harness.* 可导入）。
+gen-examples = { cmd = "python ../scripts/generate_examples.py", description = "从配置模型再生成三件套示例模板（.env.example / config.example.yaml / extensions_config.example.json；幂等）" }
+# 交互式配置向导（基于 .example 模板生成 .env / config.yaml /
+# extensions_config.json；--dry-run 预览 / --non-interactive 默认值）。
+setup = { cmd = "python src/packages/harness/config/wizard.py", description = "交互式配置向导（--dry-run 预览 / --non-interactive 用默认值）" }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Feature: dev — 后端开发/测试工具（在 runtime 基础上叠加）

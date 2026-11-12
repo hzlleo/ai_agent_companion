@@ -57,6 +57,4 @@ class TaskStatus(StrEnum):
 
 #: 活跃任务状态集合——处于此集合时任务视为「在途」（停机 drain /
 #: 周期清扫的打捞面共用此真源，禁止再复制字面量集合）。
-ACTIVE_TASK_STATUSES: frozenset[str] = frozenset(
-    {TaskStatus.PENDING, TaskStatus.RUNNING}
-)
+ACTIVE_TASK_STATUSES: frozenset[str] = frozenset({TaskStatus.PENDING, TaskStatus.RUNNING})

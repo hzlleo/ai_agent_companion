@@ -224,9 +224,18 @@ class TestParseModuleLogLevels:
 
     async def test_all_loguru_levels_accepted(self) -> None:
         """loguru 全级别值域合法。"""
-        spec = ",".join(f"m{lvl}={lvl}" for lvl in (
-            "TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL",
-        ))
+        spec = ",".join(
+            f"m{lvl}={lvl}"
+            for lvl in (
+                "TRACE",
+                "DEBUG",
+                "INFO",
+                "SUCCESS",
+                "WARNING",
+                "ERROR",
+                "CRITICAL",
+            )
+        )
         result = parse_module_log_levels(spec)
         assert len(result) == 7
 
@@ -264,9 +273,7 @@ class TestMakeModuleFilter:
 
     async def test_longest_prefix_wins(self) -> None:
         """最长前缀优先（更具体的覆盖生效）。"""
-        module_filter = _make_module_filter(
-            {"a": "ERROR", "a.sub": "TRACE"}, "INFO"
-        )
+        module_filter = _make_module_filter({"a": "ERROR", "a.sub": "TRACE"}, "INFO")
 
         class _Level:
             def __init__(self, no: int) -> None:
@@ -407,9 +414,7 @@ class TestSetupLogging:
         assert "初始化验证消息" in text_content
         assert "req=-" in text_content  # 默认 extra 占位注入
 
-    async def test_json_sink_lines_parseable(
-        self, logging_config: LoggingConfig
-    ) -> None:
+    async def test_json_sink_lines_parseable(self, logging_config: LoggingConfig) -> None:
         """JSON 文件每行可解析为 dict（聚合系统契约）。"""
         setup_logging(logging_config)
         logger.bind(request_id="req-42", persona_id="persona-7").info("JSON 验证消息")
@@ -454,9 +459,7 @@ class TestSetupLogging:
 
     async def test_custom_text_format_applied(self, logging_config: LoggingConfig) -> None:
         """自定义 text_format 生效（console 与文本文件共用 resolved 模板）。"""
-        config = logging_config.model_copy(
-            update={"text_format": "CUSTOM|{name}|{message}"}
-        )
+        config = logging_config.model_copy(update={"text_format": "CUSTOM|{name}|{message}"})
         setup_logging(config)
         logger.info("自定义模板消息")
 
@@ -468,9 +471,7 @@ class TestSetupLogging:
         # 自定义模板替换默认模板——上下文段（req=/session=）不再出现
         assert all("req=" not in ln for ln in custom_lines)
 
-    async def test_module_levels_filter_applied(
-        self, logging_config: LoggingConfig
-    ) -> None:
+    async def test_module_levels_filter_applied(self, logging_config: LoggingConfig) -> None:
         """module_levels 覆盖：被降级模块的 INFO 不落 JSON 文件。"""
         # loguru record 的 name = 调用方模块 __name__——动态取本测试模块名，
         # 避免依赖 pytest 导入模式的模块路径形态。

@@ -477,9 +477,7 @@ class TaskQueue:
             try:
                 await asyncio.wait_for(self._queue.join(), timeout=timeout)
             except TimeoutError:
-                logger.warning(
-                    "TaskQueue.stop: 等待队列排空超时（{}s），强制取消 worker", timeout
-                )
+                logger.warning("TaskQueue.stop: 等待队列排空超时（{}s），强制取消 worker", timeout)
 
         # 取消所有 worker
         for worker in self._workers:
