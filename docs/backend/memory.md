@@ -1,6 +1,6 @@
-# memory — 三层记忆域（P1 chunk 1 存储 + chunk 2 检索层）
+# memory — 三层记忆域（P1 chunk 1 存储 + chunk 2 检索层 + chunk 3 夜间梦境）
 
-`backend/src/packages/harness/memory/` 承载陪伴智能体的三层记忆：情景层（append-only 事件日志）、策展层（supersede 语义蒸馏记忆）、工作层（chat 会话回合持久化）。chunk 1 交付存储 + 管理 API；chunk 2 交付**检索层**（MemoryStore 抽象 + SeekDB 生产存储 + SQLite 回退 + 索引管道 + 检索 API，见下文「检索层」一节）；梦境整理（写入策展层的蒸馏任务）属 P1 chunk 3。
+`backend/src/packages/harness/memory/` 承载陪伴智能体的三层记忆：情景层（append-only 事件日志）、策展层（supersede 语义蒸馏记忆）、工作层（chat 会话回合持久化）。chunk 1 交付存储 + 管理 API；chunk 2 交付**检索层**（MemoryStore 抽象 + SeekDB 生产存储 + SQLite 回退 + 索引管道 + 检索 API，见下文「检索层」一节）；chunk 3 交付**夜间梦境**（情景事件 → 策展记忆的巩固整理任务 + 第一人称日记 + 运行日志 + 手工触发 API，见下文「夜间梦境」一节）。
 
 ## 三层模型
 
@@ -23,6 +23,10 @@
 | `seekdb_store.py` | SeekDB 生产存储（aiomysql raw SQL——自有池 / 注入池两形态） | `SeekDBStore` |
 | `sqlite_store.py` | SQLite 回退存储（keyword-only + `ff_memory_index_lite` 表） | `SQLiteFallbackStore` |
 | `retrieval.py` | 检索编排（MemoryIndexer 索引管道 + MemorySearchService + `build_memory_store` 装配工厂 + 条目构建辅助） | `MemoryIndexer` / `MemorySearchService` / `build_memory_store` |
+| `dreaming_models.py` | 梦境 DTO + 构造级参数（DreamJobConfig / 统计 / 决策 / 提案 / 运行记录 / 触发请求） | `DreamJobConfig` / `DreamRunRecordDTO` 等 |
+| `dreaming_prompts.py` | 梦境 prompt Unit 文件（合并 + 日记模板——版本常量 + byte-lock） | `render_merge_prompt` / `render_diary_prompt` |
+| `dreaming_orm.py` | 运行日志表 `ff_dream_runs`（独立文件——chunk 3 纯新增，orm.py 零改动） | `DreamRunRow` |
+| `dreaming.py` | 梦境编排（纯函数打分 / 规则门 + DreamService 主链路 + 运行日志读面） | `DreamService` / `recency_decay` / `select_dream_candidates` |
 
 依赖方向：memory → core（dtos / errors / time_utils / background_tasks）+ database（Base / Mixin / engine holder）+ llm（`ChatMessageRole` / `EmbeddingsResponseModel`——嵌入契约）+ config（Settings——存储选择）+ pools（seekdb_compat 类型面 / manager 共享池）；不依赖 persona / chat / usage 域（人格上下文经 `bind_persona_context` 由调用方绑定；嵌入用量经 gateway 的 usage 接线落账）。
 
@@ -178,6 +182,9 @@ GET    /api/v1/memories/sessions                    会话游标分页
 GET    /api/v1/memories/sessions/{id}               详情（含全量消息 seq 升序）
 DELETE /api/v1/memories/sessions/{id}               删除（消息同事务清理）
 POST   /api/v1/memories/search                      记忆检索（dense / keyword / hybrid——P1-2，见「检索层」）
+POST   /api/v1/memories/dream/trigger               手工触发夜间梦境整理（P1-3，见「夜间梦境」）
+GET    /api/v1/memories/dream/runs                  梦境运行日志游标分页（P1-3）
+GET    /api/v1/memories/dream/runs/{id}             运行详情（含逐事件决策，P1-3）
 ```
 
 全部响应经 `ResultDTO` 封装；分页经 `PageResponse`；Session 经 `get_async_db` 注入（事务边界归服务层）。
@@ -190,9 +197,10 @@ chat 回合（reply / stream_reply）
     ↓ ChatSessionService.append_message（seq 递增 + 会话行计数 / last_active_at 同事务更新）
     → ff_chat_messages
 
-（chunk 2/3 落地后）回合蒸馏 / 梦境整理
-    → ff_memory_episodes（append-only 事件日志）
-    → ff_curated_memory（supersede 语义蒸馏产物）
+（P1-3 落地）梦境整理（夜间巩固任务）
+    → ff_memory_episodes（日记产物：kind=dream / source="dream:diary"）
+    → ff_curated_memory（合并晋升：provenance=agent，supersede 语义——见「夜间梦境」）
+    → ff_dream_runs（运行日志：状态 / 统计 / 逐事件决策）
 
 管理面手工注入（POST /api/v1/memories/episodes）
     → MemoryService.append_episode（content_hash 计算 + 可选去重）
@@ -204,6 +212,7 @@ chat 回合（reply / stream_reply）
 - `tests/unit/test_chat_persistence.py`——ChatService 持久化集成（落库 / 恢复全链路 / 持久化关闭兼容 P0）+ CLI `/new` `/sessions` `/resume` 命令；
 - `tests/unit/test_memories_api.py`——ASGITransport 全端点 + 处理器直调契约面；
 - 检索层五件（P1-2）：`test_memory_retrieval_sql.py`（构建器精确字符串断言）/ `test_memory_seekdb_store.py`（假 aiomysql 池）/ `test_memory_sqlite_store.py`（共享引擎回退往返）/ `test_memory_indexer.py`（索引管道 + 服务联动）/ `test_memory_search_api.py`（POST /search 全模式）+ `test_pools_seekdb.py`（池生命周期）；
+- 梦境三件（P1-3）：`test_dreaming_prompts.py`（byte-lock + 渲染契约）/ `test_dreaming.py`（纯函数数学 + 门矩阵 + fail-closed 全链）/ `test_dream_api.py`（trigger + runs 端点）；
 - 集成冒烟：`tests/integration/test_seekdb_smoke.py`（env 门控默认跳过——见「冒烟测试」）；
 - 共享 SQLite fixture（StaticPool 单连接）+ PersonaMixin contextvars 隔离驱动；零真实网络 / 零真实配置；
 - 门禁：`harness/memory` ≥80%、`app/api` ≥80%（`pixi run coverage-gates`）；运行：`cd backend && pixi run tests-unit`。
@@ -325,3 +334,179 @@ POST /api/v1/memories/search          检索（body: query / mode / kinds / prov
 - app 路由的 `memory_service` **未绑定 indexer**（M1 行为保持）——索引联动的 app / CLI 装配属后续交付（工厂与管道已就绪：`MemoryService(indexer=MemoryIndexer(embedder=..., store=build_memory_store(settings)))`）；
 - 索引行的**删除联动**（管理面删除情景事件 → 同步删索引行）未接线——`store.delete` 为存储面 API（后续 chunk / 管理任务收敛）；
 - 策展记忆（ref_type=curated）的索引写入经 `MemoryIndexer` 直接可用（梦境 / 晋升链路属 chunk 3）。
+
+---
+
+# 夜间梦境（P1 chunk 3 交付）
+
+## 定位与链路总览
+
+夜间梦境（dream）是记忆层的巩固任务：把窗口内情景事件按规则门筛选后交 LLM 蒸馏为策展记忆（supersede 语义），再以人格口吻生成第一人称日记落回情景层——「白天积累、夜里整理」。
+
+```
+DreamService.run_dream(db, gateway=…, persona_name=…, store=?, now_ms=?, cfg=?)
+    ↓ ① DreamRunRow 落库（status=running——运行日志面，先落库可追溯）
+    ↓ ② fetch_day_episodes        窗口事件取回（[now-window_hours, now) 左闭右开）
+    ↓ ③ 既往已晋升集 + active 主题（人格作用域自动过滤）
+    ↓ ④ 主题相关度命中集          store 可选注入——keyword 检索 top-N 并集
+    ↓ ⑤ select_dream_candidates   规则门（纯函数——零模型调用）
+    ↓ ⑥ gateway.chat_by_role(ModelRole.DREAM, purpose="dream")  合并（人格中立 prompt）
+    ↓    parse_merge_proposals    剥围栏 + json.loads + 逐条 Model Class 校验
+    ↓ ⑦ merged_from ⊆ 候选 id 复核 → upsert_curated(provenance=agent)
+    ↓ ⑧ 日记（dream 角色）→ append_episode(kind=dream, source="dream:diary")
+    ↓ ⑨ DreamRunRow 终态（status/error/stats/decisions）→ DreamRunRecordDTO
+```
+
+角色与用量：合并 + 日记共用 `ModelRole.DREAM`（`purpose="dream"`——usage 域既有枚举成员，经网关自动落账）；人格上下文由调用方先经 `bind_persona_context` 绑定（与 memory 域其余服务同契约）。
+
+## 筛选公式（纯函数——精确数学）
+
+```
+recency_decay(ts, now, half_life_days) = 0.5 ** (age_days / half_life_days)
+    age_days = (now - ts) / 86_400_000        未来时间戳按 age=0 钳位（因子 1.0）
+    恰过一个半衰期 → 精确 0.5（两个 → 0.25，单调递减）
+
+dream_score(episode, now, cfg, topic_hits)
+    = importance × recency_decay × (1 + relevance_boost)
+    relevance_boost = cfg.boost    当 episode.id ∈ topic_hits（命中任一 active 主题
+                                   的 keyword 检索 top-N），否则 0
+```
+
+数学保持纯：存储交互在编排层（`_collect_topic_hits` 预计算命中集注入）；`topic_hits` 为空（store=None / 检索失败 / 人格 ID 非数值）时 boost=0——相关度是增强轴，检索失败不 fail 运行。
+
+## 规则门矩阵（select_dream_candidates——零模型调用，按序）
+
+| 序 | 规则 | 结果 |
+|---|---|---|
+| 1 | `provenance == untrusted` | **硬排除**：只计数 `skipped_untrusted`——不产生决策、永不进入任何梦境 prompt（合并 + 日记），也永不晋升（`upsert_curated` 对 untrusted 的拒绝构成双保险） |
+| 2 | `episode_id ∈ 既往成功运行晋升集` | skipped 决策（理由「既往梦境运行已晋升」）——既往集 = 既往 success 运行 decisions 中 promoted/merged 的 episode_id 并集 |
+| 3 | `dream_score < cfg.min_score` | skipped 决策（理由含分数值） |
+| 4 | 过门事件按分数降序（同分按 id 升序）截断至 `cfg.max_candidates` | 溢出 skipped 决策（理由「超出单次候选上限」） |
+
+决策覆盖口径：**全部可信候选事件每人一条决策**（无论过门与否）；untrusted 不可见、不产生决策。窗口 `[now - window_hours, now)` **左闭右开**（与情景事件查询约定一致）。
+
+## 构造级参数（DreamJobConfig——与 llm 网关 retry 旋钮同模式）
+
+| 旋钮 | 默认 | 语义 |
+|---|---|---|
+| `window_hours` | 24 | 候选窗口宽度（小时） |
+| `recency_half_life_days` | 30.0 | 时间衰减半衰期（天） |
+| `min_score` | 1.0 | 梦境分晋级阈值 |
+| `max_candidates` | 50 | 单次候选上限（分数降序截断） |
+| `topic_relevance_limit` | 3 | 主题相关度检索 top-N |
+| `boost` | 0.5 | 主题相关度加成系数 |
+| `diary_enabled` | true | 日记生成开关 |
+| `diary_importance` | 5 | 日记事件重要度（kind=dream 落库） |
+
+本 chunk 不修改 config 域（锁定决策）：旋钮经构造函数 / 触发请求体 `cfg` 嵌套覆写注入；向 Settings env 面迁移属后续 chunk。
+
+## LLM 契约（dreaming_prompts.py——Unit 文件）
+
+- **合并模板**（`MERGE_TEMPLATE`，byte-lock）：输入 = 编号候选事件（编号 = 事件主键；kind/source/importance/ts + 载荷文本）+ 既有 active 主题列表；输出 = 严格 JSON 数组 `[{topic, kind: memory|user_note|relationship, content, importance 1-10, merged_from: [事件编号]}]`。**人格中立**——人格卡片不进入本 prompt（合并是记忆层蒸馏，与人格声线无关）；
+- **日记模板**（`DIARY_TEMPLATE`，byte-lock）：输入 = 当日可信事件（时间序）+ `{persona_name}` 渲染变量；输出 = 第一人称中文日记。**人格声线仅经调用方替换 persona_name 进入**（人格展示名，API 层解析目标人格后传入）——模板本身零人格字段；
+- 两模板均有独立版本常量 + sha256 byte-lock 测试（`tests/unit/test_dreaming_prompts.py`）；渲染函数纯装配、支持 `template_override` 整体覆写（与 chat 域 `system_prompt` 覆写同模式）。
+
+## fail-closed 语义（锁定决策）
+
+- **解析失败零晋升**：LLM 输出不可解析为 JSON 数组 → 运行 failed，**零 upsert**（解析先于全部晋升——结构性失败不存在部分晋升态）；不进入日记阶段；
+- **逐条提案失败丢弃计数**：字段校验失败（kind 枚举 / importance 边界 / topic 空 / merged_from 空）或 `merged_from` 引用未知事件 → 该条丢弃 + `stats.failed` 计数，其余提案正常晋升；
+- **日记后置于晋升**：晋升全部提交后才生成日记——日记失败标记运行 failed 但**保留已提交晋升并在 decisions 中如实记录**（晋升是主产物、日记是叙事附产物；倒序会让日记失败回滚有效巩固，代价更高）；
+- **运行失败不抛异常**：`run_dream` 返回终态记录 DTO（`status=failed` + `error` 原因）——失败是业务结果而非请求失败；仅人格上下文缺失 / 运行行落库失败在入口 fail loud 上抛；
+- **dream 产物不排除出候选面**（文档化）：日记事件（kind=dream / provenance=agent）是普通情景事件——次夜作为候选参与合并（是否入策展由整理原则 + 分数门决定）；`untrusted` 是唯一硬排除轴。
+
+## 运行日志（ff_dream_runs）
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| `id` | BIGINT 自增 | 主键 |
+| `persona_id` | String(64)，索引 | 人格 ID（PersonaMixin 自动注入 / 过滤） |
+| `status` | String(16)，索引 | running / success / failed（行创建即落 running——进程崩溃可能遗留孤儿 running 行，P3 调度器收敛） |
+| `started_ms` / `finished_ms` | BigInteger | 开始（注入时钟口径）/ 结束时间（epoch 毫秒；运行中 finished 为 NULL） |
+| `stats` | JSON | DreamRunStatsModel 序列化（candidates / gated / promoted / superseded / skipped_untrusted / failed） |
+| `decisions` | JSON | 逐事件决策列表（DreamDecisionModel 序列化；episode_id / topic / kind / action: promoted\|skipped\|merged / reason） |
+| `diary_episode_id` | BIGINT，FK ff_memory_episodes.id（SET NULL） | 日记事件主键（未生成 / 失败为 NULL） |
+| `error` | Text | 失败原因（成功为 NULL） |
+
+决策动作语义：`promoted` = 事件晋升进**新起链**主题（upsert 落 v1）；`merged` = 事件并入**既有 active 主题**（supersede 链推进，v>1）；`skipped` = 未参与晋升（门控跳过 / 提案未收录 / 提案被丢弃）。`stats.promoted` / `stats.superseded` 与决策动作计数对齐。
+
+迁移：`alembic/versions/000000000005_add_dream_runs.py`（down_revision=000000000004；scratch sqlite 上 upgrade → downgrade → upgrade 冒烟通过）。
+
+## 触发 API（P1 手工触发——同步语义）
+
+```
+POST /api/v1/memories/dream/trigger     body: {persona_id?, cfg?{window_hours, …}}
+GET  /api/v1/memories/dream/runs        query: cursor / limit / persona_id?
+GET  /api/v1/memories/dream/runs/{id}   query: persona_id?
+```
+
+同步语义（文档化决策）：trigger **同步执行**整条梦境链（合并 + 日记的 LLM 调用内联在请求内）——P1 的 admin 手工触发面；夜间自动调度（cron / duty 轮）属 P3 调度器 chunk。运行失败是业务结果：响应恒 200，`data.status` / `data.error` 呈现终态。人格解析与既有端点同构（`persona_id` 可选——缺省激活人格，无激活 404）。
+
+触发请求 JSON 示例：
+
+```json
+{
+  "persona_id": 3,
+  "cfg": {"window_hours": 24, "min_score": 1.0, "diary_enabled": true}
+}
+```
+
+成功响应（`ResultDTO[DreamRunRecordDTO]`）：
+
+```json
+{
+  "success": true,
+  "code": "200",
+  "message": "梦境整理完成（候选 2 / 晋升 1 / 并入 1）",
+  "data": {
+    "id": 1,
+    "persona_id": "3",
+    "status": "success",
+    "started_ms": 1760000000000,
+    "finished_ms": 1760000004210,
+    "stats": {
+      "candidates": 2,
+      "gated": 2,
+      "promoted": 1,
+      "superseded": 1,
+      "skipped_untrusted": 0,
+      "failed": 0
+    },
+    "decisions": [
+      {"episode_id": 11, "topic": "口味偏好", "kind": "memory", "action": "merged",
+       "reason": "并入既有主题链（新版本 v2）"},
+      {"episode_id": 12, "topic": "运动习惯", "kind": "memory", "action": "promoted",
+       "reason": "晋升为新策展主题（首版）"}
+    ],
+    "diary_episode_id": 13,
+    "error": null,
+    "created_at": 1760000000010,
+    "updated_at": 1760000004210
+  }
+}
+```
+
+失败运行响应（仍 200——`data.status` 呈现终态）：
+
+```json
+{
+  "success": true,
+  "code": "200",
+  "message": "梦境整理失败：梦境合并输出不是合法 JSON",
+  "data": {
+    "id": 2,
+    "status": "failed",
+    "stats": {"candidates": 1, "gated": 1, "promoted": 0, "superseded": 0,
+              "skipped_untrusted": 0, "failed": 0},
+    "decisions": [],
+    "diary_episode_id": null,
+    "error": "梦境合并输出不是合法 JSON"
+  }
+}
+```
+
+## 测试与门禁（chunk 3 增量）
+
+- `tests/unit/test_dreaming_prompts.py`——byte-lock + 渲染契约（人格中立 / persona_name 替换 / 覆写语义 / 空块占位）；
+- `tests/unit/test_dreaming.py`——纯函数精确数学（半衰期边界 0.5 / 单调 / 加成）/ 规则门矩阵（untrusted 硬排除含 prompt 缺席 / 分数门 / 上限 / 既往晋升）/ run_dream 全链（happy path 晋升 + supersede 链 / fail-closed 零晋升 / 提案丢弃 / 日记失败保留晋升 / 存储命中与降级 / 生命周期行态 / 读面 + 隔离）；
+- `tests/unit/test_dream_api.py`——ASGITransport 触发 + 运行日志分页 / 详情 / 人格解析 / 处理器直调契约面；
+- 门禁：`harness/memory` ≥80%、`app/api` ≥80%（`pixi run coverage-gates`）。

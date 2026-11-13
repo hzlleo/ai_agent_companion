@@ -13,7 +13,12 @@
     - GET    /api/v1/memories/sessions/{id}               —— 会话详情（含全量消息）
     - DELETE /api/v1/memories/sessions/{id}               —— 删除（消息同事务清理）
     - POST   /api/v1/memories/search                      —— 记忆检索（P1 chunk 2：dense /
-                                                                 keyword / hybrid 三模式）
+                                                                  keyword / hybrid 三模式）
+    - POST   /api/v1/memories/dream/trigger               —— 手工触发夜间梦境整理（P1 chunk 3：
+                                                                  同步运行——admin 触发语义，
+                                                                  自动调度属 P3）
+    - GET    /api/v1/memories/dream/runs                  —— 梦境运行日志游标分页（P1 chunk 3）
+    - GET    /api/v1/memories/dream/runs/{id}             —— 运行详情（含逐事件决策，P1 chunk 3）
 
 人格作用域约定：三张 PersonaMixin 表的记忆数据按人格逻辑隔离——全部
 端点先解析目标人格（``persona_id`` 查询参数显式指定；缺省 = 当前激活
@@ -40,6 +45,12 @@ from packages.harness.core.dtos import PageResponse, ResultDTO
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.database.session import get_async_db
 from packages.harness.llm.gateway import LlmGateway
+from packages.harness.memory.dreaming import DreamService
+from packages.harness.memory.dreaming_models import (
+    DreamRunQueryDTO,
+    DreamRunRecordDTO,
+    DreamTriggerRequestDTO,
+)
 from packages.harness.memory.dtos import (
     ChatSessionDetailDTO,
     ChatSessionQueryDTO,
@@ -77,6 +88,8 @@ router = APIRouter(prefix="/api/v1/memories", tags=["memories"])
 memory_service = MemoryService()
 #: 会话持久化服务实例（同上）。
 chat_session_service = ChatSessionService()
+#: 梦境整理编排服务实例（同上——网关 / 存储 / 时钟逐次调用注入）。
+dream_service = DreamService()
 #: 人格服务实例（目标人格解析面）。
 persona_service = PersonaService()
 
@@ -541,3 +554,111 @@ async def search_memories(
     async with bind_persona_context(record.id):
         results = await service.search(query)
     return ResultDTO.ok(data=results)
+
+
+# ---------------------------------------------------------------------------
+# 夜间梦境（dreaming——P1 chunk 3：巩固合并 + 日记 + 运行日志）
+# ---------------------------------------------------------------------------
+
+
+@router.post("/dream/trigger", response_model=ResultDTO[DreamRunRecordDTO])
+async def trigger_dream(
+    req: DreamTriggerRequestDTO,
+    request: Request,
+    db: AsyncSession = Depends(get_async_db),
+) -> ResultDTO[DreamRunRecordDTO]:
+    """手工触发一次夜间梦境整理（同步运行——admin 触发语义）。
+
+    链路：解析目标人格（请求体 ``persona_id`` 可选——缺省激活人格）→
+    ``bind_persona_context``（DreamService 全链人格作用域）→
+    ``DreamService.run_dream``（网关 / 检索存储注入：网关经
+    ``app.state.gateway`` 优先——与检索端点同一解析面；存储经进程级
+    once 缓存）→ 返回运行记录。
+
+    同步语义（文档化决策）：本端点**同步执行**整条梦境链（合并 + 日记
+    的 LLM 调用内联在请求内）——P1 的手工触发面；夜间自动调度（cron /
+    duty 轮）属 P3 调度器 chunk。运行失败是**业务结果**而非请求失败：
+    响应恒 200，``data.status`` / ``data.error`` 呈现终态（fail-closed
+    语义见 harness/memory/dreaming.py 模块文档）。
+
+    Args:
+        req: 触发请求体（persona_id 可选 + cfg 参数覆写——嵌套部分覆写，
+            缺省 DreamJobConfig 全默认）。
+        request: 当前请求（app.state.gateway 解析——lifespan 装配优先）。
+        db: 注入的异步 Session（人格解析 + 梦境链共用）。
+
+    Returns:
+        运行记录 DTO（状态 / 统计 / 逐事件决策 / 日记事件链接 / 失败
+        原因）。
+
+    Raises:
+        BusinessException: 目标人格不存在或无激活人格（``NOT_FOUND``）；
+            人格上下文装配异常（运行行落库前 fail loud）。
+    """
+    record = await _resolve_target_persona(db, req.persona_id)
+    gateway = _resolve_request_gateway(request)
+    async with bind_persona_context(record.id):
+        run = await dream_service.run_dream(
+            db,
+            gateway=gateway,
+            persona_name=record.display_name,
+            store=_get_memory_store(),
+            cfg=req.cfg,
+        )
+    if run.status == "failed":
+        message = f"梦境整理失败：{run.error or '未知原因'}"
+    else:
+        message = (
+            f"梦境整理完成（候选 {run.stats.candidates} / 晋升 {run.stats.promoted}"
+            f" / 并入 {run.stats.superseded}）"
+        )
+    return ResultDTO.ok(data=run, message=message)
+
+
+@router.get("/dream/runs", response_model=ResultDTO[PageResponse[DreamRunRecordDTO]])
+async def list_dream_runs(
+    cursor: str | None = Query(None, description="分页游标（首页为 None）"),
+    limit: int = Query(20, ge=1, le=200, description="页大小（1-200）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    db: AsyncSession = Depends(get_async_db),
+) -> ResultDTO[PageResponse[DreamRunRecordDTO]]:
+    """梦境运行日志游标分页（id 降序——新运行在前；人格作用域自动过滤）。
+
+    Args:
+        cursor: 上一页返回的不透明游标（None = 首页）。
+        limit: 页大小（1-200）。
+        persona_id: 目标人格主键（None = 当前激活人格）。
+        db: 注入的异步 Session。
+
+    Returns:
+        分页响应（``next_cursor`` 非空表示还有更早运行；total 恒 -1）。
+    """
+    record = await _resolve_target_persona(db, persona_id)
+    async with bind_persona_context(record.id):
+        page = await dream_service.list_runs(db, DreamRunQueryDTO(cursor=cursor, limit=limit))
+    return ResultDTO.ok(data=page)
+
+
+@router.get("/dream/runs/{run_id}", response_model=ResultDTO[DreamRunRecordDTO])
+async def get_dream_run(
+    run_id: int,
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    db: AsyncSession = Depends(get_async_db),
+) -> ResultDTO[DreamRunRecordDTO]:
+    """按主键读取梦境运行详情（含逐事件决策明细）。
+
+    Args:
+        run_id: 运行主键。
+        persona_id: 目标人格主键（None = 当前激活人格）。
+        db: 注入的异步 Session。
+
+    Returns:
+        运行记录 DTO（状态 / 统计 / decisions 全量 / 日记链接 / 失败原因）。
+
+    Raises:
+        BusinessException: 运行不存在或不在目标人格作用域（``NOT_FOUND``）。
+    """
+    record = await _resolve_target_persona(db, persona_id)
+    async with bind_persona_context(record.id):
+        run = await dream_service.get_run(db, run_id)
+    return ResultDTO.ok(data=run)
