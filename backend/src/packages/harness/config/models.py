@@ -35,7 +35,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from urllib.parse import quote_plus
 
-from pydantic import BaseModel, Field, SecretStr, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from packages.harness.config.model_entry import LlmModelEntry
@@ -47,6 +47,7 @@ __all__ = [
     "LogConfig",
     "PoolsConfig",
     "LlmEndpointConfig",
+    "SeekDBSettings",
     "Settings",
     "settings",
     "LlmConfig",
@@ -258,6 +259,73 @@ class LlmEndpointConfig(BaseSettings):
     )
 
 
+class SeekDBSettings(BaseSettings):
+    """SeekDB 检索存储配置（env_prefix=``SEEKDB_``——P1 chunk 2 检索层）。
+
+    SeekDB（v1.4.0，MySQL 线协议 server 模式 2881 端口）承载记忆检索
+    索引表 ``ff_memory_index``（向量 + 全文 + 标量混合检索，见
+    docs/backend/memory.md 检索层一节）。
+
+    锁定决策：``enabled=False``（默认）——全工程走 SQLite 回退存储
+    （keyword 模式），零配置开发可用、测试 hermetic；``enabled=True``
+    时 PoolManager 启动期创建共享 aiomysql 池（SeekDB 不可达 fail
+    loud——部署顺序契约：SeekDB 先于 app 就绪）。
+
+    密码经环境变量间接（与 llm 条目 ``api_key_env`` 同模式——密码
+    永不落 yaml / 配置树）：本配置只持有变量名 ``password_env``，
+    实际密码由存储 / 池装配层从该变量读取。
+
+    Attributes:
+        enabled: 是否启用 SeekDB 检索存储（False = SQLite 回退）。
+        host: SeekDB 服务地址（server 模式）。
+        port: SeekDB MySQL 线协议端口（server / docker 模式 2881）。
+        user: 连接用户名。
+        password_env: 密码环境变量名（实际密码从该变量读取）。
+        database: 连接库名。
+        vector_dim: 向量维度（插值进索引表 DDL 的 VECTOR(dim)；须与
+            embed 角色模型输出一致——默认 1024 = Qwen3-Embedding-0.6B）。
+        pool_min: 连接池常驻连接数（启动期即建立）。
+        pool_max: 连接池连接上限（不得小于 pool_min）。
+    """
+
+    enabled: bool = Field(
+        default=False, description="是否启用 SeekDB 检索存储（False = SQLite 回退）"
+    )
+    host: str = Field(default="127.0.0.1", description="SeekDB 服务地址")
+    port: int = Field(default=2881, ge=1, le=65535, description="SeekDB MySQL 线协议端口")
+    user: str = Field(default="root", description="SeekDB 连接用户名")
+    password_env: str = Field(
+        default="SEEKDB_PASSWORD", min_length=1, description="SeekDB 密码环境变量名"
+    )
+    database: str = Field(default="test", description="SeekDB 连接库名")
+    vector_dim: int = Field(
+        default=1024, ge=1, le=65535, description="向量维度（须与 embed 模型输出一致）"
+    )
+    pool_min: int = Field(default=1, ge=1, description="连接池常驻连接数")
+    pool_max: int = Field(default=4, ge=1, description="连接池连接上限")
+
+    model_config = SettingsConfigDict(
+        env_prefix="SEEKDB_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @model_validator(mode="after")
+    def _verify_pool_bounds(self) -> SeekDBSettings:
+        """校验连接池边界（pool_max 不得小于 pool_min）。
+
+        Returns:
+            校验通过的实例。
+
+        Raises:
+            ValueError: pool_max < pool_min（装配错误面）。
+        """
+        if self.pool_max < self.pool_min:
+            raise ValueError(f"pool_max({self.pool_max}) 不得小于 pool_min({self.pool_min})")
+        return self
+
+
 class Settings(BaseSettings):
     """全局配置聚合器——所有 env 面子配置的聚合入口。
 
@@ -278,6 +346,7 @@ class Settings(BaseSettings):
         log: 日志配置。
         pools: 共享池配置。
         llm: LLM 默认端点 env 面。
+        seekdb: SeekDB 检索存储配置（enabled=False 默认——SQLite 回退）。
         env: 运行环境标识（local / dev / prod）。
     """
 
@@ -286,6 +355,7 @@ class Settings(BaseSettings):
     log: LogConfig = LogConfig()
     pools: PoolsConfig = PoolsConfig()
     llm: LlmEndpointConfig = LlmEndpointConfig()
+    seekdb: SeekDBSettings = SeekDBSettings()
     env: str = Field(default="local", description="运行环境标识（local / dev / prod）")
 
     model_config = SettingsConfigDict(

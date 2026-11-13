@@ -21,6 +21,7 @@ from packages.harness.config.models import (
     LlmEndpointConfig,
     LogConfig,
     PoolsConfig,
+    SeekDBSettings,
     ServerConfig,
     Settings,
 )
@@ -32,6 +33,7 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("LOG — 日志配置（三 sink：console + 文本 + JSON）", [LogConfig]),
     ("POOLS — 共享池配置（线程池 / HTTP 池 / LLM 信号量 / 熔断）", [PoolsConfig]),
     ("LLM — 默认端点 env 面（模型注册表经 config.yaml 配置）", [LlmEndpointConfig]),
+    ("SEEKDB — 检索存储配置（enabled=False 走 SQLite 回退；密码经 SEEKDB_PASSWORD 间接）", [SeekDBSettings]),
 ]
 
 

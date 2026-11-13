@@ -1,16 +1,17 @@
-# pools — 共享池域（P0-3 交付）
+# pools — 共享池域（P0-3 交付；P1-2 增 SeekDB 检索池）
 
-`backend/src/packages/harness/pools/` 承载全工程长生命周期池的统一装配 / 释放：core 共享线程池启停协调、共享 HTTP 池、LLM 条目池（per-entry 并发信号量 + 熔断状态机——P0-4 LLM 网关消费）。P0 决策：**NO Redis**——无 Redis 池（缓存走 core 进程内 TTL 实现）。
+`backend/src/packages/harness/pools/` 承载全工程长生命周期池的统一装配 / 释放：core 共享线程池启停协调、共享 HTTP 池、LLM 条目池（per-entry 并发信号量 + 熔断状态机——P0-4 LLM 网关消费）、SeekDB 检索池（aiomysql plain pool——P1-2 检索层消费，仅 `SEEKDB_ENABLED=true` 时启动）。P0 决策：**NO Redis**——无 Redis 池（缓存走 core 进程内 TTL 实现）。
 
 ## 模块一览
 
 | 模块 | 职责 | 关键导出 |
 |---|---|---|
-| `manager.py` | PoolManager 生命周期（start / stop，LIFO）+ 全局单例 | `PoolManager` / `init_pool_manager` / `pool_manager` |
+| `manager.py` | PoolManager 生命周期（start / stop，LIFO）+ 全局单例 | `PoolManager` / `init_pool_manager` / `pool_manager` / `get_seekdb_pool` |
 | `http_pool.py` | 共享 `httpx.AsyncClient` 构建器（limits / timeouts） | `build_shared_http_client` |
 | `llm_pool.py` | 熔断状态机 + per-entry 信号量注册表 + 组合门 | `CircuitBreaker` / `LlmEntryPool` / `entry_gate` |
+| `seekdb_compat.py` | aiomysql 类型化访问面（importlib 动态加载 + Protocol 收口 + 密码 env 解析 + 错误基类） | `create_seekdb_pool` / `resolve_seekdb_password` |
 
-依赖方向：pools → config（Settings / PoolsConfig / LlmModelEntry）+ core（thread_pool / errors / time_utils），合法。
+依赖方向：pools → config（Settings / PoolsConfig / SeekDBSettings / LlmModelEntry）+ core（thread_pool / errors / time_utils），合法。
 
 ## 装配 / 释放链（顺序）
 
@@ -21,15 +22,17 @@ lifespan startup（P0-6 装配）:
         1. core.init_shared_thread_pool(POOLS_THREAD_POOL_SIZE)   # 线程池下沉
         2. build_shared_http_client(POOLS_*)                       # 通用出站 HTTP
         3. LlmEntryPool(POOLS_*)                                    # 信号量/熔断（惰性注册）
+        4. create_seekdb_pool(SEEKDB_*)                             # 检索池（仅 ENABLED 时）
 
 lifespan shutdown（LIFO）:
     await pool_manager.stop()
+        0. seekdb_pool.close() + wait_closed()   # 最后启动最先关闭
         1. HTTP client aclose()
         2. LlmEntryPool.close()（信号量无需显式释放，清注册状态）
         3. shutdown_shared_thread_pool(wait=True)（在途阻塞操作自然收尾）
 ```
 
-幂等语义：重复 start 为 no-op（既有池不重建）；未 start / 重复 stop 为 no-op；get_* 未 start 时抛 `INTERNAL_ERROR`（快速暴露编程错误）。
+幂等语义：重复 start 为 no-op（既有池不重建）；未 start / 重复 stop 为 no-op；get_* 未 start 时抛 `INTERNAL_ERROR`（快速暴露编程错误）；`get_seekdb_pool` 在 `SEEKDB_ENABLED=false` 时同样 `INTERNAL_ERROR`。
 
 P0-6 app lifespan 的装配顺序契约：`init_pool_manager → start → load_all_config → init_database → …`（本域只提供 start/stop API，装配是 P0-6 职责）。
 
@@ -46,6 +49,11 @@ P0-6 app lifespan 的装配顺序契约：`init_pool_manager → start → load_
 | `POOLS_LLM_REQUEST_TIMEOUT_SECONDS` | 120 | LLM 单请求超时（P0-4 网关） |
 | `POOLS_CB_FAIL_MAX` | 5 | 熔断失败阈值 |
 | `POOLS_CB_RESET_TIMEOUT_SECONDS` | 60 | 熔断冷却秒数 |
+| `SEEKDB_ENABLED` | false | SeekDB 检索池启动开关（false = 不启动，检索走 SQLite 回退） |
+| `SEEKDB_HOST` / `SEEKDB_PORT` | 127.0.0.1 / 2881 | SeekDB 实例地址（MySQL 线协议端口） |
+| `SEEKDB_USER` / `SEEKDB_DATABASE` | root / test | 连接用户名 / 库名 |
+| `SEEKDB_PASSWORD_ENV` | SEEKDB_PASSWORD | 密码环境变量名（密码本值从该变量读取——env 间接） |
+| `SEEKDB_POOL_MIN` / `SEEKDB_POOL_MAX` | 1 / 4 | 检索池常驻 / 上限连接数 |
 
 ## 共享 HTTP 池（http_pool.py）
 
@@ -83,6 +91,12 @@ async with llm_entry_pool.entry_gate(entry):
     # （结果上报由 P0-4 网关调用点承担——本域只提供池管道，无 HTTP 调用）
 ```
 
+## SeekDB 检索池（seekdb_compat.py——P1-2）
+
+`create_seekdb_pool(...)` 创建 aiomysql 连接池（autocommit——单语句自决事务；检索层写路径全部单语句）。**plain pool**：无熔断 / 信号量（检索为可降级路径——存储失败经 SeekDBStore 映射为业务异常，不影响主链路）；启动期即建立 `POOL_MIN` 常驻连接——SeekDB 不可达时 `pool_manager.start()` fail loud（部署顺序契约：SeekDB 先于 app 就绪）。
+
+为什么有 compat 层：aiomysql 0.3.2 无 `py.typed`（mypy 严格模式拒绝直连 import）且不允许新增依赖——经 importlib 动态加载 + Protocol 类型面收口；错误基类（`pymysql.err.Error` re-export）供存储层错误映射。aiomysql 驱动选型风险与回退路径见 memory.md「检索层」。
+
 ## 全局单例（manager.py）
 
 ```
@@ -93,7 +107,7 @@ get_pool_manager()                  # 运行时读取（支持 monkeypatch）
 
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_pools_manager.py` / `test_pools_llm_pool.py`（2 份）；
-- 全部 `async def test_`；Settings 经 `build_isolated_settings` 显式值构造；HTTP 消费经 `httpx.MockTransport`（零真实出站）；熔断状态机经注入固定时钟确定性驱动（零 sleep）；信号量经真实 `asyncio.Semaphore` 并发语义验证（gather 峰值 ≤ 限值）；
+- 测试位置：`src/tests/unit/test_pools_manager.py` / `test_pools_llm_pool.py` / `test_pools_seekdb.py`（3 份）；
+- 全部 `async def test_`；Settings 经 `build_isolated_settings` 显式值构造；HTTP 消费经 `httpx.MockTransport`（零真实出站）；熔断状态机经注入固定时钟确定性驱动（零 sleep）；信号量经真实 `asyncio.Semaphore` 并发语义验证（gather 峰值 ≤ 限值）；SeekDB 池经假池工厂 monkeypatch（零真实连接）；
 - 覆盖率（`pixi run tests-unit` 实测）：harness/pools 组 **100%**；
 - 运行：`cd backend && pixi run tests-unit`。

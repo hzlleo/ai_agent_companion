@@ -1,6 +1,6 @@
-# memory — 三层记忆域（P1 chunk 1 交付）
+# memory — 三层记忆域（P1 chunk 1 存储 + chunk 2 检索层）
 
-`backend/src/packages/harness/memory/` 承载陪伴智能体的三层记忆：情景层（append-only 事件日志）、策展层（supersede 语义蒸馏记忆）、工作层（chat 会话回合持久化）。本 chunk 交付存储 + 管理 API；检索 / 向量召回与梦境整理（写入策展层的蒸馏任务）属 P1 chunk 2/3。
+`backend/src/packages/harness/memory/` 承载陪伴智能体的三层记忆：情景层（append-only 事件日志）、策展层（supersede 语义蒸馏记忆）、工作层（chat 会话回合持久化）。chunk 1 交付存储 + 管理 API；chunk 2 交付**检索层**（MemoryStore 抽象 + SeekDB 生产存储 + SQLite 回退 + 索引管道 + 检索 API，见下文「检索层」一节）；梦境整理（写入策展层的蒸馏任务）属 P1 chunk 3。
 
 ## 三层模型
 
@@ -17,9 +17,14 @@
 | `models.py` | 值域枚举（EpisodeKind / MemoryProvenance / CuratedKind / CuratedStatus）+ 事件载荷 Model Classes + 内容指纹 | `parse_episode_payload` / `compute_content_hash` |
 | `orm.py` | 四张表（PersonaMixin 作用域切分见下） | `MemoryEpisodeRow` / `CuratedMemoryRow` / `ChatSessionRow` / `ChatMessageRow` |
 | `dtos.py` | 事件 / 策展 / 会话的创建 / 记录 / 查询 / 批量删除 DTO | `EpisodeCreateDTO` / `CuratedUpsertDTO` / `ChatSessionDetailDTO` 等 |
-| `service.py` | `MemoryService`（情景 + 策展）+ `ChatSessionService`（会话） | `MemoryService` / `ChatSessionService` |
+| `service.py` | `MemoryService`（情景 + 策展；可选 indexer 联动）+ `ChatSessionService`（会话） | `MemoryService` / `ChatSessionService` |
+| `retrieval_models.py` | 检索层契约（模式 / 引用类型枚举 + 索引条目 / 检索查询 / 检索结果 / 请求体 DTO + SeekDBStoreConfig） | `MemorySearchQueryDTO` / `SeekDBStoreConfig` 等 |
+| `store.py` | `MemoryStore` 协议 + 纯 SQL 构建器（SeekDB 事实卡逐字对齐） | `build_search_sql` / `build_upsert_sql` / `build_ensure_schema_sql` |
+| `seekdb_store.py` | SeekDB 生产存储（aiomysql raw SQL——自有池 / 注入池两形态） | `SeekDBStore` |
+| `sqlite_store.py` | SQLite 回退存储（keyword-only + `ff_memory_index_lite` 表） | `SQLiteFallbackStore` |
+| `retrieval.py` | 检索编排（MemoryIndexer 索引管道 + MemorySearchService + `build_memory_store` 装配工厂 + 条目构建辅助） | `MemoryIndexer` / `MemorySearchService` / `build_memory_store` |
 
-依赖方向：memory → core（dtos / errors / time_utils）+ database（Base / Mixin）+ llm（`ChatMessageRole`——消息角色值域复用）；不依赖 persona / chat 域（人格上下文经 `bind_persona_context` 由调用方绑定）。
+依赖方向：memory → core（dtos / errors / time_utils / background_tasks）+ database（Base / Mixin / engine holder）+ llm（`ChatMessageRole` / `EmbeddingsResponseModel`——嵌入契约）+ config（Settings——存储选择）+ pools（seekdb_compat 类型面 / manager 共享池）；不依赖 persona / chat / usage 域（人格上下文经 `bind_persona_context` 由调用方绑定；嵌入用量经 gateway 的 usage 接线落账）。
 
 ## 人格作用域（PersonaMixin 切分）
 
@@ -172,6 +177,7 @@ DELETE /api/v1/memories/curated/{id}                删除
 GET    /api/v1/memories/sessions                    会话游标分页
 GET    /api/v1/memories/sessions/{id}               详情（含全量消息 seq 升序）
 DELETE /api/v1/memories/sessions/{id}               删除（消息同事务清理）
+POST   /api/v1/memories/search                      记忆检索（dense / keyword / hybrid——P1-2，见「检索层」）
 ```
 
 全部响应经 `ResultDTO` 封装；分页经 `PageResponse`；Session 经 `get_async_db` 注入（事务边界归服务层）。
@@ -197,5 +203,125 @@ chat 回合（reply / stream_reply）
 - `tests/unit/test_memory_service.py`——服务面全语义（追加 / 去重双通道 / 分页过滤 / 批量部分成功 / 日记取回 / **人格隔离** / supersede 链 / untrusted 拒绝 / 会话 seq 递增 / 载荷判别与指纹）；
 - `tests/unit/test_chat_persistence.py`——ChatService 持久化集成（落库 / 恢复全链路 / 持久化关闭兼容 P0）+ CLI `/new` `/sessions` `/resume` 命令；
 - `tests/unit/test_memories_api.py`——ASGITransport 全端点 + 处理器直调契约面；
+- 检索层五件（P1-2）：`test_memory_retrieval_sql.py`（构建器精确字符串断言）/ `test_memory_seekdb_store.py`（假 aiomysql 池）/ `test_memory_sqlite_store.py`（共享引擎回退往返）/ `test_memory_indexer.py`（索引管道 + 服务联动）/ `test_memory_search_api.py`（POST /search 全模式）+ `test_pools_seekdb.py`（池生命周期）；
+- 集成冒烟：`tests/integration/test_seekdb_smoke.py`（env 门控默认跳过——见「冒烟测试」）；
 - 共享 SQLite fixture（StaticPool 单连接）+ PersonaMixin contextvars 隔离驱动；零真实网络 / 零真实配置；
 - 门禁：`harness/memory` ≥80%、`app/api` ≥80%（`pixi run coverage-gates`）；运行：`cd backend && pixi run tests-unit`。
+
+---
+
+# 检索层（P1 chunk 2 交付）
+
+## 架构（链路总览）
+
+```
+写入面（索引链——顺序锁定）：
+    append_episode(s)                     MemoryService 写 ff_memory_episodes（事务提交）
+        ↓ commit 后（写入结果已不可逆——索引失败不影响写入）
+        ↓ episode_to_index_entry           人格 ID 数值化（str→BigInt）+ 载荷文本化（flatten）
+        ↓ MemoryIndexer.dispatch_*         后台管理器绑定 → fire-and-forget；未绑定 → 内联 await
+        ↓ gateway.embed_by_role（embed 角色，usage purpose=embed 落账）
+        ↓ store.upsert（同键覆盖——幂等重试安全）
+
+读取面（检索链）：
+    POST /api/v1/memories/search
+        ↓ _resolve_target_persona          人格解析（请求体 persona_id 可选→必填查询谓词）
+        ↓ bind_persona_context             嵌入用量归属 + PersonaMixin 语义面
+        ↓ MemorySearchService.search       dense/hybrid 先向量化查询文本；keyword 直达
+        ↓ store.search（模式 / 向量契约校验 + SQL 构建器 + 驱动执行）
+```
+
+## 存储选择（build_memory_store——单一真源）
+
+| 条件 | 存储 | 能力 |
+|---|---|---|
+| `SEEKDB_ENABLED=false`（默认） | `SQLiteFallbackStore` | keyword-only（LIKE + 朴素相关度）——零配置开发 / 测试 hermetic |
+| `SEEKDB_ENABLED=true` + PoolManager 已启动 | `SeekDBStore`（注入共享 aiomysql 池） | dense / keyword / hybrid 全模式——池生命周期归 PoolManager（app 停机经 `pool_manager.stop()` 收口，**app/main.py 无需感知存储**） |
+| `SEEKDB_ENABLED=true` + 无已启动管理器 | `SeekDBStore`（自持池，惰性创建） | 同上——`close` 归存储（独立场景 / 冒烟测试面） |
+
+工厂 `build_memory_store(settings)` 由 memories 路由（进程级 once 缓存）与后续 CLI / app 装配共用。
+
+## 模式矩阵
+
+| 模式 | 嵌入查询文本 | WHERE | ORDER BY | score 语义 | 回退存储 |
+|---|---|---|---|---|---|
+| `dense`（默认） | ✅ | persona + 标量过滤 | `score APPROXIMATE LIMIT` | cosine 距离（越小越相关） | ❌ 422 |
+| `keyword` | ❌ | + `MATCH ... AGAINST` | `MATCH ... AGAINST DESC LIMIT`（无 APPROXIMATE） | MATCH 相关度（越大越相关） | ✅ LIKE + 子串计数 |
+| `hybrid` | ✅ | + `MATCH ... AGAINST`（预过滤） | `score APPROXIMATE LIMIT` | cosine 距离 | ❌ 422 |
+
+模式 / 向量契约（违规 `VALIDATION_ERROR`）：dense / hybrid 必须携带查询向量；keyword 不得携带。回退存储收到向量模式族 → 清晰错误「回退存储不支持向量检索」。检索时间范围为**闭区间**（`start_ms <= ts_ms <= end_ms`——与 SeekDB 事实卡一致；与情景事件查询 DTO 的左闭右开约定**有意不同**）。
+
+## SQL 形态（SeekDB v1.4.0——事实卡逐字对齐，构建器单一真源）
+
+索引表 DDL（`build_ensure_schema_sql(vector_dim)`）：
+
+```sql
+CREATE TABLE IF NOT EXISTS ff_memory_index (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  persona_id BIGINT NOT NULL,
+  ref_type VARCHAR(32) NOT NULL,
+  ref_id BIGINT NOT NULL,
+  kind VARCHAR(32) NOT NULL,
+  provenance VARCHAR(16) NOT NULL,
+  ts_ms BIGINT NOT NULL,
+  content TEXT NOT NULL,
+  embedding VECTOR(1024),                -- 维度自 SEEKDB_VECTOR_DIM 插值（默认 1024）
+  FULLTEXT INDEX idx_ff_mem_ft (content) WITH PARSER jieba,
+  VECTOR INDEX idx_ff_mem_vec (embedding) WITH (DISTANCE=cosine, TYPE=hnsw, LIB=vsag),
+  UNIQUE KEY uk_ff_mem_ref (persona_id, ref_type, ref_id)
+) ORGANIZATION = HEAP;                   -- HEAP：DBMS_HYBRID_SEARCH（Form B，后续 chunk）前置
+```
+
+混合检索（Form A——单条 SQL，WHERE 谓词下推 ANN 扫描；hybrid 形态）：
+
+```sql
+SELECT id, ref_type, ref_id, kind, provenance, ts_ms, content,
+       cosine_distance(embedding, :qv) AS score
+FROM ff_memory_index
+WHERE persona_id = :pid
+  [AND kind IN (...)] [AND provenance = :p] [AND ts_ms >= :t0] [AND ts_ms <= :t1]
+  AND MATCH(content) AGAINST(:kw)       -- keyword/hybrid 模式谓词（dense 无）
+ORDER BY score APPROXIMATE LIMIT :lim;  -- APPROXIMATE 必加（否则全表扫）
+```
+
+要点：向量字面量是 JSON 数组**字符串**（`[0.1,0.2]`——经绑定参数传递）；`persona_id` 谓词每条查询必带（索引表无 PersonaMixin——隔离由 SQL 谓词强制，全部构建器路径覆盖）；keyword 模式无 APPROXIMATE（无 ANN 面）。upsert 用 `ON DUPLICATE KEY UPDATE`（作用于引用唯一键——同键幂等覆盖；若运行期 SeekDB 拒绝该语法，回退路径 DELETE+INSERT，由冒烟测试验证）。
+
+## aiomysql 驱动选型风险（文档化决策）
+
+SeekDB（v1.4.0 钉死）官方仅文档化 PyMySQL / mysqlclient；本工程选 **aiomysql**（原生 async，符合 I/O 全 async 约束；MySQL 线协议标准栈，大概率可用但无官方背书）。缓释措施：
+
+- 类型面：aiomysql 0.3.2 无 `py.typed`（mypy 严格模式拒绝直连 import）——经 `pools/seekdb_compat.py` 的 importlib 动态加载 + Protocol 收口（不允许新增依赖 / 修改 pyproject 的约束下解法）；
+- 真实验证：`tests/integration/test_seekdb_smoke.py`（env 门控，默认跳过——见下节）；
+- 不兼容回退路径：PyMySQL + `run_blocking_ops` 下沉（同步驱动 + 线程池——保持 async 边界）。
+
+## 冒烟测试（真实 SeekDB 实例）
+
+```bash
+# 1. 启动本地 SeekDB（server 模式——MySQL 线协议 2881 端口）
+docker run -d --name seekdb-smoke -p 2881:2881 oceanbase/seekdb:v1.4.0
+#    （镜像与标签以 https://github.com/oceanbase/seekdb/releases 为准）
+
+# 2. 导出门控变量并定向运行
+SEEKDB_SMOKE_URL="127.0.0.1:2881" \
+SEEKDB_SMOKE_USER=root \
+SEEKDB_SMOKE_PASSWORD=root \
+SEEKDB_SMOKE_DATABASE=test \
+pixi run pytest src/tests/integration/test_seekdb_smoke.py -v --asyncio-mode=auto
+```
+
+链路：ensure_schema → 批量 upsert → keyword / hybrid 检索回读 → 同键覆盖幂等 → 人格隔离谓词 → delete 清理。
+
+## 检索 API
+
+```
+POST /api/v1/memories/search          检索（body: query / mode / kinds / provenance /
+                                      start_ms / end_ms / limit / persona_id 可选）
+```
+
+人格解析与既有端点同构（请求体 `persona_id` 可选——缺省激活人格，无激活 404）；响应 `ResultDTO[list[MemorySearchResultDTO]]`（score 方向随模式）。
+
+## 索引联动的当前边界（文档化）
+
+- app 路由的 `memory_service` **未绑定 indexer**（M1 行为保持）——索引联动的 app / CLI 装配属后续交付（工厂与管道已就绪：`MemoryService(indexer=MemoryIndexer(embedder=..., store=build_memory_store(settings)))`）；
+- 索引行的**删除联动**（管理面删除情景事件 → 同步删索引行）未接线——`store.delete` 为存储面 API（后续 chunk / 管理任务收敛）；
+- 策展记忆（ref_type=curated）的索引写入经 `MemoryIndexer` 直接可用（梦境 / 晋升链路属 chunk 3）。

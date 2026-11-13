@@ -91,6 +91,23 @@ os.environ["LLM_BASE_URL"] = "http://127.0.0.1:9/v1"
 os.environ["LLM_API_KEY"] = "test-only-llm-api-key"
 os.environ["LLM_MODEL"] = "test-model"
 
+# --- SeekDB 检索存储（SEEKDB_ 前缀 → SeekDBSettings；默认关闭 → 测试恒走
+#     SQLite 回退存储，零真实连接；S3 硬覆盖模式——开发者 shell 导出的
+#     同名真实配置不得泄入测试） ---
+os.environ["SEEKDB_ENABLED"] = "false"
+os.environ["SEEKDB_HOST"] = "127.0.0.1"
+os.environ["SEEKDB_PORT"] = "2881"
+os.environ["SEEKDB_USER"] = "test_user"
+os.environ["SEEKDB_PASSWORD_ENV"] = "SEEKDB_TEST_PASSWORD"
+os.environ["SEEKDB_DATABASE"] = "test_seekdb"
+os.environ["SEEKDB_VECTOR_DIM"] = "1024"
+os.environ["SEEKDB_POOL_MIN"] = "1"
+os.environ["SEEKDB_POOL_MAX"] = "2"
+# 密码本值（password_env 指向的变量 + 默认变量名——测试专用值，
+# 不可触达真实实例；单测经假池消费，永不真实连接）
+os.environ["SEEKDB_TEST_PASSWORD"] = "test-only-seekdb-password"
+os.environ["SEEKDB_PASSWORD"] = "test-only-seekdb-password"
+
 # --- 运行环境标识（Settings.env → ENV） ---
 os.environ["ENV"] = "test"
 

@@ -67,6 +67,10 @@ from packages.harness.memory.orm import (
     CuratedMemoryRow,
     MemoryEpisodeRow,
 )
+from packages.harness.memory.retrieval import (
+    MemoryIndexer,
+    episode_to_index_entry,
+)
 
 __all__ = ["MemoryService", "ChatSessionService"]
 
@@ -128,7 +132,22 @@ def _episode_record(row: MemoryEpisodeRow) -> EpisodeRecordDTO:
 
 
 class MemoryService:
-    """记忆域服务（情景 + 策展；无状态——Session 由调用方注入）。"""
+    """记忆域服务（情景 + 策展；无状态——Session 由调用方注入）。
+
+    检索索引联动（P1 chunk 2，可选）：构造注入 ``indexer``
+    （:class:`MemoryIndexer`——默认 None，M1 行为不变）后，情景事件
+    **提交后**触发索引链（append → commit → embed → upsert；best-effort
+    ——任何失败仅告警，不影响写入结果与响应，见 ``_fire_indexing``）。
+    """
+
+    def __init__(self, *, indexer: MemoryIndexer | None = None) -> None:
+        """初始化服务。
+
+        Args:
+            indexer: 记忆索引管道（None = 未绑定——写入路径零索引调用，
+                M1 行为；绑定后 append 提交即触发索引分发）。
+        """
+        self._indexer = indexer
 
     # ------------------------------------------------------------------
     # 情景层——append / 查询 / 删除 / 日记
@@ -150,7 +169,8 @@ class MemoryService:
                 content) 已存在则返回既有行——幂等摄入；False 恒插入）。
 
         Returns:
-            落库后的记录 DTO（去重命中时为既有行）。
+            落库后的记录 DTO（去重命中时为既有行——命中路径不触发
+            索引，既有事件假定已索引）。
         """
         content_hash = compute_content_hash(dto.kind, dto.source, dto.content)
         if dedup:
@@ -179,7 +199,9 @@ class MemoryService:
         )
         session.add(row)
         await _commit(session)
-        return _episode_record(row)
+        record = _episode_record(row)
+        await self._fire_indexing([record])
+        return record
 
     async def append_episodes(
         self,
@@ -206,6 +228,7 @@ class MemoryService:
         records: list[EpisodeRecordDTO] = []
         batch_seen: dict[str, EpisodeRecordDTO] = {}
         pending: list[MemoryEpisodeRow] = []
+        pending_records: list[EpisodeRecordDTO] = []
         for dto in dtos:
             content_hash = compute_content_hash(dto.kind, dto.source, dto.content)
             if dedup:
@@ -243,9 +266,11 @@ class MemoryService:
             records.append(record)
             batch_seen[content_hash] = record
             pending.append(row)
+            pending_records.append(record)
         if pending:
             await _commit(session)
             logger.info("情景事件批量落库: count={}", len(pending))
+            await self._fire_indexing(pending_records)
         return records
 
     async def query_episodes(
@@ -390,9 +415,33 @@ class MemoryService:
         )
         return [_episode_record(row) for row in rows]
 
-    async def _require_episode(
-        self, session: AsyncSession, episode_id: int
-    ) -> MemoryEpisodeRow:
+    async def _fire_indexing(self, records: Sequence[EpisodeRecordDTO]) -> None:
+        """提交后触发检索索引链（best-effort——任何失败仅告警）。
+
+        链路：episode_to_index_entry（人格 ID 数值化 + 载荷文本化）→
+        indexer.dispatch（fire-and-forget / 内联 await 见 retrieval 模块
+        分发决策）。索引未绑定（M1 形态）时零调用。
+
+        Args:
+            records: 本次新增落库的记录（去重命中项不含——既有事件
+                假定已索引）。
+        """
+        if self._indexer is None or not records:
+            return
+        try:
+            entries = [episode_to_index_entry(record) for record in records]
+        except Exception:  # best-effort: 条目构建失败（载荷无文本 / 人格 ID 非数值）不阻断写入
+            logger.opt(exception=True).warning("情景事件索引条目构建失败（已吞没——不影响写入结果）")
+            return
+        try:
+            if len(entries) == 1:
+                await self._indexer.dispatch_episode(entries[0])
+            else:
+                await self._indexer.dispatch_episodes(entries)
+        except Exception:  # best-effort: 分发失败不阻断写入方
+            logger.opt(exception=True).warning("情景事件索引分发失败（已吞没——不影响写入结果）")
+
+    async def _require_episode(self, session: AsyncSession, episode_id: int) -> MemoryEpisodeRow:
         """按主键取情景事件行（人格作用域自动过滤）；缺失 fail loud。
 
         Args:

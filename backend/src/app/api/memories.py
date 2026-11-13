@@ -12,12 +12,16 @@
     - GET    /api/v1/memories/sessions                    —— 会话游标分页
     - GET    /api/v1/memories/sessions/{id}               —— 会话详情（含全量消息）
     - DELETE /api/v1/memories/sessions/{id}               —— 删除（消息同事务清理）
+    - POST   /api/v1/memories/search                      —— 记忆检索（P1 chunk 2：dense /
+                                                                 keyword / hybrid 三模式）
 
 人格作用域约定：三张 PersonaMixin 表的记忆数据按人格逻辑隔离——全部
 端点先解析目标人格（``persona_id`` 查询参数显式指定；缺省 = 当前激活
 人格，无激活人格则 ``NOT_FOUND`` fail loud），再经 ``bind_persona_context``
 绑定上下文后调用服务（自动注入 / 自动过滤）。指定人格不存在 → 404；
-他人格的资源对本作用域不可见（同样 404——隔离语义）。
+他人格的资源对本作用域不可见（同样 404——隔离语义）。检索端点同构：
+请求体 ``persona_id`` 可选（缺省激活人格），解析后作为检索查询的
+必带隔离谓词（索引表无 PersonaMixin——显式 persona_id 列过滤）。
 
 全部响应经 ``ResultDTO`` 封装；分页经 ``PageResponse``；DB Session 经
 ``database.session.get_async_db`` 依赖注入（事务边界归服务层）；全部
@@ -26,12 +30,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from typing import cast
+
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from packages.harness.config.models import settings as global_settings
 from packages.harness.core.dtos import PageResponse, ResultDTO
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.database.session import get_async_db
+from packages.harness.llm.gateway import LlmGateway
 from packages.harness.memory.dtos import (
     ChatSessionDetailDTO,
     ChatSessionQueryDTO,
@@ -51,18 +59,59 @@ from packages.harness.memory.models import (
     EpisodeKind,
     MemoryProvenance,
 )
+from packages.harness.memory.retrieval import MemorySearchService, build_memory_store
+from packages.harness.memory.retrieval_models import (
+    MemorySearchQueryDTO,
+    MemorySearchRequestDTO,
+    MemorySearchResultDTO,
+)
 from packages.harness.memory.service import ChatSessionService, MemoryService
+from packages.harness.memory.store import MemoryStore
 from packages.harness.persona.dtos import PersonaRecordDTO
 from packages.harness.persona.service import PersonaService, bind_persona_context
 
 router = APIRouter(prefix="/api/v1/memories", tags=["memories"])
 
-#: 记忆服务实例（无状态——Session 逐请求注入，服务可安全共享）。
+#: 记忆服务实例（无状态——Session 逐请求注入，服务可安全共享；indexer
+#: 未绑定——app 装配的索引联动属后续 chunk，本路由保持 M1 写入行为）。
 memory_service = MemoryService()
 #: 会话持久化服务实例（同上）。
 chat_session_service = ChatSessionService()
 #: 人格服务实例（目标人格解析面）。
 persona_service = PersonaService()
+
+#: 检索存储进程级缓存（build_memory_store 产出——SeekDB 自持池 / 回退
+#: 存储的 once 守卫跨请求复用；注入式池形态下无状态，缓存仅省构造）。
+_memory_store: MemoryStore | None = None
+
+
+def _get_memory_store() -> MemoryStore:
+    """取记忆检索存储（进程级 once 构造——存储选择见 build_memory_store）。
+
+    Returns:
+        就绪的 :class:`MemoryStore`（SeekDB / SQLite 回退——由全局
+        settings.seekdb.enabled 决定）。
+    """
+    global _memory_store
+    if _memory_store is None:
+        _memory_store = build_memory_store(global_settings)
+    return _memory_store
+
+
+def _resolve_request_gateway(request: Request) -> LlmGateway:
+    """解析请求可用的 LLM 网关（app.state.gateway 优先；缺省等价兜底）。
+
+    Args:
+        request: 当前请求（app.state.gateway 由 lifespan 装配）。
+
+    Returns:
+        用于查询向量化的 :class:`LlmGateway`（未装配 lifespan 的本地
+        测试面回落裸构造——与装配形态同语义：全局单例延迟解析）。
+    """
+    gateway = cast("LlmGateway | None", getattr(request.app.state, "gateway", None))
+    if gateway is None:
+        return LlmGateway()
+    return gateway
 
 
 async def _resolve_target_persona(
@@ -438,3 +487,57 @@ async def delete_session(
     async with bind_persona_context(record.id):
         await chat_session_service.delete_session(db, session_id)
     return ResultDTO[None].ok(message="会话已删除")
+
+
+# ---------------------------------------------------------------------------
+# 记忆检索（retrieval——P1 chunk 2：索引面混合检索）
+# ---------------------------------------------------------------------------
+
+
+@router.post("/search", response_model=ResultDTO[list[MemorySearchResultDTO]])
+async def search_memories(
+    req: MemorySearchRequestDTO,
+    request: Request,
+    db: AsyncSession = Depends(get_async_db),
+) -> ResultDTO[list[MemorySearchResultDTO]]:
+    """记忆检索（dense / keyword / hybrid 三模式——索引面混合检索）。
+
+    链路：解析目标人格（请求体 ``persona_id`` 可选——缺省激活人格）→
+    ``bind_persona_context``（供嵌入用量归属）→ ``MemorySearchService``
+    （dense / hybrid 先经网关 embed 角色向量化查询文本）→ 存储检索
+    （SeekDB 混合 / SQLite 回退 keyword）。
+
+    Args:
+        req: 检索请求体（query / mode / 过滤 / limit / persona_id 可选）。
+        request: 当前请求（app.state.gateway 解析——lifespan 装配优先）。
+        db: 注入的异步 Session（人格解析面）。
+
+    Returns:
+        命中结果列表（score 方向随模式——见 retrieval_models）。
+
+    Raises:
+        BusinessException: 目标人格不存在或无激活人格（``NOT_FOUND``）；
+            请求校验失败（``VALIDATION_ERROR``——空 query / limit 越界
+            等经 FastAPI 422）；回退存储收到向量模式（``VALIDATION_ERROR``
+            ——「回退存储不支持向量检索」）；嵌入失败（embed 角色未绑定
+            ``MODEL_NOT_FOUND`` 等）。
+    """
+    record = await _resolve_target_persona(db, req.persona_id)
+    gateway = _resolve_request_gateway(request)
+    service = MemorySearchService(
+        store=_get_memory_store(),
+        embedder=gateway.embed_by_role,
+    )
+    query = MemorySearchQueryDTO(
+        persona_id=record.id,
+        query=req.query,
+        mode=req.mode,
+        kinds=req.kinds,
+        provenance=req.provenance,
+        start_ms=req.start_ms,
+        end_ms=req.end_ms,
+        limit=req.limit,
+    )
+    async with bind_persona_context(record.id):
+        results = await service.search(query)
+    return ResultDTO.ok(data=results)

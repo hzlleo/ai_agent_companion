@@ -13,6 +13,7 @@ from packages.harness.config.models import (
     LlmEndpointConfig,
     LogConfig,
     PoolsConfig,
+    SeekDBSettings,
     ServerConfig,
     Settings,
     settings,
@@ -60,6 +61,61 @@ async def test_settings_llm_env_section_maps_env() -> None:
     assert settings.llm.base_url == "http://127.0.0.1:9/v1"
     assert settings.llm.api_key.get_secret_value() == "test-only-llm-api-key"
     assert settings.llm.model == "test-model"
+
+
+async def test_settings_seekdb_section_maps_env() -> None:
+    """seekdb 分节与 SEEKDB_* env 面对齐（默认关闭——测试恒走回退存储）。"""
+    assert settings.seekdb.enabled is False
+    assert settings.seekdb.host == "127.0.0.1"
+    assert settings.seekdb.port == 2881
+    assert settings.seekdb.user == "test_user"
+    assert settings.seekdb.password_env == "SEEKDB_TEST_PASSWORD"
+    assert settings.seekdb.database == "test_seekdb"
+    assert settings.seekdb.vector_dim == 1024
+    assert settings.seekdb.pool_min == 1
+    assert settings.seekdb.pool_max == 2
+
+
+async def test_seekdb_settings_defaults_and_pool_bounds(monkeypatch) -> None:
+    """SeekDBSettings 代码默认值 + 池边界校验（pool_max >= pool_min）。"""
+    import pytest
+    from pydantic import ValidationError
+
+    for key in (
+        "SEEKDB_ENABLED",
+        "SEEKDB_HOST",
+        "SEEKDB_PORT",
+        "SEEKDB_USER",
+        "SEEKDB_PASSWORD_ENV",
+        "SEEKDB_DATABASE",
+        "SEEKDB_VECTOR_DIM",
+        "SEEKDB_POOL_MIN",
+        "SEEKDB_POOL_MAX",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    default = SeekDBSettings(env_file=None)
+    assert default.enabled is False
+    assert default.host == "127.0.0.1"
+    assert default.port == 2881
+    assert default.user == "root"
+    assert default.password_env == "SEEKDB_PASSWORD"
+    assert default.database == "test"
+    assert default.vector_dim == 1024
+    assert default.pool_min == 1
+    assert default.pool_max == 4
+
+    with pytest.raises(ValidationError):
+        SeekDBSettings(pool_min=4, pool_max=1, env_file=None)
+
+
+async def test_build_isolated_settings_seekdb_passthrough() -> None:
+    """隔离构造：seekdb 分节显式透传 + 缺省回退（enabled=False 形态）。"""
+    seekdb = SeekDBSettings(enabled=True, host="seek.local", vector_dim=768)
+    iso = build_isolated_settings(seekdb=seekdb)
+    assert iso.seekdb is seekdb
+
+    default_iso = build_isolated_settings()
+    assert default_iso.seekdb.enabled is False
 
 
 async def test_log_to_core_config_field_mapping() -> None:
