@@ -19,6 +19,7 @@ from packages.harness.config.models import (
     LlmEndpointConfig,
     LogConfig,
     PoolsConfig,
+    SeekDBSettings,
     ServerConfig,
     Settings,
     settings,
@@ -30,6 +31,7 @@ __all__ = [
     "LogConfig",
     "PoolsConfig",
     "LlmEndpointConfig",
+    "SeekDBSettings",
     "Settings",
     "settings",
     "build_isolated_settings",
@@ -43,6 +45,7 @@ def build_isolated_settings(
     pools: PoolsConfig | None = None,
     server: ServerConfig | None = None,
     llm: LlmEndpointConfig | None = None,
+    seekdb: SeekDBSettings | None = None,
 ) -> Settings:
     """构造隔离 Settings 实例（测试 / 工具专用）。
 
@@ -55,6 +58,8 @@ def build_isolated_settings(
         pools: 池配置（None = 代码默认）。
         server: 服务配置（None = 代码默认）。
         llm: LLM 默认端点配置（None = 代码默认）。
+        seekdb: SeekDB 检索存储配置（None = 代码默认——enabled=False
+            的 SQLite 回退形态）。
 
     Returns:
         隔离 :class:`Settings` 实例（与全局单例无关联）。
@@ -65,4 +70,5 @@ def build_isolated_settings(
         log=log if log is not None else LogConfig(),
         pools=pools if pools is not None else PoolsConfig(),
         llm=llm if llm is not None else LlmEndpointConfig(),
+        seekdb=seekdb if seekdb is not None else SeekDBSettings(),
     )

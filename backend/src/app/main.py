@@ -27,9 +27,10 @@
 chat 角色网关；P0 的对话入口为控制台 CLI（自建等价栈，见
 harness.chat.cli）。
 
-ORM 注册：persona / usage 两域 ORM 在本模块导入期注册到
+ORM 注册：persona / usage / memory 三域 ORM 在本模块导入期注册到
 ``Base.metadata``——保证 ``init_database`` 的 create_all 兜底建表覆盖
 全部域表（fresh SQLite 首启即可用；生产 schema 以 Alembic 为准）。
+memory 域经 memories 路由导入链注册。
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ import packages.harness.persona.orm as persona_orm
 import packages.harness.usage.orm as usage_orm
 from app.api.health import APP_VERSION
 from app.api.health import router as health_router
+from app.api.memories import router as memories_router
 from app.api.personas import router as personas_router
 from app.middleware.error_handler import register_exception_handlers
 from packages.harness.config.loader import load_all_config, setup_logging_from_settings
@@ -139,5 +141,6 @@ def create_app() -> FastAPI:
     )
     register_exception_handlers(app)
     app.include_router(personas_router)
+    app.include_router(memories_router)
     app.include_router(health_router)
     return app

@@ -28,6 +28,7 @@ __all__ = [
     "ChatResponseModel",
     "ChatStreamChunkModel",
     "TokenUsageModel",
+    "EmbeddingsResponseModel",
     "LlmUsageEvent",
     "WireChatMessage",
     "WireTokenUsage",
@@ -36,7 +37,10 @@ __all__ = [
     "WireStreamDelta",
     "WireStreamChoice",
     "WireStreamChunk",
+    "WireEmbeddingItem",
+    "WireEmbeddingsResponse",
     "build_chat_request_body",
+    "build_embeddings_request_body",
 ]
 
 
@@ -142,6 +146,22 @@ class ChatStreamChunkModel(BaseModel):
     content: str = Field(default="", description="本块增量文本")
     finish_reason: str | None = Field(default=None, description="结束原因")
     usage: TokenUsageModel | None = Field(default=None, description="token 用量（末块）")
+
+
+class EmbeddingsResponseModel(BaseModel):
+    """向量化响应（模型无关归一形态——embed 角色调用面）。
+
+    Attributes:
+        model: 实际服务的模型名（端点回显；缺省回落请求模型名）。
+        vectors: 向量列表（与输入文本同序同长——按 index 归一）。
+        usage: token 用量（端点未回传时为 None——调用方按零用量记账）。
+        latency_ms: 端到端时延（epoch 毫秒差；client 侧测量）。
+    """
+
+    model: str = Field(default="", description="实际服务的模型名")
+    vectors: list[list[float]] = Field(default_factory=list, description="向量列表（与输入同序）")
+    usage: TokenUsageModel | None = Field(default=None, description="token 用量")
+    latency_ms: int = Field(default=0, ge=0, description="端到端时延（毫秒）")
 
 
 class LlmUsageEvent(BaseModel):
@@ -288,6 +308,38 @@ class WireStreamChunk(BaseModel):
     usage: WireTokenUsage | None = Field(default=None, description="token 用量（末块）")
 
 
+class WireEmbeddingItem(BaseModel):
+    """wire 向量化单项（embeddings 响应 data 元素形态）。
+
+    Attributes:
+        index: 输入序号（与请求 input 列表位置对应）。
+        embedding: 向量分量列表。
+        object: 载荷类型标记（端点回显，恒 ``embedding``）。
+    """
+
+    model_config = ConfigDict(protected_namespaces=(), extra="ignore")
+
+    index: int = Field(default=0, description="输入序号")
+    embedding: list[float] = Field(default_factory=list, description="向量分量列表")
+    object: str = Field(default="embedding", description="载荷类型标记")
+
+
+class WireEmbeddingsResponse(BaseModel):
+    """wire 向量化响应（embeddings 端点响应体形态）。
+
+    Attributes:
+        model: 实际服务的模型名（端点回显）。
+        data: 向量化结果列表（与请求 input 同长；client 校验）。
+        usage: token 用量（embeddings 端点通常回传 prompt_tokens）。
+    """
+
+    model_config = ConfigDict(protected_namespaces=(), extra="ignore")
+
+    model: str = Field(default="", description="实际服务的模型名")
+    data: list[WireEmbeddingItem] = Field(default_factory=list, description="向量化结果列表")
+    usage: WireTokenUsage | None = Field(default=None, description="token 用量")
+
+
 def build_chat_request_body(
     model: str,
     messages: list[ChatMessageModel] | tuple[ChatMessageModel, ...],
@@ -328,3 +380,16 @@ def build_chat_request_body(
             body["top_p"] = params.top_p
         body.update(params.extra)
     return body
+
+
+def build_embeddings_request_body(model: str, texts: list[str]) -> dict[str, Any]:
+    """构建 embeddings 请求体（wire 序列化前的 dict 形态）。
+
+    Args:
+        model: 模型名（provider model 参数）。
+        texts: 待向量化文本列表（非空——空列表由调用方先行拒绝）。
+
+    Returns:
+        可直接作为 HTTP JSON body 的 dict（``{"model": ..., "input": [...]}``）。
+    """
+    return {"model": model, "input": list(texts)}

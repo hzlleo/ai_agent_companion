@@ -7,7 +7,10 @@
        由 core 自持，本管理器只负责启停协调）；
     2. 共享 HTTP 池（``httpx.AsyncClient``）——通用出站 HTTP；
     3. LLM 条目池（:class:`packages.harness.pools.llm_pool.LlmEntryPool`）
-       —— per-entry 并发信号量 + 熔断器（P0-4 网关消费）。
+       —— per-entry 并发信号量 + 熔断器（P0-4 网关消费）；
+    4. SeekDB 检索池（aiomysql——P1 chunk 2 检索层消费；仅
+       ``settings.seekdb.enabled`` 时启动，plain pool——无熔断 / 信号量
+       复杂度，见 ``pools.seekdb_compat``）。
 
 初始化顺序（app lifespan startup，P0-6 装配）::
 
@@ -24,6 +27,7 @@
     await pool_manager.start()
     pool_manager.get_http_client()
     pool_manager.get_llm_entry_pool()
+    pool_manager.get_seekdb_pool()
     await pool_manager.stop()
 """
 
@@ -43,6 +47,11 @@ from packages.harness.core.thread_pool import (
 )
 from packages.harness.pools.http_pool import build_shared_http_client
 from packages.harness.pools.llm_pool import LlmEntryPool
+from packages.harness.pools.seekdb_compat import (
+    SeekDbPoolProtocol,
+    create_seekdb_pool,
+    resolve_seekdb_password,
+)
 
 __all__ = [
     "PoolManager",
@@ -64,7 +73,7 @@ class PoolManager:
     """
 
     def __init__(self, settings: Settings) -> None:
-        """初始化管理器（未 start——三槽位均为空）。
+        """初始化管理器（未 start——四槽位均为空）。
 
         Args:
             settings: 全局（或隔离）Settings 实例。
@@ -72,6 +81,7 @@ class PoolManager:
         self._settings = settings
         self.http_client: httpx.AsyncClient | None = None
         self.llm_entry_pool: LlmEntryPool | None = None
+        self.seekdb_pool: SeekDbPoolProtocol | None = None
         self._started = False
 
     @property
@@ -80,12 +90,17 @@ class PoolManager:
         return self._started
 
     async def start(self) -> None:
-        """装配全部池（从 ``self._settings.pools`` 读取配置）。
+        """装配全部池（从 ``self._settings`` 读取配置）。
 
         必须在 lifespan startup 中先于数据库 / 业务服务调用——
         ``run_blocking_ops`` 依赖线程池，通用 HTTP 出站依赖共享 client。
 
         幂等：已 start 时为 no-op（重复 start 直接返回）。
+
+        Raises:
+            BusinessException: SeekDB 池创建失败（``enabled=True`` 且
+                实例不可达——fail loud，部署顺序契约：SeekDB 先于 app
+                就绪；``INTERNAL_ERROR``）。
         """
         if self._started:
             return
@@ -100,25 +115,55 @@ class PoolManager:
         # 3. LLM 条目池——per-entry 信号量 + 熔断器（网关消费；信号量惰性注册）
         self.llm_entry_pool = LlmEntryPool(pools)
 
+        # 4. SeekDB 检索池——aiomysql plain pool（仅 enabled 时启动）
+        seekdb_settings = self._settings.seekdb
+        if seekdb_settings.enabled:
+            password = resolve_seekdb_password(seekdb_settings.password_env)
+            try:
+                self.seekdb_pool = await create_seekdb_pool(
+                    host=seekdb_settings.host,
+                    port=seekdb_settings.port,
+                    user=seekdb_settings.user,
+                    password=password,
+                    database=seekdb_settings.database,
+                    pool_min=seekdb_settings.pool_min,
+                    pool_max=seekdb_settings.pool_max,
+                )
+            except Exception as exc:
+                raise BusinessException(
+                    code=ErrorCode.INTERNAL_ERROR,
+                    message="SeekDB 检索池创建失败（fail loud——检查 SEEKDB_* 配置与实例可达性）",
+                    details={"reason": f"{type(exc).__name__}: {exc}"},
+                ) from exc
+
         self._started = True
         logger.info(
             "公共池已就绪: thread_pool_size={}, http_max_connections={}, "
-            "http_keepalive={}, llm_semaphore_limit={}, cb_fail_max={}, cb_cooldown={}s",
+            "http_keepalive={}, llm_semaphore_limit={}, cb_fail_max={}, cb_cooldown={}s, "
+            "seekdb_enabled={}",
             pools.thread_pool_size,
             pools.http_max_connections,
             pools.http_max_keepalive_connections,
             pools.llm_semaphore_limit,
             pools.cb_fail_max,
             pools.cb_reset_timeout_seconds,
+            seekdb_settings.enabled,
         )
 
     async def stop(self) -> None:
-        """关闭全部池（LIFO：先 HTTP / LLM 条目池，再 core 线程池）。
+        """关闭全部池（LIFO：SeekDB 池 → HTTP / LLM 条目池 → core 线程池）。
 
         幂等：未 start 时为 no-op。
         """
         if not self._started:
             return
+
+        # 0. 关闭 SeekDB 检索池（LIFO——最后启动最先关闭）
+        if self.seekdb_pool is not None:
+            self.seekdb_pool.close()
+            await self.seekdb_pool.wait_closed()
+            self.seekdb_pool = None
+            logger.info("SeekDB 检索池已关闭")
 
         # 1. 关闭共享 HTTP 池
         if self.http_client is not None:
@@ -187,6 +232,23 @@ class PoolManager:
                 message="LLM 条目池未初始化，请先调用 pool_manager.start()",
             )
         return self.llm_entry_pool
+
+    def get_seekdb_pool(self) -> SeekDbPoolProtocol:
+        """获取 SeekDB 检索池（aiomysql plain pool——检索层消费）。
+
+        Returns:
+            符合 :class:`SeekDbPoolProtocol` 的连接池实例。
+
+        Raises:
+            BusinessException: 未 start 或 ``SEEKDB_ENABLED`` 未开启
+                （``INTERNAL_ERROR``——检索存储装配前置检查面）。
+        """
+        if self.seekdb_pool is None:
+            raise BusinessException(
+                code=ErrorCode.INTERNAL_ERROR,
+                message="SeekDB 检索池未初始化（未 start 或 SEEKDB_ENABLED=false）",
+            )
+        return self.seekdb_pool
 
 
 # ---------------------------------------------------------------------------

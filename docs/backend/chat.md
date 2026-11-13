@@ -1,6 +1,6 @@
-# chat — 会话循环 / 世界书 / 控制台 CLI（P0-6 交付）
+# chat — 会话循环 / 世界书 / 控制台 CLI（P0-6 交付；P1-1 会话持久化）
 
-`backend/src/packages/harness/chat/` 承载人格感知的会话循环：chara card 正典 + 世界书 → LLM 请求消息组装（prompt Unit 文件唯一真源），经 llm 网关（role=chat）非流式 / 流式调用，会话历史维护在内存态会话对象上。P0 用户可见交付面为控制台 REPL（`pixi run chat`）；app 层随本 chunk 完成最终装配（`app/main.py` create_app + lifespan + `/api/v1/health` 存活面）。
+`backend/src/packages/harness/chat/` 承载人格感知的会话循环：chara card 正典 + 世界书 → LLM 请求消息组装（prompt Unit 文件唯一真源），经 llm 网关（role=chat）非流式 / 流式调用；P1 记忆层 chunk 1 落地**可选会话持久化**（`ff_chat_sessions` / `ff_chat_messages`——回合落库 + 会话恢复，缺省关闭保持 P0 行为）。控制台 REPL（`pixi run chat`）为用户可见交付面；app 层已完成最终装配（`app/main.py` create_app + lifespan + `/api/v1/health` 存活面 + personas / memories 路由）。
 
 ## 模块一览
 
@@ -72,7 +72,15 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 - 流式被消费方提前终止（`GeneratorExit`）→ **不追加助手回合**（半截回复不入历史）；
 - 结构性上限：`max_history_turns`（默认 64，滑动窗口丢最老）+ `max_turn_chars`（默认 2000，单回合截断保护）。
 
-**P0 锁定决策**：会话历史为内存态（每会话对象一份，不落库）——持久化随 P1 记忆层（memory 域）落地；会话创建时快照卡片（运行期管理面编辑不热更到在途会话）。
+**会话持久化（P1 记忆层——可选绑定，缺省关闭）**：`ChatService` 构造注入 `session_service`（memory 域 `ChatSessionService`）后：
+
+- `create_session(db_session=..., title=...)` 同步落 `ff_chat_sessions` 行（经 `bind_persona_context` 绑定人格上下文——PersonaMixin 自动注入），状态携带 `session_id`；未给 `db_session` 时纯内存态；
+- `reply / stream_reply` 的用户与助手回合经 `session_scope` 短事务逐条落 `ff_chat_messages`（seq 递增；**开场白不落库**——正典确定性回放，resume 后幂等重现）；网关失败时用户回合保留在库（重试即重新生成）；流式提前终止不落半截助手回合；持久化写入失败原样上抛（append-only 日志不静默丢行）；
+- `resume_session(session_id, db_session=...)` 把持久化会话回放进内存态（全量消息重放进 `turns`；卡片按会话归属人格重取**当前**正典）；调用方须先绑定目标人格上下文（他人格会话 NOT_FOUND）；未绑定持久化服务的 resume → `INTERNAL_ERROR`；
+- 持久化消息不受 `max_history_turns` 滑动窗口约束（全量记录——内存窗口只是上下文组装面）；
+- 未绑定持久化服务（P0 形态）时行为与既有完全一致——`/clear` 仅清内存历史（持久化消息保留）。
+
+**P0 锁定决策（保持）**：会话创建时快照卡片（运行期管理面编辑不热更到在途会话；resume 按当前正典重取）。
 
 ## prompt 版本与 byte-lock
 
@@ -87,12 +95,14 @@ settings → setup_logging_from_settings → load_all_config
     → PoolManager start → init_database
     → LlmGateway(usage_recorder=wire_default_usage_recorder())
     → PersonaService.get_active_persona（session_scope）
+    → ChatService(session_service=ChatSessionService())   恒绑定持久化
+    → create_session(persona, db_session)                 会话行落库
 ```
 
 - **无激活人格**：打印中文三步指引（POST 创建 → PUT 启用 → POST activate 激活），LIFO 收尾后退出码 1；
-- **有激活人格**：横幅 + 开场白 → REPL。
+- **有激活人格**：横幅 + 开场白 → REPL；**每次启动即开新持久化会话**（空会话直接退场无害，管理面可删除——文档化决策）。
 
-REPL 命令面：`/quit`（退出码 0；EOF 等效）/ `/clear`（清空历史，人格绑定保留）/ `/history`（回合列表，含时间戳）/ `/help`；空行跳过；网关 `BusinessException` 上屏不崩循环。
+REPL 命令面：`/quit`（退出码 0；EOF 等效）/ `/clear`（清空内存历史，人格绑定与持久化消息保留）/ `/history`（回合列表，含时间戳）/ `/new`（新建持久化会话，重新开场）/ `/sessions`（最近 10 个持久化会话——id / 消息数 / 标题 / 最后活跃）/ `/resume <id>`（恢复历史会话续聊——回放回合进上下文，开场白幂等重现：有 assistant 回合返回末条，否则正典开场）/ `/help`；空行跳过；网关与持久化 `BusinessException` 上屏不崩循环。
 
 停机序列（LIFO——启动逆序）：`close_database` → `pool_manager.stop`（含 core 共享线程池）。
 
@@ -102,6 +112,7 @@ REPL 命令面：`/quit`（退出码 0；EOF 等效）/ `/clear`（清空历史�
 create_app() → FastAPI(title/version/lifespan)
     ├─ register_exception_handlers(app)          共享异常处理器
     ├─ include_router(personas_router)           /api/v1/personas*
+    ├─ include_router(memories_router)           /api/v1/memories*（P1-1 记忆管理面）
     └─ include_router(health_router)             /api/v1/health
 
 startup_app_state(app, settings[, config_dir])   可独立驱动的纯异步函数对
@@ -171,6 +182,7 @@ lifespan                                          上述函数对的 asynccontex
 
 - `tests/unit/test_chat_prompts.py`——byte-lock（sha256 摘要锁）+ 渲染契约（覆写 / 空段跳过 / 兜底）；
 - `tests/unit/test_chat_service.py`——假网关记录组装消息：正典字段 / 世界书全语义（constant / scan_depth / selective / 大小写 / 预算截断 / 位置次序）/ PHI 末位 / 参数直通 / 流式聚合与提前终止 / 会话上限 / 查库路径（共享 SQLite）；
+- `tests/unit/test_chat_persistence.py`——持久化集成（P1-1）：落库 / 网关失败保留用户回合 / resume 全链路 / 持久化关闭兼容 P0 / CLI `/new` `/sessions` `/resume` 命令（真实启动栈 + tmp SQLite + 假网关）；
 - `tests/unit/test_chat_cli.py`——注入式 I/O 驱动全流程（真实启动栈 + tmp SQLite + 假网关，never real stdin）：命令面 / 无激活人格指引（退出码 1）/ 业务异常不崩 REPL / main 入口；
 - `tests/unit/test_app_main.py`——create_app 路由注册 / startup-shutdown 函数对（真实组件 + LIFO 追踪）/ health 与 personas 经 ASGITransport 走真实 app / lifespan 全周期 / 外部引擎治理；
 - 门禁：`harness/chat` ≥80%（实测 99.4%）、`app/main.py` ≥80%（实测 100%）、`app/api` ≥80%（实测 100%）。

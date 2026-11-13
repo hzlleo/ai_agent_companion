@@ -41,12 +41,24 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 | LogConfig | `LOG_` | `LEVEL`(INFO) · `FILE`(logs/app.log) · `JSON_FILE`(logs/app.json.log) · `ROTATION`(1 day) · `RETENTION`(30 days) · `MODULE_LEVELS`("") · `COLORIZE_CONSOLE`(true) |
 | PoolsConfig | `POOLS_` | `THREAD_POOL_SIZE`(8) · `HTTP_MAX_CONNECTIONS`(100) · `HTTP_MAX_KEEPALIVE_CONNECTIONS`(20) · `HTTP_CONNECT_TIMEOUT_SECONDS`(5.0) · `HTTP_TIMEOUT_SECONDS`(30.0) · `LLM_SEMAPHORE_LIMIT`(5) · `LLM_REQUEST_TIMEOUT_SECONDS`(120) · `CB_FAIL_MAX`(5) · `CB_RESET_TIMEOUT_SECONDS`(60) |
 | LlmEndpointConfig | `LLM_` | `BASE_URL`("") · `API_KEY`("") · `MODEL`("") |
+| SeekDBSettings | `SEEKDB_` | `ENABLED`(false) · `HOST`(127.0.0.1) · `PORT`(2881) · `USER`(root) · `PASSWORD_ENV`(SEEKDB_PASSWORD) · `DATABASE`(test) · `VECTOR_DIM`(1024) · `POOL_MIN`(1) · `POOL_MAX`(4) |
 | Settings | （无前缀） | `ENV`(local) |
 
 - `DatabaseConfig.async_sqlalchemy_url`：`mysql` → `mysql+aiomysql://user:pwd@host:port/db?charset=utf8mb4`（用户名/密码 URL 编码）；`sqlite` → `sqlite+aiosqlite:///{name}`（`name=":memory:"` 内存库）。
 - `LogConfig.to_core_config()`：字段一一映射为 `core.LoggingConfig`（`file→log_file` / `json_file→log_json_file`）；app lifespan 经 `setup_logging_from_settings(settings)` 接线 `core.setup_logging`。
 - 嵌套覆盖：`Settings` 开启 `env_nested_delimiter="__"`（如 `DATABASE__POOL_SIZE`），与各分节自身 `env_prefix` 并行生效。
-- 测试隔离：`build_isolated_settings(database=..., pools=...)` 显式值构造（子配置实例 pass-through，不重读 env）。
+- 测试隔离：`build_isolated_settings(database=..., pools=..., seekdb=...)` 显式值构造（子配置实例 pass-through，不重读 env）。
+
+### SeekDBSettings（P1 chunk 2 检索层 env 面）
+
+SeekDB（v1.4.0，MySQL 线协议 2881 端口）承载记忆检索索引（见 memory.md「检索层」）。要点：
+
+- `ENABLED=false`（默认）——全工程走 SQLite 回退存储（keyword 模式），零配置开发可用、测试 hermetic；
+- `PASSWORD_ENV` 密码环境变量**间接**（与 llm 条目 `api_key_env` 同模式——密码永不落 yaml / 配置树；实际密码从该变量读取，未设置时空串 + 告警）；
+- `VECTOR_DIM` 插值进索引表 DDL 的 `VECTOR(dim)`——须与 embed 角色模型输出一致（默认 1024 = Qwen3-Embedding-0.6B）；
+- `POOL_MAX >= POOL_MIN` 模型校验强制。
+
+> 注：`SEEKDB_*` 键暂未出现在 `.env.example`——env 模板生成的分节清单（`scripts/generate_examples_env.py` 的 `_ENV_SECTIONS`）在仓库根 scripts/ 树，不在本 chunk 的可改文件清单内；本表即 env 面单一参考（后续在 scripts 侧补登记后 `pixi run gen-examples` 即并入模板）。
 
 ## config.yaml — llm 段（模型注册表）
 

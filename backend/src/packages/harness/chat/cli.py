@@ -1,4 +1,4 @@
-"""chat 域控制台 REPL——P0 用户可见交付面（与当前激活人格流式对话）。
+"""chat 域控制台 REPL——用户可见交付面（与当前激活人格流式对话）。
 
 启动序列（isolated-safe——全部组件可注入，测试零真实网络 / 零真实配置）::
 
@@ -12,8 +12,14 @@
     - 有激活人格：打印横幅 + 开场白，进入 REPL 循环。
 
 REPL 命令面：``/quit`` 退出（码 0）/ ``/clear`` 清空会话历史 / ``/history``
-查看回合 / ``/help`` 帮助；其余输入经 :class:`ChatService` 流式回复
-（增量 token 直写 stdout）。回车 / EOF（Ctrl-D）等效 ``/quit``。
+查看回合 / ``/new`` 新建持久化会话 / ``/sessions`` 列出最近会话 /
+``/resume <id>`` 恢复历史会话 / ``/help`` 帮助；其余输入经
+:class:`ChatService` 流式回复（增量 token 直写 stdout）。回车 / EOF
+（Ctrl-D）等效 ``/quit``。
+
+会话持久化（P1 记忆层）：CLI 恒绑定 ``ChatSessionService``——会话与
+回合自动落库；``/clear`` 仅清内存历史（持久化消息保留——全量记录），
+``/new`` 起新会话，``/resume`` 回放历史会话续聊。
 
 停机序列（LIFO——启动逆序）：``close_database`` → ``pool_manager.stop``
 （含 core 共享线程池关闭）。
@@ -33,6 +39,7 @@ from pathlib import Path
 
 from loguru import logger
 
+import packages.harness.memory.orm as memory_orm
 import packages.harness.persona.orm as persona_orm
 import packages.harness.usage.orm as usage_orm
 from packages.harness.chat.chat_models import ChatSessionStateModel
@@ -46,14 +53,17 @@ from packages.harness.database.engine import close_database, init_database
 from packages.harness.database.session import session_scope
 from packages.harness.llm.gateway import LlmGateway, wire_default_usage_recorder
 from packages.harness.llm.llm_models import ChatMessageRole
+from packages.harness.memory.dtos import ChatSessionQueryDTO, ChatSessionSummaryDTO
+from packages.harness.memory.service import ChatSessionService
 from packages.harness.persona.dtos import PersonaRecordDTO
-from packages.harness.persona.service import PersonaService
+from packages.harness.persona.service import PersonaService, bind_persona_context
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
 
 # ORM 模型注册（导入副作用——init_database 的 create_all 兜底建表依赖
 # Base.metadata 注册；usage 域经网关默认用量接线在 init 之后才 import，
-# 此处显式注册保证 fresh SQLite 启动即有全部表）。
-_ORM_REGISTRY = (persona_orm, usage_orm)
+# 此处显式注册保证 fresh SQLite 启动即有全部表；memory 域四表随 P1
+# 会话持久化落地一并注册）。
+_ORM_REGISTRY = (persona_orm, usage_orm, memory_orm)
 
 #: 输入契约（prompt 参数 + 返回一行文本；EOF 以 EOFError 表达）。
 InputFn = Callable[[str], str]
@@ -63,10 +73,13 @@ OutputFn = Callable[[str], None]
 #: REPL 帮助文本。
 _HELP_TEXT: str = (
     "可用命令：\n"
-    "  /quit    退出会话\n"
-    "  /clear   清空会话历史（人格设定保留）\n"
-    "  /history 查看会话历史回合\n"
-    "  /help    显示本帮助\n"
+    "  /quit        退出会话\n"
+    "  /clear       清空会话历史（人格设定保留）\n"
+    "  /history     查看会话历史回合\n"
+    "  /new         新建会话（持久化，重新开场）\n"
+    "  /sessions    列出最近的持久化会话\n"
+    "  /resume <id> 恢复指定会话续聊\n"
+    "  /help        显示本帮助\n"
     "其余输入均作为对话内容发送给当前人格。\n"
 )
 
@@ -116,6 +129,20 @@ def _print_history(service: ChatService, state: ChatSessionStateModel, output_fn
         output_fn(f"[{clock}] {_ROLE_LABELS[turn.role]}: {turn.content}\n")
 
 
+def _format_session_line(summary: ChatSessionSummaryDTO) -> str:
+    """会话摘要 → 单行展示文本（/sessions 列表项）。
+
+    Args:
+        summary: 会话摘要 DTO。
+
+    Returns:
+        ``#id [N条] 标题（最后活跃 HH:MM:SS）`` 形态单行。
+    """
+    moment = from_ms(summary.last_active_at)
+    clock = moment.strftime("%H:%M:%S") if moment is not None else "--:--:--"
+    return f"  #{summary.id} [{summary.message_count}条] {summary.title}（最后活跃 {clock}）\n"
+
+
 async def run_chat_cli(
     *,
     settings: Settings | None = None,
@@ -123,6 +150,7 @@ async def run_chat_cli(
     config_dir: Path | None = None,
     gateway: LlmGateway | None = None,
     persona_service: PersonaService | None = None,
+    session_service: ChatSessionService | None = None,
     input_fn: InputFn = input,
     output_fn: OutputFn = _default_output,
 ) -> int:
@@ -135,6 +163,8 @@ async def run_chat_cli(
         config_dir: 结构化配置目录（None = CWD 发现；测试注入 tmp_path）。
         gateway: LLM 网关（None = 现场装配——usage 默认接线）。
         persona_service: 人格服务（None = 现场构造无状态实例）。
+        session_service: 会话持久化服务（None = 现场构造——CLI 恒持久化；
+            测试可注入绑定共享引擎的实例）。
         input_fn: 输入回调（默认 ``input``；测试注入序列假输入）。
         output_fn: 输出回调（默认 stdout 原样写出；测试注入记录器）。
 
@@ -143,6 +173,9 @@ async def run_chat_cli(
     """
     resolved_settings = settings if settings is not None else global_settings
     resolved_persona_service = persona_service if persona_service is not None else PersonaService()
+    resolved_session_service = (
+        session_service if session_service is not None else ChatSessionService()
+    )
     setup_logging_from_settings(resolved_settings)
     load_all_config(config_dir=config_dir)
     manager = init_pool_manager(resolved_settings)
@@ -159,7 +192,11 @@ async def run_chat_cli(
                 usage_recorder=wire_default_usage_recorder(),
             )
         )
-        service = ChatService(gateway=resolved_gateway, persona_service=resolved_persona_service)
+        service = ChatService(
+            gateway=resolved_gateway,
+            persona_service=resolved_persona_service,
+            session_service=resolved_session_service,
+        )
 
         record: PersonaRecordDTO | None
         async with session_scope() as db_session:
@@ -175,11 +212,19 @@ async def run_chat_cli(
             )
             return 1
 
-        state = await service.create_session(persona=record)
+        async with session_scope() as db_session:
+            state = await service.create_session(
+                persona=record,
+                db_session=db_session,
+                title=record.display_name or record.name,
+            )
         persona_label = state.display_name or state.persona_name
         output_fn("=" * 46 + "\n")
         output_fn(f" 已连接人格：{persona_label}（注册名 {state.persona_name}）\n")
-        output_fn(" 命令：/help 帮助 | /history 历史 | /clear 清空 | /quit 退出\n")
+        output_fn(
+            " 命令：/help 帮助 | /history 历史 | /clear 清空 | /new 新会话"
+            " | /sessions 会话列表 | /resume 恢复 | /quit 退出\n"
+        )
         output_fn("=" * 46 + "\n")
         greeting = service.opening(state)
         output_fn(f"{persona_label}> {greeting}\n")
@@ -198,10 +243,62 @@ async def run_chat_cli(
                 break
             if text == "/clear":
                 service.clear_history(state)
-                output_fn("会话历史已清空（人格设定保留）。\n")
+                output_fn("会话历史已清空（人格设定保留；持久化消息不受影响）。\n")
                 continue
             if text == "/history":
                 _print_history(service, state, output_fn)
+                continue
+            if text == "/new":
+                try:
+                    async with session_scope() as db_session:
+                        state = await service.create_session(
+                            persona=record,
+                            db_session=db_session,
+                            title=record.display_name or record.name,
+                        )
+                except BusinessException as exc:
+                    output_fn(f"[新建失败] {exc.message}（code={exc.code}）\n")
+                    continue
+                greeting = service.opening(state)
+                output_fn(f"已新建会话 #{state.session_id}。\n{persona_label}> {greeting}\n")
+                continue
+            if text == "/sessions":
+                try:
+                    async with session_scope() as db_session, bind_persona_context(record.id):
+                        page = await resolved_session_service.list_sessions(
+                            db_session, ChatSessionQueryDTO(limit=10)
+                        )
+                except BusinessException as exc:
+                    output_fn(f"[查询失败] {exc.message}（code={exc.code}）\n")
+                    continue
+                if not page.items:
+                    output_fn("（暂无历史会话）\n")
+                else:
+                    output_fn("最近的会话：\n")
+                    for summary in page.items:
+                        output_fn(_format_session_line(summary))
+                continue
+            if text.startswith("/resume"):
+                parts = text.split()
+                if len(parts) != 2 or not parts[1].isdigit():
+                    output_fn("用法：/resume <会话ID>（经 /sessions 查看）\n")
+                    continue
+                resumed: ChatSessionStateModel | None = None
+                async with session_scope() as db_session, bind_persona_context(record.id):
+                    try:
+                        resumed = await service.resume_session(
+                            int(parts[1]), db_session=db_session
+                        )
+                    except BusinessException as exc:
+                        output_fn(f"[恢复失败] {exc.message}（code={exc.code}）\n")
+                if resumed is not None:
+                    state = resumed
+                    persona_label = state.display_name or state.persona_name
+                    greeting = service.opening(state)
+                    output_fn(
+                        f"已恢复会话 #{state.session_id}（{len(state.turns)}条历史回合）。\n"
+                        f"{persona_label}> {greeting}\n"
+                    )
                 continue
             if text == "/help":
                 output_fn(_HELP_TEXT)
@@ -223,7 +320,8 @@ def main() -> None:
         prog="pixi run chat",
         description="ai_agent_companion 控制台聊天——与当前激活人格流式对话",
         epilog=(
-            "会话命令：/quit 退出 | /clear 清空历史 | /history 查看历史 | /help 帮助\n"
+            "会话命令：/quit 退出 | /clear 清空历史 | /history 查看历史 | /new 新会话"
+            " | /sessions 会话列表 | /resume 恢复 | /help 帮助\n"
             "前置条件：已激活至少一个人格（经 /api/v1/personas 管理面）"
         ),
     )

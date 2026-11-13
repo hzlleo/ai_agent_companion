@@ -64,11 +64,14 @@ from packages.harness.llm.llm_models import (
     ChatRequestParams,
     ChatResponseModel,
     ChatStreamChunkModel,
+    EmbeddingsResponseModel,
     TokenUsageModel,
     WireChatCompletionResponse,
+    WireEmbeddingsResponse,
     WireStreamChunk,
     WireTokenUsage,
     build_chat_request_body,
+    build_embeddings_request_body,
 )
 
 __all__ = ["LlmHttpClient", "LlmRetryableError", "parse_retry_after_seconds"]
@@ -76,6 +79,9 @@ __all__ = ["LlmHttpClient", "LlmRetryableError", "parse_retry_after_seconds"]
 
 #: chat/completions 端点路径（拼接在条目 base_url 之后）。
 _CHAT_COMPLETIONS_PATH = "/chat/completions"
+
+#: embeddings 端点路径（拼接在条目 base_url 之后）。
+_EMBEDDINGS_PATH = "/embeddings"
 
 #: SSE data 行前缀（OpenAI 兼容流式协议）。
 _SSE_DATA_PREFIX = "data:"
@@ -267,6 +273,47 @@ class LlmHttpClient:
         return self._to_chat_response(wire, latency_ms=latency_ms)
 
     # ------------------------------------------------------------------
+    # 向量化（embeddings）
+    # ------------------------------------------------------------------
+
+    async def embeddings(self, texts: Sequence[str]) -> EmbeddingsResponseModel:
+        """批量文本向量化（POST /embeddings——OpenAI 兼容协议）。
+
+        Args:
+            texts: 待向量化文本列表（非空——空列表为调用方编程错误）。
+
+        Returns:
+            归一向量化响应（vectors 与输入同序同长；usage / 时延）。
+
+        Raises:
+            BusinessException: 空输入（``VALIDATION_ERROR``）；连接 / 状态 /
+                超时 / 解析失败（映射表同 ``chat``——可重试失败在重试
+                耗尽后上抛）。
+        """
+        if not texts:
+            raise BusinessException(
+                code=ErrorCode.VALIDATION_ERROR,
+                message="向量化输入不能为空",
+                details={"model": self._wire.model},
+            )
+        started_ms = now_ms()
+        body = build_embeddings_request_body(self._wire.model, list(texts))
+        response = await self._post_with_retry(body, url=self._embeddings_endpoint_url())
+        try:
+            wire = WireEmbeddingsResponse.model_validate_json(response.content)
+        except (ValidationError, ValueError) as exc:
+            raise BusinessException(
+                code=ErrorCode.LLM_CALL_FAILED,
+                details={
+                    "reason": "LLM embeddings 响应不是合法的 OpenAI 兼容 JSON",
+                    "model": self._wire.model,
+                    "parse_error": str(exc)[:300],
+                },
+            ) from exc
+        latency_ms = now_ms() - started_ms
+        return self._to_embeddings_response(wire, len(texts), latency_ms=latency_ms)
+
+    # ------------------------------------------------------------------
     # 流式
     # ------------------------------------------------------------------
 
@@ -328,6 +375,10 @@ class LlmHttpClient:
         """拼接 chat/completions 端点 URL（base_url 去尾斜杠 + 路径）。"""
         return f"{self._wire.base_url.rstrip('/')}{_CHAT_COMPLETIONS_PATH}"
 
+    def _embeddings_endpoint_url(self) -> str:
+        """拼接 embeddings 端点 URL（base_url 去尾斜杠 + 路径）。"""
+        return f"{self._wire.base_url.rstrip('/')}{_EMBEDDINGS_PATH}"
+
     def _headers(self) -> dict[str, str]:
         """构建请求头（Bearer 鉴权——免鉴权端点无 Authorization 头）。"""
         headers = {"Content-Type": "application/json"}
@@ -341,11 +392,15 @@ class LlmHttpClient:
             return httpx.Timeout(self._request_timeout_seconds)
         return self._http.timeout
 
-    async def _post_with_retry(self, body: dict[str, Any]) -> httpx.Response:
+    async def _post_with_retry(
+        self, body: dict[str, Any], *, url: str | None = None
+    ) -> httpx.Response:
         """发起非流式请求（可重试阶段：连接 + 状态码确认）。
 
         Args:
             body: 请求体。
+            url: 目标端点 URL（None = chat/completions 端点；embeddings
+                等其它 OpenAI 兼容端点显式传入）。
 
         Returns:
             2xx 响应（连接 / 5xx / 429 失败经 tenacity 有界重试）。
@@ -354,11 +409,12 @@ class LlmHttpClient:
             BusinessException: 重试耗尽的可重试失败 / 不可重试失败
                 （映射表见模块 docstring）。
         """
+        target_url = url if url is not None else self._endpoint_url()
         async for attempt in self._retrying():
             with attempt:
                 try:
                     response = await self._http.post(
-                        self._endpoint_url(),
+                        target_url,
                         json=body,
                         headers=self._headers(),
                         timeout=self._request_timeout(),
@@ -554,6 +610,53 @@ class LlmHttpClient:
             content=choice.message.content,
             finish_reason=choice.finish_reason,
             model=wire.model or self._wire.model,
+            usage=_map_wire_usage(wire.usage) if wire.usage is not None else None,
+            latency_ms=latency_ms,
+        )
+
+    def _to_embeddings_response(
+        self, wire: WireEmbeddingsResponse, input_count: int, *, latency_ms: int
+    ) -> EmbeddingsResponseModel:
+        """wire 向量化响应 → 域内归一响应（数量 / 序号校验 + 按 index 归一）。
+
+        Args:
+            wire: wire 向量化响应。
+            input_count: 输入文本数（data 数量须与之相等）。
+            latency_ms: 端到端时延毫秒。
+
+        Returns:
+            归一向量化响应（vectors 与输入同序）。
+
+        Raises:
+            BusinessException: data 数量与输入不符 / 序号越界
+                （``LLM_CALL_FAILED``）。
+        """
+        if len(wire.data) != input_count:
+            raise BusinessException(
+                code=ErrorCode.LLM_CALL_FAILED,
+                details={
+                    "reason": "LLM embeddings 响应 data 数量与输入不符",
+                    "model": self._wire.model,
+                    "expected": input_count,
+                    "got": len(wire.data),
+                },
+            )
+        vectors: list[list[float]] = [[] for _ in range(input_count)]
+        for item in wire.data:
+            if not 0 <= item.index < input_count:
+                raise BusinessException(
+                    code=ErrorCode.LLM_CALL_FAILED,
+                    details={
+                        "reason": "LLM embeddings 响应序号越界",
+                        "model": self._wire.model,
+                        "index": item.index,
+                        "input_count": input_count,
+                    },
+                )
+            vectors[item.index] = item.embedding
+        return EmbeddingsResponseModel(
+            model=wire.model or self._wire.model,
+            vectors=vectors,
             usage=_map_wire_usage(wire.usage) if wire.usage is not None else None,
             latency_ms=latency_ms,
         )
