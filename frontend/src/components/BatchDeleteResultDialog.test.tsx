@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { BatchDeleteResultDialog } from './BatchDeleteResultDialog'
-import type { PersonaBatchDeleteResponse } from '@/types/persona'
+import type { BatchDeleteResult } from '@/types/common'
 
 /** 部分成功结果样例（1 激活守卫失败 + 1 成功 + 1 缺失失败）。 */
-const partialResult: PersonaBatchDeleteResponse = {
+const partialResult: BatchDeleteResult = {
   total: 3,
   succeeded: 1,
   failed: 2,

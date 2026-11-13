@@ -16,20 +16,21 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/Table'
-import type { PersonaBatchDeleteResponse } from '@/types/persona'
+import type { BatchDeleteResult } from '@/types/common'
 
 export interface BatchDeleteResultDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** 批量删除结果（部分成功形态）。 */
-  result: PersonaBatchDeleteResponse | null
+  /** 批量删除结果（部分成功形态——人格 / 情景事件等批量删除端点共用）。 */
+  result: BatchDeleteResult | null
 }
 
 /**
- * 批量删除结果对话框：总数 + 成功/失败汇总 + 逐 id 结果表。
+ * 批量删除结果对话框（共享组件）：总数 + 成功/失败汇总 + 逐 id 结果表。
  *
- * 后端契约为部分成功形态（逐 id 独立事务）——失败项（如激活人格
- * 409 / 缺失 404）逐条呈现，不阻塞其余项。
+ * 后端契约为部分成功形态（逐 id 独立事务）——失败项（如激活守卫
+ * 409 / 缺失 404）逐条呈现，不阻塞其余项。人格 / 情景事件等批量
+ * 删除端点共用。
  */
 export function BatchDeleteResultDialog({ open, onOpenChange, result }: BatchDeleteResultDialogProps) {
   return (

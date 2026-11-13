@@ -33,7 +33,7 @@ import type {
   PersonaStatus,
 } from '@/types/persona'
 import { CopyPersonaDialog } from './CopyPersonaDialog'
-import { BatchDeleteResultDialog } from './BatchDeleteResultDialog'
+import { BatchDeleteResultDialog } from '@/components/BatchDeleteResultDialog'
 
 /** 状态过滤态（空串 = 全部）。 */
 type StatusFilter = '' | PersonaStatus

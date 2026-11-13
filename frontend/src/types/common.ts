@@ -34,3 +34,27 @@ export interface PageResponse<T> {
   /** 是否还有下一页。 */
   has_more: boolean
 }
+
+/** 批量删除结果单条目（部分成功形态——逐 id 独立事务的通用契约）。 */
+export interface BatchDeleteResultItem {
+  /** 行主键。 */
+  id: number
+  /** 是否删除成功。 */
+  success: boolean
+  /** 失败错误码（成功为 null）。 */
+  code: string | null
+  /** 提示信息。 */
+  message: string
+}
+
+/** 批量删除响应（部分成功形态——人格 / 情景事件等批量删除端点共用）。 */
+export interface BatchDeleteResult {
+  /** 提交总数。 */
+  total: number
+  /** 成功数量。 */
+  succeeded: number
+  /** 失败数量。 */
+  failed: number
+  /** 逐 id 结果（与提交顺序一致）。 */
+  items: BatchDeleteResultItem[]
+}

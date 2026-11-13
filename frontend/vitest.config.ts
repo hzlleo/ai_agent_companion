@@ -13,6 +13,9 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     exclude: ['**/node_modules/**', '**/dist/**'],
+    // 单用例超时：覆盖率插桩下重表单用例（长 user.type 序列）余量收紧，
+    // 统一放宽到 15s（仅超时预算，不改变任何断言语义）。
+    testTimeout: 15_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'text-summary', 'lcov'],

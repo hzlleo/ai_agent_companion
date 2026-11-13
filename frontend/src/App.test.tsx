@@ -24,12 +24,23 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: '人格管理' })).toBeInTheDocument()
   })
 
-  it('占位路由渲染「建设中」', async () => {
+  it('记忆路由渲染真实页面（人格选择 + 五页签）', async () => {
     window.history.replaceState({}, '', '/memories')
     renderApp()
-    expect(await screen.findByText('建设中')).toBeInTheDocument()
-    expect(screen.getByText('「记忆」模块正在建设中，敬请期待。')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: '记忆' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '记忆管理' })).toBeInTheDocument()
+    const tablist = screen.getByRole('tablist', { name: '记忆子模块' })
+    expect(tablist).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: '情景' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: '梦境' })).toBeInTheDocument()
+  })
+
+  it('用量与模型路由渲染真实页面', async () => {
+    window.history.replaceState({}, '', '/usage')
+    renderApp()
+    expect(await screen.findByRole('heading', { name: '用量观测' })).toBeInTheDocument()
+    window.history.replaceState({}, '', '/models')
+    renderApp()
+    expect(await screen.findByRole('heading', { name: '模型注册表' })).toBeInTheDocument()
   })
 
   it('未知路由兜底回 /personas', async () => {
