@@ -1,0 +1,46 @@
+# AI 陪伴伙伴（ai_agent_companion）— 前端独立 Pixi 项目
+#
+# 职责：管理前端 Node.js 22 环境与全部前端 tasks。
+# pixi 项目根 = frontend/，npm 命令在此目录下运行。
+#
+# 用法（本工程约定，全部质量命令经 pixi 执行）：
+#   cd frontend && pixi install        # 安装 Node.js 22 环境
+#   cd frontend && pixi run install    # npm install（生成/更新 package-lock.json）
+#   cd frontend && pixi run dev        # 启动 Vite 开发服务（端口 5173）
+#   cd frontend && pixi run build      # 生产构建（tsc + vite build）
+#   cd frontend && pixi run test       # vitest run（单次执行）
+#   cd frontend && pixi run coverage   # vitest run --coverage（≥80% 门禁）
+#   cd frontend && pixi run lint       # tsc --noEmit + eslint src/
+#   cd frontend && pixi run typecheck  # 仅 tsc --noEmit
+
+[workspace]
+name = "ai-agent-companion-frontend"
+version = "0.1.0"
+description = "人格驱动 AI 陪伴伙伴 - 管理前端"
+channels = ["https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/", "conda-forge", "https://conda.anaconda.org/main"]
+platforms = ["linux-64", "osx-64", "win-64"]
+
+# ─── 运行时依赖（仅 Node.js 22，无 Python）───
+[dependencies]
+nodejs = { version = ">=22,<23", channel = "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/" }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tasks — 前端全部质量命令（经 pixi 调用，保证环境一致）
+# ═══════════════════════════════════════════════════════════════════════════════
+[tasks]
+# 安装前端 npm 依赖
+install = { cmd = "npm install", description = "安装前端 npm 依赖" }
+# Vite 开发服务（端口 5173；后端 CORS 已放行该来源）
+dev = { cmd = "npm run dev", description = "启动 Vite 开发服务" }
+# 构建生产包（tsc + vite build）
+build = { cmd = "npm run build", description = "构建前端生产包" }
+# TypeScript 类型检查 + ESLint 静态检查
+lint = { cmd = "npm run lint", description = "tsc --noEmit + eslint src/" }
+# 仅 TypeScript 类型检查
+typecheck = { cmd = "npx tsc --noEmit", description = "tsc --noEmit 类型检查" }
+# 运行测试（vitest run，单次执行；msw 全量拦截，无真实网络）
+test = { cmd = "npm run test:run", description = "运行前端测试" }
+# 运行测试 + 覆盖率报告（vitest 阈值门禁：src/ 全模块 perFile ≥80%）
+coverage = { cmd = "npm run test:coverage", description = "运行前端测试 + 覆盖率（≥80% 门禁）" }
+# 本地预览生产包
+preview = { cmd = "npm run preview", description = "预览前端生产包" }
