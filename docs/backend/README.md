@@ -8,11 +8,11 @@
 | config（loader/models/settings/wizard/三件套生成 + SeekDB env 面） | [config.md](config.md) | 已交付（P0-3；P1-2 增 SeekDBSettings） |
 | database（engine/base Mixins/session/alembic） | [database.md](database.md) | 已交付（P0-3） |
 | pools（manager/http/llm/seekdb 共享池 + 熔断） | [pools.md](pools.md) | 已交付（P0-3；P1-2 增 SeekDB 检索池） |
-| llm（模型网关：多 provider / roles 路由 / 用量埋点） | [llm.md](llm.md) | 已交付（P0-4） |
-| usage（token 用量记录与多维聚合） | [usage.md](usage.md) | 已交付（P0-4） |
+| llm（模型网关：多 provider / roles 路由 / 用量埋点；P2-1 增注册表管理 API：models 路由 + 原子持久化 / 热重建 / 回滚） | [llm.md](llm.md) | 已交付（P0-4；P2-1 注册表管理面） |
+| usage（token 用量记录与多维聚合；P2-1 增用量观测 API：records / aggregates / summary 路由——跨人格口径） | [usage.md](usage.md) | 已交付（P0-4；P2-1 管理 API） |
 | persona（chara card / 注册表 / 切换复制 / L-M-S 状态） | [persona.md](persona.md) | 已交付（P0-5，含首个 app 层：personas 管理 API + 共享异常处理器） |
 | chat（会话循环 / prompt 组装 / 世界书 / 控制台 CLI / 会话持久化） | [chat.md](chat.md) | 已交付（P0-6 + P1-1 持久化与恢复） |
-| app 装配（create_app + lifespan + health 存活面） | [chat.md](chat.md#app-装配appmainpy--appapihealthpy) | 已交付（P0-6，随 chat 域文档建档；P1-1 并入 memories 路由） |
+| app 装配（create_app + lifespan + health 存活面 + CORS（P2-1：ServerConfig.cors_origins 驱动，Vite dev 默认来源）） | [chat.md](chat.md#app-装配appmainpy--appapihealthpy) | 已交付（P0-6，随 chat 域文档建档；P1-1 并入 memories 路由；P2-1 并入 usage / models 路由 + CORS） |
 | memory（三层记忆：情景 / 策展 / 工作层存储 + 管理 API + 检索层 + 夜间梦境） | [memory.md](memory.md) | 已交付（P1-1 存储 / 持久化 / API；P1-2 检索层：MemoryStore + SeekDB / SQLite 回退 + 索引管道 + search API；P1-3 夜间梦境：巩固合并 + 日记 + 运行日志 + 手工触发 API） |
 | duty / scheduler（值班轮与中央调度） | duty.md | P3 交付 |
 | tools / multimodal / voice（工具层与辅助模型客户端） | tools.md | P3-P4 交付 |

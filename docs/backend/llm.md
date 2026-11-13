@@ -1,4 +1,4 @@
-# llm — 模型网关域（P0-4 交付；P1-1 扩展 embeddings）
+# llm — 模型网关域（P0-4 交付；P1-1 扩展 embeddings；P2-1 增注册表管理 API）
 
 `backend/src/packages/harness/llm/` 承载模型无关的 LLM 网关 TRANSPORT 层：OpenAI 兼容 chat/completions 客户端（手写协议——锁定决策：**不引入 openai SDK**）、角色路由门面、池门控与用量埋点；P1 记忆层 chunk 1 扩展了 embeddings 传输面（`POST /embeddings`——记忆检索的向量化前置）。本 chunk 不含 prompt 组装（chat/ 域持有 prompt Unit 文件）。
 
@@ -183,6 +183,101 @@ data: [DONE]
 - 成功 / 失败路径**均落账**（失败 tokens 为 0，调用计数 + 时延仍有观测价值）；流式以末块 usage 为准（无则零用量）；
 - persona_id / request_id 解析序：显式参数 → `core.context` 上下文变量（请求中间件已绑定则自动携带）→ None；
 - 记录器异常**仅告警不阻断主调用**（用量是观测面不是业务面）；未接线（recorder=None）零记录。
+
+## 注册表管理 API（P2 chunk 1——`app/api/models.py` + `harness/config/registry_admin.py`）
+
+config.yaml 是 LLM 注册表**唯一真源**：`/api/v1/models` 管理面对注册表的全部突变经 harness.config.registry_admin 完成「校验 → 原子持久化 → 热重建 → 失败回滚」链；`.env` 与 `extensions_config.json` 不在该路由触达范围。全局管理面（无人格上下文——注册表是进程级配置真源，非 PersonaMixin 数据）。
+
+### 端点一览
+
+| 端点 | 语义 | 错误面 |
+|---|---|---|
+| `GET /api/v1/models/entries` | 注册表状态（条目脱敏 + 解析状态 + 显式绑定） | — |
+| `GET /api/v1/models/roles` | 五角色绑定面（chat/duty/dream/look_at/embed，bound/unbound） | — |
+| `POST /api/v1/models/entries` | 创建条目 | 409 唯一名冲突 / 400 请求校验 / 422·500 写路径故障 |
+| `PUT /api/v1/models/entries/{name}` | 部分更新（name 不可变；仅出现字段生效） | 404 / 400 / 422·500 |
+| `DELETE /api/v1/models/entries/{name}` | 删除（角色绑定守卫） | 404 / 409 仍绑定角色 / 422·500 |
+
+每次突变返回写后注册表状态（脱敏）。创建 / 更新请求体（Model Classes，`extra="forbid"`——携带 `api_key` 密钥字段即 400）：
+
+```json
+{
+  "name": "vision-helper",
+  "provider": "openai_compatible",
+  "base_url": "http://127.0.0.1:9000/v1",
+  "api_key_env": "VISION_HELPER_API_KEY",
+  "model": "qwen2.5-vl-7b",
+  "roles": ["look_at"],
+  "concurrency": 2,
+  "multimodal": true
+}
+```
+
+字段规则：`name` 非空且全局唯一（strip 后校验）；`base_url` 须 http(s) URL；`model` 非空；`api_key_env` 只接受**环境变量名**（密钥值永不进请求 / 响应 / yaml——密钥唯一入口是 .env / 进程环境变量）；`roles` 值域同 `ModelRole`；`concurrency` ≥ 1（本工程注册表无 per-entry 超时字段——请求超时统一走全局 `POOLS_LLM_REQUEST_TIMEOUT_SECONDS`）。更新体无 `name`（不可变）；`concurrency` **缺席 = 不变，显式 null = 重置全局默认**（经 `model_fields_set` 区分）；`roles: []` = 清空声明。
+
+读取面（脱敏 + 解析状态）：
+
+```json
+{
+  "success": true,
+  "code": "200",
+  "message": "成功",
+  "data": {
+    "entries": [
+      {
+        "name": "main-chat",
+        "provider": "openai_compatible",
+        "base_url": "https://api.example.com/v1",
+        "api_key_env": "MAIN_CHAT_API_KEY",
+        "model": "glm-5.3",
+        "roles": ["chat", "duty"],
+        "resolved_roles": ["chat", "dream", "duty"],
+        "concurrency": 4,
+        "multimodal": false
+      }
+    ],
+    "role_bindings": {"dream": "main-chat"}
+  }
+}
+```
+
+`resolved_roles` = 解析器当前实际解析到该条目的角色集（显式绑定 + 声明先注册者胜出的合并裁决）；不含端点健康状态（管理面不探测端点）。
+
+### 写路径链（原子持久化 + 热重建 + 回滚——顺序单一真相）
+
+```
+校验（DTO：http(s) / 非空 / extra=forbid；服务：唯一 409 / 存在 404 / 删除守卫 409）
+    ↓ 构造新 LlmConfig（不可变重建——绝不原地修改运行时对象；asyncio.Lock 串行化突变窗口）
+    ↓ 原子持久化：写前整文件备份 config.yaml.bak-<epoch-ms>（shutil.copy2）
+    │             → 临时文件 config.yaml.tmp-<epoch-ms> 写入 + flush + fsync
+    │             → os.replace 原子换名（崩溃安全：config.yaml 恒为完整旧版或完整新版）
+    │             → 备份轮换（保留最新 10 份 REGISTRY_BACKUP_KEEP，更旧清理）
+    ↓ 热重建：load_config_yaml(path) 重读磁盘——证明落盘内容可加载，
+    │         并整体换血运行时（runtime_llm_config + 解析器索引 + 回退链记录）
+    ↓ 重建失败 → apply_llm_config_to_runtime(写前快照) 回滚内存注册表
+                + BusinessException(CONFIG_INVALID 422)
+```
+
+- **持久化目标** = 进程实际加载的 config.yaml（`loader.get_loaded_config_yaml_path()`——启动期 `config_dir` 注入与写路径天然一致；首次部署无文件时在该路径创建，无写前备份）；
+- **llm 段之外的顶层键原样保留**（向前兼容后续配置段）；既有文件不可解析 / 顶层非 mapping → 422 拒绝覆写（fail loud，不破坏不可审计内容）；
+- **回滚语义**：仅回滚**内存**注册表（写已成功、失败在重建）；磁盘保留新内容，`.bak-<epoch-ms>` 保留写前内容供人工恢复，下次成功写自愈覆盖；
+- **原子写失败**（备份 / 写入 / 换名异常）：临时文件即时清理（不留 `.tmp-*` 残留），原文件不变，`INTERNAL_ERROR` 500；
+- **阻塞 I/O 下沉**：文件读写 / 备份 / 换名经 `run_blocking_ops`（core 共享线程池）。
+
+### 删除守卫（两步操作约定）
+
+仍承接任一角色的条目禁止删除（409 `CONFLICT`，`details.bound_roles` 为显式绑定 + 条目声明合并的绑定集）。解除路径（两步）：
+
+1. 条目**声明**的角色：`PUT /api/v1/models/entries/{name}` 置 `roles: []`；
+2. **显式 `role_bindings`** 指向的条目：先在 config.yaml 手工移除该绑定（本管理面不提供显式绑定编辑端点——显式绑定编辑属后续 chunk 评审面）。
+
+再执行 `DELETE`。
+
+### 测试与门禁（注册表管理面）
+
+- 测试位置：`src/tests/unit/test_models_api.py`（ASGI + 处理器直调契约面）：脱敏 / 解析状态 / 创建→落盘→热重建 round-trip / 部分更新（含 concurrency 显式 null 重置）/ 删除守卫与两步解绑流 / 唯一名 409 / 非法 base_url·未知字段·未知角色 400 / 原子写失败不留临时文件 / 重建失败内存回滚（注入仅首次失败的解析器）/ 备份生成与轮换（11+ 次持久化后保留 10 份）/ 不可解析既有文件拒绝覆写 / 写路径追踪访问器；
+- 密钥防泄漏断言：测试注入真实密钥环境变量值，断言该值永不出现于任何响应面；
+- 覆盖率（`pixi run coverage-gates` 实测）：harness/config 组 97.3%（含 registry_admin.py / registry_admin_dtos.py 新文件）；app/api 组 96.5%。
 
 ## 测试与门禁
 

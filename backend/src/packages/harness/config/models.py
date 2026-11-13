@@ -66,11 +66,23 @@ class ServerConfig(BaseSettings):
             由编排层显式设置 ``SERVER_HOST=0.0.0.0`` 对外暴露）。
         port: 服务监听端口。
         workers: uvicorn worker 进程数（生产模式）。
+        cors_origins: CORS 允许来源列表（admin 前端跨域面）。默认含 Vite
+            dev server 两形态（localhost / 127.0.0.1，端口 5173）；空列表
+            = CORS 关闭（不挂 CORSMiddleware——同源部署形态）。env 覆写
+            形态为 JSON 数组字符串（pydantic-settings 复杂类型 JSON 解析）：
+            ``SERVER_CORS_ORIGINS='["http://localhost:5173"]'``。
     """
 
     host: str = Field(default="127.0.0.1", description="服务监听地址")
     port: int = Field(default=8000, ge=1, le=65535, description="服务监听端口")
     workers: int = Field(default=1, ge=1, description="uvicorn worker 进程数（生产模式）")
+    cors_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ],
+        description="CORS 允许来源（默认 Vite dev server；空列表 = 关闭 CORS）",
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="SERVER_",
