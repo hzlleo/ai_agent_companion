@@ -60,6 +60,8 @@ __all__ = [
     "register_reload_callback",
     "reset_config_runtime_state",
     "setup_logging_from_settings",
+    "get_loaded_config_yaml_path",
+    "apply_llm_config_to_runtime",
 ]
 
 #: config.yaml 默认发现路径（CWD 相对——app 层从 backend/ 目录启动；
@@ -80,6 +82,10 @@ runtime_llm_config: LlmConfig = LlmConfig()
 
 #: extensions_config.json 解析结果（工具清单）。
 extensions_config: ExtensionsConfig = ExtensionsConfig()
+
+#: 最近一次成功加载使用的 config.yaml 路径（P2 注册表管理写路径消费——
+#: 管理面原子持久化必须落在进程实际加载的同一文件上；None = 尚未加载）。
+_loaded_config_yaml_path: Path | None = None
 
 
 def register_reload_callback(cb: Callable[[], None]) -> None:
@@ -144,11 +150,14 @@ def load_config_yaml(path: Path | None = None, *, config_dir: Path | None = None
         BusinessException: 文件存在但 YAML 解析失败 / 结构非法 / 模型
             条目校验失败（``CONFIG_INVALID``）。
     """
-    global runtime_llm_config
+    global runtime_llm_config, _loaded_config_yaml_path
 
     yaml_path = path or (config_dir / "config.yaml" if config_dir else _CONFIG_YAML_PATH)
     if not yaml_path.is_file():
         logger.debug("config.yaml 不存在 (path={})，跳过加载", yaml_path)
+        # 文件缺失为合法状态：仍记录解析路径——P2 注册表管理写路径在
+        # 首次部署（尚无 config.yaml）时经本路径创建该文件。
+        _loaded_config_yaml_path = yaml_path
         return runtime_llm_config
 
     try:
@@ -184,6 +193,7 @@ def load_config_yaml(path: Path | None = None, *, config_dir: Path | None = None
         raise _wrap_config_invalid(str(yaml_path), exc) from exc
 
     runtime_llm_config = config
+    _loaded_config_yaml_path = yaml_path
     rebuild_model_resolver(config.models, config.role_bindings)
     record_multimodal_fallback(config.multimodal_fallback)
     logger.info(
@@ -317,12 +327,47 @@ def load_all_config(*, config_dir: Path | None = None) -> tuple[LlmConfig, Exten
 
 def reset_config_runtime_state() -> None:
     """复位运行时状态（测试隔离用——llm 段 / 工具清单 / 重载回调全清）。"""
-    global runtime_llm_config, extensions_config
+    global runtime_llm_config, extensions_config, _loaded_config_yaml_path
     runtime_llm_config = LlmConfig()
     extensions_config = ExtensionsConfig()
+    _loaded_config_yaml_path = None
     rebuild_model_resolver([], {})
     record_multimodal_fallback(None)
     _reload_callbacks.clear()
+
+
+def get_loaded_config_yaml_path() -> Path:
+    """返回进程当前绑定的 config.yaml 路径（注册表管理写路径消费）。
+
+    优先返回最近一次 :func:`load_config_yaml` 实际解析的路径（显式
+    ``path`` / ``config_dir`` / CWD 相对默认三者中实际生效者——含文件
+    缺失的合法跳过形态）；从未加载过时回落 CWD 相对默认路径。P2 注册表
+    管理的原子持久化必须落在进程实际加载的同一文件上——经本访问器取径。
+
+    Returns:
+        当前绑定的 :class:`Path`（未加载过 = CWD 相对 ``config.yaml``）。
+    """
+    if _loaded_config_yaml_path is not None:
+        return _loaded_config_yaml_path
+    return _CONFIG_YAML_PATH
+
+
+def apply_llm_config_to_runtime(config: LlmConfig) -> None:
+    """将 :class:`LlmConfig` 整体应用到运行时状态（最小公开重建入口）。
+
+    与 :func:`load_config_yaml` 的差异：入参是内存模型而非文件——供
+    「已有可信配置对象、需整体换血运行时」的消费面使用（P2 注册表管理
+    的**回滚路径**：热重建失败后把写前快照恢复到运行时）。三步与
+    ``load_config_yaml`` 成功尾段完全一致（runtime_llm_config 赋值 →
+    解析器重建 → 回退链记录），保证两条路径行为不漂移。
+
+    Args:
+        config: 待应用的 LlmConfig（模型注册表 + 角色绑定 + 回退链）。
+    """
+    global runtime_llm_config
+    runtime_llm_config = config
+    rebuild_model_resolver(config.models, config.role_bindings)
+    record_multimodal_fallback(config.multimodal_fallback)
 
 
 def setup_logging_from_settings(settings: Settings) -> None:

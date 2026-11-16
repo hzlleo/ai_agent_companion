@@ -35,7 +35,7 @@ ai_agent_companion/
 │   └── src/
 │       ├── app/         # 薄 FastAPI 交付层（只做 API）
 │       └── packages/harness/   # 全部业务逻辑（PEP 420 命名空间，领域分包）
-├── frontend/            # 前端独立 pixi 工程（React 19 + Vite，P2 落地）
+├── frontend/            # 前端独立 pixi 工程（React 19 + Vite 管理台：人格/记忆/用量/模型）
 ├── docker/              # 沙盒镜像树（每树完全隔离，P3 落地）
 └── docs/                # 文档（贴合代码：JSON 示例 + 字段说明 + 链路顺序）
 ```
@@ -46,7 +46,9 @@ ai_agent_companion/
 pixi install                # 安装根环境
 cd backend && pixi install  # 安装后端环境
 cd .. && pixi run test-all  # 后端全量测试
-cd backend && pixi run chat # 控制台与当前人格对话（P0-6 后可用）
+cd backend && pixi run chat # 控制台与当前人格对话
+cd ../frontend && pixi install && pixi run install  # 前端环境（Node 22 + npm 依赖）
+pixi run dev                # 前端开发服务器（5173，连本机后端 8000）
 ```
 
 配置三件套（`.env.example` / `config.example.yaml` / `extensions_config.json.example`）由

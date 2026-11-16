@@ -1,4 +1,4 @@
-# usage — token 用量域（P0-4 交付）
+# usage — token 用量域（P0-4 交付；P2-1 增管理 API）
 
 `backend/src/packages/harness/usage/` 承载 token 用量记账：LLM / 辅助端点每次调用一行记录（成功 / 失败均落账），管理面多维聚合（按条目 / 用途 / 时间桶）。表名 `ff_usage_records`（本工程 `ff_` 前缀约定）。
 
@@ -130,10 +130,133 @@ rows = await service.aggregate(UsageAggregateQueryDTO(...))  # 多维聚合（�
 
 排序：总 token 降序为主序（成本视角），分组键升序为次序（确定性输出）。聚合形态已按管理 API 预塑形（P1+ admin 端点直接包装 `aggregate` 结果）。
 
+## 管理 API（P2 chunk 1——`app/api/usage.py`）
+
+跨人格观测语义（文档化决策）：用量是管理面 observability 数据——三个端点**均无人格上下文要求**（不解析目标人格、不绑定 persona contextvar、无 PersonaMixin 自动过滤）；人格过滤经 `persona_id` 查询参数显式表达（缺省 = 全人格）。全部响应经 `ResultDTO` 封装；`UsageService` 自持 `session_scope`（会话边界在服务层），路由无 DB 依赖注入。全部时间参数为 epoch 毫秒，范围**左闭右开**（`start_ms <= ts_ms < end_ms`）。
+
+### GET /api/v1/usage/records — 记录游标分页
+
+查询参数（全可选）：`persona_id` / `model_entry` / `purpose`（chat/duty/dream/look_at/embed/tts/asr/tool）/ `status`（success/error）/ `start_ms`（含）/ `end_ms`（不含）/ `cursor`（不透明游标，首页缺省）/ `limit`（1-200，默认 20）。
+
+```json
+{
+  "success": true,
+  "code": "200",
+  "message": "成功",
+  "data": {
+    "items": [
+      {
+        "id": 42,
+        "persona_id": "persona-feiyu",
+        "ts_ms": 1762934400000,
+        "model_entry": "main-chat",
+        "provider": "openai_compatible",
+        "purpose": "chat",
+        "input_tokens": 52,
+        "output_tokens": 18,
+        "total_tokens": 70,
+        "latency_ms": 843,
+        "status": "success",
+        "request_id": "req-7f3a",
+        "error_code": null,
+        "created_at": 1762934401000
+      }
+    ],
+    "total": -1,
+    "page": 1,
+    "page_size": 20,
+    "next_cursor": "eyJpZCI6NDF9",
+    "has_more": true
+  }
+}
+```
+
+id 降序（新记录在前）；`next_cursor` 非空表示还有更早记录（原样回传接续）；`total` 恒 -1（计数不在分页路径上执行）。
+
+### GET /api/v1/usage/aggregates — 多维聚合
+
+查询参数：`group_by`（**必填**：`model_entry` / `purpose` / `time_bucket`——暴露服务层既有维度，不新增）+ `time_bucket`（`group_by=time_bucket` 时**必填**：minute / hour / day；缺失 → 422 `VALIDATION_ERROR`）+ 与 records 相同的过滤面（不含分页参数）。
+
+```json
+{
+  "success": true,
+  "code": "200",
+  "message": "成功",
+  "data": [
+    {
+      "group": "main-chat",
+      "bucket_ms": null,
+      "input_tokens": 1100,
+      "output_tokens": 540,
+      "total_tokens": 1640,
+      "call_count": 23,
+      "avg_latency_ms": 812,
+      "error_count": 2
+    },
+    {
+      "group": "960000",
+      "bucket_ms": 960000,
+      "input_tokens": 30,
+      "output_tokens": 20,
+      "total_tokens": 50,
+      "call_count": 2,
+      "avg_latency_ms": 150,
+      "error_count": 0
+    }
+  ]
+}
+```
+
+时间维度行的 `group` 为桶起点 epoch 毫秒字符串、`bucket_ms` 为其数值面；排序：总 token 降序 + 分组键升序。
+
+### GET /api/v1/usage/summary — 总览（单 payload）
+
+查询参数：与 records 相同的过滤面（不含分页参数）。经 `group_by=purpose` 聚合行派生：计数 / token 求和 / 失败数精确；整体平均时延按 per-purpose 均值（已取整）的调用次数加权（与逐记录加权均值的偏差 < 1ms）。
+
+```json
+{
+  "success": true,
+  "code": "200",
+  "message": "成功",
+  "data": {
+    "call_count": 4,
+    "input_tokens": 16,
+    "output_tokens": 27,
+    "total_tokens": 43,
+    "avg_latency_ms": 165,
+    "error_count": 1,
+    "purposes": [
+      {
+        "group": "chat",
+        "bucket_ms": null,
+        "input_tokens": 15,
+        "output_tokens": 25,
+        "total_tokens": 40,
+        "call_count": 2,
+        "avg_latency_ms": 150,
+        "error_count": 0
+      },
+      {
+        "group": "dream",
+        "bucket_ms": null,
+        "input_tokens": 1,
+        "output_tokens": 2,
+        "total_tokens": 3,
+        "call_count": 1,
+        "avg_latency_ms": 300,
+        "error_count": 1
+      }
+    ]
+  }
+}
+```
+
+空过滤结果返回全零 + 空 `purposes`（除零守卫）。请求校验失败（未知枚举 / limit 越界 / 负时间戳）→ 400 `VALIDATION_ERROR`；`time_bucket` 维度缺桶宽 → 422 `VALIDATION_ERROR`（服务层业务校验）。
+
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_usage_service.py`（1 份；网关全链消费见 `test_llm_gateway.py::test_default_usage_recorder_full_chain`）；
+- 测试位置：`src/tests/unit/test_usage_service.py`（服务面）+ `src/tests/unit/test_usage_api.py`（P2 管理 API：ASGI + 处理器直调契约面——分页接续 / 全过滤面 / 三维聚合正确性 / 总览派生 / 错误映射）；
 - 全部 `async def test_`；引擎经共享会话级 SQLite fixture（StaticPool 单连接 + 每测试自动清表）；服务经 engine holder 槽位**外部安装**（`owner_token=None`——生命周期归共享 fixture，见 database.engine 治理约定）；
 - 聚合正确性锁定：分组求和 / 计数 / 均时延 / 失败计数 / 总量降序 / minute-hour-day 三档桶宽边界对齐（含跨记录归桶与 25 小时独立桶）；
-- 覆盖率（`pixi run tests-unit` 实测）：harness/usage 组 **99%**（service 100% / orm 100% / models 100% / dtos 98%）；
+- 覆盖率（`pixi run coverage-gates` 实测）：harness/usage 组 **99.5%**（service 100% / orm 100% / models 100% / dtos 98%）；app/api 组 96.5%；
 - 运行：`cd backend && pixi run tests-unit`。

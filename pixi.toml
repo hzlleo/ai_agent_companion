@@ -2,7 +2,7 @@
 #
 # 职责：跨项目任务调度。无 Python/Node 依赖——具体环境在子项目中：
 #   backend/pixi.toml  — 后端独立 pixi 项目（Python 3.12 + dev 工具 + 全部 backend tasks）
-#   frontend/pixi.toml — 前端独立 pixi 项目（React 19 + Vite 6；P2 落地）
+#   frontend/pixi.toml — 前端独立 pixi 项目（React 19 + Vite 6 + 管理台模块：人格/记忆/用量/模型）
 #
 # 根项目仅提供跨项目 task，通过 `cd <子项目> && pixi run <task>` 委托执行。
 # 不直接调用 python/npm（根项目无 Python/Node 二进制）。
@@ -10,17 +10,23 @@
 # 用法：
 #   pixi install              # 安装根环境（无依赖，几乎空 lock）
 #   pixi run setup            # 交互式配置生成（委托 backend pixi 的 setup）
-#   pixi run test-all         # 后端全量测试（frontend 落地后并入）
-#   pixi run lint-all         # 全量 lint
+#   pixi run test-all         # 后端全量测试
+#   pixi run test-frontend    # 前端全量测试（vitest）
+#   pixi run lint-all         # 后端 lint（ruff）
+#   pixi run lint-frontend    # 前端 lint（tsc + eslint）
 #   pixi run typecheck        # 后端 mypy
-#   pixi run coverage-gates   # 按模块覆盖率门禁（≥80%）
+#   pixi run coverage-gates   # 后端按模块覆盖率门禁（≥80%）
+#   pixi run coverage-frontend # 前端覆盖率门禁（perFile ≥80%）
 #   pixi run gates            # 工程门禁集（注释/同步测试棘轮/noqa 冻结）
 #
 # 子项目命令（在子项目目录执行）：
 #   cd backend && pixi run tests-all     # 后端全量测试
 #   cd backend && pixi run lint          # ruff 检查
 #   cd backend && pixi run typecheck     # mypy 检查
-#   cd backend && pixi run chat          # 控制台聊天 CLI（P0-6 落地）
+#   cd backend && pixi run chat          # 控制台聊天 CLI
+#   cd frontend && pixi run install      # 前端 npm 依赖安装
+#   cd frontend && pixi run dev          # 前端开发服务器（5173，连本机后端）
+#   cd frontend && pixi run build        # 前端构建（tsc + vite build）
 
 [workspace]
 name = "ai-agent-companion"
@@ -50,3 +56,12 @@ coverage-gates = { cmd = "cd backend && pixi run coverage-gates", description = 
 # 工程门禁集：中文注释门 + 同步测试棘轮 + noqa/type:ignore 冻结
 # （脚本在根 scripts/，经 backend pixi 环境的 python 执行）
 gates = { cmd = "cd backend && pixi run comment-gates && pixi run sync-test-ratchet && pixi run noqa-freeze", description = "工程门禁集（注释门 / 同步测试棘轮 / noqa 冻结）" }
+# ── 前端委托任务（frontend 独立 pixi 工程） ──────────────────────────────────
+# 前端全量测试（vitest run，msw 全模拟零真实网络）
+test-frontend = { cmd = "cd frontend && pixi run test", description = "前端全量测试（vitest）" }
+# 前端覆盖率门禁（perFile ≥80% enforce，coverage-v8）
+coverage-frontend = { cmd = "cd frontend && pixi run coverage", description = "前端覆盖率门禁（perFile ≥80% enforce）" }
+# 前端 lint（tsc --noEmit + eslint 严格类型检查）
+lint-frontend = { cmd = "cd frontend && pixi run lint", description = "前端 lint（tsc + eslint）" }
+# 前端构建（tsc + vite build）
+build-frontend = { cmd = "cd frontend && pixi run build", description = "前端构建（tsc + vite build）" }

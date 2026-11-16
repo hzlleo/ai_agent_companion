@@ -3,7 +3,7 @@
 装配契约：
 
     - :func:`create_app` —— FastAPI 工厂（共享异常处理器 + personas /
-      health 路由 + lifespan）；
+      memories / usage / models / health 路由 + CORS + lifespan）；
     - :func:`startup_app_state` / :func:`shutdown_app_state` —— **可独立
       驱动的纯异步函数对**（不藏在 lifespan 闭包内——测试无需 ASGI
       lifespan runner 即可直调，本工程不引入 asgi-lifespan 依赖）；
@@ -27,6 +27,12 @@
 chat 角色网关；P0 的对话入口为控制台 CLI（自建等价栈，见
 harness.chat.cli）。
 
+CORS（P2 chunk 1）：``ServerConfig.cors_origins`` 驱动——非空时挂
+``CORSMiddleware``（``allow_credentials=True`` + 显式 methods / headers；
+默认来源为 Vite dev server 两形态），空列表 = 不挂中间件（同源部署
+形态，CORS 关闭）。隔离测试经 ``create_app(settings=...)`` 注入自定义
+来源。
+
 ORM 注册：persona / usage / memory 三域 ORM 在本模块导入期注册到
 ``Base.metadata``——保证 ``init_database`` 的 create_all 兜底建表覆盖
 全部域表（fresh SQLite 首启即可用；生产 schema 以 Alembic 为准）。
@@ -38,15 +44,19 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import cast
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 import packages.harness.persona.orm as persona_orm
 import packages.harness.usage.orm as usage_orm
 from app.api.health import APP_VERSION
 from app.api.health import router as health_router
 from app.api.memories import router as memories_router
+from app.api.models import router as models_router
 from app.api.personas import router as personas_router
+from app.api.usage import router as usage_router
 from app.middleware.error_handler import register_exception_handlers
 from packages.harness.config.loader import load_all_config, setup_logging_from_settings
 from packages.harness.config.models import Settings
@@ -58,6 +68,11 @@ from packages.harness.pools.manager import get_pool_manager, init_pool_manager
 
 # ORM 模型注册（导入副作用——见模块 docstring「ORM 注册」一节）。
 _ORM_REGISTRY = (persona_orm, usage_orm)
+
+#: CORS 显式放行方法面（管理面全操作集）。
+_CORS_ALLOW_METHODS: list[str] = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+#: CORS 显式放行请求头面（JSON API 最小集 + 鉴权）。
+_CORS_ALLOW_HEADERS: list[str] = ["Accept", "Authorization", "Content-Type"]
 
 __all__ = [
     "APP_VERSION",
@@ -113,26 +128,55 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """应用生命周期（startup / shutdown 函数对的薄封装）。
 
     Args:
-        app: FastAPI 应用实例（生产全局 settings 驱动；隔离测试直调
-            函数对或经 ``app.router.lifespan_context``）。
+        app: FastAPI 应用实例（``app.state.settings`` 由 :func:`create_app`
+            依注入参数上挂——隔离测试经 ``create_app(settings=...)`` 驱动；
+            未上挂时回落全局单例）。
 
     Yields:
         无载荷（服务就绪窗口）。
     """
-    await startup_app_state(app, global_settings)
+    settings = cast(
+        "Settings | None", getattr(app.state, "settings", None)
+    ) or global_settings
+    await startup_app_state(app, settings)
     try:
         yield
     finally:
         await shutdown_app_state(app)
 
 
-def create_app() -> FastAPI:
-    """构造 FastAPI 应用（路由 + 异常处理器 + lifespan 一次性装配）。
+def _install_cors(app: FastAPI, settings: Settings) -> None:
+    """按 ``ServerConfig.cors_origins`` 挂 CORSMiddleware（空列表 = 关闭）。
+
+    Args:
+        app: 待挂中间件的 FastAPI 应用。
+        settings: 生效 Settings（origins / credentials / 显式方法与头面）。
+    """
+    origins = settings.server.cors_origins
+    if not origins:
+        return
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=_CORS_ALLOW_METHODS,
+        allow_headers=_CORS_ALLOW_HEADERS,
+    )
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """构造 FastAPI 应用（路由 + 异常处理器 + CORS + lifespan 一次性装配）。
+
+    Args:
+        settings: 生效 Settings（None = 全局单例 ``global_settings``——
+            生产形态；隔离测试注入自定义实例——CORS 来源等 env 面随之
+            隔离，并经 ``app.state.settings`` 传递给 lifespan）。
 
     Returns:
         已完成静态装配的 :class:`FastAPI`（进程级组件在 lifespan 启动
         期装配——见 :func:`startup_app_state`）。
     """
+    effective_settings = settings if settings is not None else global_settings
     app = FastAPI(
         title="ai_agent_companion",
         version=APP_VERSION,
@@ -140,7 +184,11 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     register_exception_handlers(app)
+    _install_cors(app, effective_settings)
     app.include_router(personas_router)
     app.include_router(memories_router)
+    app.include_router(usage_router)
+    app.include_router(models_router)
     app.include_router(health_router)
+    app.state.settings = effective_settings
     return app

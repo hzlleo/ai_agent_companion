@@ -1,19 +1,20 @@
 name: CI
 
-# CI: backend 全量验证 —— 单 job 一次 pixi install，后续步骤复用同一环境。
+# CI: 全量验证 —— backend 与 frontend 两个 job 并行，各自单次 pixi 安装后串行复用。
 #
 # 结构说明：
-#   测试 / 覆盖率门 / 工程门禁 / lint / typecheck 在同一 job 内串行执行，
-#   共享一次环境安装——安装耗时远大于各检查本身的耗时（秒级），拆分并行
-#   无收益且成倍放大下载挂起面；失败步骤在 job 日志内逐级定位。
+#   backend job —— 测试 / 覆盖率门 / 工程门禁 / lint / typecheck 串行执行，
+#   共享一次环境安装（安装耗时远大于各检查本身的耗时，拆分并行
+#   无收益且成倍放大下载挂起面）。
+#   frontend job —— 前端独立 pixi 工程（Node 22 + npm）：lint / 测试 /
+#   覆盖率门（perFile ≥80%）/ 构建，经 npm 缓存加速。
 #
 # Triggers:
 #   - Pull request targeting main or develop
 #   - Push to main / develop
 #   - workflow_dispatch 手动触发
 #
-# frontend / docker 树测试在对应子项目落地后追加独立 job（见 docs/README.md 路线图）。
-# 所有 pixi 命令均通过 `cd backend &&` 在子项目目录执行（根项目无 Python/Node）。
+# 所有 pixi 命令均通过 `cd <子项目> &&` 在子项目目录执行（根项目无 Python/Node）。
 
 on:
   pull_request:
@@ -59,3 +60,40 @@ jobs:
 
       - name: Typecheck (mypy)
         run: cd backend && pixi run typecheck
+
+  # ─── Frontend: 管理台（独立 pixi 工程，Node 22 + npm） ──────────────────────
+  frontend:
+    name: Frontend (lint + tests + coverage + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pixi (single install of the node env, lock-keyed cache)
+        uses: prefix-dev/setup-pixi@v0.11.3
+        with:
+          pixi-version: v0.82.0
+          manifest-path: frontend/pixi.toml
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: frontend-npm-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: frontend-npm-${{ runner.os }}-
+
+      - name: Install npm dependencies (pixi run install)
+        run: cd frontend && pixi run install
+
+      - name: Lint (tsc --noEmit + eslint)
+        run: cd frontend && pixi run lint
+
+      - name: Tests (vitest, msw-mocked)
+        run: cd frontend && pixi run test
+
+      - name: Coverage gates (perFile >= 80%, enforce)
+        run: cd frontend && pixi run coverage
+
+      - name: Build (tsc + vite build)
+        run: cd frontend && pixi run build

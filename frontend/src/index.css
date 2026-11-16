@@ -1,0 +1,108 @@
+/*
+ * 全局样式与设计令牌（本工程约定）。
+ * Tailwind v4 CSS-first：@theme 内声明令牌，组件经 var(--color-*) 消费。
+ */
+
+@import "tailwindcss";
+
+@theme {
+  /* 品牌主色（管理台蓝） */
+  --color-brand: #2F6FED;
+  --color-brand-strong: #2456C4;
+  --color-brand-soft: #EDF3FE;
+
+  /* 语义别名（下游统一用 primary 命名） */
+  --color-primary: #2F6FED;
+  --color-primary-hover: #2456C4;
+  --color-primary-soft: #EDF3FE;
+
+  /* 功能状态色（低饱和） */
+  --color-success: #398A52;
+  --color-success-light: #F0F8F2;
+
+  --color-warning: #E7A23B;
+  --color-warning-light: #FFF8E8;
+  --color-warning-text: #C28724;
+
+  --color-destructive: #D94C4C;
+  --color-destructive-hover: #B33A3A;
+  --color-destructive-light: #FFF2F2;
+
+  --color-info: #4B7DD8;
+  --color-info-light: #F2F6FF;
+
+  /* 表面层级 */
+  --color-surface: #FFFFFF;
+  --color-surface-secondary: #F7F8FA;
+  --color-surface-hover: #F5F7FB;
+  --color-selected: #EDF3FE;
+  --color-sidebar: #F9FAFC;
+  --color-sidebar-text: #333333;
+  --color-sidebar-hover: #F0F3F9;
+  --color-sidebar-active: #EDF3FE;
+
+  /* 边框 */
+  --color-border: #E4E7EC;
+  --color-border-strong: #D0D5DD;
+
+  /* 文本三级 */
+  --color-text: #111827;
+  --color-text-secondary: #667085;
+  --color-text-muted: #98A2B3;
+
+  /* 字体 */
+  --font-sans: -apple-system, system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'Menlo', monospace;
+
+  /* 圆角 */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.625rem;
+  --radius-xl: 0.75rem;
+
+  /* 阴影（卡片无阴影，浮层轻） */
+  --shadow-card: none;
+  --shadow-hover: 0 4px 16px rgb(0 0 0 / 0.05);
+  --shadow-dropdown: 0 6px 20px rgb(0 0 0 / 0.08);
+  --shadow-modal: 0 12px 36px rgb(0 0 0 / 0.10);
+
+  /* 过渡 */
+  --transition-fast: 120ms ease;
+  --transition-normal: 160ms ease;
+}
+
+/* 注意：不得出现任何非分层（unlayered）的全局 margin/padding reset——
+ * CSS 层叠层规则下 unlayered 永远压过 @layer utilities，会使全部
+ * Tailwind 间距类（pt-/space-y-/gap- 的 margin 侧）静默失效。
+ * v4 的 preflight 已在 @layer base 内完成等效 reset。 */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  font-family: var(--font-sans);
+  color: var(--color-text);
+  background-color: var(--color-surface-secondary);
+}
+
+:root {
+  color-scheme: light;
+}
+
+p,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  overflow-wrap: break-word;
+}
+
+#root {
+  isolation: isolate;
+}
