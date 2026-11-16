@@ -53,9 +53,9 @@ lint-all = { cmd = "cd backend && pixi run lint", description = "全量 lint（�
 typecheck = { cmd = "cd backend && pixi run typecheck", description = "后端 mypy 类型检查" }
 # 按模块覆盖率门禁：harness 子包包级 + app 层分组 ≥80%（enforce 模式）
 coverage-gates = { cmd = "cd backend && pixi run coverage-gates", description = "按模块覆盖率门禁（≥80% enforce）" }
-# 工程门禁集：中文注释门 + 同步测试棘轮 + noqa/type:ignore 冻结
-# （脚本在根 scripts/，经 backend pixi 环境的 python 执行）
-gates = { cmd = "cd backend && pixi run comment-gates && pixi run sync-test-ratchet && pixi run noqa-freeze", description = "工程门禁集（注释门 / 同步测试棘轮 / noqa 冻结）" }
+# 工程门禁集：中文注释门（backend + 沙盒树）+ 同步测试棘轮（双树）+ noqa/type:ignore
+# 冻结（双树）+ 沙盒契约漂移门（脚本在根 scripts/，经 backend pixi 环境的 python 执行）
+gates = { cmd = "cd backend && pixi run comment-gates && pixi run sync-test-ratchet && pixi run noqa-freeze && pixi run sandbox-drift", description = "工程门禁集（注释门 / 同步测试棘轮 / noqa 冻结 / 沙盒契约漂移）" }
 # ── 前端委托任务（frontend 独立 pixi 工程） ──────────────────────────────────
 # 前端全量测试（vitest run，msw 全模拟零真实网络）
 test-frontend = { cmd = "cd frontend && pixi run test", description = "前端全量测试（vitest）" }

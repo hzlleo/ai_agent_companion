@@ -28,6 +28,7 @@ from packages.harness.config.models import (
     SeekDBSettings,
     ServerConfig,
     Settings,
+    ToolsSandboxSettings,
 )
 
 # .env.example 分节标题: (section_title, config_classes)
@@ -42,6 +43,7 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("DUTY — 值班轮配置（charter 工具循环 + 报告属主投递）", [DutySettings]),
     ("DREAM_SCHEDULE — 夜间梦境定时触发配置", [DreamScheduleSettings]),
     ("SCHEDULER — 中央调度器配置（自研异步循环）", [SchedulerSettings]),
+    ("TOOLS_SANDBOX — 工具沙盒配置（可选运行时；令牌经 SANDBOX_TOKEN 间接）", [ToolsSandboxSettings]),
 ]
 
 

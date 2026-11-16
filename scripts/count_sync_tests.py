@@ -52,6 +52,7 @@ DEFAULT_BASELINE = Path(__file__).resolve().parent / ".sync_test_baseline.json"
 #: 未传位置参数时的默认树集合（仓库全部 Python 测试树，键 = 相对仓库根路径）。
 DEFAULT_TREES: tuple[str, ...] = (
     "backend",
+    "docker/tool-sandbox-agent",
 )
 
 #: 扫描时跳过的目录名（pixi 环境 / 构建产物 / 依赖树 / 隐藏目录在遍历中另行过滤）。

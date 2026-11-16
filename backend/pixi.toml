@@ -104,6 +104,9 @@ comment-gates = { cmd = "python ../scripts/check_chinese_comments.py", descripti
 # 同步测试棘轮（任务名契约——根 pixi gates 链调用）：def test_ 只降不升
 # （基线 .sync_test_baseline.json 零起点——新增测试一律 async def test_）。
 sync-test-ratchet = { cmd = "python ../scripts/count_sync_tests.py --enforce", description = "同步测试只降不升棘轮校验（对照 .sync_test_baseline.json，零容忍）" }
+# 沙盒 wire 契约漂移门（任务名契约——根 pixi gates 链调用）：backend ↔
+# docker/tool-sandbox-agent 两树契约镜像块 byte 级一致比对（4 模型块 + 1 常量行）。
+sandbox-drift = { cmd = "python ../scripts/check_sandbox_dtos_drift.py", description = "沙盒 wire 契约漂移门禁（backend ↔ 沙盒树定义块文本比对）" }
 # noqa / type:ignore 增量冻结门（任务名契约——根 pixi gates 链调用）：
 # backend 生产面基线零——严禁任何 noqa / type:ignore 抑制注释。
 noqa-freeze = { cmd = "python ../scripts/noqa_freeze_check.py", description = "noqa / type:ignore 增量冻结门禁（backend 基线 0，只减不增）" }

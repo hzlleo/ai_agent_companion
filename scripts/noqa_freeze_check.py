@@ -36,6 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # 经用户显式豁免并在此留痕）。
 BASELINES: dict[str, int] = {
     "backend": 0,
+    "tool-sandbox": 0,
     "frontend-eslint-disable": 0,
 }
 
@@ -79,6 +80,21 @@ def measure_backend() -> int:
     return sum(_count_real_noqa(p) for p in _iter_py_files(REPO_ROOT / "backend" / "src"))
 
 
+def measure_tool_sandbox() -> int:
+    """tool-sandbox 生产面 noqa / type:ignore 计数。
+
+    Returns:
+        沙盒树生产面命中行数（src + server.py）。
+    """
+    return sum(
+        _count_real_noqa(p)
+        for p in _iter_py_files(
+            REPO_ROOT / "docker" / "tool-sandbox-agent" / "src",
+            (REPO_ROOT / "docker" / "tool-sandbox-agent" / "server.py",),
+        )
+    )
+
+
 def measure_frontend() -> int:
     """frontend 生产面 eslint-disable 计数（排测试文件）。
 
@@ -107,6 +123,7 @@ def main() -> int:
     """
     measured = {
         "backend": measure_backend(),
+        "tool-sandbox": measure_tool_sandbox(),
         "frontend-eslint-disable": measure_frontend(),
     }
     print("== noqa / type:ignore 冻结门禁（S8 拍板 A）==")
