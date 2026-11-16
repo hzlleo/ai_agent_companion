@@ -32,7 +32,11 @@ from packages.harness.config.models import (
     ToolsSandboxSettings,
 )
 from packages.harness.config.settings import build_isolated_settings
-from packages.harness.tools.sandbox_models import HTTP_FETCH_TOOL_NAME
+from packages.harness.tools.sandbox_models import (
+    BILI_TOOL_NAMES,
+    BILI_VIDEO_INFO_TOOL_NAME,
+    HTTP_FETCH_TOOL_NAME,
+)
 from packages.harness.tools.tool_models import ToolResultModel
 
 #: 内置工具面（装配矩阵断言基准——duty 启用 + 检索服务注入形态）。
@@ -172,10 +176,10 @@ class TestWiringMatrix:
             await shutdown_app_state(app)
         assert factory_called == []
 
-    async def test_enabled_and_healthy_registers_http_fetch(
+    async def test_enabled_and_healthy_registers_sandbox_tools(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """enabled + 探测成功 + token 就绪：http_fetch 注册 + 工厂接线参数。"""
+        """enabled + 探测成功 + token 就绪：http_fetch + B 站四工具注册 + 工厂接线参数。"""
         monkeypatch.setattr(app_main, "Scheduler", FakeScheduler)
         fake = FakeSandboxClient(has_token=True, healthy=True)
         captured = _install_fake_client(monkeypatch, fake)
@@ -193,7 +197,10 @@ class TestWiringMatrix:
         try:
             registry = app.state.duty_registry
             assert registry is not None
-            assert registry.tool_names == _BUILTIN_TOOLS + [HTTP_FETCH_TOOL_NAME]
+            assert registry.tool_names == _BUILTIN_TOOLS + [
+                HTTP_FETCH_TOOL_NAME,
+                *BILI_TOOL_NAMES,
+            ]
             # 工厂接线：共享池 http client + settings.tools_sandbox 配置面
             assert captured["settings_face"] is settings.tools_sandbox
             assert captured["http_client"] is not None
@@ -204,12 +211,17 @@ class TestWiringMatrix:
             )
             assert result.ok is True
             assert result.result == {"status_code": 200, "body": "ok"}
-            # 本地默认值物化经 wire：timeout 默认 10
+            # B 站工具同回路（本地默认值物化经 wire）
+            result = await registry.execute(
+                BILI_VIDEO_INFO_TOOL_NAME, {"bvid": "BV1xx411c7mD"}
+            )
+            assert result.ok is True
             assert fake.invocations == [
                 (
                     HTTP_FETCH_TOOL_NAME,
                     {"url": "https://example.com/x", "timeout_seconds": 10},
-                )
+                ),
+                (BILI_VIDEO_INFO_TOOL_NAME, {"bvid": "BV1xx411c7mD"}),
             ]
         finally:
             await shutdown_app_state(app)

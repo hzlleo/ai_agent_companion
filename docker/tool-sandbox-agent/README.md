@@ -1,10 +1,11 @@
 # tool-sandbox-agent — 工具沙盒代理
 
 执行器无关工具的**隔离运行时**：后端把「必须隔离执行的工具」（当前
-`http_fetch`；P4 平台工具按同一范式接入）代理到本沙盒进程执行，与后端
-**零代码共享**——唯一的耦合点是人为镜像的 wire 契约 Model Classes
-（`src/tool_sandbox/wire_models.py` ↔ 后端 `harness/tools/sandbox_models.py`，
-两侧类定义块 byte 级一致，契约漂移由仓库根漂移门禁看护）。
+`http_fetch` + B 站只读工具组 `bili_*`；P4 平台工具按同一范式接入）代理
+到本沙盒进程执行，与后端**零代码共享**——唯一的耦合点是人为镜像的
+wire 契约 Model Classes（`src/tool_sandbox/wire_models.py` ↔ 后端
+`harness/tools/sandbox_models.py`，两侧类定义块 byte 级一致，契约漂移由
+仓库根漂移门禁看护）。
 
 架构与完整链路文档见 `docs/backend/tools-sandbox.md`（后端侧建档）。
 
@@ -15,7 +16,7 @@ docker/tool-sandbox-agent/
 ├── pixi.toml          # 独立 pixi 项目（Python 3.12 + dev 工具 + tasks）
 ├── pyproject.toml     # 依赖单一数据源（运行时 fastapi/uvicorn/pydantic + dev extras）
 ├── server.py          # ASGI 入口薄层（app 工厂 + uvicorn main + token 鉴权）
-├── src/tool_sandbox/  # 常规包：wire_models / runtime / http_fetch
+├── src/tool_sandbox/  # 常规包：wire_models / runtime / http_fetch / bili_tools
 ├── src/tests/unit/    # 单元测试（镜像后端测试布局——全部 async def test_）
 ├── Dockerfile         # 加固镜像（tini / 非 root / HEALTHCHECK）
 └── README.md          # 本文件
@@ -56,6 +57,8 @@ pixi run python server.py                     # 监听 0.0.0.0:8765（缺省；S
 |---|---|---|---|
 | `SANDBOX_TOKEN` | 是 | —— | 鉴权 token（`/invoke` Bearer 面；缺失 / 为空启动期 fail fast）。**永不落日志 / 错误响应** |
 | `SANDBOX_HTTP_ALLOWLIST` | 否 | 空 | `http_fetch` 域名允许清单（逗号分隔域名后缀；**空 = 工具禁用 / 默认拒绝**——零配置部署永不产生出站流量） |
+| `BILI_API_ALLOWLIST` | 否 | `api.bilibili.com,app.bilibili.com` | B 站工具 API 域名允许清单（**未设置 = 默认清单**——与 http_fetch 相反；**空串 = 显式禁用** B 站工具组） |
+| `BILI_COOKIE` | 否 | 空 | B 站可选 Cookie 头原值（匿名公共访问为缺省；设置时作为原生 `Cookie` 头直发，提升限速余量。**永不落日志 / 错误响应**） |
 | `SANDBOX_HOST` | 否 | `0.0.0.0` | 监听地址（容器形态缺省；裸跑建议 `127.0.0.1`） |
 | `SANDBOX_PORT` | 否 | `8765` | 监听端口（改端口须同步 Dockerfile HEALTHCHECK 探针） |
 
@@ -89,6 +92,24 @@ POST /invoke {"tool": "http_fetch", "arguments": {"url": "https://example.com/x"
 | 正文 | 按字节截断 8192（8KB）；字符集取响应头，回退 utf-8；解码 `errors="replace"` |
 | 失败 | 全部归一受控失败（ok=false 终态——执行器恒不抛未受控异常） |
 | 阻塞 I/O | stdlib urllib 经 `asyncio.to_thread` 下沉（零 httpx 依赖） |
+
+### B 站只读工具组 `bili_*`（P4 平台工具——公开 JSON 接口读取面）
+
+四工具全部**只读**（红线：零评论 / 弹幕发布等写入端点），共享一个客户端
+核心（进程内限速 1 秒最小间隔 + HTTP 412 硬冷却 600→1200→1800 秒封顶 +
+WBI 键 TTL 缓存）：
+
+| 工具 | 端点（全部 GET） | 说明 |
+|---|---|---|
+| `bili_search_videos` | `/x/web-interface/wbi/search/type`（WBI 签名） | 关键词视频搜索（`search_type=video`；keyword 1-64 / page 1-5 / page_size 10/20/30） |
+| `bili_video_info` | `/x/web-interface/view`（非 WBI） | 视频详情白名单裁剪（owner / stat 子集 / 首 P cid） |
+| `bili_video_comments` | `/x/v2/reply/main`（mode=2 时间序游标） | view→aid 换算 + 游标分页（ps≤20；page 1-50） |
+| `bili_video_subtitle` | `/x/player/v2`（view→cid 换算） | 字幕清单 + 可选首个字幕正文抓取（`fetch_subtitle` 默认 false；CDN 后缀清单 `biliapi.net` / `bilivideo.com` 管制） |
+
+- **响应白名单裁剪 + JSON 序列化上限约 16KB**（超限自列表尾部整项裁剪 + `truncated` 标记）；
+- **JSON code -352**（风控）按不重试受控失败处理；**code!=0** 携带 code + message 入受控文案；
+- 出站**不走系统代理**（`ProxyHandler({})` 显式禁用）；UA + Referer 恒发；
+- 参数面（四 args 模型）与后端 `harness/tools/sandbox_models.py` 人为镜像（同 http_fetch 范式）。
 
 ## Docker 构建 / 运行
 

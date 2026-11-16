@@ -99,8 +99,16 @@ from packages.harness.persona.service import PersonaService
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
 from packages.harness.scheduler import Scheduler, build_dream_trigger_job
 from packages.harness.tools.registry import ToolRegistry, register_builtin_tools
-from packages.harness.tools.sandbox import build_sandbox_client, register_sandbox_tool
-from packages.harness.tools.sandbox_models import HTTP_FETCH_TOOL_NAME, build_http_fetch_spec
+from packages.harness.tools.sandbox import (
+    build_sandbox_client,
+    register_sandbox_tool,
+    register_sandbox_tools_for_bili,
+)
+from packages.harness.tools.sandbox_models import (
+    BILI_TOOL_NAMES,
+    HTTP_FETCH_TOOL_NAME,
+    build_http_fetch_spec,
+)
 
 # ORM 模型注册（导入副作用——见模块 docstring「ORM 注册」一节）。
 _ORM_REGISTRY = (persona_orm, usage_orm)
@@ -366,7 +374,7 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
 
 
 async def _register_sandbox_tools(app: FastAPI, settings: Settings, registry: ToolRegistry) -> None:
-    """装配沙盒工具面（enabled + token 就绪 + /health 探测成功时注册 http_fetch）。
+    """装配沙盒工具面（enabled + token 就绪 + /health 探测成功时注册 http_fetch + B 站只读工具组）。
 
     可选组件 warn-and-continue 语义（沙盒是可选运行时——锁定决策）：
     token 未配置 / 探测失败 → 跳过沙盒工具注册并告警，duty 工具面回落
@@ -411,7 +419,11 @@ async def _register_sandbox_tools(app: FastAPI, settings: Settings, registry: To
         )
         return
     register_sandbox_tool(registry, client, build_http_fetch_spec())
-    logger.info("工具沙盒工具已注册: tools=[{}]", HTTP_FETCH_TOOL_NAME)
+    register_sandbox_tools_for_bili(registry, client)
+    logger.info(
+        "工具沙盒工具已注册: tools=[{}]",
+        ", ".join((HTTP_FETCH_TOOL_NAME, *BILI_TOOL_NAMES)),
+    )
 
 
 async def _shutdown_scheduler(app: FastAPI) -> None:

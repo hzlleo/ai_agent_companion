@@ -18,7 +18,13 @@
       侧用于 registry 本地校验 + 默认值物化（fail-fast，免网络往返）；
       沙盒侧为权威执行面，双侧校验为有意冗余）；
     - :func:`build_http_fetch_spec` —— http_fetch 工具规格（后端侧 LLM
-      呈现面：名称 / 描述 / 参数 JSON Schema——duty 轮工具清单消费）。
+      呈现面：名称 / 描述 / 参数 JSON Schema——duty 轮工具清单消费）；
+    - B 站只读工具组参数面 :class:`BiliSearchVideosArgsModel` /
+      :class:`BiliVideoInfoArgsModel` / :class:`BiliVideoCommentsArgsModel` /
+      :class:`BiliSubtitleArgsModel`（**DUPLICATED**：与沙盒树
+      ``tool_sandbox/bili_tools.py`` 的参数模型人为镜像——同 http_fetch
+      范式；后端侧本地校验 + 默认值物化，沙盒侧为权威执行面）；
+    - ``build_bili_*_spec`` 四工厂 —— B 站工具规格（后端侧 LLM 呈现面）。
 
 wire 契约（HTTP 端点 ↔ 载荷）：
 
@@ -37,7 +43,7 @@ wire 契约（HTTP 端点 ↔ 载荷）：
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator
@@ -54,6 +60,19 @@ __all__ = [
     "HTTP_FETCH_TOOL_NAME",
     "HttpFetchArgsModel",
     "build_http_fetch_spec",
+    "BILI_SEARCH_VIDEOS_TOOL_NAME",
+    "BILI_VIDEO_INFO_TOOL_NAME",
+    "BILI_VIDEO_COMMENTS_TOOL_NAME",
+    "BILI_VIDEO_SUBTITLE_TOOL_NAME",
+    "BILI_TOOL_NAMES",
+    "BiliSearchVideosArgsModel",
+    "BiliVideoInfoArgsModel",
+    "BiliVideoCommentsArgsModel",
+    "BiliSubtitleArgsModel",
+    "build_bili_search_videos_spec",
+    "build_bili_video_info_spec",
+    "build_bili_video_comments_spec",
+    "build_bili_video_subtitle_spec",
 ]
 
 
@@ -231,4 +250,264 @@ def build_http_fetch_spec() -> ToolSpecModel:
         description="抓取 HTTP/HTTPS 页面文本（经隔离沙盒执行；域名允许清单管制；正文按字节截断 8KB）。",
         args_schema=_HTTP_FETCH_SCHEMA,
         args_model=HttpFetchArgsModel,
+    )
+
+
+# ---------------------------------------------------------------------------
+# B 站只读工具组（P4 平台工具——参数面与沙盒树 bili_tools.py 人为镜像）
+# ---------------------------------------------------------------------------
+# 块边界约定（镜像 HttpFetchArgsModel 范式——漂移门禁块提取口径）：四个
+# 参数模型类**连续排布**，其前可以有注释 / 常量；BiliSubtitleArgsModel
+# （末位模型）到下一顶层定义行（首个 build_*_spec 工厂）之间**只隔空行**
+# ——保证按「类定义行 → 下一顶层定义行」提取的块在两树 byte 级一致。
+
+#: bili_search_videos 工具名（与沙盒树同名约定——跨树标识一致）。
+BILI_SEARCH_VIDEOS_TOOL_NAME: str = "bili_search_videos"
+
+#: bili_video_info 工具名（同上）。
+BILI_VIDEO_INFO_TOOL_NAME: str = "bili_video_info"
+
+#: bili_video_comments 工具名（同上）。
+BILI_VIDEO_COMMENTS_TOOL_NAME: str = "bili_video_comments"
+
+#: bili_video_subtitle 工具名（同上）。
+BILI_VIDEO_SUBTITLE_TOOL_NAME: str = "bili_video_subtitle"
+
+#: 全部 B 站只读工具名（装配 / 日志面消费——顺序即注册序）。
+BILI_TOOL_NAMES: tuple[str, ...] = (
+    BILI_SEARCH_VIDEOS_TOOL_NAME,
+    BILI_VIDEO_INFO_TOOL_NAME,
+    BILI_VIDEO_COMMENTS_TOOL_NAME,
+    BILI_VIDEO_SUBTITLE_TOOL_NAME,
+)
+
+
+#: bili_search_videos 参数 JSON Schema（与 BiliSearchVideosArgsModel 字段对齐）。
+_BILI_SEARCH_SCHEMA: ToolParametersSchema = ToolParametersSchema.model_validate(
+    {
+        "type": "object",
+        "properties": {
+            "keyword": {
+                "type": "string",
+                "description": "搜索关键词（1-64 字符）",
+                "minLength": 1,
+                "maxLength": 64,
+            },
+            "page": {
+                "type": "integer",
+                "description": "页码（1-5，默认 1）",
+                "minimum": 1,
+                "maximum": 5,
+            },
+            "page_size": {
+                "type": "integer",
+                "description": "每页条数（10/20/30，默认 20）",
+                "enum": [10, 20, 30],
+            },
+        },
+        "required": ["keyword"],
+        "additionalProperties": False,
+    }
+)
+
+#: bili_video_info 参数 JSON Schema（与 BiliVideoInfoArgsModel 字段对齐）。
+_BILI_VIDEO_INFO_SCHEMA: ToolParametersSchema = ToolParametersSchema.model_validate(
+    {
+        "type": "object",
+        "properties": {
+            "bvid": {
+                "type": "string",
+                "description": "Bilibili 视频 BV 号（BV + 10 位字母数字）",
+                "minLength": 12,
+                "maxLength": 12,
+                "pattern": r"^BV[0-9A-Za-z]{10}$",
+            },
+        },
+        "required": ["bvid"],
+        "additionalProperties": False,
+    }
+)
+
+#: bili_video_comments 参数 JSON Schema（与 BiliVideoCommentsArgsModel 字段对齐）。
+_BILI_VIDEO_COMMENTS_SCHEMA: ToolParametersSchema = ToolParametersSchema.model_validate(
+    {
+        "type": "object",
+        "properties": {
+            "bvid": {
+                "type": "string",
+                "description": "Bilibili 视频 BV 号（BV + 10 位字母数字）",
+                "minLength": 12,
+                "maxLength": 12,
+                "pattern": r"^BV[0-9A-Za-z]{10}$",
+            },
+            "page": {
+                "type": "integer",
+                "description": "页码（1-50，默认 1）",
+                "minimum": 1,
+                "maximum": 50,
+            },
+            "page_size": {
+                "type": "integer",
+                "description": "每页条数（10-20，默认 20）",
+                "minimum": 10,
+                "maximum": 20,
+            },
+        },
+        "required": ["bvid"],
+        "additionalProperties": False,
+    }
+)
+
+#: bili_video_subtitle 参数 JSON Schema（与 BiliSubtitleArgsModel 字段对齐）。
+_BILI_VIDEO_SUBTITLE_SCHEMA: ToolParametersSchema = ToolParametersSchema.model_validate(
+    {
+        "type": "object",
+        "properties": {
+            "bvid": {
+                "type": "string",
+                "description": "Bilibili 视频 BV 号（BV + 10 位字母数字）",
+                "minLength": 12,
+                "maxLength": 12,
+                "pattern": r"^BV[0-9A-Za-z]{10}$",
+            },
+            "fetch_subtitle": {
+                "type": "boolean",
+                "description": "是否抓取首个字幕文件正文（默认否）",
+            },
+        },
+        "required": ["bvid"],
+        "additionalProperties": False,
+    }
+)
+
+
+class BiliSearchVideosArgsModel(BaseModel):
+    """bili_search_videos 参数面（关键词视频搜索——沙盒侧校验锚点）。
+
+    Attributes:
+        keyword: 搜索关键词（1-64 字符）。
+        page: 页码（1-5，默认 1）。
+        page_size: 每页条数（10/20/30，默认 20）。
+    """
+
+    model_config = {"extra": "forbid"}
+
+    keyword: str = Field(min_length=1, max_length=64, description="搜索关键词（1-64 字符）")
+    page: int = Field(default=1, ge=1, le=5, description="页码（1-5，默认 1）")
+    page_size: Literal[10, 20, 30] = Field(default=20, description="每页条数（10/20/30，默认 20）")
+
+
+class BiliVideoInfoArgsModel(BaseModel):
+    """bili_video_info 参数面（BV 号单视频详情——沙盒侧校验锚点）。
+
+    Attributes:
+        bvid: Bilibili 视频 BV 号（``BV`` + 10 位字母数字，共 12 字符）。
+    """
+
+    model_config = {"extra": "forbid"}
+
+    bvid: str = Field(
+        min_length=12,
+        max_length=12,
+        pattern=r"^BV[0-9A-Za-z]{10}$",
+        description="Bilibili 视频 BV 号（BV + 10 位字母数字）",
+    )
+
+
+class BiliVideoCommentsArgsModel(BaseModel):
+    """bili_video_comments 参数面（视频评论读取——沙盒侧校验锚点）。
+
+    Attributes:
+        bvid: Bilibili 视频 BV 号（``BV`` + 10 位字母数字，共 12 字符）。
+        page: 页码（1-50，默认 1——mode=2 时间序游标换算页序）。
+        page_size: 每页条数（10-20，默认 20——接口 ps 上限 20）。
+    """
+
+    model_config = {"extra": "forbid"}
+
+    bvid: str = Field(
+        min_length=12,
+        max_length=12,
+        pattern=r"^BV[0-9A-Za-z]{10}$",
+        description="Bilibili 视频 BV 号（BV + 10 位字母数字）",
+    )
+    page: int = Field(default=1, ge=1, le=50, description="页码（1-50，默认 1）")
+    page_size: int = Field(default=20, ge=10, le=20, description="每页条数（10-20，默认 20）")
+
+
+class BiliSubtitleArgsModel(BaseModel):
+    """bili_video_subtitle 参数面（视频字幕读取——沙盒侧校验锚点）。
+
+    Attributes:
+        bvid: Bilibili 视频 BV 号（``BV`` + 10 位字母数字，共 12 字符）。
+        fetch_subtitle: 是否抓取首个字幕文件正文（默认 False——仅返回
+            字幕清单；True 时经 CDN 后缀允许清单管制抓取）。
+    """
+
+    model_config = {"extra": "forbid"}
+
+    bvid: str = Field(
+        min_length=12,
+        max_length=12,
+        pattern=r"^BV[0-9A-Za-z]{10}$",
+        description="Bilibili 视频 BV 号（BV + 10 位字母数字）",
+    )
+    fetch_subtitle: bool = Field(default=False, description="是否抓取首个字幕文件正文（默认否）")
+
+
+def build_bili_search_videos_spec() -> ToolSpecModel:
+    """构建 bili_search_videos 工具规格（后端侧 LLM 呈现面）。
+
+    Returns:
+        工具规格（经 ``register_sandbox_tools_for_bili`` 装配——执行器
+        代理到沙盒；参数校验经 :class:`BiliSearchVideosArgsModel` 本地
+        物化默认值后走 wire）。
+    """
+    return ToolSpecModel(
+        name=BILI_SEARCH_VIDEOS_TOOL_NAME,
+        description="搜索 Bilibili 视频（经隔离沙盒执行；公开只读接口；关键词 + 分页；返回白名单裁剪字段）。",
+        args_schema=_BILI_SEARCH_SCHEMA,
+        args_model=BiliSearchVideosArgsModel,
+    )
+
+
+def build_bili_video_info_spec() -> ToolSpecModel:
+    """构建 bili_video_info 工具规格（后端侧 LLM 呈现面）。
+
+    Returns:
+        工具规格（同 ``build_bili_search_videos_spec`` 装配范式）。
+    """
+    return ToolSpecModel(
+        name=BILI_VIDEO_INFO_TOOL_NAME,
+        description="获取 Bilibili 视频详情（经隔离沙盒执行；公开只读接口；标题 / 简介 / UP 主 / 时长 / stat 子集 / 首 P cid）。",
+        args_schema=_BILI_VIDEO_INFO_SCHEMA,
+        args_model=BiliVideoInfoArgsModel,
+    )
+
+
+def build_bili_video_comments_spec() -> ToolSpecModel:
+    """构建 bili_video_comments 工具规格（后端侧 LLM 呈现面）。
+
+    Returns:
+        工具规格（同 ``build_bili_search_videos_spec`` 装配范式）。
+    """
+    return ToolSpecModel(
+        name=BILI_VIDEO_COMMENTS_TOOL_NAME,
+        description="获取 Bilibili 视频评论（经隔离沙盒执行；公开只读接口；时间序游标分页；返回白名单裁剪扁平列表）。",
+        args_schema=_BILI_VIDEO_COMMENTS_SCHEMA,
+        args_model=BiliVideoCommentsArgsModel,
+    )
+
+
+def build_bili_video_subtitle_spec() -> ToolSpecModel:
+    """构建 bili_video_subtitle 工具规格（后端侧 LLM 呈现面）。
+
+    Returns:
+        工具规格（同 ``build_bili_search_videos_spec`` 装配范式）。
+    """
+    return ToolSpecModel(
+        name=BILI_VIDEO_SUBTITLE_TOOL_NAME,
+        description="获取 Bilibili 视频字幕清单（经隔离沙盒执行；公开只读接口；可选抓取首个字幕正文——CDN 后缀允许清单管制）。",
+        args_schema=_BILI_VIDEO_SUBTITLE_SCHEMA,
+        args_model=BiliSubtitleArgsModel,
     )
