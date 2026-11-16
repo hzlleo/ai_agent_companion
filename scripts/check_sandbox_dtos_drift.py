@@ -4,14 +4,17 @@
 镜像方式耦合——本脚本对两侧定义做文本比对：任一侧漂移即红（红灯输出
 首个差异的 unified diff 上下文）。
 
-比对项（4 模型块 + 1 常量行）：
+比对项（9 模型块 + 6 常量行）：
 
     - ``InvokeRequestModel`` / ``InvokeResponseModel`` /
       ``HealthResponseModel``（backend ``harness/tools/sandbox_models.py``
       ↔ 沙盒树 ``tool_sandbox/wire_models.py``）；
     - ``HttpFetchArgsModel``（backend ``sandbox_models.py`` ↔ 沙盒树
       ``tool_sandbox/http_fetch.py``——参数面双侧校验为有意冗余）；
-    - ``HTTP_FETCH_TOOL_NAME`` 常量行（同上两文件）。
+    - ``BiliSearchVideosArgsModel`` / ``BiliVideoInfoArgsModel`` /
+      ``BiliVideoCommentsArgsModel`` / ``BiliSubtitleArgsModel``
+      （backend ``sandbox_models.py`` ↔ 沙盒树 ``tool_sandbox/bili_tools.py``）；
+    - ``HTTP_FETCH_TOOL_NAME`` 与四个 ``BILI_*_TOOL_NAME`` 常量行（同上文件）。
 
 块提取口径：从定义行（``class <名>(`` 顶层起点 / 常量赋值行）到下一个
 顶层定义行或文件尾，去除块尾空行——其余文本（含 docstring 与注释）
@@ -44,6 +47,9 @@ _SANDBOX_WIRE: Path = REPO_ROOT / "docker/tool-sandbox-agent/src/tool_sandbox/wi
 
 #: 沙盒树侧 http_fetch 定义文件。
 _SANDBOX_FETCH: Path = REPO_ROOT / "docker/tool-sandbox-agent/src/tool_sandbox/http_fetch.py"
+
+#: 沙盒树侧 B站工具定义文件。
+_SANDBOX_BILI: Path = REPO_ROOT / "docker/tool-sandbox-agent/src/tool_sandbox/bili_tools.py"
 
 #: 顶层定义行模式（class 定义 / 常量赋值 / 函数定义——块边界）。
 _TOP_LEVEL_DEF: re.Pattern[str] = re.compile(r"^(class\s+\w+|[A-Z][A-Z0-9_]+\s*[:=]|def\s+\w+)")
@@ -120,7 +126,7 @@ def main() -> int:
     Returns:
         0 = 全部一致；1 = 存在漂移；2 = 文件/块缺失。
     """
-    paths = [_BACKEND_MODELS, _SANDBOX_WIRE, _SANDBOX_FETCH]
+    paths = [_BACKEND_MODELS, _SANDBOX_WIRE, _SANDBOX_FETCH, _SANDBOX_BILI]
     missing = [str(p.relative_to(REPO_ROOT)) for p in paths if not p.is_file()]
     if missing:
         print(f"[check_sandbox_dtos_drift] 契约文件缺失: {missing}", file=sys.stderr)
@@ -129,6 +135,7 @@ def main() -> int:
     backend_text = _BACKEND_MODELS.read_text(encoding="utf-8")
     wire_text = _SANDBOX_WIRE.read_text(encoding="utf-8")
     fetch_text = _SANDBOX_FETCH.read_text(encoding="utf-8")
+    bili_text = _SANDBOX_BILI.read_text(encoding="utf-8")
 
     items: list[tuple[str, str, str]] = [
         (
@@ -145,11 +152,37 @@ def main() -> int:
             _extract_class_block(fetch_text, "HttpFetchArgsModel"),
         )
     )
+    items.extend(
+        (
+            name,
+            _extract_class_block(backend_text, name),
+            _extract_class_block(bili_text, name),
+        )
+        for name in (
+            "BiliSearchVideosArgsModel",
+            "BiliVideoInfoArgsModel",
+            "BiliVideoCommentsArgsModel",
+            "BiliSubtitleArgsModel",
+        )
+    )
     items.append(
         (
             "HTTP_FETCH_TOOL_NAME",
             _extract_constant_line(backend_text, "HTTP_FETCH_TOOL_NAME"),
             _extract_constant_line(fetch_text, "HTTP_FETCH_TOOL_NAME"),
+        )
+    )
+    items.extend(
+        (
+            constant,
+            _extract_constant_line(backend_text, constant),
+            _extract_constant_line(bili_text, constant),
+        )
+        for constant in (
+            "BILI_SEARCH_VIDEOS_TOOL_NAME",
+            "BILI_VIDEO_INFO_TOOL_NAME",
+            "BILI_VIDEO_COMMENTS_TOOL_NAME",
+            "BILI_VIDEO_SUBTITLE_TOOL_NAME",
         )
     )
 

@@ -9,6 +9,18 @@
 #   export SANDBOX_TOKEN="<随机长 token>"            # 必填——缺失时 compose 拒绝起服务
 #   export SANDBOX_HTTP_ALLOWLIST="example.com"     # 可选——空 = http_fetch 禁用（默认拒绝）
 #   docker compose up -d tool-sandbox-agent
+#   # 可选辅助模型服务（look_at 视觉 + embed 嵌入；需 NVIDIA Container Toolkit）：
+#   docker compose up -d llama-server-vision llama-server-embed
+#
+# 辅助模型服务（P4）：
+#   - llama-server-vision：Qwen3-VL-4B（Q4_K_M + F16 mmproj）——look_at 角色
+#     端点（backend llm 注册表条目 base_url=http://127.0.0.1:8080/v1，
+#     multimodal=true 绑定 look_at 角色）；
+#   - llama-server-embed：Qwen3-Embedding-0.6B（f16，last pooling）——embed
+#     角色端点（base_url=http://127.0.0.1:8081/v1）；
+#   - 权重经 git-lfs 拉取的 models/ 子模组只读挂载（见 docs/models.md）；
+#   - 显存预算（16GB）：视觉 ~4GB + 嵌入 ~0.8GB——余量充足；
+#   - TTS（CosyVoice3）与 ASR（Qwen3-ASR）需各自服务包装面，见文件尾注释占位。
 #
 # 加固面（与 Dockerfile 内加固共同构成沙盒边界）：
 #   - 端口仅回环暴露（127.0.0.1:8765:8765——后端本机消费，不对局域网开放）；
@@ -53,6 +65,53 @@ services:
     restart: unless-stopped
     networks:
       - tool-sandbox
+
+  # ─── 辅助模型服务：look_at 视觉理解（Qwen3-VL-4B GGUF + mmproj） ────────────
+  # OpenAI 兼含图端点 /v1/chat/completions；后端经 llm 注册表条目消费。
+  llama-server-vision:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: llama-server-vision
+    volumes:
+      - ../models/Qwen3-VL-4B-Instruct-GGUF:/models:ro
+    command: >
+      -m /models/Qwen3VL-4B-Instruct-Q4_K_M.gguf
+      --mmproj /models/mmproj-Qwen3VL-4B-Instruct-F16.gguf
+      -c 8192 -ngl 99 --host 0.0.0.0 --port 8080
+    ports:
+      - "127.0.0.1:8080:8080"
+    gpus: all
+    mem_limit: 8g
+    restart: unless-stopped
+    networks:
+      - tool-sandbox
+
+  # ─── 辅助模型服务：记忆检索嵌入（Qwen3-Embedding-0.6B，last pooling） ───────
+  # /v1/embeddings 端点；后端 embed 角色条目消费。
+  llama-server-embed:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: llama-server-embed
+    volumes:
+      - ../models/Qwen3-Embedding-0.6B-GGUF:/models:ro
+    command: >
+      -m /models/Qwen3-Embedding-0.6B-f16.gguf
+      --embedding --pooling last
+      -c 8192 -ngl 99 --host 0.0.0.0 --port 8081
+    ports:
+      - "127.0.0.1:8081:8081"
+    gpus: all
+    mem_limit: 2g
+    restart: unless-stopped
+    networks:
+      - tool-sandbox
+
+  # ─── 待接入（部署面占位，未启用） ────────────────────────────────────────────
+  # TTS（CosyVoice3）：models/Fun-CosyVoice3-0.5B-2512 权重 + 官方运行时薄包装，
+  #   暴露 POST /tts {"text","speaker","speed"} → audio/wav（契约见
+  #   backend harness/voice/tts_client.py docstring 与 docs/backend/voice.md）；
+  #   后端 Settings.voice.tts.base_url 指向该服务。
+  # ASR（Qwen3-ASR-0.6B）：models/Qwen3-ASR-0.6B 权重 + vLLM 工具包服务
+  #   （本地服务钉 vllm==0.14.0——与远端主 LLM 的 0.32+ 互不影响），
+  #   OpenAI 兼容 /v1/audio/transcriptions；后端 Settings.voice.asr.base_url。
 
 networks:
   # compose 项目内专用桥接网络（沙盒服务独占；见文件头「网络语义」注释）。
