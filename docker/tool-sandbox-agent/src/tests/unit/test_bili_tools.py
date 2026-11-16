@@ -63,7 +63,7 @@ _FIXED_NAV_JSON: dict[str, Any] = {
     "data": {
         "wbi_img": {
             "img_url": f"https://i0.hdslb.com/bfs/wbi/{_FIXED_IMG_KEY}.png",
-            "img_sub_url": f"https://i1.hdslb.com/bfs/wbi/{_FIXED_SUB_KEY}.png",
+            "sub_url": f"https://i1.hdslb.com/bfs/wbi/{_FIXED_SUB_KEY}.png",
         }
     },
 }
@@ -158,7 +158,7 @@ _VIEW_PAYLOAD: dict[str, Any] = {
 _REPLY_PAYLOAD: dict[str, Any] = {
     "code": 0,
     "data": {
-        "cursor": {"next": 3, "all_count": 100},
+        "page": {"count": 100},
         "replies": [
             {
                 "rpid": 111,
@@ -188,7 +188,7 @@ _PLAYER_PAYLOAD: dict[str, Any] = {
                 {
                     "lan": "ai-zh",
                     "lan_doc": "中文（自动生成）",
-                    "subtitle_url": "//aisubtitle.biliapi.net/bfs/subtitle.json?x=1",
+                    "subtitle_url": "//aisubtitle.hdslb.com/bfs/ai_subtitle/prod/x.json?e=1",
                 },
                 {
                     "lan": "en",
@@ -294,9 +294,9 @@ def _default_fetches(fetch: _ScriptedFetch) -> None:
     """登记四工具标准路由（view / search / reply / player / CDN）。"""
     fetch.add("/x/web-interface/view", _json_response(_VIEW_PAYLOAD))
     fetch.add("/x/web-interface/wbi/search/type", _json_response(_SEARCH_PAYLOAD))
-    fetch.add("/x/v2/reply/main", _json_response(_REPLY_PAYLOAD))
+    fetch.add("/x/v2/reply", _json_response(_REPLY_PAYLOAD))
     fetch.add("/x/player/v2", _json_response(_PLAYER_PAYLOAD))
-    fetch.add("aisubtitle.biliapi.net", _json_response(_SUBTITLE_FILE_JSON))
+    fetch.add("aisubtitle.hdslb.com", _json_response(_SUBTITLE_FILE_JSON))
 
 
 # ---------------------------------------------------------------------------
@@ -362,7 +362,7 @@ class TestWbiSigning:
             extract_wbi_keys({"code": 0, "data": {}})
         with pytest.raises(SandboxToolError, match="WBI 键为空"):
             extract_wbi_keys(
-                {"code": 0, "data": {"wbi_img": {"img_url": "", "img_sub_url": ""}}}
+                {"code": 0, "data": {"wbi_img": {"img_url": "", "sub_url": ""}}}
             )
 
     async def test_search_url_signed_end_to_end(self) -> None:
@@ -1108,7 +1108,7 @@ class TestVideoInfoTrimming:
 
 class TestComments:
     async def test_cursor_params_and_trimming(self) -> None:
-        """评论全链：view→aid 换算 + mode=2 游标参数 + 白名单裁剪。"""
+        """评论全链：view→aid 换算 + reply 端点 pn/ps/sort 参数 + 白名单裁剪。"""
         fetch = _ScriptedFetch()
         _default_fetches(fetch)
         runtime = _registered_runtime(fetch=fetch, clock=_FakeClock(), sleep=_SleepRecorder())
@@ -1119,16 +1119,17 @@ class TestComments:
             )
         )
         assert response.ok is True
-        # 两次出站：view（换算 aid）→ reply/main（游标分页）
+        # 两次出站：view（换算 aid）→ reply（pn/ps 页序分页）
         assert len(fetch.calls) == 2
         reply_url = fetch.calls[1][0]
-        assert "/x/v2/reply/main" in reply_url
+        assert "/x/v2/reply" in reply_url
+        assert "reply/main" not in reply_url
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(reply_url).query)
         assert query["oid"] == ["170001"]
         assert query["type"] == ["1"]
-        assert query["mode"] == ["2"]
+        assert query["sort"] == ["2"]
         assert query["ps"] == ["15"]
-        assert query["next"] == ["2"]
+        assert query["pn"] == ["2"]
         result = response.result
         assert result["bvid"] == "BV1xx411c7mD"
         assert result["page"] == 2
@@ -1155,7 +1156,7 @@ class TestComments:
         """评论空容忍：replies null → 空列表（页尾非失败）。"""
         fetch = _ScriptedFetch()
         fetch.add("/x/web-interface/view", _json_response(_VIEW_PAYLOAD))
-        fetch.add("/x/v2/reply/main", _json_response({"code": 0, "data": {"replies": None, "cursor": {}}}))
+        fetch.add("/x/v2/reply", _json_response({"code": 0, "data": {"replies": None, "page": {}}}))
         runtime = _registered_runtime(fetch=fetch, clock=_FakeClock(), sleep=_SleepRecorder())
         response = await runtime.invoke(
             InvokeRequestModel(
@@ -1164,7 +1165,7 @@ class TestComments:
         )
         assert response.ok is True
         assert response.result["comments"] == []
-        assert response.result["next_page"] is None
+        assert response.result["next_page"] == 0
 
     async def test_aid_missing_controlled(self) -> None:
         """aid 换算缺失：受控失败（评论换算失败面）。"""
@@ -1221,7 +1222,7 @@ class TestSubtitle:
                 {
                     "lan": "ai-zh",
                     "lan_doc": "中文（自动生成）",
-                    "subtitle_url": "https://aisubtitle.biliapi.net/bfs/subtitle.json?x=1",
+                    "subtitle_url": "https://aisubtitle.hdslb.com/bfs/ai_subtitle/prod/x.json?e=1",
                 },
                 {
                     "lan": "en",
@@ -1244,7 +1245,7 @@ class TestSubtitle:
         )
         assert response.ok is True
         assert len(fetch.calls) == 3
-        assert "aisubtitle.biliapi.net" in fetch.calls[2][0]
+        assert "aisubtitle.hdslb.com" in fetch.calls[2][0]
         assert response.result["lan"] == "ai-zh"
         assert response.result["subtitle_lines"] == [
             {"from_ts": 0.0, "to_ts": 2.5, "content": "你好"},
@@ -1283,7 +1284,7 @@ class TestSubtitle:
         fetch.add("/x/web-interface/view", _json_response(_VIEW_PAYLOAD))
         fetch.add("/x/player/v2", _json_response(_PLAYER_PAYLOAD))
         fetch.add(
-            "aisubtitle.biliapi.net",
+            "aisubtitle.hdslb.com",
             BiliFetchResponse(status_code=200, body=b"not json"),
         )
         runtime = _registered_runtime(fetch=fetch, clock=_FakeClock(), sleep=_SleepRecorder())

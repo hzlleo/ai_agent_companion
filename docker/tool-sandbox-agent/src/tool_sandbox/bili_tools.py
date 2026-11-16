@@ -9,7 +9,7 @@
 
     搜索     /x/web-interface/wbi/search/type   （WBI 签名；search_type=video）
     详情     /x/web-interface/view              （非 WBI；bvid 直查）
-    评论     /x/v2/reply/main                   （mode=2 时间序游标；ps<=20）
+    评论     /x/v2/reply                        （pn/ps 页序 + sort=2 时间序；ps<=20）
     字幕     /x/player/v2                       （view→cid 后查字幕清单）
     WBI 键   /x/web-interface/nav               （img/sub 键源——进程内 TTL 缓存）
 
@@ -25,7 +25,7 @@
     4. **JSON code != 0**：受控失败（code + message 入文案）。
 
 WBI 签名（``/x/web-interface/wbi/*`` 端点必需）：nav 键（img_url /
-img_sub_url 文件名去扩展名）经打乱表导出 32 位 mixin key → 参数值过滤
+sub_url 文件名去扩展名）经打乱表导出 32 位 mixin key → 参数值过滤
 ``!'()*`` 字符 + 追加 ``wts``（epoch 秒）→ 键排序 urlencode → 追加
 mixin key 后取 md5 即 ``w_rfd``。nav 键每进程缓存（TTL 1800 秒——
 键位轮换周期远大于 TTL，保守取半）。
@@ -43,7 +43,8 @@ mixin key 后取 md5 即 ``w_rfd``。nav 键每进程缓存（TTL 1800 秒——
        访问为缺省形态；设置时作为原生 Cookie 头直发，提升限速余量）；
        **cookie 永不入日志 / 错误面**；
     4. **字幕 CDN 抓取**：仅当 ``fetch_subtitle=true`` 时抓取首个字幕
-       JSON——CDN URL 后缀允许清单（``biliapi.net`` / ``bilivideo.com``）
+       JSON——CDN URL 后缀允许清单（``biliapi.net`` / ``bilivideo.com`` /
+       ``hdslb.com``——B 站 CDN 实际下发 ``aisubtitle.hdslb.com``）
        + 硬超时 + 体积上限（BILI_API_ALLOWLIST 不覆盖此面——字幕 URL
        由 B 站接口下发，后缀清单即信任面）；
     5. **响应白名单裁剪**：全部工具响应裁剪到白名单字段 + JSON 序列化
@@ -139,7 +140,7 @@ _SEARCH_PATH: str = "/x/web-interface/wbi/search/type"
 _VIEW_PATH: str = "/x/web-interface/view"
 
 #: 评论主端点（mode=2 时间序游标分页——ps 上限 20）。
-_REPLY_MAIN_PATH: str = "/x/v2/reply/main"
+_REPLY_PATH: str = "/x/v2/reply"
 
 #: 播放器端点（view→cid 后查字幕清单；部分视频须登录才有字幕——空容忍）。
 _PLAYER_PATH: str = "/x/player/v2"
@@ -148,7 +149,7 @@ _PLAYER_PATH: str = "/x/player/v2"
 _NAV_URL: str = f"{_API_BASE}{_NAV_PATH}"
 
 #: 字幕 CDN 后缀允许清单（字幕 URL 由 B 站接口下发——后缀即信任面）。
-_SUBTITLE_CDN_SUFFIXES: tuple[str, ...] = ("biliapi.net", "bilivideo.com")
+_SUBTITLE_CDN_SUFFIXES: tuple[str, ...] = ("biliapi.net", "bilivideo.com", "hdslb.com")
 
 #: 域名允许清单环境变量（未设置 = 默认清单；空串 = 显式禁用——与
 #: http_fetch 的 SANDBOX_HTTP_ALLOWLIST「空 = 默认拒绝」语义相反，见模块
@@ -471,7 +472,7 @@ def derive_mixin_key(img_key: str, sub_key: str) -> str:
 
     Args:
         img_key: nav ``img_url`` 文件名（去扩展名）。
-        sub_key: nav ``img_sub_url`` 文件名（去扩展名）。
+        sub_key: nav ``sub_url`` 文件名（去扩展名）。
 
     Returns:
         32 位 mixin key（签名盐）。
@@ -566,7 +567,7 @@ def extract_wbi_keys(nav_json: dict[str, Any]) -> tuple[str, str]:
     if not isinstance(wbi_img, dict):
         raise SandboxToolError("Bilibili nav 响应 wbi_img 段缺失")
     img_key = _filename_without_ext(str(wbi_img.get("img_url") or ""))
-    sub_key = _filename_without_ext(str(wbi_img.get("img_sub_url") or ""))
+    sub_key = _filename_without_ext(str(wbi_img.get("sub_url") or ""))
     if not img_key or not sub_key:
         raise SandboxToolError("Bilibili nav 响应 WBI 键为空")
     return img_key, sub_key
@@ -1134,10 +1135,11 @@ class _BiliClientCore:
         return _trim_video_info(data).model_dump()
 
     def video_comments(self, *, bvid: str, page: int, page_size: int) -> dict[str, Any]:
-        """视频评论（view→aid 换算 + reply/main mode=2 时间序游标分页）。
+        """视频评论（view→aid 换算 + reply 端点 pn/ps 页序分页）。
 
-        游标语义：mode=2（时间序）下 ``next`` 参数即页序（1 起）——
-        请求页码直接换算游标；ps 上限 20（参数面 10-20 收敛）。
+        分页语义：``pn`` 即页序（1 起）、``ps`` 每页条数（参数面 10-20
+        收敛）、``sort=2`` 时间序；``next_page`` 由 ``page.count`` 总数
+        换算（本页末尾超出总数即 0——无更多页）。
 
         Args:
             bvid: 视频 BV 号。
@@ -1145,7 +1147,7 @@ class _BiliClientCore:
             page_size: 每页条数（10-20）。
 
         Returns:
-            白名单裁剪结果（comments 扁平列表 + 分页元信息 + 下一页游标）。
+            白名单裁剪结果（comments 扁平列表 + 分页元信息 + 下一页码）。
 
         Raises:
             SandboxToolError: 全链受控失败面 + aid 换算缺失。
@@ -1157,24 +1159,26 @@ class _BiliClientCore:
         params: dict[str, Any] = {
             "oid": aid,
             "type": 1,
-            "mode": 2,
+            "sort": 2,
+            "pn": page,
             "ps": page_size,
-            "next": page,
         }
-        data = self._request_json(_REPLY_MAIN_PATH, params, wbi=False)
+        data = self._request_json(_REPLY_PATH, params, wbi=False)
         replies_raw = data.get("replies")
         replies = replies_raw if isinstance(replies_raw, list) else []
         comments = [
             _trim_comment(reply) for reply in replies if isinstance(reply, dict)
         ]
-        cursor_raw = data.get("cursor")
-        cursor = cursor_raw if isinstance(cursor_raw, dict) else {}
+        page_raw = data.get("page")
+        page_info = page_raw if isinstance(page_raw, dict) else {}
+        total = _to_int(page_info.get("count")) or 0
+        next_page = page + 1 if page * page_size < total else 0
         result: dict[str, Any] = {
             "bvid": bvid,
             "page": page,
             "page_size": page_size,
             "comments": [comment.model_dump() for comment in comments],
-            "next_page": _to_int(cursor.get("next")),
+            "next_page": next_page,
         }
         return _cap_result(result, "comments")
 
