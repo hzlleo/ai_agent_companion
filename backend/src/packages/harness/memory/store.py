@@ -12,7 +12,7 @@ MemoryStore 协议（存储选择见 ``memory.retrieval.build_memory_store``）�
 逐字对齐，测试以精确字符串断言锁定）：
 
     - :func:`build_ensure_schema_sql` —— 索引表 DDL（VECTOR(dim) 插值 /
-      jieba 全文索引 / hnsw 向量索引 / HEAP 组织 / 引用唯一键）；
+      ik 全文索引 / hnsw 向量索引 / HEAP 组织 / 引用唯一键）；
     - :func:`build_upsert_sql`        —— 批量 upsert（ON DUPLICATE KEY
       UPDATE——按引用唯一键幂等覆盖）；
     - :func:`build_delete_sql`        —— 按引用删除（人格 + 类型 + 引用键）；
@@ -121,7 +121,7 @@ class MemoryStore(Protocol):
 
 
 def build_ensure_schema_sql(vector_dim: int) -> str:
-    """构建索引表 DDL（SeekDB——VECTOR(dim) / jieba 全文 / hnsw 向量索引）。
+    """构建索引表 DDL（SeekDB——VECTOR(dim) / ik 全文 / hnsw 向量索引）。
 
     形态要点（事实卡锁定）：
 
@@ -129,7 +129,7 @@ def build_ensure_schema_sql(vector_dim: int) -> str:
           Qwen3-Embedding-0.6B）；
         - ``ORGANIZATION = HEAP`` —— DBMS_HYBRID_SEARCH（Form B，后续
           chunk）的前置条件；
-        - 全文索引中文分词 ``WITH PARSER jieba``；
+        - 全文索引中文分词 ``WITH PARSER ik``；
         - 向量索引 ``DISTANCE=cosine, TYPE=hnsw, LIB=vsag``；
         - ``UNIQUE KEY uk_ff_mem_ref`` —— 引用唯一键（upsert 的
           ON DUPLICATE KEY 作用面）。
@@ -161,7 +161,7 @@ def build_ensure_schema_sql(vector_dim: int) -> str:
         "  ts_ms BIGINT NOT NULL,\n"
         "  content TEXT NOT NULL,\n"
         f"  embedding VECTOR({vector_dim}),\n"
-        "  FULLTEXT INDEX idx_ff_mem_ft (content) WITH PARSER jieba,\n"
+        "  FULLTEXT INDEX idx_ff_mem_ft (content) WITH PARSER ik PARSER_PROPERTIES=(ik_mode='max_word'),\n"
         "  VECTOR INDEX idx_ff_mem_vec (embedding) "
         "WITH (DISTANCE=cosine, TYPE=hnsw, LIB=vsag),\n"
         "  UNIQUE KEY uk_ff_mem_ref (persona_id, ref_type, ref_id)\n"
@@ -286,7 +286,9 @@ def build_search_sql(
           WHERE 含 MATCH 谓词；``ORDER BY MATCH(content) AGAINST(%s) DESC
           LIMIT %s``（**无 APPROXIMATE**——无 ANN 面）；
         - **hybrid**：SELECT 含 cosine_distance score；WHERE 含 MATCH
-          谓词（关键词预过滤）；``ORDER BY score APPROXIMATE LIMIT %s``。
+          谓词（关键词预过滤）；``ORDER BY score LIMIT %s``（**精确排序，
+          无 APPROXIMATE**——v1.4.0 实测 MATCH 谓词不进 ANN 扫描、组合式
+          静默空集；过滤后行集小，精确距离排序语义等价且正确）。
 
     谓词组装顺序（参数与 SQL 出现序一致——左到右，逐行）：
 
@@ -344,10 +346,12 @@ def build_search_sql(
         lines.append("  AND MATCH(content) AGAINST(%s)")
         params.append(query.query)
 
-    # ORDER BY + LIMIT（模式分派：keyword 无 APPROXIMATE）
+    # ORDER BY + LIMIT（模式分派：keyword 无 score 位复用；hybrid 精确排序）
     if query.mode == MemorySearchMode.KEYWORD:
         lines.append("ORDER BY MATCH(content) AGAINST(%s) DESC LIMIT %s")
         params.append(query.query)
+    elif query.mode == MemorySearchMode.HYBRID:
+        lines.append("ORDER BY score LIMIT %s")
     else:
         lines.append("ORDER BY score APPROXIMATE LIMIT %s")
     params.append(query.limit)

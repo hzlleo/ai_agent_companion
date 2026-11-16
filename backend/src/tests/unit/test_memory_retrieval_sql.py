@@ -1,10 +1,10 @@
 """memory 检索层 SQL 构建器测试——精确字符串断言（SeekDB 事实卡锁定面）。
 
-覆盖面：ensure_schema DDL（VECTOR(dim) 插值 / jieba 全文 / hnsw 向量
+覆盖面：ensure_schema DDL（VECTOR(dim) 插值 / ik 全文 / hnsw 向量
 索引 / HEAP / 引用唯一键）/ upsert（行数占位符展开 + ON DUPLICATE KEY
 覆盖列）/ delete（三谓词）/ search 三模式（dense 无 MATCH + APPROXIMATE；
 keyword 有 MATCH 无 APPROXIMATE + ORDER BY MATCH DESC；hybrid MATCH +
-APPROXIMATE）/ 过滤器组合与参数序 / 模式违规 fail loud / LIMIT 钳位
+精确排序无 APPROXIMATE）/ 过滤器组合与参数序 / 模式违规 fail loud / LIMIT 钳位
 （DTO 边界）/ 向量 JSON 字面量编码。
 """
 
@@ -46,7 +46,7 @@ def _query(**overrides: object) -> MemorySearchQueryDTO:
 
 
 async def test_ensure_schema_sql_exact_shape() -> None:
-    """DDL 精确形态：VECTOR(dim) 插值 + jieba 全文 + hnsw 向量索引 + HEAP + 引用唯一键。"""
+    """DDL 精确形态：VECTOR(dim) 插值 + ik 全文 + hnsw 向量索引 + HEAP + 引用唯一键。"""
     sql = build_ensure_schema_sql(1024)
     assert sql == (
         "CREATE TABLE IF NOT EXISTS ff_memory_index (\n"
@@ -59,7 +59,7 @@ async def test_ensure_schema_sql_exact_shape() -> None:
         "  ts_ms BIGINT NOT NULL,\n"
         "  content TEXT NOT NULL,\n"
         "  embedding VECTOR(1024),\n"
-        "  FULLTEXT INDEX idx_ff_mem_ft (content) WITH PARSER jieba,\n"
+        "  FULLTEXT INDEX idx_ff_mem_ft (content) WITH PARSER ik PARSER_PROPERTIES=(ik_mode='max_word'),\n"
         "  VECTOR INDEX idx_ff_mem_vec (embedding) "
         "WITH (DISTANCE=cosine, TYPE=hnsw, LIB=vsag),\n"
         "  UNIQUE KEY uk_ff_mem_ref (persona_id, ref_type, ref_id)\n"
@@ -185,8 +185,8 @@ async def test_search_sql_keyword_match_without_approximate() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_search_sql_hybrid_match_and_approximate() -> None:
-    """hybrid：MATCH 预过滤谓词 + cosine_distance score + APPROXIMATE。"""
+async def test_search_sql_hybrid_match_and_exact_order() -> None:
+    """hybrid：MATCH 预过滤谓词 + cosine_distance score + 精确排序（无 APPROXIMATE）。"""
     sql, params = build_search_sql(_query(mode=MemorySearchMode.HYBRID), [0.3, 0.4])
     assert sql == (
         "SELECT id, ref_type, ref_id, kind, provenance, ts_ms, content,\n"
@@ -194,9 +194,10 @@ async def test_search_sql_hybrid_match_and_approximate() -> None:
         "FROM ff_memory_index\n"
         "WHERE persona_id = %s\n"
         "  AND MATCH(content) AGAINST(%s)\n"
-        "ORDER BY score APPROXIMATE LIMIT %s"
+        "ORDER BY score LIMIT %s"
     )
     assert params == ["[0.3,0.4]", 7, "小鱼干", 10]
+    assert "APPROXIMATE" not in sql
 
 
 # ---------------------------------------------------------------------------

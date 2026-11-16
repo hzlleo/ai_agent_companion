@@ -3,7 +3,7 @@
 架构位置（P1 chunk 2 检索层，文档化于 docs/backend/memory.md）：
 
     - 索引表 ``ff_memory_index``：向量（VECTOR(dim) + hnsw）+ 全文
-      （jieba）+ 标量（persona_id / kind / provenance / ts_ms）混合检索
+      （ik）+ 标量（persona_id / kind / provenance / ts_ms）混合检索
       ——**raw SQL only**（SeekDB 无 SQLAlchemy 方言；DDL 与查询形态
       见 memory.store 构建器，与事实卡逐字对齐）；
     - 连接：自有 aiomysql 池（构造注入优先——PoolManager 共享池；
