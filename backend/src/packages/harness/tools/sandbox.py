@@ -45,6 +45,10 @@ from packages.harness.tools.sandbox_models import (
     InvokeResponseModel,
     SandboxClientFace,
     SandboxSettingsFace,
+    build_bili_search_videos_spec,
+    build_bili_video_comments_spec,
+    build_bili_video_info_spec,
+    build_bili_video_subtitle_spec,
 )
 from packages.harness.tools.tool_models import ToolResultModel, ToolSpecModel
 
@@ -52,6 +56,7 @@ __all__ = [
     "ToolSandboxClient",
     "build_sandbox_client",
     "register_sandbox_tool",
+    "register_sandbox_tools_for_bili",
 ]
 
 
@@ -269,3 +274,27 @@ def register_sandbox_tool(
         return outcome.result
 
     registry.register(spec, _execute)
+
+
+def register_sandbox_tools_for_bili(
+    registry: ToolRegistry, sandbox_client: SandboxClientFace
+) -> None:
+    """注册全部 B 站只读沙盒代理工具（四工具——逐个走 :func:`register_sandbox_tool`）。
+
+    工具面（全部只读公开 JSON 接口，语义在沙盒树 ``bili_tools.py``）：
+    ``bili_search_videos`` / ``bili_video_info`` / ``bili_video_comments`` /
+    ``bili_video_subtitle``。失败语义同 http_fetch 代理（客户端 ok=False
+    转 ``INTERNAL_ERROR`` 业务异常，registry 归一 ok=False）。
+
+    Args:
+        registry: 工具注册表（装配目标——同名后写覆盖前写）。
+        sandbox_client: 沙盒客户端（真实 :class:`ToolSandboxClient` /
+            测试 fake 均可——结构化协议）。
+    """
+    for spec in (
+        build_bili_search_videos_spec(),
+        build_bili_video_info_spec(),
+        build_bili_video_comments_spec(),
+        build_bili_video_subtitle_spec(),
+    ):
+        register_sandbox_tool(registry, sandbox_client, spec)

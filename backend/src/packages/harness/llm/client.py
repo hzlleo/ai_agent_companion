@@ -13,10 +13,10 @@
       归一为 dict）；
     - 流式 ``stream()``：SSE 行解析 → 异步迭代产出
       :class:`ChatStreamChunkModel`（末块 usage 经 ``stream_options.
-      include_usage`` 声明回传）；**流式恒 content-only**——原生工具调用
-      与流式组合在请求体构建层直接拒绝（``VALIDATION_ERROR``，见
-      llm_models.build_chat_request_body——client ``stream()`` 不设
-      tools 参数面）；
+      include_usage`` 声明回传）；**流式恒 content-only 纯文本**——原生
+      工具调用与多模态内容分块同流式的组合在请求体构建层直接拒绝
+      （``VALIDATION_ERROR``，见 llm_models.build_chat_request_body——
+      client ``stream()`` 不设 tools / 分块参数面）；
     - 重试（tenacity）：仅覆盖**幂等安全失败集**——连接错误 / 5xx /
       408 / 429（429 尊重 Retry-After 头，等待封顶可配）；流式请求仅
       「发起 → 2xx 确认」阶段可重试（首块产出后重放会重复消费，不重试）；

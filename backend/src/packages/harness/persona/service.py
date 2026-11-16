@@ -211,7 +211,8 @@ class PersonaService:
 
         Args:
             session: 注入的异步 Session。
-            dto: 创建 DTO（status 缺省 disabled；展示名缺省回落 card.name）。
+            dto: 创建 DTO（status 缺省 disabled；展示名缺省回落 card.name；
+                voice_profile 可选绑定）。
 
         Returns:
             落库后的记录 DTO（含主键）。
@@ -226,6 +227,7 @@ class PersonaService:
             status=dto.status.value,
             is_active=False,
             chara_card=dto.card.model_dump(),
+            voice_profile=dto.voice_profile.model_dump() if dto.voice_profile is not None else None,
         )
         session.add(row)
         await self._commit(session)
@@ -314,6 +316,11 @@ class PersonaService:
                 logger.info("停用人格并自动清激活位: id={}", persona_id)
         if dto.card is not None:
             row.chara_card = self._merge_card(row.chara_card, dto.card)
+        if "voice_profile" in dto.model_fields_set:
+            # 出现即整体替换（显式 null 清除绑定；语音绑定无字段级合并）
+            row.voice_profile = (
+                dto.voice_profile.model_dump() if dto.voice_profile is not None else None
+            )
         await self._commit(session)
         return PersonaRecordDTO.model_validate(row)
 
@@ -342,6 +349,7 @@ class PersonaService:
             status=PersonaStatus.DISABLED.value,
             is_active=False,
             chara_card=CharaCardModel.model_validate(source.chara_card).model_dump(),
+            voice_profile=dict(source.voice_profile) if source.voice_profile is not None else None,
         )
         session.add(new_row)
         await session.flush()  # 先取新行主键，状态深拷贝需要

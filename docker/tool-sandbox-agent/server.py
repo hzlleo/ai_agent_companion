@@ -3,7 +3,7 @@
 职责边界（本文件只做「入口」——工具语义全部在 ``tool_sandbox`` 包内）：
 
     - :func:`create_app`  —— FastAPI 工厂（token 鉴权依赖 + ``/health`` /
-      ``/invoke`` 两端点 + 默认运行时装配 http_fetch）；
+      ``/invoke`` 两端点 + 默认运行时装配 http_fetch + B 站只读工具组）；
     - :func:`main`        —— uvicorn 启动（host/port 经 env 覆写）。
 
 鉴权（安全红线）：
@@ -35,6 +35,7 @@ from typing import Annotated
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException
 
+from tool_sandbox.bili_tools import register_bili_tools
 from tool_sandbox.http_fetch import build_http_fetch_tool
 from tool_sandbox.runtime import SandboxToolRuntime
 from tool_sandbox.wire_models import (
@@ -96,11 +97,11 @@ def resolve_bind_address() -> tuple[str, int]:
 
 
 def create_app(*, runtime: SandboxToolRuntime | None = None) -> FastAPI:
-    """构造 FastAPI 应用（token 鉴权 + 两端点 + 默认 http_fetch 装配）。
+    """构造 FastAPI 应用（token 鉴权 + 两端点 + 默认工具装配）。
 
     Args:
-        runtime: 沙盒工具运行时（None = 新建并注册 http_fetch——生产
-            形态；测试注入 stub 运行时隔离工具语义）。
+        runtime: 沙盒工具运行时（None = 新建并注册 http_fetch + B 站只读
+            工具组——生产形态；测试注入 stub 运行时隔离工具语义）。
 
     Returns:
         已完成装配的 :class:`FastAPI` 实例。
@@ -116,6 +117,7 @@ def create_app(*, runtime: SandboxToolRuntime | None = None) -> FastAPI:
         runtime = SandboxToolRuntime()
         spec, executor = build_http_fetch_tool()
         runtime.register(spec, executor)
+        register_bili_tools(runtime)
     app = FastAPI(
         title="tool-sandbox-agent",
         version="0.1.0",

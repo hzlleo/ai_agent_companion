@@ -10,11 +10,13 @@
 | pools（manager/http/llm/seekdb 共享池 + 熔断） | [pools.md](pools.md) | 已交付（P0-3；P1-2 增 SeekDB 检索池） |
 | llm（模型网关：多 provider / roles 路由 / 用量埋点；P2-1 增注册表管理 API：models 路由 + 原子持久化 / 热重建 / 回滚） | [llm.md](llm.md) | 已交付（P0-4；P2-1 注册表管理面） |
 | usage（token 用量记录与多维聚合；P2-1 增用量观测 API：records / aggregates / summary 路由——跨人格口径） | [usage.md](usage.md) | 已交付（P0-4；P2-1 管理 API） |
-| persona（chara card / 注册表 / 切换复制 / L-M-S 状态） | [persona.md](persona.md) | 已交付（P0-5，含首个 app 层：personas 管理 API + 共享异常处理器） |
+| persona（chara card / 注册表 / 切换复制 / L-M-S 状态；P4-1 增人格语音绑定 voice_profile） | [persona.md](persona.md) | 已交付（P0-5，含首个 app 层：personas 管理 API + 共享异常处理器；P4-1 增列见 [voice.md](voice.md)） |
 | chat（会话循环 / prompt 组装 / 世界书 / 控制台 CLI / 会话持久化） | [chat.md](chat.md) | 已交付（P0-6 + P1-1 持久化与恢复） |
 | app 装配（create_app + lifespan + health 存活面 + CORS（P2-1：ServerConfig.cors_origins 驱动，Vite dev 默认来源）） | [chat.md](chat.md#app-装配appmainpy--appapihealthpy) | 已交付（P0-6，随 chat 域文档建档；P1-1 并入 memories 路由；P2-1 并入 usage / models 路由 + CORS） |
 | memory（三层记忆：情景 / 策展 / 工作层存储 + 管理 API + 检索层 + 夜间梦境） | [memory.md](memory.md) | 已交付（P1-1 存储 / 持久化 / API；P1-2 检索层：MemoryStore + SeekDB / SQLite 回退 + 索引管道 + search API；P1-3 夜间梦境：巩固合并 + 日记 + 运行日志 + 手工触发 API） |
 | duty / scheduler（值班轮与中央调度：LLM 原生工具调用 + 工具注册表 + 章程驱动值班工具循环 + 手滚调度器 + 梦境定时触发） | [duty.md](duty.md) | 已交付（P3-2；含 harness/tools 工具注册表与内置工具——沙盒执行器属 P3-3） |
 | tools / sandbox（工具沙盒：docker/tool-sandbox-agent 独立隔离运行时 + wire 契约双树镜像 + 后端沙盒客户端 / registry 代理注册 + http_fetch 示例工具 + compose 加固部署） | [tools-sandbox.md](tools-sandbox.md) | 已交付（P3-3；沙盒为可选运行时——enabled=false 默认，P4 平台工具按 http_fetch 范式接入） |
-| tools / multimodal / voice（工具层与辅助模型客户端） | tools.md | P4 交付（工具注册表已随 P3-2 交付于 [duty.md](duty.md) 工具注册表一节；docker 沙盒已随 P3-3 交付于 [tools-sandbox.md](tools-sandbox.md)；多模态 / 语音后续 chunk） |
-| channels（平台通道：通道中立路由器 + Telegram 适配器 / 长轮询 runner / offset 持久化 / 4096 分段） | [channels.md](channels.md) | 已交付（P3-1：Telegram；P3-2 duty 报告出站经既有路由器消费；P4 多通道扩展 / safety 审批红线后续 chunk） |
+| voice（语音域：CosyVoice3 TTS 客户端 + Qwen3-ASR OpenAI 兼容转写客户端 + VoiceService 编排 / 用量埋点 + persona 语音绑定 + voice 管理 API + CLI --voice） | [voice.md](voice.md) | 已交付（P4-1；外部本地模型服务经 HTTP 契约消费——enabled=false 默认，compose 接线属后续部署 chunk；多模态 look_at / B站 / QQ 通道后续 chunk） |
+| multimodal（多模态 look_at 域：llm 内容分块（OpenAI 兼容 vision 消息）+ LookAtService 编排（config 回退链消费）/ purpose="look_at" 用量埋点 + look_at 工具注册（duty / persona 工具循环）+ look_at 管理 API（multipart 上传）） | [multimodal.md](multimodal.md) | 已交付（P4-2；视觉模型 = llm 注册表 multimodal 条目——生产形态本地 llama-server + Qwen3-VL GGUF 子模型；B站 / QQ 通道后续 chunk） |
+| tools / multimodal / voice（工具层与辅助模型客户端） | tools.md | P4 交付（工具注册表已随 P3-2 交付于 [duty.md](duty.md) 工具注册表一节；docker 沙盒已随 P3-3 交付于 [tools-sandbox.md](tools-sandbox.md)；语音已随 P4-1 交付于 [voice.md](voice.md)；多模态已随 P4-2 交付于 [multimodal.md](multimodal.md)） |
+| channels（平台通道：通道中立路由器 + Telegram 适配器 / 长轮询 runner / offset 持久化 / 4096 分段 + QQ 适配器 / NapCat OneBot v11 webhook 推送入站 / 消息展平 / message_id 去重） | [channels.md](channels.md) | 已交付（P3-1：Telegram；P3-2 duty 报告出站经既有路由器消费；P4-4：QQ / NapCat——推送式入站无 runner，warn-and-continue 启动校验；B站通道 / safety 审批红线后续 chunk） |

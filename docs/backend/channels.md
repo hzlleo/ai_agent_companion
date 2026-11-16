@@ -1,18 +1,22 @@
-# channels — 平台通道层（P3 chunk 1 交付：Telegram 首个适配器）
+# channels — 平台通道层（P3 chunk 1 交付：Telegram 首个适配器；P4 chunk 4 交付：QQ / NapCat OneBot v11）
 
-`backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram 首个——手写 Bot API 客户端 + 长轮询 runner）。P3 锁定决策：Telegram first；通道抽象保持类型可扩展（`ChannelType` StrEnum——P4 B站 / QQ 在此追加成员与同级子模型）。
+`backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram——手写 Bot API 客户端 + 长轮询 runner；QQ——NapCat OneBot v11 客户端 + webhook 推送入站）。通道抽象保持类型可扩展（`ChannelType` StrEnum——B站等后续通道在此追加成员与同级子模型）。
 
 ## 模块一览
 
 | 模块 | 职责 | 关键导出 |
 |---|---|---|
-| `channel_models.py` | 通道中立 Model Classes（Unit 文件）：通道类型值域 / 入站 / 出站 / 上下文 / 投递结果 | `ChannelType` / `InboundMessageModel` / `OutboundMessageModel` / `ChannelContextModel` / `ChannelDeliveryResultModel` |
+| `channel_models.py` | 通道中立 Model Classes（Unit 文件）：通道类型值域（telegram / qq）/ 入站 / 出站 / 上下文 / 投递结果 | `ChannelType` / `InboundMessageModel` / `OutboundMessageModel` / `ChannelContextModel` / `ChannelDeliveryResultModel` |
 | `channel_service.py` | 通道路由器（每聊天会话 + 人格绑定 + 单消息错误隔离）+ 适配器发送面协议 | `ChannelRouter` / `ChannelAdapterProtocol` / `CHANNEL_FALLBACK_REPLY_TEXT` |
 | `telegram/tg_models.py` | Bot API wire 模型子集（Unit 文件）：update / message / 响应包裹（泛型） | `TgUpdateModel` / `TgMessageModel` / `TgResponseModel[T]` / `TgSendMessageResult` / `TgBotInfoModel` |
 | `telegram/tg_client.py` | 手写 Bot API 客户端（共享 httpx client 注入；4096 分段） | `TelegramClient` / `split_tg_message_text` |
 | `telegram/tg_runner.py` | 长轮询 runner（offset 持久化 + 去重 + 退避 + 优雅停机 + 发送面适配） | `TelegramChannelRunner` |
+| `qq/qq_models.py` | OneBot v11 wire 模型子集（Unit 文件）：事件（段数组 / CQ 码字符串双形态 message）/ 段 / 动作请求包裹 / 动作响应包裹（投递映射） | `Ob11EventModel` / `Ob11MessageSegmentModel` / `Ob11ApiRequestModel` / `Ob11ApiResponseModel` / `Ob11LoginInfoModel` |
+| `qq/qq_client.py` | 手写 NapCat OneBot v11 HTTP API 客户端（共享 httpx client 注入；单一动作对象包裹） | `NapCatOneBotClient` |
+| `qq/qq_adapter.py` | QQ 适配器发送面（chat_id grammar 解析 → NapCat 动作 → 投递映射；无 runner） | `NapCatQQAdapter` |
+| `qq/qq_webhook.py` | webhook 事件处理器（容错解析 / 大类过滤 / message_id 去重 / 消息展平；恒不抛） | `process_webhook_event` / `flatten_message_text` / `QqMessageDedupWindow` / `reset_qq_webhook_state` |
 
-依赖方向：channels → chat（ChatService）+ persona（bind_persona_context）+ config（Settings.channels）+ core（errors / thread_pool / time_utils）；HTTP 出站一律经 pools 共享 `httpx.AsyncClient`（硬规则：无私建连接）。锁定设计决策：**不引入 aiogram / python-telegram-bot**——按 Bot API 协议手写（与 llm 域「不引入 openai SDK」同约定）。
+依赖方向：channels → chat（ChatService）+ persona（bind_persona_context）+ config（Settings.channels）+ core（errors / time_utils）；HTTP 出站一律经 pools 共享 `httpx.AsyncClient`（硬规则：无私建连接）。锁定设计决策：**不引入 aiogram / python-telegram-bot / 任何 OneBot SDK**——按平台协议手写（与 llm 域「不引入 openai SDK」同约定）。
 
 ## 架构：适配器 / 路由器 / runner 链路顺序
 
@@ -46,7 +50,12 @@ TELEGRAM_ENABLED=true 时：
     → TelegramChannelRunner → router.register_adapter(TELEGRAM, runner)
     → asyncio.create_task(runner.run()) + background_task_manager.register
     （app.state.channels_router / channels_runner / channels_task 三槽位）
-TELEGRAM_ENABLED=false（缺省）：no-op——零通道对象构造
+QQ_ENABLED=true 时（同一 ChannelRouter——任一通道启用即构造）：
+    NapCatOneBotClient（access token 间接——缺失不 fail fast）
+    → NapCatQQAdapter → router.register_adapter(QQ, adapter)
+    → get_login_info 启动校验（warn-and-continue——见「QQ 通道」一节）
+    （无 runner / task——推送式入站零长驻任务）
+TELEGRAM_ENABLED=false 且 QQ_ENABLED=false（缺省）：no-op——零通道对象构造
 ```
 
 停机 LIFO（`shutdown_app_state`）：`_shutdown_channels`（先于公共池——runner 消费共享 HTTP client）→ `pool_manager.stop()` → `close_database()` → `shutdown_shared_thread_pool()`。通道停机链：`request_stop()`（优雅——在途长轮询最多再等一个窗口）→ bounded 等待（5s）→ 超时 `cancel` 兜底（offset 已逐批持久化，重启安全）。
@@ -104,7 +113,7 @@ runner 循环层另有兜底：getUpdates 失败按指数退避重试（见下�
 | `reply_to_message_id` | 只挂首段（续文逐段引用会渲染成多条引用噪声） |
 | 空文本 / 非数字引用 ID | `VALIDATION_ERROR`（调用方 bug 面——不进重试） |
 
-## 错误码映射（channels 域段——本 chunk 新增于 core ErrorCode 注册表）
+## 错误码映射（channels 域段——P3 chunk 1 新增于 core ErrorCode 注册表）
 
 | 失败类别 | 错误码 | HTTP | 可重试 |
 |---|---|---|---|
@@ -113,7 +122,146 @@ runner 循环层另有兜底：getUpdates 失败按指数退避重试（见下�
 | 其余 HTTP 非 200 / ok=False / 传输异常 / JSON 非法 | `CHANNEL_API_ERROR` | 503 | runner 退避 |
 | 路由器收到未注册适配器通道的入站消息 | `CHANNEL_DISABLED` | 409 | 否（装配面） |
 
-## Settings（`Settings.channels`）
+## QQ 通道（P4 chunk 4——NapCat / OneBot v11）
+
+### 架构：推送式入站 vs Telegram 拉取式
+
+```
+QQ（NapCat 部署机服务，OneBot v11 实现）
+    ↓ HTTP POST 事件上报（NapCat 侧配置上报 URL 指向本后端）
+POST /api/v1/channels/qq/webhook（app/api/channels_qq.py）
+    ↓ token 校验（webhook_token_env 配置时恒时比较 Bearer）
+qq_webhook.process_webhook_event（qq/qq_webhook.py）
+    ① Ob11EventModel 容错解析（非法载荷 = 确认并忽略）
+    ② 大类过滤（仅 post_type=message 进路由；notice / request /
+       meta_event 确认并忽略）
+    ③ message_id 去重（进程内有界 FIFO 窗口 1024）
+    ④ 消息展平（段数组 / CQ 码字符串 → 纯文本；非文本段占位符化）
+    ⑤ InboundMessageModel（chat_id grammar + epoch 秒 ×1000 归一）
+ChannelRouter.handle_inbound（channel_service.py——与 telegram 共用）
+    ↓ ①-⑤ 同 telegram（会话懒建 / 人格绑定 / ChatService.reply）
+NapCatQQAdapter.send_message（发送面适配）
+    ↓ chat_id grammar 解析 → NapCatOneBotClient（单一动作对象包裹 POST）
+NapCat HTTP API（POST {http_api_base_url} {"action": ..., "params": {...}}）
+    ↓ {"status": "ok"|"async", "retcode": 0, "data": {"message_id": N}}
+QQ
+```
+
+与 Telegram 的根本差异：**入站方向相反**。Telegram 是后端长轮询**拉取**（getUpdates + offset 游标 + runner 后台任务）；QQ 是 NapCat 主动**推送**到本后端 webhook（后端零长驻任务、零游标状态文件）。停机语义随之简化：QQ 无 runner 可停（适配器注册态随 `channels_router` 槽位复位；共享池 client 生命周期归 pools）。
+
+### chat_id grammar（锁定决策）
+
+| OutboundMessageModel.chat_id | NapCat 动作 | 路由器会话身份键 |
+|---|---|---|
+| `private:<user_id>` | `send_private_msg` | `channel:qq:private:<uid>` |
+| `group:<group_id>` | `send_group_msg` | `channel:qq:group:<gid>` |
+
+- grammar 非法（未知前缀 / 非数字 / 非正整数）→ `VALIDATION_ERROR`（调用方 bug 面——webhook 入站只产出合法 grammar，出站兜底路径亦复用入站 chat_id）；
+- 身份键含通道名 + 目标类型前缀——QQ 私聊 / 群聊 / Telegram 会话三者天然隔离（无跨通道撞键可能）；
+- **引用回复不透传**（文档化偏差）：`reply_to_message_id` 在出站时丢弃——OneBot v11 引用需构造 `reply` 消息段（渲染为引用块），与通道中立纯文本出站语义不匹配；兜底消息本就不引用，正常回复的引用增益不抵段组装复杂度（后续通道增强面再评估）。
+
+### 出站动作包裹（锁定决策——单一对象形态）
+
+`POST {http_api_base_url}` 请求体 `{"action": "<动作名>", "params": {...}}`（NapCat HTTP API 兼容「动作名进 URL 路径」形态——本工程不使用，单一形态锁定防双形态漂移）。成功判定：`retcode == 0` **且** `status ∈ {ok, async}`（`async` = 已受理异步执行——亦为成功）；`data.message_id` 归一为投递结果 `message_ids`（wire 未回传时为空列表——送达成功但无引用凭据）。出站 `params.message` 直接传纯文本字符串（OneBot v11 message 字段合法形态之一）；**不做超长分段**——QQ 客户端对长文本自行折行，平台未文档化单消息硬上限（tg 4096 分段规则不适用）。
+
+### 消息展平（入站文本归一）
+
+OneBot v11 `message` 字段双形态：段数组（`[{"type": "text", "data": {...}}]`）或 CQ 码字符串（`"你好[CQ:image,file=x.jpg]"`）——双形态均解析：
+
+- `text` 段取 `data.text` **无缝拼接**（多 text 段是同一消息的连续切片）；CQ 码字符串的码外字面文本保留；
+- 非文本段按占位符表降级（人格可见的降级形态）：
+
+| 段类型 | 占位符 | 段类型 | 占位符 |
+|---|---|---|---|
+| `image` | `[图片]` | `at` | `[提及]` |
+| `face` | `[表情]` | `reply` | `[引用回复]` |
+| `record` | `[语音]` | `share` / `music` | `[分享]` / `[音乐]` |
+| `video` | `[视频]` | `red_packet` / `poke` / `dice` | `[红包]` / `[戳一戳]` / `[骰子]` |
+| `forward` | `[合并转发]` | `json` / `xml` | `[卡片消息]` |
+| 未知类型 | `[其它消息]` | （CQ 字符串内 `text` 罕见形态） | 空串 |
+
+- 展平后空文本（无段 / 空串）跳过路由；纯图片消息展平为 `[图片]` **进路由**（人格可感知非文本内容——与 tg「非文本消息过滤不进路由」的差异点，QQ 占位符化后即文本）。
+
+### 去重与顺序（文档化边界）
+
+- **去重**：`message_id` 进程内有界 FIFO 窗口（1024——tg_runner 同语义同容量）；兜底「NapCat 重启 / 网络重试」窗口内的重投。进程重启清零（重启窗口内的重投可能重消费——QQ 无 offset 持久化等价物，OneBot v11 HTTP POST 上报无确认游标；NapCat 侧重试窗口短，影响面小）；
+- **顺序**：HTTP POST 上报不保证事件顺序（群消息并发上报可能乱序到达）——路由器按会话串行消费到达序，非平台发送序；
+- **message_id 负值**：NapCat 实现下常见——合法形态（去重键与入站 `message_id` 字符串化承载）。
+
+### webhook 确认语义（铁律）
+
+**webhook 处理器恒不抛异常**（逐事件隔离：载荷非法 / 字段缺失 / 路由器内部异常只进日志）；端点对接受 / 忽略 / 隔离失败**恒 200 `{"status": "ok"}`**——OneBot 上报方对非 200 会**重试**，确认即防重投风暴（与 tg runner「非消息更新 offset 照常推进」同哲学）。仅两类请求形态错误走 4xx：鉴权失败（401）/ 请求体非 JSON 对象（400）。
+
+### 启动校验：warn-and-continue（与 telegram 的差异）
+
+| | Telegram | QQ |
+|---|---|---|
+| token 缺失（构造期） | fail loud（app 拒绝启动） | 不 fail（NapCat 未开启鉴权是合法形态） |
+| 启动校验失败（getMe / get_login_info） | token 无效 → fail fast 终止 runner 任务；暂态失败 → 告警进退避循环 | **一律 warn-and-continue**——适配器仍注册，出站失败逐消息经路由器兜底隔离 |
+| 理由 | 长驻轮询任务——token 无效时任务无意义 | 推送式入站 + 无长驻任务；NapCat 常晚于后端就绪（部署时序），fail fast 只会因部署顺序杀掉整个 app |
+
+### NapCat 部署要点（部署机独立服务）
+
+1. **NapCat 服务**：部署机安装并登录 QQ 账号（NapCat 为独立进程，暴露 OneBot v11 HTTP API——默认 `http://127.0.0.1:3000`，即 `QQ_HTTP_API_BASE_URL` 指向目标）；
+2. **HTTP POST 上报配置**：NapCat 侧配置事件上报 URL 指向本后端 `POST /api/v1/channels/qq/webhook`（公网部署经反代暴露该端点；上报携带 access token 时走 `Authorization: Bearer` 头）；
+3. **token 双侧配置**：NapCat 侧开启 access token 鉴权时，本后端设 `QQ_ACCESS_TOKEN`（出站 Bearer）；上报校验 token 设 `QQ_WEBHOOK_TOKEN`（入站恒时比较——**空 = 鉴权关闭，仅限同机 / 可信内网部署**，公网暴露必须配置否则任何人可注入伪造事件）；
+4. **群 vs 私聊语义**：私聊会话身份 `private:<user_id>`（一人一会话）；群聊 `group:<group_id>`（一群一会话，群内所有成员共享同一人格会话——发送者 ID 经 `sender_id` 承载）。
+
+### 错误码映射（QQ 面——复用 channels 域既有码表）
+
+| 失败类别 | 错误码 | HTTP | 可重试 |
+|---|---|---|---|
+| access token 无效（NapCat 401/403） | `CHANNEL_TOKEN_MISSING` | 500 | 否（配置面） |
+| 其余 HTTP 非 200 / retcode 非 0 / status=failed / 传输异常 / JSON 非法 | `CHANNEL_API_ERROR` | 503 | 逐消息隔离 |
+| chat_id grammar 非法 / 空文本 | `VALIDATION_ERROR` | 422 | 否（调用方 bug） |
+| webhook 鉴权失败（入站） | `UNAUTHORIZED` | 401 | 否 |
+| webhook 请求体非 JSON 对象 | `BAD_REQUEST` | 400 | 否 |
+| 路由器收到未注册适配器通道的入站消息 | `CHANNEL_DISABLED` | 409 | 否（装配面） |
+
+### Settings（QQ 分节）
+
+env 面（`env_prefix=QQ_`；嵌套覆写 `CHANNELS__QQ__*` 亦可用）：
+
+| 字段 | env 变量 | 默认 | 说明 |
+|---|---|---|---|
+| `enabled` | `QQ_ENABLED` | `false` | 是否装配 QQ 通道适配器（false = 零通道对象构造） |
+| `http_api_base_url` | `QQ_HTTP_API_BASE_URL` | `http://127.0.0.1:3000` | NapCat HTTP API 基础 URL（单一动作对象包裹 POST 目标） |
+| `access_token_env` | `QQ_ACCESS_TOKEN_ENV` | `QQ_ACCESS_TOKEN` | **出站** access token 环境变量名（间接——本值以 `Authorization: Bearer` 头携带；空 = NapCat 未开启鉴权形态） |
+| `webhook_token_env` | `QQ_WEBHOOK_TOKEN_ENV` | `QQ_WEBHOOK_TOKEN` | **入站**校验 token 环境变量名（间接——恒时比较；**空 = 鉴权关闭**，见部署要点 3） |
+| `request_timeout_seconds` | `QQ_REQUEST_TIMEOUT_SECONDS` | `15` | 单次动作请求超时秒数（> 0） |
+
+```bash
+# .env 形态（分节 env 前缀）
+QQ_ENABLED=true
+QQ_HTTP_API_BASE_URL=http://127.0.0.1:3000
+QQ_ACCESS_TOKEN=your-napcat-access-token      # access_token_env 指向的本值（永不落 yaml）
+QQ_WEBHOOK_TOKEN=your-webhook-verify-token    # webhook_token_env 指向的本值
+QQ_REQUEST_TIMEOUT_SECONDS=15
+```
+
+```yaml
+# config.yaml 不承载通道配置（env 面专属——与 telegram 同约定）；
+# 嵌套覆写形态（进程环境变量，优先级高于 .env）：
+#   CHANNELS__QQ__ENABLED=true
+#   CHANNELS__QQ__REQUEST_TIMEOUT_SECONDS=9
+```
+
+隔离构造（测试 / 工具）：
+
+```python
+from packages.harness.config.models import ChannelsSettings, QqChannelSettings
+from packages.harness.config.settings import build_isolated_settings
+
+settings = build_isolated_settings(
+    channels=ChannelsSettings(
+        qq=QqChannelSettings(enabled=True, access_token_env="QQ_TEST_ACCESS_TOKEN")
+    )
+)
+```
+
+> 注：`backend/.env.example` 由根 `scripts/generate_examples*.py` 从配置类内省生成；其分节登记表本 chunk 未变更（scripts/ 不在交付面），QQ_* 键面以本表 + `src/conftest.py` 硬覆盖清单为准（`QQ_ENABLED` / `QQ_HTTP_API_BASE_URL` / `QQ_ACCESS_TOKEN_ENV` / `QQ_WEBHOOK_TOKEN_ENV` / `QQ_REQUEST_TIMEOUT_SECONDS` / 双 token 本值变量）。
+
+## Settings（`Settings.channels`）——telegram 分节
 
 env 面（`env_prefix=TELEGRAM_`；嵌套覆写 `CHANNELS__TELEGRAM__*` 亦可用）：
 
@@ -166,11 +314,17 @@ settings = build_isolated_settings(
 
 | 测试文件 | 覆盖 |
 |---|---|
-| `tests/unit/test_channels_models.py` | 值域 / 校验 / 默认值 / 身份键 |
-| `tests/unit/test_channels_settings.py` | env 面对齐 / 默认值 / 边界校验 / 隔离构造 / 嵌套覆写 |
+| `tests/unit/test_channels_models.py` | 值域（telegram + qq）/ 校验 / 默认值 / 身份键 |
+| `tests/unit/test_channels_settings.py` | telegram env 面对齐 / 默认值 / 边界校验 / 隔离构造 / 嵌套覆写 |
+| `tests/unit/test_qq_settings.py` | QQ env 面对齐 / 默认值 / 边界校验 / 隔离构造 / `CHANNELS__QQ__*` 嵌套覆写 |
 | `tests/unit/test_tg_client.py` | MockTransport：请求形状（timeout / offset / 超时裕量）/ 4096 分段 / 错误映射表 / token fail fast |
+| `tests/unit/test_qq_client.py` | MockTransport：动作包裹形状 / Bearer 头有无 / 超时注入 / status=async 成功 / 错误映射表 / 空文本拒绝 |
 | `tests/unit/test_tg_runner.py` | fake client + fake router + 注入休眠：offset 往返 / 去重 / 退避 / 优雅停机 / 启动校验 / 发送面 |
+| `tests/unit/test_qq_adapter.py` | fake 客户端：chat_id grammar 双形态 / 投递映射（ok / 无 message_id）/ grammar 校验 / 失败上抛 |
+| `tests/unit/test_qq_webhook.py` | fake 路由器：私聊 / 群聊路由形状 / 展平双形态 + 占位符表 / 去重 + FIFO 淘汰 / 忽略矩阵 / 隔离铁律 |
 | `tests/unit/test_channel_router.py` | fake ChatService：会话复用 / 持久化调用形状 / 人格绑定 / 错误隔离矩阵 |
-| `tests/unit/test_app_channels_lifespan.py` | enabled / disabled 装配 / 停机 LIFO 顺序 / token 缺失 fail fast / 任务终态收割 / cancel 兜底 |
+| `tests/unit/test_channels_qq_api.py` | ASGITransport：恒 200 确认形状 / 鉴权矩阵（401 / 关闭）/ 体校验 400 / 路由器未装配确认丢弃 |
+| `tests/unit/test_app_channels_lifespan.py` | telegram enabled / disabled 装配 / 停机 LIFO 顺序 / token 缺失 fail fast / 任务终态收割 / cancel 兜底 |
+| `tests/unit/test_app_qq_channels_lifespan.py` | QQ enabled / disabled 装配 / warn-and-continue / 双通道共用路由器 / 共享池注入 / 装配顺序契约 |
 
 零真实网络（MockTransport / fake）；零真实配置（隔离 Settings + conftest 硬覆盖；测试 token 为专用假值）；全部 `async def test_*`。

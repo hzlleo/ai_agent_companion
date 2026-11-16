@@ -19,10 +19,13 @@ from packages.harness.channels.channel_service import ChannelRouter
 
 
 async def test_channel_type_value_domain() -> None:
-    """ChannelType：P3 值域 = telegram（StrEnum 字符串兼容）。"""
+    """ChannelType：值域 = telegram + qq（StrEnum 字符串兼容——枚举为
+    多通道扩展点，P4 chunk 4 加入 qq）。"""
     assert ChannelType.TELEGRAM.value == "telegram"
     assert ChannelType.TELEGRAM == "telegram"
-    assert [member.value for member in ChannelType] == ["telegram"]
+    assert ChannelType.QQ.value == "qq"
+    assert ChannelType.QQ == "qq"
+    assert [member.value for member in ChannelType] == ["telegram", "qq"]
 
 
 async def test_inbound_message_defaults_and_fields() -> None:

@@ -17,7 +17,7 @@
     - **时间一律 epoch 毫秒**（``core.time_utils.now_ms``——Telegram wire
       层的 epoch 秒在 runner 映射时 ×1000 归一）；
     - ``ChannelType`` 为 StrEnum 值域（P3 = telegram；P4 多通道扩展在此
-      追加成员，如 bilibili / qq）。
+      追加成员——QQ 已于 P4 chunk 4 加入，B站等后续通道同点追加）。
 """
 
 from __future__ import annotations
@@ -38,13 +38,14 @@ __all__ = [
 
 
 class ChannelType(StrEnum):
-    """通道类型值域（P3 = telegram；P4 多通道扩展点）。
+    """通道类型值域（P3 = telegram；P4 chunk 4 增 qq；后续通道同点追加）。
 
     继承 ``StrEnum`` 保证与字符串比较兼容——``ChannelType.TELEGRAM ==
     "telegram"`` 为 ``True``（与 core ``ErrorCode`` 同约定）。
     """
 
     TELEGRAM = "telegram"
+    QQ = "qq"
 
 
 class ChannelContextModel(BaseModel):

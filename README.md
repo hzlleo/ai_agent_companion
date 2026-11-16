@@ -36,7 +36,8 @@ ai_agent_companion/
 │       ├── app/         # 薄 FastAPI 交付层（只做 API）
 │       └── packages/harness/   # 全部业务逻辑（PEP 420 命名空间，领域分包）
 ├── frontend/            # 前端独立 pixi 工程（React 19 + Vite 管理台：人格/记忆/用量/模型）
-├── docker/              # 沙盒镜像树（每树完全隔离，P3 落地）
+├── models/              # 本地模型子模组（ModelScope 源，权重经 git-lfs 按需拉取——见 docs/models.md）
+├── docker/              # 工具沙盒隔离树（每树完全隔离）+ compose
 └── docs/                # 文档（贴合代码：JSON 示例 + 字段说明 + 链路顺序）
 ```
 

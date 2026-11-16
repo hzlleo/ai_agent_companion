@@ -1,6 +1,6 @@
 # 工具沙盒（tool sandbox）— 隔离工具运行时（P3 chunk 3 交付）
 
-`docker/tool-sandbox-agent/`（独立 pixi 项目 + 加固镜像——沙盒树）+ `backend/src/packages/harness/tools/sandbox_models.py` / `sandbox.py`（后端侧客户端 + 注册接线）+ `docker/docker-compose.yml`（部署编排），共同构成「执行器无关工具的隔离执行面」：后端把**必须隔离运行的工具**（当前 `http_fetch`；P4 平台工具按同一范式接入）代理到沙盒进程执行。
+`docker/tool-sandbox-agent/`（独立 pixi 项目 + 加固镜像——沙盒树）+ `backend/src/packages/harness/tools/sandbox_models.py` / `sandbox.py`（后端侧客户端 + 注册接线）+ `docker/docker-compose.yml`（部署编排），共同构成「执行器无关工具的隔离执行面」：后端把**必须隔离运行的工具**（当前 `http_fetch` + B 站只读工具组 `bili_*`；P4 平台工具按同一范式接入）代理到沙盒进程执行。
 
 ## 为什么隔离（架构决策）
 
@@ -59,6 +59,55 @@ duty 轮 tool_calls（DutyService 工具循环）
 
 参数面双树各持一份（后端 `HttpFetchArgsModel` 用于 registry 本地校验 + 默认值物化（fail-fast，免网络往返）；沙盒侧为权威执行面——双侧校验为**有意冗余**，改任一侧须同步另一侧）。
 
+## B 站只读工具组 `bili_*`（P4 chunk 3 交付）
+
+### 只读红线（平台风险对策）
+
+B 站 2026-07 曾对第三方 Python 库采取法律行动——暴露面收敛为**四条红线**：
+
+1. **只读公开 JSON 接口**：全部端点为 GET 公开读取面；**零评论 / 弹幕发布、零登录流程、零任何写入类 API**（`bili_tools.py` 全文无写入端点——代码评审锚点）；
+2. **cookie 环境变量间接**：env `BILI_COOKIE`（可选——缺省为匿名公共访问；设置时作为原生 `Cookie` 头直发以提升限速余量）；**cookie 永不入日志 / 错误面**；
+3. **保守限速 + 风控冷却**（见下）；
+4. **响应白名单裁剪**：全部工具响应裁剪到白名单字段 + JSON 序列化上限约 16KB（超限自列表尾部整项裁剪 + `truncated` 标记）。
+
+### 端点面（全部 GET、全部公开只读）
+
+| 工具 | 端点 | 签名 | 说明 |
+|---|---|---|---|
+| `bili_search_videos` | `/x/web-interface/wbi/search/type` | **WBI** | 关键词视频搜索（`search_type=video`；keyword 1-64 / page 1-5 / page_size 10/20/30 默认 20） |
+| `bili_video_info` | `/x/web-interface/view` | 非 WBI | 视频详情白名单裁剪（owner / stat 子集 / 首 P cid / 分 P 总数） |
+| `bili_video_comments` | `/x/v2/reply/main` | 非 WBI | view→aid 换算 + **mode=2 时间序游标**（`next` = 页序 1 起；ps≤20；page 1-50 / page_size 10-20 默认 20）→ 扁平 `[{rpid, uname, message, like, ctime}]` |
+| `bili_video_subtitle` | `/x/player/v2` | 非 WBI | view→cid 换算 → 字幕清单 `[{lan, lan_doc, subtitle_url}]`（协议相对 URL 归一 https）；`fetch_subtitle=true`（默认 false）时抓取首个字幕 JSON——**CDN 后缀允许清单**（`biliapi.net` / `bilivideo.com`）+ 硬超时 + 体积上限（**不归 `BILI_API_ALLOWLIST` 管**——字幕 URL 由 B 站接口下发，后缀即信任面） |
+| （内部）WBI 键源 | `/x/web-interface/nav` | 非 WBI | img/sub 键（URL 文件名去扩展名）→ 进程内 TTL 缓存（1800 秒） |
+
+**WBI 签名**（`/x/web-interface/wbi/*` 必需）：nav 键经打乱表重排导出 32 位 mixin key → 参数值过滤 `!'()*` 字符 + 追加 `wts`（epoch 秒）→ 键排序 urlencode → 拼接 mixin key 取 md5 即 `w_rfd`（公开算法；md5 在此为平台签名算法，非安全哈希面）。
+
+### 风险控制语义（逐条锁定）
+
+| 信号 | 语义 |
+|---|---|
+| 最小间隔 | 进程内全部出站请求统一过闸：**1 秒**最小间隔（含 nav 键获取与字幕 CDN 抓取；时钟 / sleep 可注入） |
+| **HTTP 412** | **硬冷却**：基线 600 秒，连续命中 x2 递增、封顶 1800 秒（进程内持久）；冷却期间全部 B 站请求**零网络快速失败**；非 412 成功响应将连击计数归零 |
+| **JSON code -352** | 风控拦截——**不重试**受控失败（不触发冷却；调用方应降频） |
+| JSON code != 0 | 受控失败（code + message 入 `SandboxToolError` 文案） |
+| 非 200 / 非法 JSON | 受控失败（传输 / 形态面） |
+
+出站**不走系统代理**（`ProxyHandler({})` 显式禁用——系统代理破坏 B 站风控指纹）；UA（浏览器形态）+ Referer（`https://www.bilibili.com/`）恒发。
+
+### 允许清单（与 http_fetch 的语义差异——文档化决策）
+
+| 项 | http_fetch（`SANDBOX_HTTP_ALLOWLIST`） | B 站工具组（`BILI_API_ALLOWLIST`） |
+|---|---|---|
+| 未设置 | 空 = **默认拒绝**（零配置零出站） | **默认清单** `api.bilibili.com,app.bilibili.com`（工具组存在的目的就是访问 B 站） |
+| 空串 | 工具禁用 | **显式禁用**（部署方一键关停） |
+| 匹配语义 | 点边界后缀匹配（同 `domain_matches_allowlist`） | 同左（复用 http_fetch 实现） |
+
+真实网络正确性（端点形态 / WBI 签名 / 风控码经验映射）在**部署机**验证——CI 测试 hermetic 钉住文档化响应形态（两树测试矩阵即行为契约）。
+
+### 双树镜像面（与 drift 门禁的差距——主 agent 事项）
+
+参数面四模型（`BiliSearchVideosArgsModel` / `BiliVideoInfoArgsModel` / `BiliVideoCommentsArgsModel` / `BiliSubtitleArgsModel`）+ 四工具名常量与沙盒树 `bili_tools.py` **byte 级镜像**（块提取口径与 HttpFetchArgsModel 一致——末位模型到下一顶层定义行之间只隔空行；两侧文件内已有块边界约定注释）。**注意：仓库根漂移门禁（`scripts/check_sandbox_dtos_drift.py`）当前只比对 http_fetch 块——bili 四模型块 + 工具名常量行应加入门禁比对项（根脚本属主 agent 面，本 chunk 不动）**；在门禁扩展前，镜像由两树同组测试断言（`test_tools_sandbox_bili.py` ↔ `test_bili_tools.py`）行为看护。
+
 ## 模块一览（两侧）
 
 | 树 | 模块 | 职责 |
@@ -67,9 +116,10 @@ duty 轮 tool_calls（DutyService 工具循环）
 | 沙盒 | `tool_sandbox/wire_models.py` | wire 契约 Model Classes（镜像源） |
 | 沙盒 | `tool_sandbox/runtime.py` | 沙盒工具运行时（注册 / 隔离执行 / 计时——镜像后端 ToolRegistry 语义） |
 | 沙盒 | `tool_sandbox/http_fetch.py` | http_fetch 工具（允许清单 / 重定向校验 / 8KB 截断 / to_thread 抓取） |
-| 后端 | `harness/tools/sandbox_models.py` | Unit 文件：wire 契约（镜像副本）+ `SandboxSettingsFace` / `SandboxClientFace` 协议 + `HttpFetchArgsModel` + `build_http_fetch_spec` |
-| 后端 | `harness/tools/sandbox.py` | `ToolSandboxClient`（共享池 + Bearer + 恒不抛）+ `build_sandbox_client` + `register_sandbox_tool`（registry 代理注册） |
-| 后端 | `app/main.py` `_register_sandbox_tools` | 启动接线（enabled → token 检查 → /health 探测 → 注册 http_fetch） |
+| 沙盒 | `tool_sandbox/bili_tools.py` | B 站只读工具组（共享客户端核心：限速 / 412 硬冷却 / WBI 键缓存 / 白名单裁剪 / 16KB 上限） |
+| 后端 | `harness/tools/sandbox_models.py` | Unit 文件：wire 契约（镜像副本）+ `SandboxSettingsFace` / `SandboxClientFace` 协议 + `HttpFetchArgsModel` + `build_http_fetch_spec` + B 站四参数模型（镜像）+ 四 `build_bili_*_spec` |
+| 后端 | `harness/tools/sandbox.py` | `ToolSandboxClient`（共享池 + Bearer + 恒不抛）+ `build_sandbox_client` + `register_sandbox_tool` + `register_sandbox_tools_for_bili`（registry 代理注册） |
+| 后端 | `app/main.py` `_register_sandbox_tools` | 启动接线（enabled → token 检查 → /health 探测 → 注册 http_fetch + B 站四工具） |
 
 依赖方向：tools 域内部（sandbox → sandbox_models / registry / tool_models）+ core（errors / time_utils）；沙盒树零后端依赖。
 
@@ -82,7 +132,7 @@ duty 轮 tool_calls（DutyService 工具循环）
 | `tools_sandbox.token_env` | `TOOLS_SANDBOX_TOKEN_ENV` | `SANDBOX_TOKEN` | 鉴权 token 环境变量名（间接模式） |
 | `tools_sandbox.request_timeout_seconds` | `TOOLS_SANDBOX_REQUEST_TIMEOUT_SECONDS` | `15` | 单次请求超时（invoke / 健康探测共用——启动探测的 bounded 上限） |
 
-沙盒容器内 env：`SANDBOX_TOKEN`（必填）、`SANDBOX_HTTP_ALLOWLIST`（可选，空 = http_fetch 禁用）、`SANDBOX_HOST` / `SANDBOX_PORT`（缺省 `0.0.0.0:8765`——容器形态）。
+沙盒容器内 env：`SANDBOX_TOKEN`（必填）、`SANDBOX_HTTP_ALLOWLIST`（可选，空 = http_fetch 禁用）、`BILI_API_ALLOWLIST`（可选，未设置 = 默认清单 `api.bilibili.com,app.bilibili.com`；空串 = B 站工具组禁用）、`BILI_COOKIE`（可选，B 站 Cookie 头原值——永不入日志）、`SANDBOX_HOST` / `SANDBOX_PORT`（缺省 `0.0.0.0:8765`——容器形态）。
 
 > 注：`backend/.env.example` 分节登记属根 scripts/ 生成器（主 agent 面）——本 chunk 新增 env 键面以本表 + `src/conftest.py` 硬覆盖清单为准（`TOOLS_SANDBOX_*` / `SANDBOX_TOKEN` / `SANDBOX_TEST_TOKEN`）。
 
@@ -97,7 +147,8 @@ _startup_scheduler（duty / dream 任一启用时）
         ↓ token 未配置（token_env 变量为空）→ 跳过 + 告警（warn-and-continue）
         ↓ probe_health() 失败（bounded 超时 request_timeout_seconds）→ 跳过 + 告警
         ↓ register_sandbox_tool(registry, client, build_http_fetch_spec())
-    ↓ DutyService（工具面此刻已含 http_fetch——list_specs 进入 LLM 请求）
+        ↓ register_sandbox_tools_for_bili(registry, client)（四工具）
+    ↓ DutyService（工具面此刻已含 http_fetch + bili_*——list_specs 进入 LLM 请求）
 ```
 
 装配矩阵：
@@ -107,7 +158,7 @@ _startup_scheduler（duty / dream 任一启用时）
 | off | 任意 | ——（零注册表——沙盒消费面是 duty 工具循环） | 无 |
 | on | off | —— | 内置工具 |
 | on | on | 失败 / token 缺失 | 内置工具（告警） |
-| on | on | 成功 | 内置工具 + `http_fetch` |
+| on | on | 成功 | 内置工具 + `http_fetch` + B 站四工具（`bili_search_videos` / `bili_video_info` / `bili_video_comments` / `bili_video_subtitle`） |
 
 ## 部署（compose——后端不进 compose）
 
@@ -138,12 +189,14 @@ docker compose up -d tool-sandbox-agent   # 127.0.0.1:8765 → 容器 8765
 |---|---|
 | `tests/unit/test_tools_sandbox_client.py` | MockTransport 客户端：token 间接 / 鉴权头形状 / ok-error 映射 / 传输异常 / 超时 / 非成功状态 / wire 破坏 / 健康探测矩阵 / 工厂 face 构造 |
 | `tests/unit/test_tools_sandbox_registry.py` | 代理回路（fake 客户端 ok / 失败归一）/ 本地校验 fail-fast / 默认值物化经 wire / 规格呈现面 / HttpFetchArgsModel 校验矩阵 / wire 模型基础面 |
+| `tests/unit/test_tools_sandbox_bili.py` | B 站四工具代理回路（ok / 失败归一 / 默认值物化经 wire）/ 本地校验 fail-fast / 参数模型校验矩阵 + JSON Schema 锚点（镜像面行为锚）/ 规格呈现面（enum / pattern / 边界） |
 | `tests/unit/test_tools_sandbox_settings.py` | env 面映射 / 默认值 / 校验 / 聚合 + 隔离构造 / conftest 硬覆盖锚点 |
-| `tests/unit/test_app_sandbox_lifespan.py` | 装配矩阵（disabled / healthy / unhealthy / token 缺失 / duty 关闭）+ 工厂接线参数 + 代理回路 |
+| `tests/unit/test_app_sandbox_lifespan.py` | 装配矩阵（disabled / healthy / unhealthy / token 缺失 / duty 关闭）+ 工厂接线参数 + 代理回路（http_fetch + bili） |
 
 | 测试文件（沙盒树） | 覆盖 |
 |---|---|
 | `src/tests/unit/test_wire_models.py` | wire 契约模型校验面 |
 | `src/tests/unit/test_runtime.py` | 运行时四类隔离 + 计时（注入时钟）+ 默认值物化 |
 | `src/tests/unit/test_http_fetch.py` | 允许清单矩阵 / URL 校验 / 重定向逐跳 / 抓取（monkeypatch opener）/ 执行器注入回路 |
+| `src/tests/unit/test_bili_tools.py` | WBI 签名确定性（测试内独立参考算法）/ nav TTL / 限速 / 412 硬冷却递增封顶 + 过期 + 归零 / -352 不重试 / code!=0 / 白名单裁剪（四工具）/ 16KB 上限 / cookie 间接 + 代理禁用 / 字幕空容忍 + CDN 后缀清单 / 允许清单默认 vs 禁用 / 参数校验矩阵 / 全链默认值物化 |
 | `src/tests/unit/test_server.py` | ASGI 手写调用：鉴权矩阵 / 端点面 / 422 / 默认运行时全链 / fail-fast / 恒时比较 / 绑定解析 |

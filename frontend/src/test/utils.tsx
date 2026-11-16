@@ -13,6 +13,9 @@ import { RouterProvider, createMemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 import { ToastProvider } from '@/components/ui/Toast'
 
+/** 保存成功后导航落点的桩路由 testid（字面量路由，杜绝 404 ErrorBoundary 路径）。 */
+export const NAVIGATED_AWAY_TESTID = 'navigated-away'
+
 /** 页面 / 组件测试用 QueryClient：查询与变更均不重试。 */
 export function createTestQueryClient(options: { gcTime?: number } = {}): QueryClient {
   const defaultOptions =
@@ -54,7 +57,18 @@ export function renderWithProviders(
 ): RenderResult {
   const { route = '/', path = '*' } = options
   const queryClient = createTestQueryClient()
-  const router = createMemoryRouter([{ path, element: ui }], { initialEntries: [route] })
+  const router = createMemoryRouter(
+    [
+      { path, element: ui },
+      // 保存成功后导航落点的字面量桩路由（声明在被测页之后：被测页显式
+      // path 与之同分时先声明者胜——列表页自测传 path:'/personas' 即可
+      // 正常挂载；表单页 path:'*' 下 navigate('/personas') 命中本桩而非
+      // 默认 ErrorBoundary 的 404 异步错误路径——后者在 teardown 竞态下
+      // 造成覆盖抖动（perFile 阈值边缘 flaky））。
+      { path: '/personas', element: createElement('div', { 'data-testid': NAVIGATED_AWAY_TESTID }) },
+    ],
+    { initialEntries: [route] },
+  )
   return render(
     createElement(
       QueryClientProvider,

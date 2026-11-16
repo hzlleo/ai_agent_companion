@@ -124,6 +124,23 @@ os.environ["TELEGRAM_STATE_DIR"] = "data/channels"
 os.environ["TELEGRAM_TEST_BOT_TOKEN"] = "test-only-telegram-bot-token"
 os.environ["TELEGRAM_BOT_TOKEN"] = "test-only-telegram-bot-token"
 
+# --- QQ 通道（QQ_ 前缀 → QqChannelSettings；默认关闭 → 测试零真实连接；
+#     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试。双
+#     token 间接：出站 access token 经 QQ_TEST_ACCESS_TOKEN（NapCat HTTP
+#     API 鉴权）；入站 webhook token 经 QQ_TEST_WEBHOOK_TOKEN（上报校验
+#     ——默认非空 = 测试默认开启入站鉴权，鉴权矩阵按需 monkeypatch）；
+#     单测经 MockTransport / fake 消费，永不真实连接） ---
+os.environ["QQ_ENABLED"] = "false"
+os.environ["QQ_HTTP_API_BASE_URL"] = "http://127.0.0.1:3000"
+os.environ["QQ_ACCESS_TOKEN_ENV"] = "QQ_TEST_ACCESS_TOKEN"
+os.environ["QQ_WEBHOOK_TOKEN_ENV"] = "QQ_TEST_WEBHOOK_TOKEN"
+os.environ["QQ_REQUEST_TIMEOUT_SECONDS"] = "15"
+# 双 token 本值（指向的变量 + 默认变量名——测试专用值，不可触达真实 NapCat）
+os.environ["QQ_TEST_ACCESS_TOKEN"] = "test-only-qq-access-token"
+os.environ["QQ_ACCESS_TOKEN"] = "test-only-qq-access-token"
+os.environ["QQ_TEST_WEBHOOK_TOKEN"] = "test-only-qq-webhook-token"
+os.environ["QQ_WEBHOOK_TOKEN"] = "test-only-qq-webhook-token"
+
 # --- 值班轮（DUTY_ 前缀 → DutySettings；默认关闭 → 测试零调度副作用；
 #     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试） ---
 os.environ["DUTY_ENABLED"] = "false"
@@ -152,6 +169,22 @@ os.environ["TOOLS_SANDBOX_REQUEST_TIMEOUT_SECONDS"] = "15"
 # token 本值（token_env 指向的变量 + 默认变量名——测试专用值）
 os.environ["SANDBOX_TEST_TOKEN"] = "test-only-sandbox-token"
 os.environ["SANDBOX_TOKEN"] = "test-only-sandbox-token"
+
+# --- 语音域（VOICE_TTS_ / VOICE_ASR_ 前缀 → TtsSettings / AsrSettings；
+#     默认关闭 → 测试零真实连接（voice 服务为部署机外部本地进程）；
+#     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试；
+#     单测经 MockTransport / fake 消费，永不触达真实模型服务） ---
+os.environ["VOICE_TTS_ENABLED"] = "false"
+os.environ["VOICE_TTS_BASE_URL"] = "http://127.0.0.1:9880"
+os.environ["VOICE_TTS_MODEL_ENTRY"] = "cosyvoice3"
+os.environ["VOICE_TTS_REQUEST_TIMEOUT_SECONDS"] = "30"
+os.environ["VOICE_TTS_DEFAULT_SPEAKER"] = "中文女"
+os.environ["VOICE_TTS_DEFAULT_SPEED"] = "1.0"
+os.environ["VOICE_ASR_ENABLED"] = "false"
+os.environ["VOICE_ASR_BASE_URL"] = "http://127.0.0.1:8082"
+os.environ["VOICE_ASR_MODEL_ENTRY"] = "qwen3-asr-0.6b"
+os.environ["VOICE_ASR_REQUEST_TIMEOUT_SECONDS"] = "60"
+os.environ["VOICE_ASR_LANGUAGE"] = ""
 
 # --- 运行环境标识（Settings.env → ENV） ---
 os.environ["ENV"] = "test"
