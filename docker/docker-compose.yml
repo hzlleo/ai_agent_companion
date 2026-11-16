@@ -1,0 +1,60 @@
+# 工具沙盒代理编排 —— 独立部署面（P3 chunk 3 交付）
+#
+# 后端**不进 compose**（经 backend/ pixi 运行——本文件只编排沙盒）：
+# 后端经 http://127.0.0.1:8765 消费沙盒 /invoke（共享 httpx 池 + Bearer token，
+# 见 backend harness/tools/sandbox.py 与 docs/backend/tools-sandbox.md）。
+#
+# 用法：
+#   cd docker
+#   export SANDBOX_TOKEN="<随机长 token>"            # 必填——缺失时 compose 拒绝起服务
+#   export SANDBOX_HTTP_ALLOWLIST="example.com"     # 可选——空 = http_fetch 禁用（默认拒绝）
+#   docker compose up -d tool-sandbox-agent
+#
+# 加固面（与 Dockerfile 内加固共同构成沙盒边界）：
+#   - 端口仅回环暴露（127.0.0.1:8765:8765——后端本机消费，不对局域网开放）；
+#   - cap_drop: ALL（弃全部 Linux capabilities）；
+#   - no-new-privileges（进程树不可提权）；
+#   - read_only + tmpfs /tmp（根文件系统只读；/tmp 内存盘——运行期零持久写盘）；
+#   - 资源限额 mem 256m / cpus 0.5（工具风暴隔离面）；
+#   - restart: unless-stopped（宿主机重启后自动恢复）。
+#
+# 网络语义（文档化决策）：本网络为 compose 项目内专用桥接网络（sandbox
+# 服务独占——「internal」取「项目内专用」义）；**不设 `internal: true`**
+# ——http_fetch 需要受控出站 egress（真正的出站管控面是
+# SANDBOX_HTTP_ALLOWLIST 域名允许清单 + Dockerfile 抓取语义），
+# internal:true 会同时阻断工具出站，使沙盒丧失职能。
+
+services:
+  tool-sandbox-agent:
+    build:
+      context: ./tool-sandbox-agent
+      dockerfile: Dockerfile
+    image: tool-sandbox-agent:0.1.0
+    container_name: tool-sandbox-agent
+    environment:
+      # 鉴权 token（必填——${VAR:?} 形态缺失即拒绝启动；值不落 compose 文件）。
+      SANDBOX_TOKEN: ${SANDBOX_TOKEN:?SANDBOX_TOKEN 未设置——导出后再启动（见 docs/backend/tools-sandbox.md）}
+      # http_fetch 域名允许清单（逗号分隔域名后缀；空 / 未设 = 工具禁用·默认拒绝）。
+      SANDBOX_HTTP_ALLOWLIST: ${SANDBOX_HTTP_ALLOWLIST:-}
+    ports:
+      # 仅回环暴露：后端本机消费（127.0.0.1:8765 → 容器 8765）。
+      - "127.0.0.1:8765:8765"
+    # 资源限额（工具风暴隔离——内存 256 MiB / CPU 0.5 核）。
+    mem_limit: 256m
+    cpus: 0.5
+    # 运行期加固（与 Dockerfile 的 tini / 非 root / HEALTHCHECK 互补）。
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    networks:
+      - tool-sandbox
+
+networks:
+  # compose 项目内专用桥接网络（沙盒服务独占；见文件头「网络语义」注释）。
+  tool-sandbox:
+    driver: bridge

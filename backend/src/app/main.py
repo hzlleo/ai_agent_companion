@@ -20,10 +20,12 @@
                                                 装配 runner 后台任务；token
                                                 缺失 fail fast；缺省 no-op）
         ↓ _startup_scheduler(app, settings)    中央调度器（DUTY_ENABLED /
-                                                DREAM_SCHEDULE_ENABLED 任一
-                                                开启时装配；**后于通道**——
-                                                duty 报告出站复用通道路由器；
-                                                缺省 no-op）
+                                                 DREAM_SCHEDULE_ENABLED 任一
+                                                 开启时装配；**后于通道**——
+                                                 duty 报告出站复用通道路由器；
+                                                 缺省 no-op；duty 启用时
+                                                 _register_sandbox_tools 在
+                                                 内置工具后追加沙盒工具面）
 
 停机序列（启动逆序）::
 
@@ -95,6 +97,8 @@ from packages.harness.persona.service import PersonaService
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
 from packages.harness.scheduler import Scheduler, build_dream_trigger_job
 from packages.harness.tools.registry import ToolRegistry, register_builtin_tools
+from packages.harness.tools.sandbox import build_sandbox_client, register_sandbox_tool
+from packages.harness.tools.sandbox_models import HTTP_FETCH_TOOL_NAME, build_http_fetch_spec
 
 # ORM 模型注册（导入副作用——见模块 docstring「ORM 注册」一节）。
 _ORM_REGISTRY = (persona_orm, usage_orm)
@@ -308,6 +312,7 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
                 embedder=app.state.gateway.embed_by_role,
             ),
         )
+        await _register_sandbox_tools(app, settings, registry)
         duty_service = DutyService(
             gateway=app.state.gateway,
             registry=registry,
@@ -356,6 +361,55 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
         scheduler.job_names,
         settings.scheduler.tick_seconds,
     )
+
+
+async def _register_sandbox_tools(app: FastAPI, settings: Settings, registry: ToolRegistry) -> None:
+    """装配沙盒工具面（enabled + token 就绪 + /health 探测成功时注册 http_fetch）。
+
+    可选组件 warn-and-continue 语义（沙盒是可选运行时——锁定决策）：
+    token 未配置 / 探测失败 → 跳过沙盒工具注册并告警，duty 工具面回落
+    到内置工具（get_current_time + search_memory——值班轮照常运行）。
+    探测经共享 httpx 池（bounded 超时 = ``request_timeout_seconds``）。
+    仅在 duty 启用时被调用（沙盒工具的消费面是 duty / persona 工具循环）。
+
+    Args:
+        app: 待装配的 FastAPI 应用（本函数不新增 state 槽位——代理执行器
+            闭包持有客户端引用）。
+        settings: 生效 Settings（``settings.tools_sandbox`` 分节）。
+        registry: duty 工具注册表（沙盒工具追加装配目标）。
+
+    Raises:
+        BusinessException: 公共池未启动（``INTERNAL_ERROR``——调用顺序
+            契约破坏面；与通道装配同前置检查）。
+    """
+    sandbox = settings.tools_sandbox
+    if not sandbox.enabled:
+        logger.info("工具沙盒未启用（TOOLS_SANDBOX_ENABLED=false）——跳过装配")
+        return
+    manager = get_pool_manager()
+    if manager is None or not manager.started:
+        raise BusinessException(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="工具沙盒装配前置失败：公共池未启动（lifespan 装配顺序破坏）",
+        )
+    client = build_sandbox_client(manager.get_http_client(), sandbox)
+    if not client.has_token:
+        logger.warning(
+            "工具沙盒 token 未配置（环境变量 {} 为空）——跳过沙盒工具注册，"
+            "duty 工具面仅内置工具",
+            sandbox.token_env,
+        )
+        return
+    if not await client.probe_health():
+        logger.warning(
+            "工具沙盒健康探测失败（{}，超时 {}s 上限）——跳过沙盒工具注册，"
+            "duty 工具面仅内置工具",
+            sandbox.base_url,
+            sandbox.request_timeout_seconds,
+        )
+        return
+    register_sandbox_tool(registry, client, build_http_fetch_spec())
+    logger.info("工具沙盒工具已注册: tools=[{}]", HTTP_FETCH_TOOL_NAME)
 
 
 async def _shutdown_scheduler(app: FastAPI) -> None:

@@ -28,6 +28,8 @@
       env_prefix=``DREAM_SCHEDULE_``——P3 chunk 2）
     - ``SchedulerSettings``  —— 中央调度器分节（``Settings.scheduler``；
       env_prefix=``SCHEDULER_``——P3 chunk 2）
+    - ``ToolsSandboxSettings`` —— 工具沙盒分节（``Settings.tools_sandbox``；
+      env_prefix=``TOOLS_SANDBOX_``——P3 chunk 3）
     - ``Settings``           —— 聚合器（全局单例 ``settings``）
     - ``LlmConfig``          —— config.yaml 的 ``llm`` 段（模型注册表 / 角色绑定 /
       多模态回退链）
@@ -62,6 +64,7 @@ __all__ = [
     "DutySettings",
     "DreamScheduleSettings",
     "SchedulerSettings",
+    "ToolsSandboxSettings",
     "Settings",
     "settings",
     "LlmConfig",
@@ -493,6 +496,47 @@ class SchedulerSettings(BaseSettings):
     )
 
 
+class ToolsSandboxSettings(BaseSettings):
+    """工具沙盒配置（env_prefix=``TOOLS_SANDBOX_``——P3 chunk 3 工具沙盒）。
+
+    锁定决策：``enabled=False``（默认）——沙盒是**可选运行时**：全工程
+    无沙盒照常运行（duty 工具面回落到内置工具）；``enabled=True`` 时
+    app lifespan 在 duty 装配后经 ``/health`` 探测（bounded 超时）——
+    探测失败 / token 未配置 → 跳过沙盒工具注册并告警
+    （warn-and-continue，见 docs/backend/tools-sandbox.md）。
+
+    鉴权 token 经环境变量间接（与 llm 条目 ``api_key_env`` / telegram
+    ``bot_token_env`` 同模式——**密钥永不落 yaml / 配置树**）：本配置只
+    持有变量名 ``token_env``，实际 token 由 tools 域沙盒客户端在构造期
+    从该变量读取。
+
+    Attributes:
+        enabled: 是否启用工具沙盒（False = 不探测 / 不注册沙盒工具）。
+        base_url: 沙盒服务基础 URL（compose 形态 127.0.0.1:8765）。
+        token_env: 鉴权 token 环境变量名（实际 token 从该变量读取）。
+        request_timeout_seconds: 单次请求超时秒数（invoke / 健康探测
+            共用——启动期探测的 bounded 上限）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用工具沙盒")
+    base_url: str = Field(
+        default="http://127.0.0.1:8765", min_length=1, description="沙盒服务基础 URL"
+    )
+    token_env: str = Field(
+        default="SANDBOX_TOKEN", min_length=1, description="鉴权 token 环境变量名"
+    )
+    request_timeout_seconds: float = Field(
+        default=15.0, gt=0, description="单次请求超时（invoke / 健康探测共用）"
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="TOOLS_SANDBOX_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class TelegramSettings(BaseSettings):
     """Telegram 通道配置（env_prefix=``TELEGRAM_``——P3 chunk 1 通道层）。
 
@@ -621,6 +665,8 @@ class Settings(BaseSettings):
         duty: 值班轮配置（默认关闭——P3 chunk 2）。
         dream_schedule: 梦境定时调度配置（默认关闭——P3 chunk 2）。
         scheduler: 中央调度器配置（tick 间隔——P3 chunk 2）。
+        tools_sandbox: 工具沙盒配置（默认关闭——P3 chunk 3；沙盒为可选
+            运行时，duty 工具面在沙盒不可达时回落到内置工具）。
         env: 运行环境标识（local / dev / prod）。
     """
 
@@ -634,6 +680,7 @@ class Settings(BaseSettings):
     duty: DutySettings = DutySettings()
     dream_schedule: DreamScheduleSettings = DreamScheduleSettings()
     scheduler: SchedulerSettings = SchedulerSettings()
+    tools_sandbox: ToolsSandboxSettings = ToolsSandboxSettings()
     env: str = Field(default="local", description="运行环境标识（local / dev / prod）")
 
     model_config = SettingsConfigDict(

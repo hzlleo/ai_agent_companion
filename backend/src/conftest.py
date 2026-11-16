@@ -140,6 +140,19 @@ os.environ["DREAM_SCHEDULE_DAILY_AT"] = "03:00"
 # --- 中央调度器（SCHEDULER_ 前缀 → SchedulerSettings；S3 硬覆盖模式） ---
 os.environ["SCHEDULER_TICK_SECONDS"] = "1.0"
 
+# --- 工具沙盒（TOOLS_SANDBOX_ 前缀 → ToolsSandboxSettings；默认关闭 →
+#     测试零沙盒探测 / 零真实连接；S3 硬覆盖模式——开发者 shell 导出的
+#     同名真实配置不得泄入测试。token 经 SANDBOX_TEST_TOKEN 间接——测试
+#     专用值，不可触达真实沙盒；单测经 MockTransport / fake 消费，永不
+#     真实连接） ---
+os.environ["TOOLS_SANDBOX_ENABLED"] = "false"
+os.environ["TOOLS_SANDBOX_BASE_URL"] = "http://127.0.0.1:8765"
+os.environ["TOOLS_SANDBOX_TOKEN_ENV"] = "SANDBOX_TEST_TOKEN"
+os.environ["TOOLS_SANDBOX_REQUEST_TIMEOUT_SECONDS"] = "15"
+# token 本值（token_env 指向的变量 + 默认变量名——测试专用值）
+os.environ["SANDBOX_TEST_TOKEN"] = "test-only-sandbox-token"
+os.environ["SANDBOX_TOKEN"] = "test-only-sandbox-token"
+
 # --- 运行环境标识（Settings.env → ENV） ---
 os.environ["ENV"] = "test"
 

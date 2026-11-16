@@ -26,6 +26,7 @@ from packages.harness.config.models import (
     SeekDBSettings,
     ServerConfig,
     Settings,
+    ToolsSandboxSettings,
     settings,
 )
 
@@ -40,6 +41,7 @@ __all__ = [
     "DutySettings",
     "DreamScheduleSettings",
     "SchedulerSettings",
+    "ToolsSandboxSettings",
     "Settings",
     "settings",
     "build_isolated_settings",
@@ -58,6 +60,7 @@ def build_isolated_settings(
     duty: DutySettings | None = None,
     dream_schedule: DreamScheduleSettings | None = None,
     scheduler: SchedulerSettings | None = None,
+    tools_sandbox: ToolsSandboxSettings | None = None,
 ) -> Settings:
     """构造隔离 Settings 实例（测试 / 工具专用）。
 
@@ -78,6 +81,8 @@ def build_isolated_settings(
             测试注入 enabled=True 形态）。
         dream_schedule: 梦境调度配置（None = 代码默认——关闭形态）。
         scheduler: 中央调度器配置（None = 代码默认——tick 1.0s）。
+        tools_sandbox: 工具沙盒配置（None = 代码默认——关闭形态；
+            沙盒 lifespan 测试注入 enabled=True 形态）。
 
     Returns:
         隔离 :class:`Settings` 实例（与全局单例无关联）。
@@ -93,4 +98,5 @@ def build_isolated_settings(
         duty=duty if duty is not None else DutySettings(),
         dream_schedule=dream_schedule if dream_schedule is not None else DreamScheduleSettings(),
         scheduler=scheduler if scheduler is not None else SchedulerSettings(),
+        tools_sandbox=tools_sandbox if tools_sandbox is not None else ToolsSandboxSettings(),
     )
