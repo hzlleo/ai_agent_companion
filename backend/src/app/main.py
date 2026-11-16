@@ -69,6 +69,7 @@ import packages.harness.persona.orm as persona_orm
 import packages.harness.usage.orm as usage_orm
 from app.api.health import APP_VERSION
 from app.api.health import router as health_router
+from app.api.look_at import router as look_at_router
 from app.api.memories import router as memories_router
 from app.api.models import router as models_router
 from app.api.personas import router as personas_router
@@ -524,6 +525,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(memories_router)
     app.include_router(usage_router)
     app.include_router(voice_router)
+    app.include_router(look_at_router)
     app.include_router(models_router)
     app.include_router(health_router)
     app.state.settings = effective_settings

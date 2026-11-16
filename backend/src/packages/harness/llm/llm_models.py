@@ -5,6 +5,10 @@
     - 域内契约（模型无关）：:class:`ChatMessageModel` / :class:`ChatRequestParams`
       / :class:`ChatResponseModel` / :class:`ChatStreamChunkModel` /
       :class:`TokenUsageModel`——网关门面（gateway）与业务调用方消费；
+    - 多模态内容分块契约（P4-2）：:class:`TextContentPart` /
+      :class:`ImageContentPart`（``ContentPartModel`` 判别联合——
+      ``ChatMessageModel.content`` 升级为 ``str | list[ContentPartModel]``，
+      纯文本形态全量向后兼容）；
     - 原生工具调用契约（P3-2）：:class:`ToolParametersSchema` /
       :class:`ToolDefinitionModel`（请求 tools 面）+ :class:`ToolCallModel`
       （响应 tool_calls 面 + assistant / tool 消息形态扩展）；
@@ -16,9 +20,10 @@
 约定：全部时间字段 epoch 毫秒；token 计数非负；wire DTO ``extra="ignore"``
 容忍端点附加字段（前向兼容）。
 
-流式边界（文档化决策）：**流式传输面恒为 content-only**——原生工具调用
-仅支持非流式 ``chat``；``build_chat_request_body`` 对 ``stream=True`` 且
-携带 ``tools`` 的组合直接拒绝（``VALIDATION_ERROR``——调用方编程错误面）。
+流式边界（文档化决策）：**流式传输面恒为 content-only 纯文本**——原生
+工具调用仅支持非流式 ``chat``；多模态内容分块同样仅支持非流式。
+``build_chat_request_body`` 对 ``stream=True`` 且携带 ``tools`` 或内容
+分块的组合直接拒绝（``VALIDATION_ERROR``——调用方编程错误面）。
 """
 
 from __future__ import annotations
@@ -26,7 +31,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -35,6 +40,10 @@ from packages.harness.core.errors import BusinessException, ErrorCode
 __all__ = [
     "ChatMessageRole",
     "ChatMessageModel",
+    "ContentPartModel",
+    "TextContentPart",
+    "ImageContentUrlModel",
+    "ImageContentPart",
     "ChatRequestParams",
     "ChatResponseModel",
     "ChatStreamChunkModel",
@@ -139,27 +148,89 @@ class ToolCallModel(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict, description="已解析调用参数")
 
 
+class ImageContentUrlModel(BaseModel):
+    """图片载荷 URL（OpenAI 兼容 ``image_url.url`` 形态）。
+
+    ``url`` 承载两类形态：``https://`` 远程图片 URL，或 ``data:<mime>;
+    base64,<payload>`` 内联 data URL（本地视觉链路的主形态——图像字节
+    不落盘、不外发，经 data URL 直传端点）。
+
+    Attributes:
+        url: 图片 URL（https 远程地址或 data: 内联 URL；非空）。
+        detail: 细节档位（``auto`` / ``low`` / ``high``——OpenAI 兼容
+            协议可选字段；None = 不进入 wire 序列化，端点默认值生效）。
+    """
+
+    url: str = Field(min_length=1, description="图片 URL（https 或 data: URL）")
+    detail: str | None = Field(
+        default=None, description="细节档位（auto/low/high；None = 端点默认）"
+    )
+
+
+class TextContentPart(BaseModel):
+    """文本内容分块（``{"type": "text", "text": ...}`` 形态）。
+
+    Attributes:
+        type: 分块类型判别子（恒 ``text``）。
+        text: 分块文本。
+    """
+
+    type: Literal["text"] = Field(default="text", description="内容分块类型（text）")
+    text: str = Field(description="分块文本")
+
+
+class ImageContentPart(BaseModel):
+    """图片内容分块（``{"type": "image_url", "image_url": {...}}`` 形态）。
+
+    Attributes:
+        type: 分块类型判别子（恒 ``image_url``）。
+        image_url: 图片载荷（URL + 可选细节档位）。
+    """
+
+    type: Literal["image_url"] = Field(
+        default="image_url", description="内容分块类型（image_url）"
+    )
+    image_url: ImageContentUrlModel = Field(description="图片载荷")
+
+
+#: 多模态内容分块判别联合（按 ``type`` 判别子分派——OpenAI 兼容
+#: messages[].content[] 元素形态的模型无关契约）。
+ContentPartModel = Annotated[
+    TextContentPart | ImageContentPart,
+    Field(discriminator="type"),
+]
+
+
 class ChatMessageModel(BaseModel):
-    """单条聊天消息（模型无关传输契约——含原生工具调用形态）。
+    """单条聊天消息（模型无关传输契约——含原生工具调用与多模态形态）。
 
     形态矩阵（按 role）：
 
-        - ``system`` / ``user``：纯文本（``content``）；
+        - ``system`` / ``user``：纯文本（``content``）或**多模态内容分块**
+          （``content`` 为 :class:`ContentPartModel` 列表——user 轮携带
+          [image, text] 视觉理解形态；wire 序列化为 parts 数组）；
         - ``assistant`` + ``tool_calls``：模型工具调用声明轮（``content``
           可为空串——wire 序列化为 ``null``）；多轮上下文回放用；
         - ``tool``：工具结果回放（``tool_call_id`` 关联声明轮 + ``content``
           承载反馈文本）。
 
+    向后兼容：``content`` 为 ``str | list[ContentPartModel]``——纯字符串
+    形态在全部既有调用面（chat / duty / dream / 流式）原样有效，wire
+    序列化保持二键 ``{"role", "content"}`` 不变；仅分块列表形态序列化
+    为 parts 数组（流式传输面拒绝分块形态，见模块 docstring）。
+
     Attributes:
         role: 消息角色。
-        content: 消息文本内容（多模态内容分块契约由后续多模态 chunk 扩展，
-            本 chunk 为纯文本传输面；assistant 工具调用轮可为空串）。
+        content: 消息内容（纯文本，或多模态内容分块列表；assistant
+            工具调用轮可为空串）。
         tool_calls: 模型工具调用声明（assistant 轮次携带；其余角色为 None）。
         tool_call_id: 关联的调用 ID（tool 角色消息必填语义；其余角色 None）。
     """
 
     role: ChatMessageRole = Field(description="消息角色")
-    content: str = Field(description="消息文本内容")
+    content: str | list[ContentPartModel] = Field(
+        description="消息内容（纯文本或多模态内容分块列表）"
+    )
     tool_calls: list[ToolCallModel] | None = Field(
         default=None, description="模型工具调用声明（assistant 轮）"
     )
@@ -478,24 +549,77 @@ class WireEmbeddingsResponse(BaseModel):
     usage: WireTokenUsage | None = Field(default=None, description="token 用量")
 
 
-def _serialize_message(message: ChatMessageModel) -> dict[str, Any]:
-    """单条消息 → wire dict 形态（按 role 分派工具调用形态）。
+def _serialize_content_part(part: TextContentPart | ImageContentPart) -> dict[str, Any]:
+    """单个内容分块 → wire dict 形态（OpenAI 兼容 content[] 元素）。
 
     Args:
-        message: 域内消息（含 assistant 工具调用轮 / tool 结果轮形态）。
+        part: 域内内容分块（文本 / 图片）。
+
+    Returns:
+        wire 分块 dict：文本块 ``{"type": "text", "text": ...}``；图片块
+        ``{"type": "image_url", "image_url": {"url": ...[, "detail": ...]}}``
+        （``detail`` 仅在显式设置时进入 wire——端点默认值生效）。
+    """
+    if isinstance(part, TextContentPart):
+        return {"type": "text", "text": part.text}
+    image_payload: dict[str, Any] = {"url": part.image_url.url}
+    if part.image_url.detail is not None:
+        image_payload["detail"] = part.image_url.detail
+    return {"type": "image_url", "image_url": image_payload}
+
+
+def _serialize_content(content: str | list[ContentPartModel]) -> str | list[dict[str, Any]]:
+    """消息内容 → wire 形态（纯文本原样字符串；分块列表序列化 parts 数组）。
+
+    Args:
+        content: 域内消息内容（str 或 ContentPartModel 列表）。
+
+    Returns:
+        wire content 值：字符串（纯文本——既有形态全量兼容）或分块
+        dict 列表（多模态形态）。
+    """
+    if isinstance(content, str):
+        return content
+    return [_serialize_content_part(part) for part in content]
+
+
+def _has_content_parts(messages: Sequence[ChatMessageModel]) -> bool:
+    """判定消息序列是否携带多模态内容分块（流式守卫判据）。
+
+    Args:
+        messages: 聊天消息序列。
+
+    Returns:
+        任一消息 content 为分块列表时 True（空列表形态视为无分块——
+        与纯文本语义等同）。
+    """
+    return any(
+        isinstance(message.content, list) and message.content for message in messages
+    )
+
+
+def _serialize_message(message: ChatMessageModel) -> dict[str, Any]:
+    """单条消息 → wire dict 形态（按 role 分派工具调用 / 多模态形态）。
+
+    Args:
+        message: 域内消息（含 assistant 工具调用轮 / tool 结果轮 /
+            user 多模态分块形态）。
 
     Returns:
         OpenAI 兼容 messages 元素 dict：
-            - assistant 轮携带 ``tool_calls`` 时 content 为空串则序列化
-              ``null``（协议语义），``arguments`` 序列化为紧凑 JSON 字符串；
+            - assistant 轮携带 ``tool_calls`` 时 content 为空串 / 空列表
+              则序列化 ``null``（协议语义），``arguments`` 序列化为紧凑
+              JSON 字符串；
             - tool 轮输出 ``tool_call_id`` + content（缺失关联 ID 时为
               空串——调用方组装契约责任）；
+            - content 纯文本序列化字符串，分块列表序列化 parts 数组
+              （见 ``_serialize_content``）；
             - 其余角色纯 role / content 二键。
     """
     if message.role == ChatMessageRole.ASSISTANT and message.tool_calls is not None:
         return {
             "role": message.role.value,
-            "content": message.content if message.content else None,
+            "content": _serialize_content(message.content) if message.content else None,
             "tool_calls": [
                 {
                     "id": call.id,
@@ -514,9 +638,9 @@ def _serialize_message(message: ChatMessageModel) -> dict[str, Any]:
         return {
             "role": message.role.value,
             "tool_call_id": message.tool_call_id or "",
-            "content": message.content,
+            "content": _serialize_content(message.content),
         }
-    return {"role": message.role.value, "content": message.content}
+    return {"role": message.role.value, "content": _serialize_content(message.content)}
 
 
 def build_chat_request_body(
@@ -535,14 +659,16 @@ def build_chat_request_body(
     末块回传）；``params.extra`` 原样并入顶层（provider 特有参数透传）；
     ``tools`` 非空时按 OpenAI 兼容形态包裹
     （``{"type": "function", "function": {...}}``）并携带 ``tool_choice``
-    （缺省 ``auto``——模型自行决定）。
+    （缺省 ``auto``——模型自行决定）；**tools 与多模态内容分块可组合**
+    （视觉 + 工具调用形态——duty 轮工具循环消费）。
 
     Args:
         model: 模型名（provider model 参数）。
-        messages: 聊天消息序列（含 assistant 工具调用轮 / tool 结果轮）。
+        messages: 聊天消息序列（含 assistant 工具调用轮 / tool 结果轮 /
+            user 多模态分块轮）。
         params: 采样参数（None = 全默认）。
-        stream: 是否流式请求（**流式恒 content-only**——与 ``tools``
-            组合直接拒绝）。
+        stream: 是否流式请求（**流式恒 content-only 纯文本**——与
+            ``tools`` / 内容分块组合直接拒绝）。
         tools: 原生工具定义列表（None / 空 = 不携带工具面）。
         tool_choice: 工具选择策略（None = ``auto``；仅 ``tools`` 非空时
             进入请求体）。
@@ -553,6 +679,8 @@ def build_chat_request_body(
     Raises:
         BusinessException: ``stream=True`` 且 ``tools`` 非空
             （``VALIDATION_ERROR``——流式传输面不支持原生工具调用，
+            调用方编程错误）；``stream=True`` 且消息携带内容分块
+            （``VALIDATION_ERROR``——流式传输面不支持多模态内容分块，
             调用方编程错误）。
     """
     if stream and tools:
@@ -560,6 +688,12 @@ def build_chat_request_body(
             code=ErrorCode.VALIDATION_ERROR,
             message="流式请求不支持原生工具调用（流式传输面恒 content-only）",
             details={"tools": len(tools)},
+        )
+    if stream and _has_content_parts(messages):
+        raise BusinessException(
+            code=ErrorCode.VALIDATION_ERROR,
+            message="流式请求不支持多模态内容分块（流式传输面恒 content-only 纯文本）",
+            details={"messages_with_parts": len(messages)},
         )
     body: dict[str, Any] = {
         "model": model,
