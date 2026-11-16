@@ -1,0 +1,12 @@
+[submodule "models/Qwen3-Embedding-0.6B-GGUF"]
+	path = models/Qwen3-Embedding-0.6B-GGUF
+	url = https://www.modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF.git
+[submodule "models/Qwen3-VL-4B-Instruct-GGUF"]
+	path = models/Qwen3-VL-4B-Instruct-GGUF
+	url = https://www.modelscope.cn/Qwen/Qwen3-VL-4B-Instruct-GGUF.git
+[submodule "models/Qwen3-ASR-0.6B"]
+	path = models/Qwen3-ASR-0.6B
+	url = https://www.modelscope.cn/Qwen/Qwen3-ASR-0.6B.git
+[submodule "models/Fun-CosyVoice3-0.5B-2512"]
+	path = models/Fun-CosyVoice3-0.5B-2512
+	url = https://www.modelscope.cn/FunAudioLLM/Fun-CosyVoice3-0.5B-2512.git

@@ -8,6 +8,7 @@
 |---|---|
 | [backend/](backend/README.md) | 后端模块文档（core / config / database / pools / llm / persona / memory / chat / usage / duty / tools / safety …按模块逐份） |
 | [test-strategy/](test-strategy/README.md) | 测试策略（全异步 / 无真实配置 / 共享资源 / 覆盖率门 / 棘轮门） |
+| [models.md](models.md) | 模型子模组（ModelScope 源清单 / UA 覆写 / lfs 拉取 / 升级流程） |
 
 ## 路线图（P0 骨架 → 完整形态）
 
