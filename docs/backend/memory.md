@@ -256,7 +256,7 @@ chat 回合（reply / stream_reply）
 |---|---|---|---|---|---|
 | `dense`（默认） | ✅ | persona + 标量过滤 | `score APPROXIMATE LIMIT` | cosine 距离（越小越相关） | ❌ 422 |
 | `keyword` | ❌ | + `MATCH ... AGAINST` | `MATCH ... AGAINST DESC LIMIT`（无 APPROXIMATE） | MATCH 相关度（越大越相关） | ✅ LIKE + 子串计数 |
-| `hybrid` | ✅ | + `MATCH ... AGAINST`（预过滤） | `score APPROXIMATE LIMIT` | cosine 距离 | ❌ 422 |
+| `hybrid` | ✅ | + `MATCH ... AGAINST`（预过滤） | `score LIMIT`（精确排序——v1.4.0 实测 MATCH 不进 ANN 扫描，组合式静默空集） | cosine 距离 | ❌ 422 |
 
 模式 / 向量契约（违规 `VALIDATION_ERROR`）：dense / hybrid 必须携带查询向量；keyword 不得携带。回退存储收到向量模式族 → 清晰错误「回退存储不支持向量检索」。检索时间范围为**闭区间**（`start_ms <= ts_ms <= end_ms`——与 SeekDB 事实卡一致；与情景事件查询 DTO 的左闭右开约定**有意不同**）。
 
@@ -275,7 +275,7 @@ CREATE TABLE IF NOT EXISTS ff_memory_index (
   ts_ms BIGINT NOT NULL,
   content TEXT NOT NULL,
   embedding VECTOR(1024),                -- 维度自 SEEKDB_VECTOR_DIM 插值（默认 1024）
-  FULLTEXT INDEX idx_ff_mem_ft (content) WITH PARSER jieba,
+  FULLTEXT INDEX idx_ff_mem_ft (content) WITH PARSER ik PARSER_PROPERTIES=(ik_mode='max_word'),
   VECTOR INDEX idx_ff_mem_vec (embedding) WITH (DISTANCE=cosine, TYPE=hnsw, LIB=vsag),
   UNIQUE KEY uk_ff_mem_ref (persona_id, ref_type, ref_id)
 ) ORGANIZATION = HEAP;                   -- HEAP：DBMS_HYBRID_SEARCH（Form B，后续 chunk）前置

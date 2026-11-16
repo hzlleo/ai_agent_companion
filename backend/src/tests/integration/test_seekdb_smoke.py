@@ -2,22 +2,23 @@
 
 前置：启动本地 SeekDB（server 模式——MySQL 线协议 2881 端口）::
 
-    docker run -d --name seekdb-smoke -p 2881:2881 oceanbase/seekdb:v1.4.0
+    docker run -d --name seekdb-smoke -p 2881:2881 \\
+      oceanbase/seekdb:1.4.0-100000172026082615
 
-（镜像与标签以 SeekDB releases 页为准：
-https://github.com/oceanbase/seekdb/releases ——v1.4.0 为本工程钉死版本。）
+（镜像标签以 SeekDB releases / Docker Hub 页为准——本工程钉死 v1.4.0
+发行镜像 ``1.4.0-100000172026082615``；容器默认 **root 空密码**。）
 
 随后导出门控变量并定向运行::
 
     SEEKDB_SMOKE_URL="127.0.0.1:2881" \\
     SEEKDB_SMOKE_USER=root \\
-    SEEKDB_SMOKE_PASSWORD=root \\
+    SEEKDB_SMOKE_PASSWORD="" \\
     SEEKDB_SMOKE_DATABASE=test \\
     pixi run pytest src/tests/integration/test_seekdb_smoke.py -v --asyncio-mode=auto
 
 链路（SeekDBStore 全语义真实验证——单测假池面无法覆盖的端到端契约）：
 
-    ensure_schema（DDL 建表——VECTOR / jieba 全文 / hnsw / HEAP）→
+    ensure_schema（DDL 建表——VECTOR / ik 全文 / hnsw / HEAP）→
     upsert（ON DUPLICATE KEY 批量——运行期语法验证：若 SeekDB 拒绝
     ON DUPLICATE KEY，此处即失败，回退路径为 DELETE+INSERT，见
     memory.store.build_upsert_sql 文档）→ keyword 检索回读 →
