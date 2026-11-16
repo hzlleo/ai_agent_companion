@@ -49,7 +49,8 @@ class MemorySearchMode(StrEnum):
 
     - ``dense``：稠密向量检索（查询文本经 embed 角色向量化后 ANN 近邻）；
     - ``keyword``：全文关键词检索（MATCH ... AGAINST / 回退存储 LIKE）；
-    - ``hybrid``：混合检索（关键词谓词预过滤 + 向量距离排序）。
+    - ``hybrid``：混合检索（SeekDB ``DBMS_HYBRID_SEARCH.SEARCH``
+      引擎——关键词与向量融合排序）。
     """
 
     DENSE = "dense"
@@ -133,11 +134,13 @@ class MemorySearchQueryDTO(BaseModel):
 class MemorySearchResultDTO(BaseModel):
     """记忆检索结果 DTO（单条命中——引用定位 + 正文 + 相关度分）。
 
-    score 语义随模式而变（文档化决策——两种度量的天然方向差异）：
+    score 语义随模式而变（文档化决策——各度量的天然方向差异）：
 
-        - dense / hybrid：cosine 距离（**越小越相关**，升序返回）；
+        - dense：cosine 距离（**越小越相关**，升序返回）；
         - keyword：全文相关度（SeekDB MATCH 分数 / 回退存储朴素
-          子串计数——**越大越相关**）。
+          子串计数——**越大越相关**）；
+        - hybrid：SeekDB 融合相关度 ``_score``（关键词与向量 blended
+          ——**越大越相关**，降序返回）。
 
     调用方按 ``mode`` 解释 score 方向；结果已按对应方向排好序。
 
