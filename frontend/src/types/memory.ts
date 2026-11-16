@@ -307,7 +307,7 @@ export interface MemorySearchResult {
   ts_ms: number
   /** 索引正文（命中片段展示面）。 */
   content: string
-  /** 相关度分（dense/hybrid = cosine 距离越小越相关；keyword = 相关度越大越相关）。 */
+  /** 相关度分（dense = cosine 距离越小越相关；keyword / hybrid = 相关度越大越相关——hybrid 为 SeekDB 融合相关度 _score，降序返回）。 */
   score: number
 }
 
@@ -315,7 +315,7 @@ export interface MemorySearchResult {
 // 夜间梦境（dreaming——同步触发 + 运行日志）
 // ---------------------------------------------------------------------------
 
-/** 梦境任务构造级参数（DreamJobConfig 全量形态）。 */
+/** 梦境任务构造级参数（DreamJobConfig 全量形态——与后端 11 字段一一对应）。 */
 export interface DreamJobConfig {
   /** 候选窗口宽度（小时；窗口 [now - window_hours, now) 左闭右开）。 */
   window_hours: number
@@ -333,6 +333,12 @@ export interface DreamJobConfig {
   diary_enabled: boolean
   /** 日记事件重要度（kind=dream 落库）。 */
   diary_importance: number
+  /** 孤儿 running 行收敛阈值（epoch 毫秒，默认 3600000 = 1 小时——run_dream 入口将早于阈值的遗留 running 行批量判为 failed）。 */
+  stale_running_threshold_ms: number
+  /** 已晋升跳过的回溯窗（epoch 毫秒，默认 2592000000 = 30 天——仅统计窗内成功运行的晋升决策为「既往已晋升」跳过依据）。 */
+  promoted_lookback_ms: number
+  /** 单次运行窗口事件上限（默认 2000——超出按时间序截断并告警，防超宽窗口全量入内存 / prompt）。 */
+  max_episodes: number
 }
 
 /** 梦境运行统计（计数口径与决策动作对齐）。 */

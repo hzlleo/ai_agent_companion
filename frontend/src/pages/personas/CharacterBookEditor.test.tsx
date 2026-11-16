@@ -91,6 +91,19 @@ describe('CharacterBookEditor', () => {
     expect(screen.getByLabelText(/副触发关键词/)).toHaveValue('')
   })
 
+  it('selective 开启时副触发键标注必填（视觉提示——不阻断输入）', async () => {
+    const user = userEvent.setup()
+    render(<StatefulEditor initial={createEmptyBook()} />)
+    // 未开启：占位提示「需开启选择性触发」。
+    expect(screen.getByLabelText(/副触发关键词（需开启选择性触发）/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: '选择性触发' }))
+    // 开启：切换为必填视觉提示，输入仍可用（校验在提交期）。
+    expect(screen.getByLabelText(/副触发关键词（必填，逗号分隔）/)).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/副触发关键词/), '夜谈')
+    expect(screen.getByLabelText(/副触发关键词/)).toHaveValue('夜谈')
+  })
+
   it('校验错误内联呈现（扫描深度 / token 预算 / 插入顺序 / 副键规则）', () => {
     render(
       <StatefulEditor

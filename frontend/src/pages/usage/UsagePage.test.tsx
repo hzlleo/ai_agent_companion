@@ -43,6 +43,19 @@ describe('UsagePage', () => {
     expect(await screen.findByLabelText('桶宽')).toBeInTheDocument()
   })
 
+  it('time_bucket 桶宽选择器旁呈现 UTC 对齐口径提示', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<UsagePage />, { route: '/usage' })
+    await screen.findByTestId('usage-summary-call_count')
+
+    // 非 time_bucket 维度不显示桶口径提示。
+    expect(screen.queryByTestId('usage-bucket-utc-hint')).not.toBeInTheDocument()
+    await user.selectOptions(screen.getByLabelText('分组维度'), 'time_bucket')
+    expect(await screen.findByTestId('usage-bucket-utc-hint')).toHaveTextContent(
+      '时间桶按 UTC 对齐（day 桶边界为 UTC 零点；显示已换算为本地时区）',
+    )
+  })
+
   it('time_bucket 桶宽切换刷新聚合', async () => {
     const user = userEvent.setup()
     let capturedBucket: string | null = null

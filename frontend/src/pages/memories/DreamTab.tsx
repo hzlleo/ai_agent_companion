@@ -36,6 +36,9 @@ interface DreamConfigFormState {
   window_hours: string
   min_score: string
   max_candidates: string
+  stale_running_threshold_ms: string
+  promoted_lookback_ms: string
+  max_episodes: string
   diary_enabled: boolean
 }
 
@@ -43,12 +46,17 @@ const EMPTY_CONFIG_FORM: DreamConfigFormState = {
   window_hours: '',
   min_score: '',
   max_candidates: '',
+  stale_running_threshold_ms: '',
+  promoted_lookback_ms: '',
+  max_episodes: '',
   diary_enabled: true,
 }
 
 /**
  * cfg 覆写表单 → 请求体 cfg 片段（仅出现字段生效——与后端嵌套部分
- * 覆写语义对齐；全空 + 日记开关默认时返回 undefined = 全默认）。
+ * 覆写语义对齐）。恒返回至少含 ``diary_enabled`` 的覆写对象
+ * （``{diary_enabled: true}`` 与全默认语义等价——后端以模型默认值
+ * 兜底缺省字段）。
  */
 function formToConfigOverrides(
   form: DreamConfigFormState,
@@ -62,6 +70,15 @@ function formToConfigOverrides(
   }
   if (form.max_candidates.trim() !== '') {
     overrides.max_candidates = Number(form.max_candidates)
+  }
+  if (form.stale_running_threshold_ms.trim() !== '') {
+    overrides.stale_running_threshold_ms = Number(form.stale_running_threshold_ms)
+  }
+  if (form.promoted_lookback_ms.trim() !== '') {
+    overrides.promoted_lookback_ms = Number(form.promoted_lookback_ms)
+  }
+  if (form.max_episodes.trim() !== '') {
+    overrides.max_episodes = Number(form.max_episodes)
   }
   overrides.diary_enabled = form.diary_enabled
   return overrides
@@ -85,6 +102,24 @@ function validateConfigForm(form: DreamConfigFormState): string | null {
     const parsed = Number(form.max_candidates)
     if (!Number.isInteger(parsed) || parsed < 1 || parsed > 500) {
       return '候选事件上限须为 1-500 的整数'
+    }
+  }
+  if (form.stale_running_threshold_ms.trim() !== '') {
+    const parsed = Number(form.stale_running_threshold_ms)
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      return '孤儿收敛阈值须为不小于 1 的整数（毫秒）'
+    }
+  }
+  if (form.promoted_lookback_ms.trim() !== '') {
+    const parsed = Number(form.promoted_lookback_ms)
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      return '已晋升回溯窗须为不小于 1 的整数（毫秒）'
+    }
+  }
+  if (form.max_episodes.trim() !== '') {
+    const parsed = Number(form.max_episodes)
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100_000) {
+      return '窗口事件上限须为 1-100000 的整数'
     }
   }
   return null
@@ -196,6 +231,55 @@ export function DreamTab({ personaId }: DreamTabProps) {
                   setConfigForm((prev) => ({ ...prev, max_candidates: e.target.value }))
                 }
                 placeholder="默认 50"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="dream-stale-threshold" className="text-sm font-medium">
+                孤儿收敛阈值（毫秒）
+              </label>
+              <Input
+                id="dream-stale-threshold"
+                type="number"
+                min={1}
+                className="w-40"
+                value={configForm.stale_running_threshold_ms}
+                onChange={(e) =>
+                  setConfigForm((prev) => ({ ...prev, stale_running_threshold_ms: e.target.value }))
+                }
+                placeholder="默认 3600000（1 小时）"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="dream-promoted-lookback" className="text-sm font-medium">
+                已晋升回溯窗（毫秒）
+              </label>
+              <Input
+                id="dream-promoted-lookback"
+                type="number"
+                min={1}
+                className="w-44"
+                value={configForm.promoted_lookback_ms}
+                onChange={(e) =>
+                  setConfigForm((prev) => ({ ...prev, promoted_lookback_ms: e.target.value }))
+                }
+                placeholder="默认 2592000000（30 天）"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="dream-max-episodes" className="text-sm font-medium">
+                窗口事件上限
+              </label>
+              <Input
+                id="dream-max-episodes"
+                type="number"
+                min={1}
+                max={100000}
+                className="w-32"
+                value={configForm.max_episodes}
+                onChange={(e) =>
+                  setConfigForm((prev) => ({ ...prev, max_episodes: e.target.value }))
+                }
+                placeholder="默认 2000"
               />
             </div>
             <Checkbox

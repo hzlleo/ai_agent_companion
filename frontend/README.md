@@ -58,13 +58,12 @@ frontend/
     │   ├── useUsageApi.ts     # usage 总览/聚合/记录 hooks
     │   └── useModelsApi.ts    # models 注册表状态/绑定 + CRUD hooks
     ├── pages/
-    │   ├── PlaceholderPage.tsx   # 「建设中」占位页
     │   ├── personas/             # 人格模块（列表/表单/世界书/复制/批量/状态层）
     │   ├── memories/             # 记忆模块（五页签：情景/策展/会话/检索/梦境）
     │   ├── usage/                # 用量模块（总览瓦片 + 聚合 + 记录表）
     │   └── models/               # 模型注册表模块（条目 + 角色绑定 + 409 守卫流）
     ├── lib/               # cn / 时间格式化（epoch 毫秒 ↔ datetime-local）
-    ├── test/              # msw 服务器（四域默认 handlers）+ 共享渲染工具
+    ├── test/              # msw 服务器（四域默认 handlers）+ 共享渲染工具 + 契约漂移门禁（contract/）
     ├── App.tsx            # 路由 + ToastProvider
     └── main.tsx           # 入口（React Query Provider）
 ```
@@ -112,6 +111,22 @@ toast 呈现，含 400 校验 / 404 / 409 冲突等后端语义）。
   激活守卫 409 等错误路径的用户可见呈现；
 - 覆盖率门禁：`pixi run coverage` 对 `src/**` 逐文件 ≥80%
   （lines / branches / functions / statements）。
+
+## 契约漂移门禁（types 镜像 ↔ 后端 DTO）
+
+`src/types/` 是后端 pydantic DTO 的手写镜像（前后端源码隔离），漂移
+由**双侧门禁**拦截（数据源为提交态 fixture
+`src/test/contract/dtoSchemas.json`，约 45 组共享 wire 契约）：
+
+- **改后端 DTO** → 先 `cd backend && pixi run export-dto-schemas`
+  重新导出 fixture 并随改动一并提交——否则后端
+  `test_dto_schema_fixture.py`（内存再生 ↔ 提交态逐字节比对）即红；
+- **改前端 types**（增删字段）→ 前端契约测试
+  `src/test/contract/dtoContract.test.ts` 即拦（TypeScript 编译器 API
+  提取手写类型成员名，与 fixture 中 schema `properties` 键集逐组断言
+  相等，中文 diff 报缺失 / 多余字段）；
+- fixture 由脚本确定性生成（排序键 + byte-stable），**严禁手改**；
+  manifest 段固化「schema 键 ↔ 前端类型 ↔ 源文件」映射。
 
 ## 代码规范（本工程约定）
 

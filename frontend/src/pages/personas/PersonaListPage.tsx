@@ -104,7 +104,7 @@ export default function PersonaListPage() {
     setSelectedIds(checked ? new Set(loadedIds) : new Set())
   }
 
-  /** 确认操作分发（各操作经 msw 端点落库，错误 toast 后端 message）。 */
+  /** 确认操作分发（各操作经后端端点落库，错误 toast 后端 message）。 */
   const handleConfirm = (): void => {
     if (confirmAction === null) {
       return

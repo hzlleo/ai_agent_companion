@@ -83,6 +83,9 @@ describe('EpisodeInjectDialog', () => {
     await screen.findByLabelText(/载荷 JSON/)
     await user.type(screen.getByLabelText('事件来源'), 'admin-console')
     await user.click(screen.getByRole('button', { name: '注入' }))
-    expect(await screen.findByText('请求参数错误')).toBeInTheDocument()
+    // toast 附注首条字段定位（fix #7：details.errors 透出）。
+    expect(
+      await screen.findByText('请求参数错误（content: Input should be a valid dictionary）'),
+    ).toBeInTheDocument()
   })
 })

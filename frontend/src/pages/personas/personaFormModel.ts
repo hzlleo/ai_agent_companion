@@ -19,6 +19,7 @@ import type {
   PersonaRecord,
   PersonaStatus,
   PersonaUpdateRequest,
+  VoiceProfile,
 } from '@/types/persona'
 
 // ---------------------------------------------------------------------------
@@ -83,7 +84,17 @@ export interface CharaCardFormState {
   character_book: CharacterBookFormState | null
 }
 
-/** 人格表单完整字段态（基础 + 卡片）。 */
+/** 语音绑定字段态（字符串承载——speaker 空 = 不绑定；speed 空 = 默认 1.0）。 */
+export interface VoiceProfileFormState {
+  /** 发音人（CosyVoice speaker id；空 = 不绑定）。 */
+  speaker: string
+  /** instruct2 风格指令（空 = null 普通合成）。 */
+  instruct_text: string
+  /** 语速（字符串态；空 = 默认 1.0）。 */
+  speed: string
+}
+
+/** 人格表单完整字段态（基础 + 卡片 + 语音绑定）。 */
 export interface PersonaFormState {
   /** 注册名。 */
   name: string
@@ -93,6 +104,8 @@ export interface PersonaFormState {
   status: PersonaStatus
   /** 卡片字段态。 */
   card: CharaCardFormState
+  /** 语音绑定字段态。 */
+  voice: VoiceProfileFormState
 }
 
 /** 字段错误集（字段路径 → 中文错误文案）。 */
@@ -143,6 +156,15 @@ export function createEmptyCard(): CharaCardFormState {
   }
 }
 
+/** 新建空语音绑定（全空 = 不绑定）。 */
+export function createEmptyVoiceForm(): VoiceProfileFormState {
+  return {
+    speaker: '',
+    instruct_text: '',
+    speed: '',
+  }
+}
+
 /** 新建空人格表单。 */
 export function createEmptyForm(): PersonaFormState {
   return {
@@ -150,6 +172,7 @@ export function createEmptyForm(): PersonaFormState {
     display_name: '',
     status: 'disabled',
     card: createEmptyCard(),
+    voice: createEmptyVoiceForm(),
   }
 }
 
@@ -182,6 +205,39 @@ export function recordToFormState(record: PersonaRecord): PersonaFormState {
     display_name: record.display_name,
     status: record.status,
     card: cardToFormState(record.card),
+    voice: voiceToFormState(record.voice_profile),
+  }
+}
+
+/** wire 语音绑定 → 表单态（null → 全空）。 */
+function voiceToFormState(voice: VoiceProfile | null): VoiceProfileFormState {
+  if (voice === null) {
+    return createEmptyVoiceForm()
+  }
+  return {
+    speaker: voice.speaker,
+    instruct_text: voice.instruct_text ?? '',
+    speed: String(voice.speed),
+  }
+}
+
+/**
+ * 表单态语音绑定 → wire 形态。
+ *
+ * speaker 为空 → null（不绑定）；speaker 非空 → 绑定对象（speed 空 /
+ * 非法收敛为默认 1.0——提交期校验先行，此处为兜底形态）。
+ */
+export function voiceFormToWire(form: VoiceProfileFormState): VoiceProfile | null {
+  const speaker = form.speaker.trim()
+  if (speaker === '') {
+    return null
+  }
+  const speedParsed = Number(form.speed)
+  const speed = form.speed.trim() !== '' && Number.isFinite(speedParsed) ? speedParsed : 1.0
+  return {
+    speaker,
+    instruct_text: form.instruct_text.trim() === '' ? null : form.instruct_text.trim(),
+    speed,
   }
 }
 
@@ -255,7 +311,10 @@ function validateInsertionOrder(value: string): string | null {
  * - 展示名：可空；填了则 1-128；
  * - 世界书 scan_depth / token_budget：可空（= 不限），填了须 ≥1 整数；
  * - 条目 insertion_order：0-9999 整数；
- * - 条目 selective=false 时不得携带副触发键（后端规格一致性校验）。
+ * - 条目 selective=false 时不得携带副触发键，selective=true 时必须
+ *   携带至少一个非空副触发键（后端规格一致性校验的对称双分支）；
+ * - 语音绑定：speaker 1-128 字符（填写指令 / 语速时必填）；
+ *   speed 0.5-2.0（后端 VoiceProfileModel 值域）。
  *
  * @returns 错误集（空对象 = 校验通过）。
  */
@@ -291,7 +350,24 @@ export function validatePersonaForm(form: PersonaFormState): PersonaFormErrors {
       if (!entry.selective && parseKeys(entry.secondary_keys).length > 0) {
         errors[`${prefix}.secondary_keys`] = '副触发键仅在开启「选择性触发」时可填写'
       }
+      if (entry.selective && parseKeys(entry.secondary_keys).length === 0) {
+        errors[`${prefix}.secondary_keys`] = '开启选择性触发的条目必须填写至少一个副触发关键词'
+      }
     })
+  }
+
+  const voiceSpeaker = form.voice.speaker.trim()
+  if (voiceSpeaker === '' && (form.voice.instruct_text.trim() !== '' || form.voice.speed.trim() !== '')) {
+    errors['voice.speaker'] = '填写发音人后才会绑定语音（指令 / 语速不单独生效）'
+  }
+  if (voiceSpeaker !== '' && voiceSpeaker.length > 128) {
+    errors['voice.speaker'] = '发音人长度不得超过 128 个字符'
+  }
+  if (form.voice.speed.trim() !== '') {
+    const speedParsed = Number(form.voice.speed)
+    if (!Number.isFinite(speedParsed) || speedParsed < 0.5 || speedParsed > 2.0) {
+      errors['voice.speed'] = '语速须在 0.5-2.0 之间'
+    }
   }
 
   return errors
@@ -356,14 +432,16 @@ export function formToCreateRequest(form: PersonaFormState): PersonaCreateReques
     display_name: form.display_name.trim() === '' ? null : form.display_name.trim(),
     status: form.status,
     card: cardFormToWire(form.card),
+    voice_profile: voiceFormToWire(form.voice),
   }
 }
 
-/** 表单态 → 基础字段更新请求体（卡片经 PUT /card 单独整体替换）。 */
+/** 表单态 → 基础字段更新请求体（卡片经 PUT /card 单独整体替换；语音绑定随基础字段整体替换）。 */
 export function formToBaseUpdateRequest(form: PersonaFormState): PersonaUpdateRequest {
   return {
     name: form.name.trim(),
     display_name: form.display_name.trim() === '' ? null : form.display_name.trim(),
     status: form.status,
+    voice_profile: voiceFormToWire(form.voice),
   }
 }
