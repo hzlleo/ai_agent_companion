@@ -306,9 +306,11 @@ async def test_cli_main_entry_exit_code_passthrough(
     """main 入口：argparse 解析 + run_chat_cli 退出码经 SystemExit 透传。"""
     recorded: dict[str, object] = {}
 
-    async def fake_run_chat_cli() -> int:
-        """假 REPL（记录调用，返回哨兵退出码）。"""
+    async def fake_run_chat_cli(**kwargs: Any) -> int:
+        """假 REPL（记录调用与旗标面，返回哨兵退出码——**kwargs 兼容
+        P4 --voice 旗标新增参数）。"""
         recorded["called"] = True
+        recorded["kwargs"] = kwargs
         return 7
 
     def fake_asyncio_run(coro: Any) -> int:
@@ -328,6 +330,7 @@ async def test_cli_main_entry_exit_code_passthrough(
         cli.main()
     assert exc_info.value.code == 7
     assert recorded["called"] is True
+    assert recorded["kwargs"]["voice"] is False
 
 
 async def test_cli_main_help_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:

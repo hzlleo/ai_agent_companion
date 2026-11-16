@@ -3,7 +3,7 @@
 装配契约：
 
     - :func:`create_app` —— FastAPI 工厂（共享异常处理器 + personas /
-      memories / usage / models / health 路由 + CORS + lifespan）；
+      memories / usage / models / voice / health 路由 + CORS + lifespan）；
     - :func:`startup_app_state` / :func:`shutdown_app_state` —— **可独立
       驱动的纯异步函数对**（不藏在 lifespan 闭包内——测试无需 ASGI
       lifespan runner 即可直调，本工程不引入 asgi-lifespan 依赖）；
@@ -73,6 +73,7 @@ from app.api.memories import router as memories_router
 from app.api.models import router as models_router
 from app.api.personas import router as personas_router
 from app.api.usage import router as usage_router
+from app.api.voice import router as voice_router
 from app.middleware.error_handler import register_exception_handlers
 from packages.harness.channels.channel_models import ChannelType
 from packages.harness.channels.channel_service import ChannelRouter
@@ -522,6 +523,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(personas_router)
     app.include_router(memories_router)
     app.include_router(usage_router)
+    app.include_router(voice_router)
     app.include_router(models_router)
     app.include_router(health_router)
     app.state.settings = effective_settings

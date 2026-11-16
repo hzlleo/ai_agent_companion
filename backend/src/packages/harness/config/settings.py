@@ -27,6 +27,7 @@ from packages.harness.config.models import (
     ServerConfig,
     Settings,
     ToolsSandboxSettings,
+    VoiceSettings,
     settings,
 )
 
@@ -42,6 +43,7 @@ __all__ = [
     "DreamScheduleSettings",
     "SchedulerSettings",
     "ToolsSandboxSettings",
+    "VoiceSettings",
     "Settings",
     "settings",
     "build_isolated_settings",
@@ -61,6 +63,7 @@ def build_isolated_settings(
     dream_schedule: DreamScheduleSettings | None = None,
     scheduler: SchedulerSettings | None = None,
     tools_sandbox: ToolsSandboxSettings | None = None,
+    voice: VoiceSettings | None = None,
 ) -> Settings:
     """构造隔离 Settings 实例（测试 / 工具专用）。
 
@@ -83,6 +86,8 @@ def build_isolated_settings(
         scheduler: 中央调度器配置（None = 代码默认——tick 1.0s）。
         tools_sandbox: 工具沙盒配置（None = 代码默认——关闭形态；
             沙盒 lifespan 测试注入 enabled=True 形态）。
+        voice: 语音域配置（None = 代码默认——TTS / ASR 关闭形态；
+            voice 测试注入 enabled=True 形态）。
 
     Returns:
         隔离 :class:`Settings` 实例（与全局单例无关联）。
@@ -99,4 +104,5 @@ def build_isolated_settings(
         dream_schedule=dream_schedule if dream_schedule is not None else DreamScheduleSettings(),
         scheduler=scheduler if scheduler is not None else SchedulerSettings(),
         tools_sandbox=tools_sandbox if tools_sandbox is not None else ToolsSandboxSettings(),
+        voice=voice if voice is not None else VoiceSettings(),
     )

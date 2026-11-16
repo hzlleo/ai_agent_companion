@@ -30,6 +30,9 @@
       env_prefix=``SCHEDULER_``——P3 chunk 2）
     - ``ToolsSandboxSettings`` —— 工具沙盒分节（``Settings.tools_sandbox``；
       env_prefix=``TOOLS_SANDBOX_``——P3 chunk 3）
+    - ``TtsSettings`` / ``AsrSettings`` / ``VoiceSettings`` —— 语音域分节
+      （``Settings.voice``；子模型 env_prefix=``VOICE_TTS_`` /
+      ``VOICE_ASR_``——P4 chunk 1）
     - ``Settings``           —— 聚合器（全局单例 ``settings``）
     - ``LlmConfig``          —— config.yaml 的 ``llm`` 段（模型注册表 / 角色绑定 /
       多模态回退链）
@@ -65,6 +68,9 @@ __all__ = [
     "DreamScheduleSettings",
     "SchedulerSettings",
     "ToolsSandboxSettings",
+    "TtsSettings",
+    "AsrSettings",
+    "VoiceSettings",
     "Settings",
     "settings",
     "LlmConfig",
@@ -640,6 +646,117 @@ class ChannelsSettings(BaseModel):
     )
 
 
+class TtsSettings(BaseSettings):
+    """TTS 语音合成配置（env_prefix=``VOICE_TTS_``——P4 chunk 1 voice 域）。
+
+    锁定决策：``enabled=False``（默认）——语音是可选能力面：CosyVoice3
+    包装服务是部署机上的外部本地进程（权重经 ``models/`` 子模块承载，
+    compose 接线属后续部署 chunk），缺省零配置开发可用、测试 hermetic；
+    ``enabled=True`` 时 voice 域 API / CLI ``--voice`` 方可消费。
+
+    Attributes:
+        enabled: 是否启用 TTS 合成（False = voice API / CLI 拒绝）。
+        base_url: CosyVoice 包装服务基础 URL（部署契约见 harness/voice/
+            tts_client 模块 docstring——POST /tts → audio/wav）。
+        model_entry: 用量记账的模型条目名（usage 行 model_entry 列）。
+        request_timeout_seconds: 单次合成请求超时秒数（音频合成耗时
+            显著长于普通 API）。
+        default_speaker: 缺省发音人（无人格 voice_profile 绑定时的回落
+            值——CosyVoice 预置 speaker 名）。
+        default_speed: 缺省语速（0.5-2.0；1.0 为自然语速）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用 TTS 语音合成")
+    base_url: str = Field(
+        default="http://127.0.0.1:9880", min_length=1, description="CosyVoice 包装服务基础 URL"
+    )
+    model_entry: str = Field(
+        default="cosyvoice3", min_length=1, description="用量记账模型条目名"
+    )
+    request_timeout_seconds: float = Field(
+        default=30.0, gt=0, description="单次合成请求超时（秒）"
+    )
+    default_speaker: str = Field(
+        default="中文女", min_length=1, description="缺省发音人（CosyVoice 预置 speaker）"
+    )
+    default_speed: float = Field(default=1.0, ge=0.5, le=2.0, description="缺省语速（0.5-2.0）")
+
+    model_config = SettingsConfigDict(
+        env_prefix="VOICE_TTS_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+class AsrSettings(BaseSettings):
+    """ASR 语音识别配置（env_prefix=``VOICE_ASR_``——P4 chunk 1 voice 域）。
+
+    锁定决策：``enabled=False``（默认）——与 TtsSettings 同可选能力面
+    语义（Qwen3-ASR 经 vLLM 工具链以 OpenAI 兼容 audio 端点部署——
+    部署契约见 harness/voice/asr_client 模块 docstring）。
+
+    Attributes:
+        enabled: 是否启用 ASR 转写（False = voice API 拒绝）。
+        base_url: Qwen3-ASR 服务基础 URL（OpenAI 兼容路径由客户端拼接）。
+        model_entry: 用量记账的模型条目名（兼作 multipart ``model`` 字段
+            值——与部署侧模型 id 同名约定）。
+        request_timeout_seconds: 单次转写请求超时秒数（音频上传 + 转写）。
+        language: 缺省语言提示（None = 端点自动检测；请求级参数覆盖）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用 ASR 语音识别")
+    base_url: str = Field(
+        default="http://127.0.0.1:8082", min_length=1, description="Qwen3-ASR 服务基础 URL"
+    )
+    model_entry: str = Field(
+        default="qwen3-asr-0.6b", min_length=1, description="用量记账模型条目名（兼模型 id）"
+    )
+    request_timeout_seconds: float = Field(
+        default=60.0, gt=0, description="单次转写请求超时（秒）"
+    )
+    language: str | None = Field(
+        default=None, description="缺省语言提示（None = 端点自动检测）"
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="VOICE_ASR_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @field_validator("language", mode="before")
+    @classmethod
+    def _empty_language_to_none(cls, value: object) -> object:
+        """env 面空字符串 / 纯空白归一为 None（自动检测语义）。
+
+        Args:
+            value: 原始值（env 注入时空字符串 = 未设置）。
+
+        Returns:
+            空 / 纯空白字符串归一为 None；其余原样返回。
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+
+class VoiceSettings(BaseModel):
+    """语音域配置分节（``Settings.voice``——TTS / ASR 聚合容器）。
+
+    与 ``ChannelsSettings`` 同约定：env 面子配置为独立 env_prefix 的
+    ``BaseSettings``，聚合容器为普通 BaseModel。
+
+    Attributes:
+        tts: TTS 合成配置（默认关闭——CosyVoice3 包装服务）。
+        asr: ASR 转写配置（默认关闭——Qwen3-ASR OpenAI 兼容端点）。
+    """
+
+    tts: TtsSettings = Field(default_factory=TtsSettings, description="TTS 合成配置")
+    asr: AsrSettings = Field(default_factory=AsrSettings, description="ASR 转写配置")
+
+
 class Settings(BaseSettings):
     """全局配置聚合器——所有 env 面子配置的聚合入口。
 
@@ -667,6 +784,8 @@ class Settings(BaseSettings):
         scheduler: 中央调度器配置（tick 间隔——P3 chunk 2）。
         tools_sandbox: 工具沙盒配置（默认关闭——P3 chunk 3；沙盒为可选
             运行时，duty 工具面在沙盒不可达时回落到内置工具）。
+        voice: 语音域配置（TTS / ASR 默认关闭——P4 chunk 1；外部本地
+            模型服务经 HTTP 契约消费，部署接线属后续 chunk）。
         env: 运行环境标识（local / dev / prod）。
     """
 
@@ -681,6 +800,7 @@ class Settings(BaseSettings):
     dream_schedule: DreamScheduleSettings = DreamScheduleSettings()
     scheduler: SchedulerSettings = SchedulerSettings()
     tools_sandbox: ToolsSandboxSettings = ToolsSandboxSettings()
+    voice: VoiceSettings = VoiceSettings()
     env: str = Field(default="local", description="运行环境标识（local / dev / prod）")
 
     model_config = SettingsConfigDict(

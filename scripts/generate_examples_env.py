@@ -29,6 +29,7 @@ from packages.harness.config.models import (
     ServerConfig,
     Settings,
     ToolsSandboxSettings,
+    VoiceSettings,
 )
 
 # .env.example 分节标题: (section_title, config_classes)
@@ -44,6 +45,7 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("DREAM_SCHEDULE — 夜间梦境定时触发配置", [DreamScheduleSettings]),
     ("SCHEDULER — 中央调度器配置（自研异步循环）", [SchedulerSettings]),
     ("TOOLS_SANDBOX — 工具沙盒配置（可选运行时；令牌经 SANDBOX_TOKEN 间接）", [ToolsSandboxSettings]),
+    ("VOICE — 语音配置（TTS=CosyVoice3 / ASR=Qwen3-ASR，独立本地服务端点）", [VoiceSettings]),
 ]
 
 

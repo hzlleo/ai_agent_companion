@@ -153,6 +153,22 @@ os.environ["TOOLS_SANDBOX_REQUEST_TIMEOUT_SECONDS"] = "15"
 os.environ["SANDBOX_TEST_TOKEN"] = "test-only-sandbox-token"
 os.environ["SANDBOX_TOKEN"] = "test-only-sandbox-token"
 
+# --- 语音域（VOICE_TTS_ / VOICE_ASR_ 前缀 → TtsSettings / AsrSettings；
+#     默认关闭 → 测试零真实连接（voice 服务为部署机外部本地进程）；
+#     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试；
+#     单测经 MockTransport / fake 消费，永不触达真实模型服务） ---
+os.environ["VOICE_TTS_ENABLED"] = "false"
+os.environ["VOICE_TTS_BASE_URL"] = "http://127.0.0.1:9880"
+os.environ["VOICE_TTS_MODEL_ENTRY"] = "cosyvoice3"
+os.environ["VOICE_TTS_REQUEST_TIMEOUT_SECONDS"] = "30"
+os.environ["VOICE_TTS_DEFAULT_SPEAKER"] = "中文女"
+os.environ["VOICE_TTS_DEFAULT_SPEED"] = "1.0"
+os.environ["VOICE_ASR_ENABLED"] = "false"
+os.environ["VOICE_ASR_BASE_URL"] = "http://127.0.0.1:8082"
+os.environ["VOICE_ASR_MODEL_ENTRY"] = "qwen3-asr-0.6b"
+os.environ["VOICE_ASR_REQUEST_TIMEOUT_SECONDS"] = "60"
+os.environ["VOICE_ASR_LANGUAGE"] = ""
+
 # --- 运行环境标识（Settings.env → ENV） ---
 os.environ["ENV"] = "test"
 

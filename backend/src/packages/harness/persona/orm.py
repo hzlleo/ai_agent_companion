@@ -19,6 +19,11 @@
           事务性单激活切换，见 service 层）；激活要求 status=active；
         - ``chara_card`` JSON 列整体存储 :class:`CharaCardModel` 文档
           （L 层正典——会话期不可变）；
+        - ``voice_profile`` JSON 可空列存储人格语音绑定
+          （:class:`~packages.harness.voice.voice_models.VoiceProfileModel`
+          序列化形态——P4 chunk 1 增列；未绑定为 NULL → 合成回落
+          settings 缺省发音人；语音绑定与卡片正交——管理面独立增删，
+          不参与卡片补丁合并语义）；
         - 乐观锁版本列：**本工程 ORM 无版本计数约定**（database/base.py
           仅有 BigIntIdMixin / TimestampMixin / PersonaMixin，usage 域表
           亦无版本列）——遵循既有约定不引入 version 列；注册表写路径
@@ -62,6 +67,8 @@ class PersonaRow(Base, BigIntIdMixin, TimestampMixin):
         status: 可用性状态（active / disabled；与 is_active 正交）。
         is_active: 单激活绑定位（全表至多一行为 True；激活事务性切换）。
         chara_card: 人格卡片 JSON 文档（CharaCardModel 序列化形态）。
+        voice_profile: 人格语音绑定 JSON（VoiceProfileModel 序列化形态；
+            NULL = 未绑定——合成回落 settings 缺省）。
     """
 
     __tablename__ = "ff_personas"
@@ -77,6 +84,11 @@ class PersonaRow(Base, BigIntIdMixin, TimestampMixin):
     )
     chara_card: Mapped[dict[str, Any]] = mapped_column(
         JSON, comment="人格卡片 JSON（chara card v2 文档）"
+    )
+    voice_profile: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON,
+        nullable=True,
+        comment="人格语音绑定 JSON（VoiceProfileModel 形态；未绑定为 NULL）",
     )
 
 

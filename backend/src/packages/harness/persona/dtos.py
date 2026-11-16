@@ -31,6 +31,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from packages.harness.persona.chara_card import CharaBookModel, CharaCardModel
 from packages.harness.persona.models import PersonaStateLayer, PersonaStatus
+from packages.harness.voice.voice_models import VoiceProfileModel
 
 __all__ = [
     "PersonaCreateDTO",
@@ -56,6 +57,8 @@ class PersonaCreateDTO(BaseModel):
         display_name: 展示名；None 时回落 ``card.name``。
         status: 可用性状态（默认 disabled——启用是显式管理动作）。
         card: 人格卡片（chara card v2 文档；必填——无卡片的人格无意义）。
+        voice_profile: 人格语音绑定（None = 不绑定——合成回落 settings
+            缺省发音人；P4 chunk 1 增字段）。
     """
 
     name: str = Field(min_length=1, max_length=128, description="注册名（全局唯一）")
@@ -66,6 +69,9 @@ class PersonaCreateDTO(BaseModel):
         default=PersonaStatus.DISABLED, description="可用性状态（默认 disabled）"
     )
     card: CharaCardModel = Field(description="人格卡片（chara card v2）")
+    voice_profile: VoiceProfileModel | None = Field(
+        default=None, description="人格语音绑定（None = 不绑定）"
+    )
 
 
 class CharaCardPatchDTO(BaseModel):
@@ -113,6 +119,9 @@ class PersonaUpdateDTO(BaseModel):
         display_name: 新展示名。
         status: 新可用性状态。
         card: 卡片补丁（仅出现字段覆写；不提供则卡片原样）。
+        voice_profile: 人格语音绑定（**出现即整体替换**——显式 null 清除
+            绑定；不提供则原样保留；与卡片补丁的 exclude_unset 语义不同：
+            语音绑定是单对象面，无字段级合并）。
     """
 
     name: str | None = Field(
@@ -123,6 +132,9 @@ class PersonaUpdateDTO(BaseModel):
     )
     status: PersonaStatus | None = Field(default=None, description="新可用性状态")
     card: CharaCardPatchDTO | None = Field(default=None, description="卡片补丁")
+    voice_profile: VoiceProfileModel | None = Field(
+        default=None, description="语音绑定（出现即替换；显式 null 清除）"
+    )
 
 
 class PersonaCopyDTO(BaseModel):
@@ -152,6 +164,7 @@ class PersonaRecordDTO(BaseModel):
         status: 可用性状态。
         is_active: 单激活绑定位。
         card: 人格卡片（chara card v2 文档）。
+        voice_profile: 人格语音绑定（None = 未绑定）。
         created_at: 创建时间（epoch 毫秒）。
         updated_at: 更新时间（epoch 毫秒）。
     """
@@ -166,6 +179,10 @@ class PersonaRecordDTO(BaseModel):
     card: CharaCardModel = Field(
         validation_alias=AliasChoices("card", "chara_card"),
         description="人格卡片",
+    )
+    voice_profile: VoiceProfileModel | None = Field(
+        default=None,
+        description="人格语音绑定（None = 未绑定）",
     )
     created_at: int = Field(description="创建时间（epoch 毫秒）")
     updated_at: int = Field(description="更新时间（epoch 毫秒）")
