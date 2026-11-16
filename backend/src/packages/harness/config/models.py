@@ -20,6 +20,8 @@
     - ``PoolsConfig``        —— 共享池（env_prefix=``POOLS_``；线程池 / HTTP 池 /
       LLM 信号量 / 熔断阈值）
     - ``LlmEndpointConfig``  —— LLM 默认端点 env 面（env_prefix=``LLM_``）
+    - ``ChannelsSettings``   —— 通道域分节（``Settings.channels``；telegram
+      子模型 env_prefix=``TELEGRAM_``——P3 chunk 1）
     - ``Settings``           —— 聚合器（全局单例 ``settings``）
     - ``LlmConfig``          —— config.yaml 的 ``llm`` 段（模型注册表 / 角色绑定 /
       多模态回退链）
@@ -48,6 +50,8 @@ __all__ = [
     "PoolsConfig",
     "LlmEndpointConfig",
     "SeekDBSettings",
+    "TelegramSettings",
+    "ChannelsSettings",
     "Settings",
     "settings",
     "LlmConfig",
@@ -338,6 +342,109 @@ class SeekDBSettings(BaseSettings):
         return self
 
 
+class TelegramSettings(BaseSettings):
+    """Telegram 通道配置（env_prefix=``TELEGRAM_``——P3 chunk 1 通道层）。
+
+    锁定决策：``enabled=False``（默认）——零配置开发可用、测试 hermetic；
+    ``enabled=True`` 时 app lifespan 装配 Telegram 通道 runner（长轮询
+    后台任务，见 docs/backend/channels.md）。
+
+    bot token 经环境变量间接（与 llm 条目 ``api_key_env`` / SeekDB
+    ``password_env`` 同模式——**密钥永不落 yaml / 配置树**）：本配置只
+    持有变量名 ``bot_token_env``，实际 token 由 channels 域客户端在
+    构造期从该变量读取；``enabled=True`` 且变量缺失 / 为空时启动期
+    fail fast（``CHANNEL_TOKEN_MISSING``，中文错误信息）。
+
+    Attributes:
+        enabled: 是否启用 Telegram 通道（False = 不装配 runner）。
+        bot_token_env: bot token 环境变量名（实际 token 从该变量读取）。
+        api_base: Bot API 基础 URL（默认官方端点；可指向自建代理）。
+        poll_timeout_seconds: getUpdates 长轮询超时秒数（Bot API 长轮询
+            上限 50 秒——请求超时为该值 + 传输裕量）。
+        owner_chat_id: 属主会话 ID（Telegram chat id 字符串形态；None =
+            未配置。P3 duty 轮值班通知的投递目标，通道层本 chunk 不消费）。
+        backoff_base_seconds: 轮询失败退避基数秒（指数退避起点）。
+        backoff_max_seconds: 退避封顶秒数（不得小于基数）。
+        state_dir: 通道状态目录（offset 持久化 JSON 文件落此；相对路径
+            按进程 CWD 解析）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用 Telegram 通道")
+    bot_token_env: str = Field(
+        default="TELEGRAM_BOT_TOKEN", min_length=1, description="bot token 环境变量名"
+    )
+    api_base: str = Field(
+        default="https://api.telegram.org", min_length=1, description="Bot API 基础 URL"
+    )
+    poll_timeout_seconds: int = Field(
+        default=25, ge=1, le=50, description="getUpdates 长轮询超时秒数（Bot API 上限 50）"
+    )
+    owner_chat_id: str | None = Field(
+        default=None, description="属主会话 ID（duty 通知目标；None = 未配置）"
+    )
+    backoff_base_seconds: float = Field(default=1.0, gt=0, description="退避基数秒")
+    backoff_max_seconds: float = Field(default=60.0, gt=0, description="退避封顶秒数")
+    state_dir: str = Field(
+        default="data/channels", min_length=1, description="通道状态目录（offset 持久化）"
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="TELEGRAM_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @field_validator("owner_chat_id", mode="before")
+    @classmethod
+    def _empty_owner_chat_id_to_none(cls, value: object) -> object:
+        """env 面空字符串归一为 None（未配置语义）。
+
+        Args:
+            value: 原始值（env 注入时空字符串 = 未设置）。
+
+        Returns:
+            空字符串归一为 None；其余原样返回。
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _verify_backoff_bounds(self) -> TelegramSettings:
+        """校验退避边界（backoff_max 不得小于 backoff_base）。
+
+        Returns:
+            校验通过的实例。
+
+        Raises:
+            ValueError: backoff_max_seconds < backoff_base_seconds（装配
+                错误面——封顶必须不小于基数）。
+        """
+        if self.backoff_max_seconds < self.backoff_base_seconds:
+            raise ValueError(
+                f"backoff_max_seconds({self.backoff_max_seconds}) 不得小于 "
+                f"backoff_base_seconds({self.backoff_base_seconds})"
+            )
+        return self
+
+
+class ChannelsSettings(BaseModel):
+    """通道域配置分节（``Settings.channels``——多平台通道聚合容器）。
+
+    P3 chunk 1 仅含 telegram 子模型；P4 多通道扩展（B站 / QQ 等）在此
+    追加同级子模型（各自独立 env_prefix 的 ``BaseSettings``——本工程
+    约定：env 面子配置为 BaseSettings，聚合容器为普通 BaseModel）。
+
+    Attributes:
+        telegram: Telegram 通道配置（默认关闭）。
+    """
+
+    telegram: TelegramSettings = Field(
+        default_factory=TelegramSettings, description="Telegram 通道配置"
+    )
+
+
 class Settings(BaseSettings):
     """全局配置聚合器——所有 env 面子配置的聚合入口。
 
@@ -359,6 +466,7 @@ class Settings(BaseSettings):
         pools: 共享池配置。
         llm: LLM 默认端点 env 面。
         seekdb: SeekDB 检索存储配置（enabled=False 默认——SQLite 回退）。
+        channels: 通道域配置分节（telegram 默认关闭——P3 chunk 1）。
         env: 运行环境标识（local / dev / prod）。
     """
 
@@ -368,6 +476,7 @@ class Settings(BaseSettings):
     pools: PoolsConfig = PoolsConfig()
     llm: LlmEndpointConfig = LlmEndpointConfig()
     seekdb: SeekDBSettings = SeekDBSettings()
+    channels: ChannelsSettings = ChannelsSettings()
     env: str = Field(default="local", description="运行环境标识（local / dev / prod）")
 
     model_config = SettingsConfigDict(

@@ -100,4 +100,17 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh-CN": "模型不存在",
         "en": "Model not found",
     },
+    # --- 平台通道（P3 channels 域） ---
+    "CHANNEL_DISABLED": {
+        "zh-CN": "该平台通道未启用",
+        "en": "This platform channel is not enabled",
+    },
+    "CHANNEL_TOKEN_MISSING": {
+        "zh-CN": "平台通道凭证未配置",
+        "en": "Platform channel credential is not configured",
+    },
+    "CHANNEL_API_ERROR": {
+        "zh-CN": "平台通道调用失败，请稍后重试",
+        "en": "Platform channel call failed, please retry later",
+    },
 }

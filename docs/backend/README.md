@@ -16,4 +16,4 @@
 | memory（三层记忆：情景 / 策展 / 工作层存储 + 管理 API + 检索层 + 夜间梦境） | [memory.md](memory.md) | 已交付（P1-1 存储 / 持久化 / API；P1-2 检索层：MemoryStore + SeekDB / SQLite 回退 + 索引管道 + search API；P1-3 夜间梦境：巩固合并 + 日记 + 运行日志 + 手工触发 API） |
 | duty / scheduler（值班轮与中央调度） | duty.md | P3 交付 |
 | tools / multimodal / voice（工具层与辅助模型客户端） | tools.md | P3-P4 交付 |
-| channels / safety（平台通道 / 审批与红线） | channels.md | P3 交付 |
+| channels（平台通道：通道中立路由器 + Telegram 适配器 / 长轮询 runner / offset 持久化 / 4096 分段） | [channels.md](channels.md) | 已交付（P3-1：Telegram；P4 多通道扩展 / safety 审批红线后续 chunk） |

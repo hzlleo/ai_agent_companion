@@ -17,6 +17,7 @@ from generate_examples_helpers import (
 from pydantic_settings import BaseSettings
 
 from packages.harness.config.models import (
+    ChannelsSettings,
     DatabaseConfig,
     LlmEndpointConfig,
     LogConfig,
@@ -34,6 +35,7 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("POOLS — 共享池配置（线程池 / HTTP 池 / LLM 信号量 / 熔断）", [PoolsConfig]),
     ("LLM — 默认端点 env 面（模型注册表经 config.yaml 配置）", [LlmEndpointConfig]),
     ("SEEKDB — 检索存储配置（enabled=False 走 SQLite 回退；密码经 SEEKDB_PASSWORD 间接）", [SeekDBSettings]),
+    ("CHANNELS — 平台通道配置（Telegram 先行；机器人令牌经 TELEGRAM_BOT_TOKEN 间接）", [ChannelsSettings]),
 ]
 
 

@@ -16,12 +16,17 @@
         ↓ init_database(settings.database)     引擎 + 会话工厂（槽位）
         ↓ init_pool_manager + start            公共池（线程 / HTTP / LLM 条目）
         ↓ app.state.gateway = LlmGateway(...)  网关上挂（默认用量接线）
+        ↓ _startup_channels(app, settings)     通道层（TELEGRAM_ENABLED 时
+                                                装配 runner 后台任务；token
+                                                缺失 fail fast；缺省 no-op）
 
 停机序列（启动逆序）::
 
-    pool_manager.stop()                       HTTP / LLM 条目池 + 共享线程池
-        ↓ close_database()                    引擎 dispose + 槽位复位
-        ↓ shutdown_shared_thread_pool()       幂等兜底（pool stop 已关）
+    _shutdown_channels(app)                   通道 runner 优雅停机（先于池——
+                                              runner 消费共享 HTTP client）
+        ↓ pool_manager.stop()                  HTTP / LLM 条目池 + 共享线程池
+        ↓ close_database()                     引擎 dispose + 槽位复位
+        ↓ shutdown_shared_thread_pool()        幂等兜底（pool stop 已关）
 
 ``app.state.gateway``：为后续 API 消费方（会话路由 / 通道层）预装配的
 chat 角色网关；P0 的对话入口为控制台 CLI（自建等价栈，见
@@ -41,6 +46,7 @@ memory 域经 memories 路由导入链注册。
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -48,6 +54,7 @@ from typing import cast
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from loguru import logger
 
 import packages.harness.persona.orm as persona_orm
 import packages.harness.usage.orm as usage_orm
@@ -58,12 +65,21 @@ from app.api.models import router as models_router
 from app.api.personas import router as personas_router
 from app.api.usage import router as usage_router
 from app.middleware.error_handler import register_exception_handlers
+from packages.harness.channels.channel_models import ChannelType
+from packages.harness.channels.channel_service import ChannelRouter
+from packages.harness.channels.telegram.tg_client import TelegramClient
+from packages.harness.channels.telegram.tg_runner import TelegramChannelRunner
+from packages.harness.chat.service import ChatService
 from packages.harness.config.loader import load_all_config, setup_logging_from_settings
 from packages.harness.config.models import Settings
 from packages.harness.config.models import settings as global_settings
+from packages.harness.core.background_tasks import background_task_manager
+from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.thread_pool import shutdown_shared_thread_pool
 from packages.harness.database.engine import close_database, init_database
+from packages.harness.database.session import session_scope
 from packages.harness.llm.gateway import LlmGateway, wire_default_usage_recorder
+from packages.harness.memory.service import ChatSessionService
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
 
 # ORM 模型注册（导入副作用——见模块 docstring「ORM 注册」一节）。
@@ -73,6 +89,8 @@ _ORM_REGISTRY = (persona_orm, usage_orm)
 _CORS_ALLOW_METHODS: list[str] = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
 #: CORS 显式放行请求头面（JSON API 最小集 + 鉴权）。
 _CORS_ALLOW_HEADERS: list[str] = ["Accept", "Authorization", "Content-Type"]
+#: 通道 runner 优雅停机等待秒数（在途长轮询最多一个窗口——超时 cancel 兜底）。
+_CHANNELS_STOP_TIMEOUT_SECONDS: float = 5.0
 
 __all__ = [
     "APP_VERSION",
@@ -95,7 +113,8 @@ async def startup_app_state(
 
     Raises:
         BusinessException: 配置解析失败（``CONFIG_INVALID``——fail loud，
-            半生效配置不可审计）。
+            半生效配置不可审计）；通道启用但 bot token 缺失
+            （``CHANNEL_TOKEN_MISSING``——fail loud，装配期拒绝启动）。
     """
     setup_logging_from_settings(settings)
     load_all_config(config_dir=config_dir)
@@ -106,6 +125,7 @@ async def startup_app_state(
         settings=settings,
         usage_recorder=wire_default_usage_recorder(),
     )
+    await _startup_channels(app, settings)
 
 
 async def shutdown_app_state(app: FastAPI) -> None:
@@ -114,6 +134,7 @@ async def shutdown_app_state(app: FastAPI) -> None:
     Args:
         app: 待收尾的 FastAPI 应用（``app.state.gateway`` 置 None）。
     """
+    await _shutdown_channels(app)
     manager = get_pool_manager()
     if manager is not None and manager.started:
         await manager.stop()
@@ -121,6 +142,114 @@ async def shutdown_app_state(app: FastAPI) -> None:
     # 共享线程池幂等兜底（pool stop 已关闭；防御独立初始化路径）。
     shutdown_shared_thread_pool(wait=True)
     app.state.gateway = None
+
+
+async def _startup_channels(app: FastAPI, settings: Settings) -> None:
+    """装配通道层（``TELEGRAM_ENABLED=true`` 时启动 runner 后台任务）。
+
+    装配链：TelegramClient（token 解析 fail fast）→ ChannelRouter（逐消息
+    ChatService 工厂闭包 ``app.state.gateway`` + ``session_scope`` 持久化）
+    → TelegramChannelRunner → ``router.register_adapter`` → create_task +
+    ``background_task_manager`` 托管。禁用时 no-op（零通道对象构造）。
+
+    Args:
+        app: 待装配的 FastAPI 应用（router / runner / task 上挂
+            ``app.state``——router 供后续 duty 等出站投递面复用）。
+        settings: 生效 Settings（``settings.channels.telegram`` 分节）。
+
+    Raises:
+        BusinessException: token 环境变量缺失 / 为空
+            （``CHANNEL_TOKEN_MISSING``——fail loud）；公共池未启动
+            （``INTERNAL_ERROR``——调用顺序契约破坏面）。
+    """
+    app.state.channels_runner = None
+    app.state.channels_task = None
+    app.state.channels_router = None
+    telegram = settings.channels.telegram
+    if not telegram.enabled:
+        logger.info("Telegram 通道未启用（TELEGRAM_ENABLED=false）——跳过装配")
+        return
+    manager = get_pool_manager()
+    if manager is None or not manager.started:
+        raise BusinessException(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="通道装配前置失败：公共池未启动（lifespan 装配顺序破坏）",
+        )
+    gateway = app.state.gateway
+    client = TelegramClient(
+        manager.get_http_client(),
+        bot_token_env=telegram.bot_token_env,
+        api_base=telegram.api_base,
+        poll_timeout_seconds=telegram.poll_timeout_seconds,
+    )
+    router = ChannelRouter(
+        chat_service_factory=lambda: ChatService(
+            gateway=gateway,
+            session_service=ChatSessionService(),
+        ),
+        session_factory=session_scope,
+    )
+    runner = TelegramChannelRunner(
+        client=client,
+        router=router,
+        backoff_base_seconds=telegram.backoff_base_seconds,
+        backoff_max_seconds=telegram.backoff_max_seconds,
+        state_dir=telegram.state_dir,
+    )
+    router.register_adapter(ChannelType.TELEGRAM, runner)
+    task = asyncio.create_task(runner.run(), name="telegram-channel-runner")
+    background_task_manager.register(task)
+    task.add_done_callback(_log_channel_task_termination)
+    app.state.channels_router = router
+    app.state.channels_runner = runner
+    app.state.channels_task = task
+    logger.info(
+        "Telegram 通道 runner 已启动（managed background task）: state_dir={}",
+        telegram.state_dir,
+    )
+
+
+async def _shutdown_channels(app: FastAPI) -> None:
+    """停机通道层（先于公共池——runner 消费共享 HTTP client；幂等）。
+
+    停机链：``request_stop``（优雅）→ bounded 等待任务收尾 → 超时
+    ``cancel`` 兜底（在途长轮询被取消——offset 已逐批持久化，重启安全）。
+
+    Args:
+        app: 待收尾的 FastAPI 应用（``channels_router`` / ``channels_runner``
+            / ``channels_task`` 槽位复位 None）。
+    """
+    runner: TelegramChannelRunner | None = getattr(app.state, "channels_runner", None)
+    task: asyncio.Task[None] | None = getattr(app.state, "channels_task", None)
+    app.state.channels_runner = None
+    app.state.channels_task = None
+    app.state.channels_router = None
+    if task is None or task.done():
+        return
+    if runner is not None:
+        runner.request_stop()
+    try:
+        await asyncio.wait_for(task, timeout=_CHANNELS_STOP_TIMEOUT_SECONDS)
+    except TimeoutError:
+        # wait_for 超时路径已 cancel 任务并等待取消收尾——此处仅记录
+        logger.warning("Telegram 通道停机等待超时——已强制取消长轮询任务")
+    except Exception as exc:
+        logger.warning("Telegram 通道任务以异常收尾: {}", exc)
+    logger.info("Telegram 通道 runner 已停机")
+
+
+def _log_channel_task_termination(task: asyncio.Task[None]) -> None:
+    """通道后台任务终态日志（异常终止 / 取消均落日志——不留哑任务）。
+
+    Args:
+        task: 已完成（或已取消）的后台任务。
+    """
+    if task.cancelled():
+        logger.info("Telegram 通道任务已被取消（停机兜底路径）")
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Telegram 通道任务异常终止: {}", exc)
 
 
 @asynccontextmanager

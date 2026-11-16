@@ -173,6 +173,11 @@ class ErrorCode(StrEnum):
     LLM_REQUEST_FAILED = ("LLM_REQUEST_FAILED", 503)
     MODEL_NOT_FOUND = ("MODEL_NOT_FOUND", 404)
 
+    # --- 平台通道（P3 channels 域；Telegram 首个适配器消费） ---
+    CHANNEL_DISABLED = ("CHANNEL_DISABLED", 409)
+    CHANNEL_TOKEN_MISSING = ("CHANNEL_TOKEN_MISSING", 500)
+    CHANNEL_API_ERROR = ("CHANNEL_API_ERROR", 503)
+
     def __new__(cls, code: str, http_status: int) -> ErrorCode:
         """构造枚举成员。
 

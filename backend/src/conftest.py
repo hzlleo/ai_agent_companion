@@ -108,6 +108,22 @@ os.environ["SEEKDB_POOL_MAX"] = "2"
 os.environ["SEEKDB_TEST_PASSWORD"] = "test-only-seekdb-password"
 os.environ["SEEKDB_PASSWORD"] = "test-only-seekdb-password"
 
+# --- Telegram 通道（TELEGRAM_ 前缀 → TelegramSettings；默认关闭 → 测试零
+#     真实连接；S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入
+#     测试。bot token 经 TELEGRAM_TEST_BOT_TOKEN 间接——测试专用值，
+#     不可触达真实 bot；单测经 MockTransport / fake 消费，永不真实连接） ---
+os.environ["TELEGRAM_ENABLED"] = "false"
+os.environ["TELEGRAM_BOT_TOKEN_ENV"] = "TELEGRAM_TEST_BOT_TOKEN"
+os.environ["TELEGRAM_API_BASE"] = "https://api.telegram.org"
+os.environ["TELEGRAM_POLL_TIMEOUT_SECONDS"] = "25"
+os.environ["TELEGRAM_OWNER_CHAT_ID"] = ""
+os.environ["TELEGRAM_BACKOFF_BASE_SECONDS"] = "1.0"
+os.environ["TELEGRAM_BACKOFF_MAX_SECONDS"] = "60.0"
+os.environ["TELEGRAM_STATE_DIR"] = "data/channels"
+# token 本值（bot_token_env 指向的变量 + 默认变量名——测试专用值）
+os.environ["TELEGRAM_TEST_BOT_TOKEN"] = "test-only-telegram-bot-token"
+os.environ["TELEGRAM_BOT_TOKEN"] = "test-only-telegram-bot-token"
+
 # --- 运行环境标识（Settings.env → ENV） ---
 os.environ["ENV"] = "test"
 
