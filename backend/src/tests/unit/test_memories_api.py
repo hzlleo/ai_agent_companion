@@ -222,6 +222,16 @@ async def test_episode_delete_and_batch_partial(
     assert by_id[999]["code"] == "NOT_FOUND"
     assert by_id[keep["id"]]["success"] is True
 
+    # ids 唯一性校验：重复项在 DTO 边界拒绝（VALIDATION_ERROR 400）
+    duplicated = await client.post(
+        "/api/v1/memories/episodes/batch-delete",
+        json={"ids": [keep["id"], keep["id"]]},
+    )
+    assert duplicated.status_code == 400
+    duplicated_body = duplicated.json()
+    assert duplicated_body["code"] == "VALIDATION_ERROR"
+    assert any("重复" in error["msg"] for error in duplicated_body["data"]["errors"])
+
 
 async def test_episode_bad_payload_400(client: AsyncClient, active_persona_id: int) -> None:
     """载荷与 kind 不匹配 / 非法 kind：请求校验失败 400（VALIDATION_ERROR）。"""

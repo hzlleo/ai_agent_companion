@@ -1,8 +1,8 @@
-"""memory 域梦境 ORM——运行日志表 ff_dream_runs（P1 chunk 3 交付）。
+"""memory 域梦境 ORM——运行日志表 ff_dream_runs。
 
-独立文件决策（文档化）：梦境运行日志是 chunk 3 的纯新增面——独立
-``dreaming_orm.py`` 保持 chunk 1 交付的 ``orm.py``（四表）零改动，
-迁移 / 导入面互不扰动；两文件同处 memory 域包，Base 注册表共享。
+独立文件决策（文档化）：梦境运行日志与 ``orm.py``（四表）分文件——
+运行日志面与主表面互不扰动，迁移 / 导入面各自演进；两文件同处
+memory 域包，Base 注册表共享。
 
 表清单：
 
@@ -16,7 +16,9 @@ DreamDecisionModel）；``diary_episode_id`` 自引用外键指向情景事件�
 （SET NULL——日记事件被管理面删除时运行日志保留，链接置空）。
 
 运行状态语义：行创建即落库 ``status=running``（进程崩溃可能遗留孤儿
-running 行——P3 调度器负责收敛，本 chunk 文档化该边界）。
+running 行——由 ``DreamService.run_dream`` 入口按
+``DreamJobConfig.stale_running_threshold_ms`` 阈值批量收敛为 failed，
+error=「进程崩溃遗留，由调度收敛」）。
 """
 
 from __future__ import annotations

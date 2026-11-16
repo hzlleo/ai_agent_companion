@@ -1,4 +1,4 @@
-"""memory 域梦境整理编排——夜间记忆巩固任务（P1 chunk 3 交付）。
+"""memory 域梦境整理编排——夜间记忆巩固任务。
 
 夜间梦境（dream）是记忆层的巩固任务：把窗口内的情景事件按规则门
 筛选后交 LLM 蒸馏为策展记忆（supersede 语义），再以人格口吻生成
@@ -7,9 +7,13 @@
 调用链（顺序锁定，文档化于 docs/backend/memory.md 夜间梦境一节）::
 
     DreamService.run_dream(db, gateway=..., persona_name=..., store=?, now_ms=?, cfg=?)
+        ↓ ⓪ 孤儿 running 行收敛（stale_running_threshold_ms 阈值内的
+          崩溃遗留行批量置 failed——进程崩溃遗留的唯一出口）
         ↓ ① DreamRunRow 落库（status=running——运行日志面，先落库可追溯）
-        ↓ ② 取窗口事件 fetch_day_episodes（[now-window, now) 左闭右开）
-        ↓ ③ 取既往成功运行的已晋升事件集 + 既有 active 策展主题
+        ↓ ② 取窗口事件 fetch_day_episodes（[now-window, now) 左闭右开；
+          超出 max_episodes 按时间序截断并告警）
+        ↓ ③ 取回溯窗内既往成功运行的已晋升事件集（promoted_lookback_ms
+          回溯窗）+ 既有 active 策展主题
         ↓ ④ 主题相关度命中集（store 可选注入——keyword 检索 top-N，
           失败 / 未注入降级 boost=0）
         ↓ ⑤ 规则门 select_dream_candidates（零模型调用——纯函数）：
@@ -36,6 +40,13 @@ fail-closed 语义（锁定决策，逐条）：
       ——日记失败标记运行 failed 但**保留已提交的晋升并在 decisions
       中如实记录**（晋升是本任务的主产物、日记是叙事附产物；倒序会让
       日记失败回滚掉已有效的记忆巩固，代价更高）；
+    - **合并中断决策补齐**：合并 / 晋升阶段异常中断时，过门但未决策
+      的候选事件补 skipped 决策（reason=合并中断）——失败运行的决策
+      面对全部可信候选同样全覆盖；
+    - **孤儿 running 行收敛**：run_dream 入口把本人格
+      ``started_ms < now - stale_running_threshold_ms`` 且无终态的
+      running 行批量置 failed（error=进程崩溃遗留）——进程崩溃是
+      running 行终态缺失的唯一来源，调度 / 手工触发入口共享本收敛；
     - **运行失败不抛异常**：run_dream 返回终态记录 DTO（status=failed +
       error 原因）——手工触发面（admin API）以运行日志为产物，失败是
       业务结果而非请求失败；仅人格上下文缺失 / 运行行落库失败在入口
@@ -46,19 +57,21 @@ fail-closed 语义（锁定决策，逐条）：
 无 I/O、无模型调用；编排（本模块 DreamService）负责取数与落库。
 
 构造级旋钮：:class:`DreamJobConfig`（窗口 / 半衰期 / 分数门 / 上限 /
-相关度加成 / 日记开关——构造注入，与 llm 网关 retry 旋钮同模式；
-config 域 env 面迁移属后续 chunk）。
+相关度加成 / 日记开关 / 孤儿 running 收敛阈值 / 已晋升回溯窗 / 单次
+事件上限——构造注入，与 llm 网关 retry 旋钮同模式；Settings env 面
+迁移为已文档化的演进方向）。
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 from pydantic import ValidationError
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.harness.config.model_entry import ModelRole
@@ -121,6 +134,9 @@ MS_PER_HOUR: int = 3_600_000
 DREAM_PURPOSE: str = "dream"
 #: 日记事件的来源标识（情景层 kind=dream 行的 source）。
 DIARY_SOURCE: str = "dream:diary"
+#: 孤儿 running 行收敛的落库失败原因（run_dream 入口批量置 failed 时写入
+#: DreamRunRow.error——进程崩溃遗留的终态补齐）。
+_STALE_RUNNING_ERROR: str = "进程崩溃遗留，由调度收敛"
 
 
 class _DreamPhaseError(Exception):
@@ -419,9 +435,11 @@ class DreamService:
     ) -> DreamRunRecordDTO:
         """执行一次夜间梦境整理（fail-closed——返回终态记录，失败不抛）。
 
-        链路与 fail-closed 语义见模块 docstring。关键排序决策：**晋升
-        全部提交后才生成日记**——日记失败标记运行 failed 但保留已提交
-        晋升（decisions 如实记录）。
+        链路与 fail-closed 语义见模块 docstring。入口先收敛孤儿
+        running 行（``stale_running_threshold_ms`` 阈值内的崩溃遗留
+        行批量置 failed）；关键排序决策：**晋升全部提交后才生成日记**
+        ——日记失败标记运行 failed 但保留已提交晋升（decisions 如实
+        记录）。
 
         Args:
             session: 注入的异步 Session（调用方已绑定人格上下文）。
@@ -450,6 +468,7 @@ class DreamService:
                 message="梦境运行缺少人格上下文",
                 details={"fix": "调用方先经 bind_persona_context 绑定人格上下文"},
             )
+        await self._converge_stale_running(session, run_now=run_now, cfg=resolved_cfg)
         row = DreamRunRow(
             status=DreamRunStatus.RUNNING.value,
             started_ms=run_now,
@@ -512,6 +531,56 @@ class DreamService:
         )
         return DreamRunRecordDTO.model_validate(row)
 
+    async def _converge_stale_running(
+        self, session: AsyncSession, *, run_now: int, cfg: DreamJobConfig
+    ) -> int:
+        """收敛孤儿 running 行（进程崩溃遗留——单条批量 UPDATE 置 failed）。
+
+        判定：``status=running AND finished_ms IS NULL AND started_ms <
+        run_now - cfg.stale_running_threshold_ms``（人格作用域经
+        PersonaMixin 批量 UPDATE 自动过滤——仅本人格行）。当前运行行
+        尚未创建，天然不在收敛面。返回收敛行数（零即无遗留）。
+
+        Args:
+            session: 注入的异步 Session（人格作用域批量 UPDATE）。
+            run_now: 注入时钟（epoch 毫秒——阈值参考轴）。
+            cfg: 任务参数（stale_running_threshold_ms 收敛阈值）。
+
+        Returns:
+            本次收敛的行数。
+
+        Raises:
+            Exception: 收敛 UPDATE 落库失败（归 run_dream 入口 fail loud
+                ——与运行行落库失败同语义）。
+        """
+        stale_before = run_now - cfg.stale_running_threshold_ms
+        # ORM-enabled UPDATE——运行期返回 CursorResult（DML 行计数面）
+        result = cast(
+            "CursorResult[Any]",
+            await session.execute(
+                update(DreamRunRow)
+                .where(
+                    DreamRunRow.status == DreamRunStatus.RUNNING.value,
+                    DreamRunRow.finished_ms.is_(None),
+                    DreamRunRow.started_ms < stale_before,
+                )
+                .values(
+                    status=DreamRunStatus.FAILED.value,
+                    finished_ms=run_now,
+                    error=_STALE_RUNNING_ERROR,
+                )
+            ),
+        )
+        converged = int(result.rowcount)
+        await _commit(session)
+        if converged:
+            logger.warning(
+                "已收敛孤儿梦境运行行（进程崩溃遗留）: count={}, threshold_ms={}",
+                converged,
+                cfg.stale_running_threshold_ms,
+            )
+        return converged
+
     async def _run_phases(
         self,
         session: AsyncSession,
@@ -548,8 +617,17 @@ class DreamService:
         episodes = await self._memory.fetch_day_episodes(
             session, start_ms=window_start, end_ms=run_now
         )
+        if len(episodes) > cfg.max_episodes:
+            logger.warning(
+                "窗口事件数超出单次上限，按时间序截断: count={}, cap={}",
+                len(episodes),
+                cfg.max_episodes,
+            )
+            episodes = episodes[: cfg.max_episodes]
         trusted = [record for record in episodes if record.provenance != MemoryProvenance.UNTRUSTED]
-        already_promoted = await self._previous_promoted_ids(session)
+        already_promoted = await self._previous_promoted_ids(
+            session, run_now=run_now, cfg=cfg
+        )
         active_topics = await self._active_topics(session)
         topic_hits = (
             await self._collect_topic_hits(store, persona_scope, active_topics, cfg)
@@ -605,6 +683,67 @@ class DreamService:
         decided_ids: set[int],
     ) -> int:
         """LLM 合并 + 逐条复核 + 晋升（返回提案丢弃计数）。
+
+        异常中断决策补齐：任何阶段异常上抛前，过门但未决策的候选事件
+        补 skipped 决策（reason=合并中断）——失败运行的决策面对全部
+        可信候选同样全覆盖（与成功路径口径一致）。
+
+        Args:
+            session: 注入的异步 Session。
+            gateway: LLM 网关（dream 角色）。
+            persona_scope: 人格作用域 ID。
+            selected: 过门候选（分数降序）。
+            active_topics: 既有 active 策展记忆。
+            stats: 运行统计（failed 就地累加）。
+            decisions: 决策列表（晋升 / 并入 / 未收录决策就地追加）。
+            decided_ids: 已决策事件 id 集（就地更新——防重复决策）。
+
+        Returns:
+            提案丢弃计数（逐条校验失败 + merged_from 未知引用）。
+
+        Raises:
+            _DreamPhaseError: LLM 返回空 / 结构性解析失败（零晋升）。
+            BusinessException: LLM 调用 / 晋升落库异常（归 run_dream 记录）。
+        """
+        try:
+            return await self._merge_and_promote_inner(
+                session,
+                gateway=gateway,
+                persona_scope=persona_scope,
+                selected=selected,
+                active_topics=active_topics,
+                stats=stats,
+                decisions=decisions,
+                decided_ids=decided_ids,
+            )
+        except Exception:
+            # 合并中断：过门但未决策的候选补 skipped 决策（决策面全覆盖）
+            for candidate in selected:
+                if candidate.id in decided_ids:
+                    continue
+                decisions.append(
+                    DreamDecisionModel(
+                        episode_id=candidate.id,
+                        action=DreamDecisionAction.SKIPPED,
+                        reason="合并中断，本次未完成该事件的决策",
+                    )
+                )
+                decided_ids.add(candidate.id)
+            raise
+
+    async def _merge_and_promote_inner(
+        self,
+        session: AsyncSession,
+        *,
+        gateway: LlmGateway,
+        persona_scope: str,
+        selected: list[EpisodeRecordDTO],
+        active_topics: list[CuratedRecordDTO],
+        stats: DreamRunStatsModel,
+        decisions: list[DreamDecisionModel],
+        decided_ids: set[int],
+    ) -> int:
+        """合并 + 晋升主体（异常上抛由 ``_merge_and_promote`` 补决策）。
 
         Args:
             session: 注入的异步 Session。
@@ -814,19 +953,31 @@ class DreamService:
     # 内部——既往运行 / 主题取回 / 相关度命中
     # ------------------------------------------------------------------
 
-    async def _previous_promoted_ids(self, session: AsyncSession) -> frozenset[int]:
-        """既往成功运行的已晋升事件 id 集（promoted + merged 决策并集）。
+    async def _previous_promoted_ids(
+        self, session: AsyncSession, *, run_now: int, cfg: DreamJobConfig
+    ) -> frozenset[int]:
+        """既往成功运行的已晋升事件 id 集（回溯窗内 promoted + merged 并集）。
+
+        回溯窗：仅统计 ``finished_ms`` 落在 ``[run_now - cfg.promoted_lookback_ms,
+        run_now]`` 内的成功运行（运行中 finished_ms 为 NULL——自然排除；
+        窗外运行的晋升不再构成跳过依据，事件可被重新巩固）。
 
         Args:
             session: 注入的异步 Session（人格作用域自动过滤）。
+            run_now: 注入时钟（epoch 毫秒——回溯窗参考轴）。
+            cfg: 任务参数（promoted_lookback_ms 回溯窗宽度）。
 
         Returns:
-            已晋升事件 id 集（空 = 首次运行 / 无既往晋升）。
+            已晋升事件 id 集（空 = 窗内无既往晋升 / 首次运行）。
         """
+        window_start = run_now - cfg.promoted_lookback_ms
         rows = list(
             (
                 await session.execute(
-                    select(DreamRunRow).where(DreamRunRow.status == DreamRunStatus.SUCCESS.value)
+                    select(DreamRunRow).where(
+                        DreamRunRow.status == DreamRunStatus.SUCCESS.value,
+                        DreamRunRow.finished_ms >= window_start,
+                    )
                 )
             )
             .scalars()

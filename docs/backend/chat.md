@@ -128,8 +128,9 @@ startup_app_state(app, settings[, config_dir])   可独立驱动的纯异步函�
     → app.state.memory_store = build_memory_store(检索 / 梦境 / 调度器共用)
     → _startup_channels(TELEGRAM / QQ 启用时装配；缺省 no-op)
     → _startup_scheduler(DUTY / DREAM_SCHEDULE 启用时装配；缺省 no-op)
-shutdown_app_state(app)                          LIFO 五步停机链：scheduler → channels
-                                                 → pool stop → close_database → 线程池幂等兜底
+shutdown_app_state(app)                          LIFO 六步停机链：scheduler → channels
+                                                  → 后台任务 drain → pool stop
+                                                  → close_database → 线程池幂等兜底
 lifespan                                          上述函数对的 asynccontextmanager 薄封装
 ```
 

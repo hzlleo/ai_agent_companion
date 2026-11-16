@@ -38,6 +38,7 @@ from packages.harness.memory.dreaming import (
 )
 from packages.harness.memory.dreaming_models import (
     DreamDecisionAction,
+    DreamDecisionModel,
     DreamJobConfig,
     DreamProposedItemModel,
     DreamRunQueryDTO,
@@ -958,3 +959,208 @@ async def test_run_dream_missing_persona_context_fails_loud(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )
     assert exc_info.value.code == "PERSONA_CONTEXT_REQUIRED"
+
+
+# ---------------------------------------------------------------------------
+# run_dream——孤儿 running 行收敛（入口批量置 failed）
+# ---------------------------------------------------------------------------
+
+
+async def test_run_dream_converges_stale_running_rows(db_session: AsyncSession) -> None:
+    """孤儿 running 收敛：崩溃遗留行置 failed（error 落列）；新鲜行与他人格行不动。"""
+    async with bind_persona_context(PERSONA_A):
+        db_session.add(
+            DreamRunRow(
+                status="running",
+                started_ms=NOW - 10 * 3_600_000,  # 10 小时前——超过默认 1 小时阈值
+                finished_ms=None,
+                stats={},
+                decisions=[],
+                diary_episode_id=None,
+                error=None,
+            )
+        )
+        db_session.add(
+            DreamRunRow(
+                status="running",
+                started_ms=NOW - 1_000,  # 新鲜 running 行——阈值内不动
+                finished_ms=None,
+                stats={},
+                decisions=[],
+                diary_episode_id=None,
+                error=None,
+            )
+        )
+        await db_session.commit()
+    async with bind_persona_context(PERSONA_B):
+        db_session.add(
+            DreamRunRow(
+                status="running",
+                started_ms=NOW - 10 * 3_600_000,  # 他人格的崩溃遗留行——不跨人格收敛
+                finished_ms=None,
+                stats={},
+                decisions=[],
+                diary_episode_id=None,
+                error=None,
+            )
+        )
+        await db_session.commit()
+
+    async with bind_persona_context(PERSONA_A):
+        gateway = FakeDreamGateway([])
+        run = await dream_service.run_dream(
+            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+        )
+    assert run.status == "success"
+
+    async with bind_persona_context(PERSONA_A):
+        a_runs = list((await db_session.execute(select(DreamRunRow))).scalars().all())
+    by_started = {row.started_ms: row for row in a_runs}
+    stale = by_started[NOW - 10 * 3_600_000]
+    assert stale.status == "failed"
+    assert stale.finished_ms == NOW
+    assert stale.error is not None
+    assert "进程崩溃遗留" in stale.error
+    fresh = by_started[NOW - 1_000]
+    assert fresh.status == "running"  # 阈值内行未被收敛
+    assert fresh.error is None
+    async with bind_persona_context(PERSONA_B):
+        b_runs = list((await db_session.execute(select(DreamRunRow))).scalars().all())
+    assert b_runs[0].status == "running"  # 他人格行未被收敛
+
+
+# ---------------------------------------------------------------------------
+# run_dream——已晋升回溯窗（promoted_lookback_ms）
+# ---------------------------------------------------------------------------
+
+
+async def test_run_dream_promoted_lookback_window_excludes_old_runs(
+    db_session: AsyncSession,
+) -> None:
+    """回溯窗：窗外成功运行的晋升不再构成跳过依据——事件被重新巩固。"""
+    async with bind_persona_context(PERSONA_A):
+        ep = await memory_service.append_episode(
+            db_session, _chat_dto(user="很久以前说的事", importance=6, ts_ms=NOW - 2_000)
+        )
+        db_session.add(
+            DreamRunRow(
+                status="success",
+                started_ms=NOW - 40 * DAY_MS,
+                finished_ms=NOW - 40 * DAY_MS,  # 40 天前——窗外（默认回溯 30 天）
+                stats={},
+                decisions=[
+                    DreamDecisionModel(
+                        episode_id=ep.id, action=DreamDecisionAction.PROMOTED
+                    ).model_dump()
+                ],
+                diary_episode_id=None,
+                error=None,
+            )
+        )
+        await db_session.commit()
+        gateway = FakeDreamGateway(
+            [_merge_response([_proposal("重新巩固", [ep.id])]), "今天的日记。"]
+        )
+        run = await dream_service.run_dream(
+            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+        )
+    assert run.status == "success"
+    assert run.stats.gated == 1  # 窗外晋升不跳过——事件重新过门
+    decision_by_id = {decision.episode_id: decision for decision in run.decisions}
+    assert decision_by_id[ep.id].action == DreamDecisionAction.PROMOTED
+
+
+async def test_run_dream_promoted_lookback_window_keeps_recent_runs(
+    db_session: AsyncSession,
+) -> None:
+    """回溯窗：窗内成功运行的晋升仍构成跳过依据。"""
+    async with bind_persona_context(PERSONA_A):
+        ep = await memory_service.append_episode(
+            db_session, _chat_dto(user="最近说的事", importance=6, ts_ms=NOW - 2_000)
+        )
+        db_session.add(
+            DreamRunRow(
+                status="success",
+                started_ms=NOW - 10 * DAY_MS,
+                finished_ms=NOW - 10 * DAY_MS,  # 10 天前——窗内（默认回溯 30 天）
+                stats={},
+                decisions=[
+                    DreamDecisionModel(
+                        episode_id=ep.id, action=DreamDecisionAction.MERGED
+                    ).model_dump()
+                ],
+                diary_episode_id=None,
+                error=None,
+            )
+        )
+        await db_session.commit()
+        gateway = FakeDreamGateway(["今天很平静。"])
+        run = await dream_service.run_dream(
+            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+        )
+    assert run.status == "success"
+    decision_by_id = {decision.episode_id: decision for decision in run.decisions}
+    assert decision_by_id[ep.id].action == DreamDecisionAction.SKIPPED
+    assert "既往" in decision_by_id[ep.id].reason
+
+
+# ---------------------------------------------------------------------------
+# run_dream——窗口事件上限（max_episodes 截断）
+# ---------------------------------------------------------------------------
+
+
+async def test_run_dream_max_episodes_cap_truncates(db_session: AsyncSession) -> None:
+    """窗口事件上限：超出按时间序截断（保留最早事件）——候选计数受限。"""
+    async with bind_persona_context(PERSONA_A):
+        early = await memory_service.append_episode(
+            db_session, _chat_dto(user="清晨的事", importance=6, ts_ms=NOW - 7_200_000)
+        )
+        late = await memory_service.append_episode(
+            db_session, _chat_dto(user="深夜的事", importance=6, ts_ms=NOW - 1_000)
+        )
+        gateway = FakeDreamGateway(
+            [_merge_response([_proposal("截断主题", [early.id])]), "今天的日记。"]
+        )
+        run = await dream_service.run_dream(
+            db_session,
+            gateway=gateway,
+            persona_name="大肥鱼",
+            now_ms=NOW,
+            cfg=DreamJobConfig(max_episodes=1),
+        )
+    assert run.status == "success"
+    assert run.stats.candidates == 1  # 截断后仅 1 条可信事件
+    merge_prompt = gateway.calls[0]["messages"][0].content
+    assert f"事件 #{early.id}" in merge_prompt  # 时间序截断保留最早事件
+    assert f"事件 #{late.id}" not in merge_prompt
+    decision_ids = {decision.episode_id for decision in run.decisions}
+    assert early.id in decision_ids
+    assert late.id not in decision_ids  # 截断事件不产生决策（不在候选面）
+
+
+# ---------------------------------------------------------------------------
+# run_dream——合并中断决策补齐（失败路径决策面全覆盖）
+# ---------------------------------------------------------------------------
+
+
+async def test_run_dream_merge_interrupt_backfills_decisions(
+    db_session: AsyncSession,
+) -> None:
+    """合并中断：LLM 异常中断 → 过门未决策候选补 skipped 决策（reason=合并中断）。"""
+    async with bind_persona_context(PERSONA_A):
+        ep1 = await memory_service.append_episode(
+            db_session, _chat_dto(user="中断前的事一", importance=6, ts_ms=NOW - 2_000)
+        )
+        ep2 = await memory_service.append_episode(
+            db_session, _chat_dto(user="中断前的事二", importance=6, ts_ms=NOW - 1_000)
+        )
+        gateway = FailingDreamGateway([])
+        run = await dream_service.run_dream(
+            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+        )
+    assert run.status == "failed"
+    assert "LLM_REQUEST_FAILED" in (run.error or "")
+    decision_by_id = {decision.episode_id: decision for decision in run.decisions}
+    for ep in (ep1, ep2):
+        assert decision_by_id[ep.id].action == DreamDecisionAction.SKIPPED
+        assert "合并中断" in decision_by_id[ep.id].reason

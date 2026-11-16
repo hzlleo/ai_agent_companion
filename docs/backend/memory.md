@@ -1,13 +1,13 @@
-# memory — 三层记忆域（P1 chunk 1 存储 + chunk 2 检索层 + chunk 3 夜间梦境）
+# memory — 三层记忆域（存储 + 检索层 + 夜间梦境）
 
-`backend/src/packages/harness/memory/` 承载陪伴智能体的三层记忆：情景层（append-only 事件日志）、策展层（supersede 语义蒸馏记忆）、工作层（chat 会话回合持久化）。chunk 1 交付存储 + 管理 API；chunk 2 交付**检索层**（MemoryStore 抽象 + SeekDB 生产存储 + SQLite 回退 + 索引管道 + 检索 API，见下文「检索层」一节）；chunk 3 交付**夜间梦境**（情景事件 → 策展记忆的巩固整理任务 + 第一人称日记 + 运行日志 + 手工触发 API，见下文「夜间梦境」一节）。
+`backend/src/packages/harness/memory/` 承载陪伴智能体的三层记忆：情景层（append-only 事件日志）、策展层（supersede 语义蒸馏记忆）、工作层（chat 会话回合持久化）。本域交付存储 + 管理 API、**检索层**（MemoryStore 抽象 + SeekDB 生产存储 + SQLite 回退 + 索引管道 + 检索 API，见下文「检索层」一节）与**夜间梦境**（情景事件 → 策展记忆的巩固整理任务 + 第一人称日记 + 运行日志 + 手工触发 API，见下文「夜间梦境」一节）。
 
 ## 三层模型
 
 | 层 | 表 | 语义 | 写入方 |
 |---|---|---|---|
 | episodic（情景） | `ff_memory_episodes` | 发生过的每件事一行；**append-only**（只增不改，删除是管理面显式动作） | chat 回合 / duty 报告 / dream 产物 / platform 动作 / 管理面手工注入 |
-| curated（策展） | `ff_curated_memory` | 蒸馏后的结构化记忆；同 (persona, kind, topic) **至多一条 active**（supersede 取代语义，历史链可回溯） | 管理面 upsert（本 chunk）/ 梦境整理任务（chunk 3） |
+| curated（策展） | `ff_curated_memory` | 蒸馏后的结构化记忆；同 (persona, kind, topic) **至多一条 active**（supersede 取代语义，历史链可回溯） | 管理面 upsert / 梦境整理任务 |
 | working（工作） | `ff_chat_sessions` + `ff_chat_messages` | chat 会话与回合（会话内上下文组装原料） | `ChatService` 持久化绑定（见 chat.md） |
 
 ## 模块一览
@@ -25,7 +25,7 @@
 | `retrieval.py` | 检索编排（MemoryIndexer 索引管道 + MemorySearchService + `build_memory_store` 装配工厂 + 条目构建辅助） | `MemoryIndexer` / `MemorySearchService` / `build_memory_store` |
 | `dreaming_models.py` | 梦境 DTO + 构造级参数（DreamJobConfig / 统计 / 决策 / 提案 / 运行记录 / 触发请求） | `DreamJobConfig` / `DreamRunRecordDTO` 等 |
 | `dreaming_prompts.py` | 梦境 prompt Unit 文件（合并 + 日记模板——版本常量 + byte-lock） | `render_merge_prompt` / `render_diary_prompt` |
-| `dreaming_orm.py` | 运行日志表 `ff_dream_runs`（独立文件——chunk 3 纯新增，orm.py 零改动） | `DreamRunRow` |
+| `dreaming_orm.py` | 运行日志表 `ff_dream_runs`（独立文件——与 orm.py 分文件） | `DreamRunRow` |
 | `dreaming.py` | 梦境编排（纯函数打分 / 规则门 + DreamService 主链路 + 运行日志读面） | `DreamService` / `recency_decay` / `select_dream_candidates` |
 
 依赖方向：memory → core（dtos / errors / time_utils / background_tasks）+ database（Base / Mixin / engine holder）+ llm（`ChatMessageRole` / `EmbeddingsResponseModel`——嵌入契约）+ config（Settings——存储选择）+ pools（seekdb_compat 类型面 / manager 共享池）；不依赖 persona / chat / usage 域（人格上下文经 `bind_persona_context` 由调用方绑定；嵌入用量经 gateway 的 usage 接线落账）。
@@ -66,11 +66,12 @@
 | `status` | String(16)，索引 | active / superseded |
 | `superseded_by_id` | BIGINT，自引用 FK（SET NULL） | 取代者行主键（active 行为 NULL） |
 | `version` | Integer | 链内版本号（首版 1，supersede 递增） |
+| `active_marker` | String(16)，可空 | 单 active 守卫标记（active 行 `'active'` / superseded 行 NULL）——唯一键 `uq_ff_curated_active (persona_id, kind, topic, active_marker)` 的非 NULL 侧（两方言唯一键均忽略 NULL，多代 superseded 行共存；迁移 0007） |
 
 ### ff_chat_sessions / ff_chat_messages（工作层）
 
 `ff_chat_sessions`：`persona_id`（PersonaMixin）/ `title` / `message_count`（下一消息 seq）/ `last_active_at`（索引）。
-`ff_chat_messages`：`session_id`（FK ff_chat_sessions.id，级联删除，索引）/ `seq`（会话内从 1 递增）/ `role`（user/assistant/system）/ `content` / `ts_ms`。
+`ff_chat_messages`：`session_id`（FK ff_chat_sessions.id，级联删除，索引）/ `seq`（会话内从 1 递增；唯一键 `uq_ff_chat_messages_seq (session_id, seq)`——DB 级兜底，迁移 0007）/ `role`（user/assistant/system）/ `content` / `ts_ms`。
 
 ## provenance 规则（全记忆层统一 taxonomy）
 
@@ -92,12 +93,15 @@ get_episode(id) / delete_episode(id)      读取 / 管理面删除（append-only
 batch_delete_episodes(ids)                批量删除（部分成功——逐 id 独立事务）
 fetch_day_episodes(start_ms, end_ms)      日记输入面（时间升序 (ts, id) 稳定排列）
 
-upsert_curated(dto)                       supersede 语义 upsert（单事务原子切换）
+upsert_curated(dto)                       supersede 语义 upsert（单事务原子切换 + 并发冲突重试）
 query_curated(query) / get_curated(id)    查询 / 读取（kind / topic / status 过滤）
 get_curated_history(id)                   历史链（锚点行同 (kind, topic) 全链，版本升序）
 delete_curated(id)                        管理面删除（active 行删除后该 topic 重新起链，version 从 1 计数）
 
 create_session(title) / list_sessions / get_session / delete_session / append_message
+                                          （append_message：会话行 SELECT ... FOR UPDATE 行锁 +
+                                          (session_id, seq) 唯一键兜底 + 冲突重试一次；delete_session：
+                                          消息单语句批量 DELETE + 会话行 ORM 删除）
 ```
 
 ### supersede 链（单一真相）
@@ -108,7 +112,7 @@ upsert(topic=T, content=C2)  →  row#2 (v2, active)   row#1 → status=supersed
 upsert(topic=T, content=C3)  →  row#3 (v3, active)   row#2 → status=superseded, superseded_by_id=row#3.id
 ```
 
-- 同 (persona, kind, topic) 至多一条 `status=active`——由服务层单事务保证（新行落库 → 旧行标记 + 链接 → commit）；
+- 同 (persona, kind, topic) 至多一条 `status=active`——**由 DB 唯一键 `uq_ff_curated_active (persona_id, kind, topic, active_marker)` 强制**（active 行 `active_marker='active'`、superseded 行 NULL；服务层在单事务内按确定语句序完成「新行落库（NULL 标记）→ 旧行解除标记 + superseded + 链接 → 新行取得标记」，并发双写由唯一键拒绝 + 服务层回滚重试一次收敛）；
 - 历史链读取：链内任意行作锚点，取其 (kind, topic) 全部行按 `(version, id)` 升序（supersede 语义下两口径等价）；
 - 删除 active 行后该 topic 无 active 行，下次 upsert 重新起链（version 从 1 重新计数——文档化决策）。
 
@@ -181,10 +185,10 @@ DELETE /api/v1/memories/curated/{id}                删除
 GET    /api/v1/memories/sessions                    会话游标分页
 GET    /api/v1/memories/sessions/{id}               详情（含全量消息 seq 升序）
 DELETE /api/v1/memories/sessions/{id}               删除（消息同事务清理）
-POST   /api/v1/memories/search                      记忆检索（dense / keyword / hybrid——P1-2，见「检索层」）
-POST   /api/v1/memories/dream/trigger               手工触发夜间梦境整理（P1-3，见「夜间梦境」）
-GET    /api/v1/memories/dream/runs                  梦境运行日志游标分页（P1-3）
-GET    /api/v1/memories/dream/runs/{id}             运行详情（含逐事件决策，P1-3）
+POST   /api/v1/memories/search                      记忆检索（dense / keyword / hybrid——见「检索层」）
+POST   /api/v1/memories/dream/trigger               手工触发夜间梦境整理（见「夜间梦境」）
+GET    /api/v1/memories/dream/runs                  梦境运行日志游标分页
+GET    /api/v1/memories/dream/runs/{id}             运行详情（含逐事件决策）
 ```
 
 全部响应经 `ResultDTO` 封装；分页经 `PageResponse`；Session 经 `get_async_db` 注入（事务边界归服务层）。
@@ -194,10 +198,11 @@ GET    /api/v1/memories/dream/runs/{id}             运行详情（含逐事件�
 ```
 chat 回合（reply / stream_reply）
     ↓ ChatService._persist_turn（session_scope 短事务 + bind_persona_context）
-    ↓ ChatSessionService.append_message（seq 递增 + 会话行计数 / last_active_at 同事务更新）
+    ↓ ChatSessionService.append_message（会话行 FOR UPDATE 行锁 + seq 唯一键兜底
+      + 计数 / last_active_at 同事务更新）
     → ff_chat_messages
 
-（P1-3 落地）梦境整理（夜间巩固任务）
+（梦境整理落地）夜间巩固任务
     → ff_memory_episodes（日记产物：kind=dream / source="dream:diary"）
     → ff_curated_memory（合并晋升：provenance=agent，supersede 语义——见「夜间梦境」）
     → ff_dream_runs（运行日志：状态 / 统计 / 逐事件决策）
@@ -208,18 +213,18 @@ chat 回合（reply / stream_reply）
 
 ## 测试与门禁
 
-- `tests/unit/test_memory_service.py`——服务面全语义（追加 / 去重双通道 / 分页过滤 / 批量部分成功 / 日记取回 / **人格隔离** / supersede 链 / untrusted 拒绝 / 会话 seq 递增 / 载荷判别与指纹）；
-- `tests/unit/test_chat_persistence.py`——ChatService 持久化集成（落库 / 恢复全链路 / 持久化关闭兼容 P0）+ CLI `/new` `/sessions` `/resume` 命令；
+- `tests/unit/test_memory_service.py`——服务面全语义（追加 / 去重双通道 / 分页过滤 / 批量部分成功 / 日记取回 / **人格隔离** / supersede 链与 active_marker 两态 / 单 active 唯一键 DB 约束 + 并发冲突重试 / untrusted 拒绝 / 会话 seq 递增 + seq 唯一键 DB 约束 + 冲突重试 / 批量删除 ids 唯一性 / 载荷判别与指纹）；
+- `tests/unit/test_chat_persistence.py`——ChatService 持久化集成（落库 / 恢复全链路 / 未绑定持久化时的纯内存兼容）+ CLI `/new` `/sessions` `/resume` 命令；
 - `tests/unit/test_memories_api.py`——ASGITransport 全端点 + 处理器直调契约面；
-- 检索层五件（P1-2）：`test_memory_retrieval_sql.py`（构建器精确字符串断言）/ `test_memory_seekdb_store.py`（假 aiomysql 池）/ `test_memory_sqlite_store.py`（共享引擎回退往返）/ `test_memory_indexer.py`（索引管道 + 服务联动）/ `test_memory_search_api.py`（POST /search 全模式）+ `test_pools_seekdb.py`（池生命周期）；
-- 梦境三件（P1-3）：`test_dreaming_prompts.py`（byte-lock + 渲染契约）/ `test_dreaming.py`（纯函数数学 + 门矩阵 + fail-closed 全链）/ `test_dream_api.py`（trigger + runs 端点）；
+- 检索层五件：`test_memory_retrieval_sql.py`（构建器精确字符串断言 + hybrid 执行面形态异常含多列 fail loud）/ `test_memory_seekdb_store.py`（假 aiomysql 池）/ `test_memory_sqlite_store.py`（共享引擎回退往返）/ `test_memory_indexer.py`（索引管道 + 服务联动）/ `test_memory_search_api.py`（POST /search 全模式）+ `test_pools_seekdb.py`（池生命周期）；
+- 梦境三件：`test_dreaming_prompts.py`（byte-lock + 渲染契约）/ `test_dreaming.py`（纯函数数学 + 门矩阵 + fail-closed 全链 + 孤儿 running 收敛 / 已晋升回溯窗 / 事件上限截断 / 合并中断决策补齐）/ `test_dream_api.py`（trigger + runs 端点）；
 - 集成冒烟：`tests/integration/test_seekdb_smoke.py`（env 门控默认跳过——见「冒烟测试」）；
 - 共享 SQLite fixture（StaticPool 单连接）+ PersonaMixin contextvars 隔离驱动；零真实网络 / 零真实配置；
 - 门禁：`harness/memory` ≥80%、`app/api` ≥80%（`pixi run coverage-gates`）；运行：`cd backend && pixi run tests-unit`。
 
 ---
 
-# 检索层（P1 chunk 2 交付）
+# 检索层
 
 ## 架构（链路总览）
 
@@ -345,7 +350,7 @@ SELECT DBMS_HYBRID_SEARCH.SEARCH('ff_memory_index', :dsl);
 
 SeekDB（v1.4.0 钉死）官方仅文档化 PyMySQL / mysqlclient；本工程选 **aiomysql**（原生 async，符合 I/O 全 async 约束；MySQL 线协议标准栈，大概率可用但无官方背书）。缓释措施：
 
-- 类型面：aiomysql 0.3.2 无 `py.typed`（mypy 严格模式拒绝直连 import）——经 `pools/seekdb_compat.py` 的 importlib 动态加载 + Protocol 收口（不允许新增依赖 / 修改 pyproject 的约束下解法）；
+- 类型面：aiomysql 0.3.2 无 `py.typed`（mypy 严格模式拒绝直连 import）——现行方案为 **`backend/pyproject.toml` 的 `[tool.mypy]` overrides 为 aiomysql 单模块开启 `ignore_missing_imports`**（配置级豁免，代码零 `type: ignore`）+ `pools/seekdb_compat.py` 顶层静态 `import aiomysql`（**无运行期动态加载**）+ 驱动对象经 `SeekDbPoolProtocol` / `SeekDbConnectionProtocol` / `SeekDbCursorProtocol` Protocol 类型面收口（真实池 / 连接 / 游标为鸭子类型，Protocol 即调用方依赖的全部表面）；
 - 真实验证：`tests/integration/test_seekdb_smoke.py`（env 门控，默认跳过——见下节）；
 - 不兼容回退路径：PyMySQL + `run_blocking_ops` 下沉（同步驱动 + 线程池——保持 async 边界）。
 
@@ -377,13 +382,13 @@ POST /api/v1/memories/search          检索（body: query / mode / kinds / prov
 
 ## 索引联动的当前边界（文档化）
 
-- app 路由的 `memory_service` **未绑定 indexer**（M1 行为保持）——索引联动的 app / CLI 装配属后续交付（工厂与管道已就绪：`MemoryService(indexer=MemoryIndexer(embedder=..., store=build_memory_store(settings)))`）；
-- 索引行的**删除联动**（管理面删除情景事件 → 同步删索引行）未接线——`store.delete` 为存储面 API（后续 chunk / 管理任务收敛）；
-- 策展记忆（ref_type=curated）的索引写入经 `MemoryIndexer` 直接可用（梦境 / 晋升链路属 chunk 3）。
+- app 路由的 `memory_service` **未绑定 indexer**——索引联动的 app / CLI 装配属后续交付（工厂与管道已就绪：`MemoryService(indexer=MemoryIndexer(embedder=..., store=build_memory_store(settings)))`）；
+- 索引行的**删除联动**（管理面删除情景事件 → 同步删索引行）未接线——`store.delete` 为存储面 API（管理任务收敛方向）；
+- 策展记忆（ref_type=curated）的索引写入经 `MemoryIndexer` 直接可用（写入方装配属后续交付）。
 
 ---
 
-# 夜间梦境（P1 chunk 3 交付）
+# 夜间梦境
 
 ## 定位与链路总览
 
@@ -391,9 +396,13 @@ POST /api/v1/memories/search          检索（body: query / mode / kinds / prov
 
 ```
 DreamService.run_dream(db, gateway=…, persona_name=…, store=?, now_ms=?, cfg=?)
+    ↓ ⓪ 孤儿 running 行收敛        stale_running_threshold_ms 阈值内的崩溃遗留行
+    │                               批量置 failed（error=「进程崩溃遗留，由调度收敛」）
     ↓ ① DreamRunRow 落库（status=running——运行日志面，先落库可追溯）
-    ↓ ② fetch_day_episodes        窗口事件取回（[now-window_hours, now) 左闭右开）
-    ↓ ③ 既往已晋升集 + active 主题（人格作用域自动过滤）
+    ↓ ② fetch_day_episodes          窗口事件取回（[now-window_hours, now) 左闭右开；
+    │                               超出 max_episodes 按时间序截断并告警）
+    ↓ ③ 既往已晋升集 + active 主题（人格作用域自动过滤；已晋升集仅统计
+    │                               promoted_lookback_ms 回溯窗内的成功运行）
     ↓ ④ 主题相关度命中集          store 可选注入——keyword 检索 top-N 并集
     ↓ ⑤ select_dream_candidates   规则门（纯函数——零模型调用）
     ↓ ⑥ gateway.chat_by_role(ModelRole.DREAM, purpose="dream")  合并（人格中立 prompt）
@@ -425,7 +434,7 @@ dream_score(episode, now, cfg, topic_hits)
 | 序 | 规则 | 结果 |
 |---|---|---|
 | 1 | `provenance == untrusted` | **硬排除**：只计数 `skipped_untrusted`——不产生决策、永不进入任何梦境 prompt（合并 + 日记），也永不晋升（`upsert_curated` 对 untrusted 的拒绝构成双保险） |
-| 2 | `episode_id ∈ 既往成功运行晋升集` | skipped 决策（理由「既往梦境运行已晋升」）——既往集 = 既往 success 运行 decisions 中 promoted/merged 的 episode_id 并集 |
+| 2 | `episode_id ∈ 既往成功运行晋升集` | skipped 决策（理由「既往梦境运行已晋升」）——既往集 = 回溯窗（`promoted_lookback_ms`）内 success 运行 decisions 中 promoted/merged 的 episode_id 并集 |
 | 3 | `dream_score < cfg.min_score` | skipped 决策（理由含分数值） |
 | 4 | 过门事件按分数降序（同分按 id 升序）截断至 `cfg.max_candidates` | 溢出 skipped 决策（理由「超出单次候选上限」） |
 
@@ -443,8 +452,11 @@ dream_score(episode, now, cfg, topic_hits)
 | `boost` | 0.5 | 主题相关度加成系数 |
 | `diary_enabled` | true | 日记生成开关 |
 | `diary_importance` | 5 | 日记事件重要度（kind=dream 落库） |
+| `stale_running_threshold_ms` | 3600000 | 孤儿 running 行收敛阈值（epoch 毫秒）——run_dream 入口将 started_ms 早于 `now - 阈值` 且无终态的 running 行批量置 failed |
+| `promoted_lookback_ms` | 2592000000 | 已晋升跳过的回溯窗（epoch 毫秒，默认 30 天）——仅统计 finished_ms 落窗内的成功运行决策为跳过依据 |
+| `max_episodes` | 2000 | 单次运行窗口事件上限（超出按时间序截断并告警） |
 
-本 chunk 不修改 config 域（锁定决策）：旋钮经构造函数 / 触发请求体 `cfg` 嵌套覆写注入；向 Settings env 面迁移属后续 chunk。
+旋钮经构造函数 / 触发请求体 `cfg` 嵌套覆写注入（Settings env 面迁移为已文档化的演进方向）。
 
 ## LLM 契约（dreaming_prompts.py——Unit 文件）
 
@@ -456,6 +468,7 @@ dream_score(episode, now, cfg, topic_hits)
 
 - **解析失败零晋升**：LLM 输出不可解析为 JSON 数组 → 运行 failed，**零 upsert**（解析先于全部晋升——结构性失败不存在部分晋升态）；不进入日记阶段；
 - **逐条提案失败丢弃计数**：字段校验失败（kind 枚举 / importance 边界 / topic 空 / merged_from 空）或 `merged_from` 引用未知事件 → 该条丢弃 + `stats.failed` 计数，其余提案正常晋升；
+- **合并中断决策补齐**：合并 / 晋升阶段异常中断时，过门但未决策的候选事件补 skipped 决策（reason=合并中断）——失败运行的决策面对全部可信候选同样全覆盖；
 - **日记后置于晋升**：晋升全部提交后才生成日记——日记失败标记运行 failed 但**保留已提交晋升并在 decisions 中如实记录**（晋升是主产物、日记是叙事附产物；倒序会让日记失败回滚有效巩固，代价更高）；
 - **运行失败不抛异常**：`run_dream` 返回终态记录 DTO（`status=failed` + `error` 原因）——失败是业务结果而非请求失败；仅人格上下文缺失 / 运行行落库失败在入口 fail loud 上抛；
 - **dream 产物不排除出候选面**（文档化）：日记事件（kind=dream / provenance=agent）是普通情景事件——次夜作为候选参与合并（是否入策展由整理原则 + 分数门决定）；`untrusted` 是唯一硬排除轴。
@@ -466,7 +479,7 @@ dream_score(episode, now, cfg, topic_hits)
 |---|---|---|
 | `id` | BIGINT 自增 | 主键 |
 | `persona_id` | String(64)，索引 | 人格 ID（PersonaMixin 自动注入 / 过滤） |
-| `status` | String(16)，索引 | running / success / failed（行创建即落 running——进程崩溃可能遗留孤儿 running 行，P3 调度器收敛） |
+| `status` | String(16)，索引 | running / success / failed（行创建即落 running——进程崩溃可能遗留孤儿 running 行，由 run_dream 入口按 `stale_running_threshold_ms` 收敛为 failed） |
 | `started_ms` / `finished_ms` | BigInteger | 开始（注入时钟口径）/ 结束时间（epoch 毫秒；运行中 finished 为 NULL） |
 | `stats` | JSON | DreamRunStatsModel 序列化（candidates / gated / promoted / superseded / skipped_untrusted / failed） |
 | `decisions` | JSON | 逐事件决策列表（DreamDecisionModel 序列化；episode_id / topic / kind / action: promoted\|skipped\|merged / reason） |
@@ -475,9 +488,9 @@ dream_score(episode, now, cfg, topic_hits)
 
 决策动作语义：`promoted` = 事件晋升进**新起链**主题（upsert 落 v1）；`merged` = 事件并入**既有 active 主题**（supersede 链推进，v>1）；`skipped` = 未参与晋升（门控跳过 / 提案未收录 / 提案被丢弃）。`stats.promoted` / `stats.superseded` 与决策动作计数对齐。
 
-迁移：`alembic/versions/000000000005_add_dream_runs.py`（down_revision=000000000004；scratch sqlite 上 upgrade → downgrade → upgrade 冒烟通过）。
+迁移：`alembic/versions/000000000005_add_dream_runs.py`（down_revision=000000000004）；单 active 守卫与 seq 唯一键见 `alembic/versions/000000000007_memory_concurrency_constraints.py`（down_revision=000000000006；scratch sqlite 上 upgrade → downgrade → upgrade + active 行回填冒烟通过）。
 
-## 触发 API（P1 手工触发——同步语义）
+## 触发 API（手工触发——同步语义）
 
 ```
 POST /api/v1/memories/dream/trigger     body: {persona_id?, cfg?{window_hours, …}}
@@ -485,7 +498,7 @@ GET  /api/v1/memories/dream/runs        query: cursor / limit / persona_id?
 GET  /api/v1/memories/dream/runs/{id}   query: persona_id?
 ```
 
-同步语义（文档化决策）：trigger **同步执行**整条梦境链（合并 + 日记的 LLM 调用内联在请求内）——P1 的 admin 手工触发面；夜间自动调度（cron / duty 轮）属 P3 调度器 chunk。运行失败是业务结果：响应恒 200，`data.status` / `data.error` 呈现终态。人格解析与既有端点同构（`persona_id` 可选——缺省激活人格，无激活 404）。
+同步语义（文档化决策）：trigger **同步执行**整条梦境链（合并 + 日记的 LLM 调用内联在请求内）——admin 手工触发面；夜间自动调度（cron / duty 轮）属中央调度器。运行失败是业务结果：响应恒 200，`data.status` / `data.error` 呈现终态。人格解析与既有端点同构（`persona_id` 可选——缺省激活人格，无激活 404）。
 
 触发请求 JSON 示例：
 
@@ -550,7 +563,7 @@ GET  /api/v1/memories/dream/runs/{id}   query: persona_id?
 }
 ```
 
-## 测试与门禁（chunk 3 增量）
+## 测试与门禁（梦境面增量）
 
 - `tests/unit/test_dreaming_prompts.py`——byte-lock + 渲染契约（人格中立 / persona_name 替换 / 覆写语义 / 空块占位）；
 - `tests/unit/test_dreaming.py`——纯函数精确数学（半衰期边界 0.5 / 单调 / 加成）/ 规则门矩阵（untrusted 硬排除含 prompt 缺席 / 分数门 / 上限 / 既往晋升）/ run_dream 全链（happy path 晋升 + supersede 链 / fail-closed 零晋升 / 提案丢弃 / 日记失败保留晋升 / 存储命中与降级 / 生命周期行态 / 读面 + 隔离）；

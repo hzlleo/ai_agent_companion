@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.harness.core.errors import BusinessException, ErrorCode
@@ -20,6 +21,7 @@ from packages.harness.memory.dtos import (
     ChatSessionQueryDTO,
     CuratedQueryDTO,
     CuratedUpsertDTO,
+    EpisodeBatchDeleteRequest,
     EpisodeCreateDTO,
     EpisodeQueryDTO,
 )
@@ -310,7 +312,11 @@ def _curated_dto(
 
 
 async def test_curated_upsert_supersedes(db_session: AsyncSession) -> None:
-    """supersede 语义：首版 active v1 → 再 upsert 出 active v2，旧行链接——恒单 active。"""
+    """supersede 语义：首版 active v1 → 再 upsert 出 active v2，旧行链接——恒单 active。
+
+    active_marker 守卫同步断言：active 行恒 ``'active'``、superseded 行
+    恒 NULL（DB 唯一键 uq_ff_curated_active 的两态标记）。
+    """
     async with bind_persona_context(PERSONA_A):
         first = await memory_service.upsert_curated(db_session, _curated_dto())
         assert first.version == 1
@@ -328,23 +334,29 @@ async def test_curated_upsert_supersedes(db_session: AsyncSession) -> None:
         assert refetched_first.status == CuratedStatus.SUPERSEDED
         assert refetched_first.superseded_by_id == second.id
 
-        active_rows = list(
+        chain_rows = list(
             (
                 await db_session.execute(
                     select(CuratedMemoryRow).where(
-                        CuratedMemoryRow.topic == "口味偏好",
-                        CuratedMemoryRow.status == CuratedStatus.ACTIVE.value,
+                        CuratedMemoryRow.topic == "口味偏好"
                     )
                 )
             )
             .scalars()
             .all()
         )
+        markers = {row.id: row.active_marker for row in chain_rows}
+        assert markers[first.id] is None  # superseded 行解除标记
+        assert markers[second.id] == "active"  # 新 active 行取得标记
+        active_rows = [row for row in chain_rows if row.status == CuratedStatus.ACTIVE.value]
         assert [row.id for row in active_rows] == [second.id]
 
 
 async def test_curated_history_chain(db_session: AsyncSession) -> None:
-    """历史链：三版本链全量版本升序；链中锚点（任意版本）取同一链。"""
+    """历史链：三版本链全量版本升序；链中锚点（任意版本）取同一链。
+
+    active_marker 两态同步断言：链内仅末位 active 行携带 'active' 标记。
+    """
     async with bind_persona_context(PERSONA_A):
         v1 = await memory_service.upsert_curated(db_session, _curated_dto(content="v1"))
         v2 = await memory_service.upsert_curated(db_session, _curated_dto(content="v2"))
@@ -356,6 +368,18 @@ async def test_curated_history_chain(db_session: AsyncSession) -> None:
     assert [r.version for r in from_head] == [1, 2, 3]
     assert [r.content for r in from_head] == ["v1", "v2", "v3"]
     assert [r.id for r in from_middle] == [v1.id, v2.id, v3.id]
+    async with bind_persona_context(PERSONA_A):
+        chain_rows = list(
+            (
+                await db_session.execute(
+                    select(CuratedMemoryRow).where(CuratedMemoryRow.topic == "口味偏好")
+                )
+            )
+            .scalars()
+            .all()
+        )
+    markers = {row.version: row.active_marker for row in chain_rows}
+    assert markers == {1: None, 2: None, 3: "active"}  # 多代 NULL 共存 + 单 active
 
 
 async def test_curated_untrusted_rejected(db_session: AsyncSession) -> None:
@@ -426,6 +450,116 @@ async def test_curated_persona_isolation(db_session: AsyncSession) -> None:
             await memory_service.get_curated_history(db_session, a2.id)
     assert a2.superseded_by_id is None
     assert b1.version == 1  # B 的链不受 A 影响
+
+
+# ---------------------------------------------------------------------------
+# 策展层——单 active 唯一键（DB 级不变式 + 并发冲突重试）
+# ---------------------------------------------------------------------------
+
+
+async def test_curated_unique_active_marker_db_constraint(
+    db_session: AsyncSession,
+) -> None:
+    """DB 级单 active 唯一键：同 (persona, kind, topic) 双 'active' 标记行 → IntegrityError。"""
+    async with bind_persona_context(PERSONA_A):
+        db_session.add(
+            CuratedMemoryRow(
+                kind=CuratedKind.MEMORY.value,
+                topic="约束主题",
+                content="第一条 active",
+                importance=5,
+                provenance=MemoryProvenance.OWNER.value,
+                status=CuratedStatus.ACTIVE.value,
+                superseded_by_id=None,
+                version=1,
+                active_marker="active",
+            )
+        )
+        await db_session.commit()
+        db_session.add(
+            CuratedMemoryRow(
+                kind=CuratedKind.MEMORY.value,
+                topic="约束主题",
+                content="第二条 active",
+                importance=5,
+                provenance=MemoryProvenance.OWNER.value,
+                status=CuratedStatus.ACTIVE.value,
+                superseded_by_id=None,
+                version=2,
+                active_marker="active",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await db_session.commit()
+        await db_session.rollback()
+    assert await _count(db_session, CuratedMemoryRow) == 1  # 第二条未落库
+
+
+async def test_curated_superseded_null_marker_rows_coexist(
+    db_session: AsyncSession,
+) -> None:
+    """superseded 行（NULL 标记）数量不限：多代共存不撞唯一键（NULL 被忽略）。"""
+    async with bind_persona_context(PERSONA_A):
+        for version in range(1, 5):
+            db_session.add(
+                CuratedMemoryRow(
+                    kind=CuratedKind.MEMORY.value,
+                    topic="共存主题",
+                    content=f"第 {version} 代",
+                    importance=5,
+                    provenance=MemoryProvenance.OWNER.value,
+                    status=CuratedStatus.SUPERSEDED.value,
+                    superseded_by_id=None,
+                    version=version,
+                    active_marker=None,
+                )
+            )
+        await db_session.commit()
+    assert await _count(db_session, CuratedMemoryRow) == 4
+
+
+async def test_curated_upsert_conflict_retry_supersedes(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """并发冲突重试：首次尝试撞单 active 唯一键 → 回滚重读 active 行走 supersede 分支。"""
+    calls: list[int] = []
+    original_once = MemoryService._upsert_curated_once
+
+    async def conflicting_then_real(
+        inner_self: MemoryService, session: AsyncSession, dto: CuratedUpsertDTO
+    ) -> object:
+        """首次尝试：模拟并发赢家抢先落同 topic 的 active v1 后抛唯一键冲突。"""
+        if not calls:
+            calls.append(1)
+            await original_once(inner_self, session, dto)
+            raise IntegrityError(
+                "INSERT INTO ff_curated_memory ...",
+                {},
+                Exception("UNIQUE constraint failed: uq_ff_curated_active"),
+            )
+        return await original_once(inner_self, session, dto)
+
+    monkeypatch.setattr(MemoryService, "_upsert_curated_once", conflicting_then_real)
+    async with bind_persona_context(PERSONA_A):
+        record = await memory_service.upsert_curated(db_session, _curated_dto())
+    assert calls == [1]  # 首次尝试确实撞了冲突
+    assert record.version == 2  # 重试重读 active 行 → supersede 分支
+    async with bind_persona_context(PERSONA_A):
+        chain_rows = list(
+            (
+                await db_session.execute(
+                    select(CuratedMemoryRow).where(CuratedMemoryRow.topic == "口味偏好")
+                )
+            )
+            .scalars()
+            .all()
+        )
+    by_version = {row.version: row for row in chain_rows}
+    assert by_version[1].status == CuratedStatus.SUPERSEDED.value
+    assert by_version[1].active_marker is None
+    assert by_version[1].superseded_by_id == record.id
+    assert by_version[2].status == CuratedStatus.ACTIVE.value
+    assert by_version[2].active_marker == "active"
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +661,85 @@ async def test_session_missing_raises_not_found(db_session: AsyncSession) -> Non
 
 
 # ---------------------------------------------------------------------------
+# 会话层——seq 唯一键（DB 级不变式 + 并发冲突重试）
+# ---------------------------------------------------------------------------
+
+
+async def test_session_message_seq_db_constraint(db_session: AsyncSession) -> None:
+    """DB 级 seq 唯一键：同 (session_id, seq) 双行 → IntegrityError。"""
+    async with bind_persona_context(PERSONA_A):
+        summary = await session_service.create_session(db_session, title="seq 约束")
+        db_session.add(
+            ChatMessageRow(
+                session_id=summary.id, seq=1, role="user", content="第一条", ts_ms=1
+            )
+        )
+        await db_session.commit()
+        db_session.add(
+            ChatMessageRow(
+                session_id=summary.id, seq=1, role="user", content="重复 seq", ts_ms=2
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await db_session.commit()
+        await db_session.rollback()
+    assert await _count(db_session, ChatMessageRow) == 1  # 第二条未落库
+
+
+async def test_append_message_seq_conflict_retry_recomputes(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """seq 冲突重试：并发赢家抢先落 seq=1 并推进计数 → 重试取新计数落 seq=2。"""
+    calls: list[int] = []
+    original_once = ChatSessionService._append_message_once
+
+    async def conflicting_then_real(
+        inner_self: ChatSessionService,
+        session: AsyncSession,
+        session_id: int,
+        *,
+        role: ChatMessageRole,
+        content: str,
+        ts_ms: int | None = None,
+    ) -> object:
+        """首次尝试：模拟并发赢家抢先追加一条消息（计数同步推进）后抛唯一键冲突。"""
+        if not calls:
+            calls.append(1)
+            await original_once(
+                inner_self, session, session_id, role=role, content="并发消息", ts_ms=ts_ms
+            )
+            raise IntegrityError(
+                "INSERT INTO ff_chat_messages ...",
+                {},
+                Exception("Duplicate entry for key 'uq_ff_chat_messages_seq'"),
+            )
+        return await original_once(
+            inner_self, session, session_id, role=role, content=content, ts_ms=ts_ms
+        )
+
+    monkeypatch.setattr(ChatSessionService, "_append_message_once", conflicting_then_real)
+    async with bind_persona_context(PERSONA_A):
+        summary = await session_service.create_session(db_session, title="冲突会话")
+        message = await session_service.append_message(
+            db_session,
+            summary.id,
+            role=ChatMessageRole.USER,
+            content="正式消息",
+            ts_ms=1_000,
+        )
+    assert calls == [1]  # 首次尝试确实撞了冲突
+    assert message.seq == 2  # 重试读到赢家推进后的计数 → 下一 seq
+    assert message.content == "正式消息"
+    async with bind_persona_context(PERSONA_A):
+        detail = await session_service.get_session(db_session, summary.id)
+    assert detail.message_count == 2
+    assert [(m.seq, m.content) for m in detail.messages] == [
+        (1, "并发消息"),
+        (2, "正式消息"),
+    ]
+
+
+# ---------------------------------------------------------------------------
 # 载荷判别 / 内容指纹（models + dtos 契约）
 # ---------------------------------------------------------------------------
 
@@ -586,3 +799,12 @@ async def test_content_hash_stable_and_discriminating() -> None:
     assert base != compute_content_hash(
         EpisodeKind.CHAT, "chat", ChatTurnPayloadModel(user_content="晚")
     )
+
+
+async def test_batch_delete_request_duplicate_ids_rejected() -> None:
+    """批量删除 ids 唯一性校验：重复项拒绝（中文错误信息）；唯一列表通过。"""
+    with pytest.raises(ValidationError) as exc_info:
+        EpisodeBatchDeleteRequest(ids=[1, 1, 2])
+    assert "重复" in str(exc_info.value)
+    request = EpisodeBatchDeleteRequest(ids=[1, 2, 3])
+    assert request.ids == [1, 2, 3]

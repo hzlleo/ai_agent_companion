@@ -50,6 +50,7 @@ from packages.harness.memory.dreaming import DreamService
 from packages.harness.memory.dreaming_models import (
     DreamRunQueryDTO,
     DreamRunRecordDTO,
+    DreamRunStatus,
     DreamTriggerRequestDTO,
 )
 from packages.harness.memory.dtos import (
@@ -619,7 +620,7 @@ async def trigger_dream(
             store=_resolve_request_memory_store(request),
             cfg=req.cfg,
         )
-    if run.status == "failed":
+    if run.status == DreamRunStatus.FAILED:
         message = f"梦境整理失败：{run.error or '未知原因'}"
     else:
         message = (

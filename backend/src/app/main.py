@@ -38,9 +38,14 @@
                                               duty 出站消费通道路由器）
         ↓ _shutdown_channels(app)             通道 runner 优雅停机（先于池——
                                               runner 消费共享 HTTP client）
-        ↓ pool_manager.stop()                  HTTP / LLM 条目池 + 共享线程池
-        ↓ close_database()                     引擎 dispose + 槽位复位
-        ↓ shutdown_shared_thread_pool()        幂等兜底（pool stop 已关）
+        ↓ background_task_manager.shutdown()  全局后台任务 drain（先于池——
+                                              fire-and-forget 索引等在途
+                                              任务消费 SeekDB 池 / 共享
+                                              client；is_shutting_down 标志
+                                              同步置位）
+        ↓ pool_manager.stop()                 HTTP / LLM 条目池 + 共享线程池
+        ↓ close_database()                    引擎 dispose + 槽位复位
+        ↓ shutdown_shared_thread_pool()       幂等兜底（pool stop 已关）
 
 ``app.state.gateway``：为后续 API 消费方（会话路由 / 通道层）预装配的
 chat 角色网关；当前对话入口为控制台 CLI（自建等价栈，见
@@ -131,6 +136,9 @@ _CORS_ALLOW_HEADERS: list[str] = ["Accept", "Authorization", "Content-Type"]
 _CHANNELS_STOP_TIMEOUT_SECONDS: float = 5.0
 #: 调度器优雅停机等待秒数（tick 收尾 + 在途作业排水——超时 cancel 兜底）。
 _SCHEDULER_STOP_TIMEOUT_SECONDS: float = 10.0
+#: 全局后台任务 drain 等待秒数（fire-and-forget 索引等在途任务的宽限期
+#: ——先于池关闭执行，超时 cancel 兜底）。
+_BACKGROUND_DRAIN_TIMEOUT_SECONDS: float = 10.0
 
 __all__ = [
     "APP_VERSION",
@@ -174,12 +182,19 @@ async def startup_app_state(
 async def shutdown_app_state(app: FastAPI) -> None:
     """停机全部进程级组件（启动严格逆序；幂等——组件未启动时 no-op）。
 
+    停机链：调度器 → 通道 → 全局后台任务 drain（``background_task_manager.
+    shutdown``——fire-and-forget 任务在池关闭前排空，``is_shutting_down``
+    标志同步置位）→ 公共池 → 数据库 → 线程池幂等兜底。
+
     Args:
         app: 待收尾的 FastAPI 应用（``app.state.gateway`` /
             ``app.state.memory_store`` 置 None）。
     """
     await _shutdown_scheduler(app)
     await _shutdown_channels(app)
+    # 后台任务 drain 先于池关闭——在途 fire-and-forget 任务（索引链等）
+    # 消费 SeekDB 池 / 共享 client，池先关会让其必然失败
+    await background_task_manager.shutdown(timeout=_BACKGROUND_DRAIN_TIMEOUT_SECONDS)
     manager = get_pool_manager()
     if manager is not None and manager.started:
         await manager.stop()

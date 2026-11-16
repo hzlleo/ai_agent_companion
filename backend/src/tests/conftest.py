@@ -35,6 +35,7 @@ from packages.harness.config import loader as config_loader
 from packages.harness.config.multimodal_fallback_loader import (
     reset_multimodal_fallback_runtime_state,
 )
+from packages.harness.core.background_tasks import background_task_manager
 from packages.harness.core.cache import MemoryTTLCache, reset_default_cache
 from packages.harness.core.logging_models import LoggingConfig
 from packages.harness.core.thread_pool import shutdown_shared_thread_pool
@@ -122,6 +123,23 @@ async def _reset_config_runtime_state() -> AsyncIterator[None]:
     yield
     config_loader.reset_config_runtime_state()
     reset_multimodal_fallback_runtime_state()
+
+
+@pytest.fixture(autouse=True)
+async def _reset_background_task_manager() -> AsyncIterator[None]:
+    """自动 fixture：每测试后复位全局后台任务管理器停机标志。
+
+    ``shutdown_app_state`` 现经 lifespan 停机链调用
+    ``background_task_manager.shutdown()``——真实组件测试（startup /
+    shutdown 函数对）会将进程级单例的 ``is_shutting_down`` 置位且该标志
+    设计上不再回落；不复位会跨测试泄漏（后续测试的 fire-and-forget
+    分发决策被静默改为内联）。
+
+    Yields:
+        无载荷（仅承担 teardown）。
+    """
+    yield
+    background_task_manager._shutting_down = False
 
 
 # ---------------------------------------------------------------------------

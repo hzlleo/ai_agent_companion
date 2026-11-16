@@ -1,6 +1,6 @@
 """memory 域检索编排——索引管道 + 检索服务 + 存储装配工厂。
 
-本模块是 P1 chunk 2 检索层的编排面（契约在 ``memory.retrieval_models``
+本模块是检索层的编排面（契约在 ``memory.retrieval_models``
 与 ``memory.store``，实现在 ``memory.seekdb_store`` / ``memory.sqlite_store``）：
 
     - :class:`MemoryIndexer`      —— 索引管道（episode append → embed →
