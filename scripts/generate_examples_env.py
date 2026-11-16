@@ -19,9 +19,12 @@ from pydantic_settings import BaseSettings
 from packages.harness.config.models import (
     ChannelsSettings,
     DatabaseConfig,
+    DreamScheduleSettings,
+    DutySettings,
     LlmEndpointConfig,
     LogConfig,
     PoolsConfig,
+    SchedulerSettings,
     SeekDBSettings,
     ServerConfig,
     Settings,
@@ -36,6 +39,9 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("LLM — 默认端点 env 面（模型注册表经 config.yaml 配置）", [LlmEndpointConfig]),
     ("SEEKDB — 检索存储配置（enabled=False 走 SQLite 回退；密码经 SEEKDB_PASSWORD 间接）", [SeekDBSettings]),
     ("CHANNELS — 平台通道配置（Telegram 先行；机器人令牌经 TELEGRAM_BOT_TOKEN 间接）", [ChannelsSettings]),
+    ("DUTY — 值班轮配置（charter 工具循环 + 报告属主投递）", [DutySettings]),
+    ("DREAM_SCHEDULE — 夜间梦境定时触发配置", [DreamScheduleSettings]),
+    ("SCHEDULER — 中央调度器配置（自研异步循环）", [SchedulerSettings]),
 ]
 
 

@@ -19,10 +19,17 @@
         ↓ _startup_channels(app, settings)     通道层（TELEGRAM_ENABLED 时
                                                 装配 runner 后台任务；token
                                                 缺失 fail fast；缺省 no-op）
+        ↓ _startup_scheduler(app, settings)    中央调度器（DUTY_ENABLED /
+                                                DREAM_SCHEDULE_ENABLED 任一
+                                                开启时装配；**后于通道**——
+                                                duty 报告出站复用通道路由器；
+                                                缺省 no-op）
 
 停机序列（启动逆序）::
 
-    _shutdown_channels(app)                   通道 runner 优雅停机（先于池——
+    _shutdown_scheduler(app)                  调度器优雅停机（先于通道——
+                                              duty 出站消费通道路由器）
+        ↓ _shutdown_channels(app)             通道 runner 优雅停机（先于池——
                                               runner 消费共享 HTTP client）
         ↓ pool_manager.stop()                  HTTP / LLM 条目池 + 共享线程池
         ↓ close_database()                     引擎 dispose + 槽位复位
@@ -78,9 +85,16 @@ from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.thread_pool import shutdown_shared_thread_pool
 from packages.harness.database.engine import close_database, init_database
 from packages.harness.database.session import session_scope
+from packages.harness.duty.duty_models import DutyRunConfigModel
+from packages.harness.duty.duty_service import DutyService
 from packages.harness.llm.gateway import LlmGateway, wire_default_usage_recorder
-from packages.harness.memory.service import ChatSessionService
+from packages.harness.memory.dreaming import DreamService
+from packages.harness.memory.retrieval import MemorySearchService, build_memory_store
+from packages.harness.memory.service import ChatSessionService, MemoryService
+from packages.harness.persona.service import PersonaService
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
+from packages.harness.scheduler import Scheduler, build_dream_trigger_job
+from packages.harness.tools.registry import ToolRegistry, register_builtin_tools
 
 # ORM 模型注册（导入副作用——见模块 docstring「ORM 注册」一节）。
 _ORM_REGISTRY = (persona_orm, usage_orm)
@@ -91,6 +105,8 @@ _CORS_ALLOW_METHODS: list[str] = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
 _CORS_ALLOW_HEADERS: list[str] = ["Accept", "Authorization", "Content-Type"]
 #: 通道 runner 优雅停机等待秒数（在途长轮询最多一个窗口——超时 cancel 兜底）。
 _CHANNELS_STOP_TIMEOUT_SECONDS: float = 5.0
+#: 调度器优雅停机等待秒数（tick 收尾 + 在途作业排水——超时 cancel 兜底）。
+_SCHEDULER_STOP_TIMEOUT_SECONDS: float = 10.0
 
 __all__ = [
     "APP_VERSION",
@@ -126,6 +142,7 @@ async def startup_app_state(
         usage_recorder=wire_default_usage_recorder(),
     )
     await _startup_channels(app, settings)
+    await _startup_scheduler(app, settings)
 
 
 async def shutdown_app_state(app: FastAPI) -> None:
@@ -134,6 +151,7 @@ async def shutdown_app_state(app: FastAPI) -> None:
     Args:
         app: 待收尾的 FastAPI 应用（``app.state.gateway`` 置 None）。
     """
+    await _shutdown_scheduler(app)
     await _shutdown_channels(app)
     manager = get_pool_manager()
     if manager is not None and manager.started:
@@ -252,6 +270,141 @@ def _log_channel_task_termination(task: asyncio.Task[None]) -> None:
         logger.error("Telegram 通道任务异常终止: {}", exc)
 
 
+async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
+    """装配中央调度器（duty / dream 任一启用时注册作业并启动后台任务）。
+
+    装配链（顺序锁定）：工具注册表（内置工具——get_current_time 恒注册；
+    search_memory 经记忆检索服务注入，存储与 dream 作业共用同一
+    ``build_memory_store`` 产出——SeekDB 形态下不双建池）→ DutyService
+    （网关 / 注册表 / 通道路由器 + 属主会话——**通道先行装配**，未启用
+    通道时路由器为 None → 报告仅落记忆）→ Scheduler（tick 来自
+    Settings.scheduler）→ 注册 duty 每日作业 + dream 每日作业（按开关）
+    → ``create_task(scheduler.run())`` + ``background_task_manager`` 托管。
+    全部关闭时 no-op（零调度器对象构造）。
+
+    Args:
+        app: 待装配的 FastAPI 应用（scheduler / scheduler_task /
+            duty_service / duty_registry 上挂 ``app.state``）。
+        settings: 生效 Settings（``settings.duty`` / ``settings.dream_schedule``
+            / ``settings.scheduler`` 分节）。
+    """
+    app.state.scheduler = None
+    app.state.scheduler_task = None
+    app.state.duty_service = None
+    app.state.duty_registry = None
+    duty_enabled = settings.duty.enabled
+    dream_enabled = settings.dream_schedule.enabled
+    if not duty_enabled and not dream_enabled:
+        logger.info("中央调度器未启用（DUTY_ENABLED / DREAM_SCHEDULE_ENABLED 均关闭）——跳过装配")
+        return
+    store = build_memory_store(settings)
+    scheduler = Scheduler(tick_seconds=settings.scheduler.tick_seconds)
+    if duty_enabled:
+        registry = ToolRegistry()
+        register_builtin_tools(
+            registry,
+            search_service=MemorySearchService(
+                store=store,
+                embedder=app.state.gateway.embed_by_role,
+            ),
+        )
+        duty_service = DutyService(
+            gateway=app.state.gateway,
+            registry=registry,
+            memory_service=MemoryService(),
+            persona_service=PersonaService(),
+            channel_router=app.state.channels_router,
+            owner_chat_id=settings.channels.telegram.owner_chat_id,
+            report_to_owner=settings.duty.report_to_owner,
+        )
+        duty_cfg = DutyRunConfigModel(
+            max_tool_steps=settings.duty.max_tool_steps,
+            charter_text=settings.duty.charter_text,
+        )
+
+        async def _duty_job() -> None:
+            """单轮值班作业（每轮新会话——fail-closed 恒不抛）。"""
+            async with session_scope() as session:
+                report = await duty_service.run_duty_round(session, cfg=duty_cfg)
+            logger.info(
+                "值班调度轮次收束: persona={}, status={}, steps={}, owner_delivery={}",
+                report.persona,
+                report.status.value,
+                len(report.steps),
+                report.owner_delivery.value,
+            )
+
+        scheduler.register_daily("duty", _duty_job, daily_at=settings.duty.daily_at)
+        app.state.duty_service = duty_service
+        app.state.duty_registry = registry
+    if dream_enabled:
+        dream_job = build_dream_trigger_job(
+            dream_service=DreamService(),
+            gateway=app.state.gateway,
+            persona_service=PersonaService(),
+            session_factory=session_scope,
+            store=store,
+        )
+        scheduler.register_daily("dream", dream_job, daily_at=settings.dream_schedule.daily_at)
+    task = asyncio.create_task(scheduler.run(), name="central-scheduler")
+    background_task_manager.register(task)
+    task.add_done_callback(_log_scheduler_task_termination)
+    app.state.scheduler = scheduler
+    app.state.scheduler_task = task
+    logger.info(
+        "中央调度器已启动（managed background task）: jobs={}, tick_seconds={}",
+        scheduler.job_names,
+        settings.scheduler.tick_seconds,
+    )
+
+
+async def _shutdown_scheduler(app: FastAPI) -> None:
+    """停机中央调度器（先于通道——duty 出站消费通道路由器；幂等）。
+
+    停机链：``request_stop``（优雅——tick 循环 + 在途作业排水）→
+    bounded 等待任务收尾 → 超时 ``cancel`` 兜底（排水封顶由调度器
+    ``drain_timeout_seconds`` 承担，本层等待覆盖 tick + 排水全程）。
+
+    Args:
+        app: 待收尾的 FastAPI 应用（scheduler / scheduler_task /
+            duty_service / duty_registry 槽位复位 None）。
+    """
+    scheduler: Scheduler | None = getattr(app.state, "scheduler", None)
+    task: asyncio.Task[None] | None = getattr(app.state, "scheduler_task", None)
+    app.state.scheduler = None
+    app.state.scheduler_task = None
+    app.state.duty_service = None
+    app.state.duty_registry = None
+    if task is None or task.done():
+        if task is not None and not task.cancelled():
+            _log_scheduler_task_termination(task)
+        return
+    if scheduler is not None:
+        scheduler.request_stop()
+    try:
+        await asyncio.wait_for(task, timeout=_SCHEDULER_STOP_TIMEOUT_SECONDS)
+    except TimeoutError:
+        # wait_for 超时路径已 cancel 任务并等待取消收尾——此处仅记录
+        logger.warning("中央调度器停机等待超时——已强制取消调度任务")
+    except Exception as exc:
+        logger.warning("中央调度器任务以异常收尾: {}", exc)
+    logger.info("中央调度器已停机")
+
+
+def _log_scheduler_task_termination(task: asyncio.Task[None]) -> None:
+    """调度器后台任务终态日志（异常终止 / 取消均落日志——不留哑任务）。
+
+    Args:
+        task: 已完成（或已取消）的后台任务。
+    """
+    if task.cancelled():
+        logger.info("中央调度器任务已被取消（停机兜底路径）")
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("中央调度器任务异常终止: {}", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """应用生命周期（startup / shutdown 函数对的薄封装）。
@@ -264,9 +417,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Yields:
         无载荷（服务就绪窗口）。
     """
-    settings = cast(
-        "Settings | None", getattr(app.state, "settings", None)
-    ) or global_settings
+    settings = cast("Settings | None", getattr(app.state, "settings", None)) or global_settings
     await startup_app_state(app, settings)
     try:
         yield

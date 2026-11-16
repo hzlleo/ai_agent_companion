@@ -124,6 +124,22 @@ os.environ["TELEGRAM_STATE_DIR"] = "data/channels"
 os.environ["TELEGRAM_TEST_BOT_TOKEN"] = "test-only-telegram-bot-token"
 os.environ["TELEGRAM_BOT_TOKEN"] = "test-only-telegram-bot-token"
 
+# --- 值班轮（DUTY_ 前缀 → DutySettings；默认关闭 → 测试零调度副作用；
+#     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试） ---
+os.environ["DUTY_ENABLED"] = "false"
+os.environ["DUTY_DAILY_AT"] = "22:00"
+os.environ["DUTY_MAX_TOOL_STEPS"] = "8"
+os.environ["DUTY_REPORT_TO_OWNER"] = "true"
+os.environ["DUTY_CHARTER_TEXT"] = ""
+
+# --- 梦境调度（DREAM_SCHEDULE_ 前缀 → DreamScheduleSettings；默认关闭
+#     → 测试零调度副作用；S3 硬覆盖模式） ---
+os.environ["DREAM_SCHEDULE_ENABLED"] = "false"
+os.environ["DREAM_SCHEDULE_DAILY_AT"] = "03:00"
+
+# --- 中央调度器（SCHEDULER_ 前缀 → SchedulerSettings；S3 硬覆盖模式） ---
+os.environ["SCHEDULER_TICK_SECONDS"] = "1.0"
+
 # --- 运行环境标识（Settings.env → ENV） ---
 os.environ["ENV"] = "test"
 

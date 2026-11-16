@@ -131,6 +131,17 @@ class ChannelRouter:
         """已注册适配器的通道列表（装配观测面）。"""
         return list(self._adapters)
 
+    def get_adapter(self, channel: ChannelType) -> ChannelAdapterProtocol | None:
+        """读取通道适配器发送面（出站投递的公共读取面）。
+
+        Args:
+            channel: 通道类型。
+
+        Returns:
+            已注册的适配器发送面；未注册返回 None。
+        """
+        return self._adapters.get(channel)
+
     @property
     def session_count(self) -> int:
         """在途通道会话数（channel:chat_id 维度；观测面）。"""

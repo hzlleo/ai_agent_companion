@@ -22,6 +22,12 @@
     - ``LlmEndpointConfig``  —— LLM 默认端点 env 面（env_prefix=``LLM_``）
     - ``ChannelsSettings``   —— 通道域分节（``Settings.channels``；telegram
       子模型 env_prefix=``TELEGRAM_``——P3 chunk 1）
+    - ``DutySettings``       —— 值班轮分节（``Settings.duty``；env_prefix=
+      ``DUTY_``——P3 chunk 2）
+    - ``DreamScheduleSettings`` —— 梦境调度分节（``Settings.dream_schedule``；
+      env_prefix=``DREAM_SCHEDULE_``——P3 chunk 2）
+    - ``SchedulerSettings``  —— 中央调度器分节（``Settings.scheduler``；
+      env_prefix=``SCHEDULER_``——P3 chunk 2）
     - ``Settings``           —— 聚合器（全局单例 ``settings``）
     - ``LlmConfig``          —— config.yaml 的 ``llm`` 段（模型注册表 / 角色绑定 /
       多模态回退链）
@@ -34,6 +40,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 from urllib.parse import quote_plus
 
@@ -52,6 +59,9 @@ __all__ = [
     "SeekDBSettings",
     "TelegramSettings",
     "ChannelsSettings",
+    "DutySettings",
+    "DreamScheduleSettings",
+    "SchedulerSettings",
     "Settings",
     "settings",
     "LlmConfig",
@@ -60,6 +70,27 @@ __all__ = [
     "ExtensionTool",
     "ExtensionsConfig",
 ]
+
+#: 每日时刻 "HH:MM" 合法形态（24 小时制——duty / dream_schedule 共用）。
+_DAILY_AT_RE = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+
+
+def _validate_daily_at_shape(value: str) -> str:
+    """校验每日时刻形态（``HH:MM`` 24 小时制——strip 后 fullmatch）。
+
+    Args:
+        value: 每日时刻字符串。
+
+    Returns:
+        校验通过的 strip 后原值。
+
+    Raises:
+        ValueError: 形态非法（装配错误面）。
+    """
+    stripped = value.strip()
+    if not _DAILY_AT_RE.fullmatch(stripped):
+        raise ValueError(f"daily_at 须为 HH:MM 形态（24 小时制）: {value!r}")
+    return stripped
 
 
 class ServerConfig(BaseSettings):
@@ -342,6 +373,126 @@ class SeekDBSettings(BaseSettings):
         return self
 
 
+class DutySettings(BaseSettings):
+    """值班轮配置（env_prefix=``DUTY_``——P3 chunk 2 duty 域）。
+
+    锁定决策：``enabled=False``（默认）——零配置开发可用、测试 hermetic；
+    ``enabled=True`` 时 app lifespan 装配中央调度器并注册 duty 每日作业
+    （见 docs/backend/duty.md）。
+
+    Attributes:
+        enabled: 是否启用值班轮（False = 不注册 duty 调度作业）。
+        daily_at: 每日值班时刻（"HH:MM" 24 小时制——naive 本地时间；
+            scheduler 无 cron 语法 / 时区数据库）。
+        max_tool_steps: 单轮工具调用步数上限（超出 → 强制最终报告指令；
+            1-64）。
+        report_to_owner: 值班报告是否投递属主（False = 仅落记忆）。
+        charter_text: 值班任务书覆写（空 / None = duty_prompts 正典模板；
+            非空整体替换——env 面空字符串归一 None）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用值班轮")
+    daily_at: str = Field(default="22:00", description="每日值班时刻（HH:MM）")
+    max_tool_steps: int = Field(default=8, ge=1, le=64, description="单轮工具调用步数上限")
+    report_to_owner: bool = Field(default=True, description="值班报告是否投递属主")
+    charter_text: str | None = Field(default=None, description="值班任务书覆写（None = 正典模板）")
+
+    model_config = SettingsConfigDict(
+        env_prefix="DUTY_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @field_validator("charter_text", mode="before")
+    @classmethod
+    def _empty_charter_text_to_none(cls, value: object) -> object:
+        """env 面空字符串 / 纯空白归一为 None（未覆写语义）。
+
+        Args:
+            value: 原始值（env 注入时空字符串 = 未设置）。
+
+        Returns:
+            空 / 纯空白字符串归一为 None；其余原样返回。
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("daily_at")
+    @classmethod
+    def _validate_daily_at(cls, value: str) -> str:
+        """校验每日时刻形态（共享规则见 :func:`_validate_daily_at_shape`）。
+
+        Args:
+            value: 每日时刻字符串。
+
+        Returns:
+            校验通过的原值。
+
+        Raises:
+            ValueError: 形态非法（装配错误面）。
+        """
+        return _validate_daily_at_shape(value)
+
+
+class DreamScheduleSettings(BaseSettings):
+    """梦境调度配置（env_prefix=``DREAM_SCHEDULE_``——P3 chunk 2）。
+
+    锁定决策：``enabled=False``（默认）——梦境经 admin API 手工触发
+    （P1 chunk 3 交付面）；``enabled=True`` 时 app lifespan 在中央调度器
+    注册 dream 每日作业（DreamService.run_dream 复用——as-is）。
+
+    Attributes:
+        enabled: 是否启用梦境定时调度（False = 仅手工触发面）。
+        daily_at: 每日梦境时刻（"HH:MM" 24 小时制——naive 本地时间）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用梦境定时调度")
+    daily_at: str = Field(default="03:00", description="每日梦境时刻（HH:MM）")
+
+    model_config = SettingsConfigDict(
+        env_prefix="DREAM_SCHEDULE_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @field_validator("daily_at")
+    @classmethod
+    def _validate_daily_at(cls, value: str) -> str:
+        """校验每日时刻形态（共享规则见 :func:`_validate_daily_at_shape`）。
+
+        Args:
+            value: 每日时刻字符串。
+
+        Returns:
+            校验通过的原值。
+
+        Raises:
+            ValueError: 形态非法（装配错误面）。
+        """
+        return _validate_daily_at_shape(value)
+
+
+class SchedulerSettings(BaseSettings):
+    """中央调度器配置（env_prefix=``SCHEDULER_``——P3 chunk 2）。
+
+    Attributes:
+        tick_seconds: 调度器 tick 循环间隔秒（到期判定分辨率下限；
+            > 0）。
+    """
+
+    tick_seconds: float = Field(default=1.0, gt=0, description="调度器 tick 循环间隔秒")
+
+    model_config = SettingsConfigDict(
+        env_prefix="SCHEDULER_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class TelegramSettings(BaseSettings):
     """Telegram 通道配置（env_prefix=``TELEGRAM_``——P3 chunk 1 通道层）。
 
@@ -467,6 +618,9 @@ class Settings(BaseSettings):
         llm: LLM 默认端点 env 面。
         seekdb: SeekDB 检索存储配置（enabled=False 默认——SQLite 回退）。
         channels: 通道域配置分节（telegram 默认关闭——P3 chunk 1）。
+        duty: 值班轮配置（默认关闭——P3 chunk 2）。
+        dream_schedule: 梦境定时调度配置（默认关闭——P3 chunk 2）。
+        scheduler: 中央调度器配置（tick 间隔——P3 chunk 2）。
         env: 运行环境标识（local / dev / prod）。
     """
 
@@ -477,6 +631,9 @@ class Settings(BaseSettings):
     llm: LlmEndpointConfig = LlmEndpointConfig()
     seekdb: SeekDBSettings = SeekDBSettings()
     channels: ChannelsSettings = ChannelsSettings()
+    duty: DutySettings = DutySettings()
+    dream_schedule: DreamScheduleSettings = DreamScheduleSettings()
+    scheduler: SchedulerSettings = SchedulerSettings()
     env: str = Field(default="local", description="运行环境标识（local / dev / prod）")
 
     model_config = SettingsConfigDict(
