@@ -5,15 +5,22 @@
     - 索引表 ``ff_memory_index``：向量（VECTOR(dim) + hnsw）+ 全文
       （ik）+ 标量（persona_id / kind / provenance / ts_ms）混合检索
       ——**raw SQL only**（SeekDB 无 SQLAlchemy 方言；DDL 与查询形态
-      见 memory.store 构建器，与事实卡逐字对齐）；
+      见 memory.store 构建器，与事实卡逐字对齐）；hybrid 模式经官方
+      融合引擎 ``DBMS_HYBRID_SEARCH.SEARCH``（Form B——单行单列 JSON
+      载荷，见下）；
     - 连接：自有 aiomysql 池（构造注入优先——PoolManager 共享池；
       未注入时惰性自建，``close`` 归本存储）——**不共享** SQLAlchemy
       主库引擎（检索索引是独立数据面）；
     - 全部语句经 ``memory.store`` 构建器产出（SQL 形态单一真源）；
-    - 行映射：驱动游标 tuple 行 + description 列名 → dict → 结果 DTO；
-    - 错误映射：驱动异常（pymysql.err.Error 族）→ ``INTERNAL_ERROR``
-      BusinessException（携带 operation / reason——错误码纪律：本
-      chunk 不新增 SEEKB_* 成员，复用既有通用码；偏差见交付报告）。
+    - 行映射：Form A（dense / keyword）——驱动游标 tuple 行 +
+      description 列名 → dict → 结果 DTO；Form B（hybrid）——SEARCH
+      单行单列 JSON 载荷 → json.loads → 行 dict（全表列 + ``_score``
+      融合相关度，越大越相关）→ 结果 DTO（畸形行警告 + 跳过——
+      永不逐行抛出；空集 = SQL NULL 单元格 → 空列表，live 实测形态）；
+    - 错误映射：驱动异常（pymysql.err.Error 族）与 hybrid 载荷形态
+      异常 → ``INTERNAL_ERROR`` BusinessException（携带 operation /
+      reason——write / fetch / create_pool / hybrid_parse；错误码纪律：
+      不新增 SEEKB_* 成员，复用既有通用码）。
 
 人格隔离：索引表无 PersonaMixin 概念——``persona_id`` 是显式 BigInt
 列 + 每条查询的必带谓词（构建器保证——见 memory.store 模块 docstring）。
@@ -22,6 +29,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Sequence
 from typing import Any
 
@@ -32,6 +40,7 @@ from packages.harness.memory.models import MemoryProvenance
 from packages.harness.memory.retrieval_models import (
     MemoryIndexEntryDTO,
     MemoryRefType,
+    MemorySearchMode,
     MemorySearchQueryDTO,
     MemorySearchResultDTO,
     SeekDBStoreConfig,
@@ -74,6 +83,43 @@ def _result_from_row(row: dict[str, Any]) -> MemorySearchResultDTO:
         content=str(row["content"]),
         score=float(row["score"]),
     )
+
+
+def _hybrid_result_from_row(row: object) -> MemorySearchResultDTO | None:
+    """DBMS_HYBRID_SEARCH 命中行 → 检索结果 DTO（畸形行警告 + 跳过）。
+
+    Form B 行 dict 携带全表列 + ``_score``（融合相关度，越大越相关
+    ——方向与 Form A dense 的 cosine 距离相反）；provenance 取存储
+    字符串直映（值域枚举不合法即畸形）。畸形行（非 JSON 对象 / 缺
+    ``_score`` / 引用与信任列缺失或非法）**警告 + 跳过，永不逐行
+    抛出**；展示列（kind / ts_ms / content）缺失取空 / 0 缺省。
+
+    Args:
+        row: json.loads 产出的命中行（形态不可信——非 dict / 缺列容忍）。
+
+    Returns:
+        归一后的结果 DTO；畸形行返回 None（调用方跳过）。
+    """
+    if not isinstance(row, dict):
+        logger.warning("SeekDB hybrid 检索畸形行已跳过（非 JSON 对象）: row={!r}", row)
+        return None
+    try:
+        return MemorySearchResultDTO(
+            ref_type=MemoryRefType(str(row["ref_type"])),
+            ref_id=int(row["ref_id"]),
+            kind=str(row.get("kind", "")),
+            provenance=MemoryProvenance(str(row["provenance"])),
+            ts_ms=int(row.get("ts_ms", 0)),
+            content=str(row.get("content", "")),
+            score=float(row["_score"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.warning(
+            "SeekDB hybrid 检索畸形行已跳过: reason={!r}, row_keys={!r}",
+            f"{type(exc).__name__}: {exc}",
+            sorted(row.keys()),
+        )
+        return None
 
 
 class SeekDBStore:
@@ -202,7 +248,10 @@ class SeekDBStore:
     async def search(
         self, query: MemorySearchQueryDTO, query_vector: list[float] | None
     ) -> list[MemorySearchResultDTO]:
-        """按模式混合检索（SQL 构建 / 模式校验归 memory.store 构建器）。
+        """按模式混合检索（hybrid = Form B 官方融合引擎；其余 = Form A）。
+
+        SQL 构建 / 模式校验归 memory.store 构建器；hybrid 分派到
+        :meth:`_search_hybrid`（单行单列 JSON 载荷解析 + 逐行映射）。
 
         Args:
             query: 检索查询 DTO（persona_id 必带——隔离谓词）。
@@ -210,13 +259,18 @@ class SeekDBStore:
                 ——违规由构建器 fail loud）。
 
         Returns:
-            结果 DTO 列表（score 方向随模式——见 retrieval_models）。
+            结果 DTO 列表（score 方向随模式：dense = cosine 距离越小越
+            相关；keyword = MATCH 相关度、hybrid = 融合 ``_score`` 均越大
+            越相关——hybrid 与 dense 方向相反，调用方按 mode 解释）。
 
         Raises:
             BusinessException: 模式违规（``VALIDATION_ERROR``——构建器
-                抛出）；驱动执行失败（``INTERNAL_ERROR``）。
+                抛出）；驱动执行失败 / hybrid 载荷形态异常
+                （``INTERNAL_ERROR``）。
         """
         sql, params = build_search_sql(query, query_vector)
+        if query.mode == MemorySearchMode.HYBRID:
+            return await self._search_hybrid(sql, params)
         rows = await self._run_fetch(sql, params)
         return [_result_from_row(row) for row in rows]
 
@@ -316,6 +370,70 @@ class SeekDBStore:
             return []
         columns = [str(column[0]) for column in description]
         return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    async def _search_hybrid(self, sql: str, params: Sequence[Any]) -> list[MemorySearchResultDTO]:
+        """执行 Form B 检索并解析单行单列 JSON 载荷（hybrid 专用路径）。
+
+        结果契约（live 实测，v1.4.0）：SEARCH 恒返回单行单列——命中集
+        为 JSON 数组字符串（行 dict 含全表列 + ``_score``，引擎已按
+        融合分降序排列）；**空集为 SQL NULL 单元格**（非 ``"[]"``）。
+        载荷形态偏离该契约 → ``INTERNAL_ERROR`` fail loud（协议面
+        异常不该静默吞掉）；行级畸形由 :func:`_hybrid_result_from_row`
+        警告 + 跳过。
+
+        Args:
+            sql: SEARCH 语句（构建器产出）。
+            params: 绑定参数（单元素——JSON DSL 字符串）。
+
+        Returns:
+            结果 DTO 列表（引擎融合分降序保持）。
+
+        Raises:
+            BusinessException: 载荷形态异常（``INTERNAL_ERROR``）；驱动
+                执行失败（``INTERNAL_ERROR``——_run_fetch 映射）。
+        """
+        rows = await self._run_fetch(sql, params)
+        if len(rows) != 1:
+            raise self._hybrid_payload_error(f"SEARCH 语句应返回单行单列，实际行数 {len(rows)}")
+        first = rows[0]
+        if not first:
+            raise self._hybrid_payload_error("SEARCH 语句应返回单行单列，实际首行零列")
+        cell = next(iter(first.values()))
+        if cell is None:
+            return []
+        if not isinstance(cell, str):
+            raise self._hybrid_payload_error(
+                f"SEARCH 结果单元格非 JSON 字符串: {type(cell).__name__}"
+            )
+        try:
+            raw_rows: Any = json.loads(cell)
+        except json.JSONDecodeError as exc:
+            raise self._hybrid_payload_error(f"SEARCH 载荷 JSON 解析失败: {exc}") from exc
+        if not isinstance(raw_rows, list):
+            raise self._hybrid_payload_error(
+                f"SEARCH 载荷不是 JSON 数组: {type(raw_rows).__name__}"
+            )
+        results: list[MemorySearchResultDTO] = []
+        for raw_row in raw_rows:
+            mapped = _hybrid_result_from_row(raw_row)
+            if mapped is not None:
+                results.append(mapped)
+        return results
+
+    def _hybrid_payload_error(self, reason: str) -> BusinessException:
+        """构造 hybrid 载荷形态异常（与 _map_error 同形——operation 面）。
+
+        Args:
+            reason: 形态异常原因（入 details 供排障）。
+
+        Returns:
+            携带 ``hybrid_parse`` 操作面的 :class:`BusinessException`。
+        """
+        return BusinessException(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="SeekDB 检索存储访问失败",
+            details={"operation": "hybrid_parse", "reason": reason},
+        )
 
     def _map_error(self, operation: str, exc: Exception) -> BusinessException:
         """驱动异常 → 业务异常（错误码纪律：复用 INTERNAL_ERROR）。

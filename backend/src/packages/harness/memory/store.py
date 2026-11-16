@@ -16,8 +16,10 @@ MemoryStore 协议（存储选择见 ``memory.retrieval.build_memory_store``）�
     - :func:`build_upsert_sql`        —— 批量 upsert（ON DUPLICATE KEY
       UPDATE——按引用唯一键幂等覆盖）；
     - :func:`build_delete_sql`        —— 按引用删除（人格 + 类型 + 引用键）；
-    - :func:`build_search_sql`        —— 三模式混合检索（Form A：单条 SQL，
-      WHERE 谓词下推 ANN 扫描）。
+    - :func:`build_search_sql`        —— 三模式混合检索（dense / keyword =
+      Form A 单条 SQL；hybrid = Form B 官方融合引擎单语句委托）；
+    - :func:`build_hybrid_search_payload` —— hybrid（Form B）的 JSON DSL
+      载荷（query_string 关键词 + 标量 filter + knn 向量）。
 
 SeekDB SQL 形态约束（事实卡锁定，逐条对应构建器实现）：
 
@@ -28,7 +30,14 @@ SeekDB SQL 形态约束（事实卡锁定，逐条对应构建器实现）：
       ``:qv``）——经 :func:`encode_vector_literal` 编码后作绑定参数；
     - 单向量条件（本层查询形态恒单条 cosine_distance）；
     - ``persona_id`` 谓词**每条查询必带**（索引表无 PersonaMixin 概念，
-      人格隔离由 SQL 谓词强制——全部构建器路径包含该谓词）。
+      人格隔离由 SQL 谓词强制——全部构建器路径包含该谓词；Form B 中
+      为 filter 数组首条 term，任何过滤组合下不省略）；
+    - hybrid（Form B）：单语句 ``SELECT DBMS_HYBRID_SEARCH.SEARCH(
+      'ff_memory_index', %s)``，唯一绑定参数 = JSON DSL 字符串
+      （:func:`build_hybrid_search_payload` 产出）；结果单行单列——
+      命中集为 JSON 数组字符串（行 dict 含全表列 + ``_score`` 融合
+      相关度，**越大越相关**——与 dense 的 cosine 距离方向相反），
+      空集为 SQL NULL；表组织须 ``HEAP``（DDL 已锁定该前置）。
 
 模式违规（查询模式与向量参数不匹配）在构建器内 fail loud
 （``VALIDATION_ERROR``——错误码纪律：本 chunk 不新增错误码成员，
@@ -55,6 +64,7 @@ __all__ = [
     "build_ensure_schema_sql",
     "build_upsert_sql",
     "build_delete_sql",
+    "build_hybrid_search_payload",
     "build_search_sql",
     "encode_vector_literal",
 ]
@@ -240,6 +250,61 @@ def encode_vector_literal(vector: Sequence[float]) -> str:
     return json.dumps(list(vector), separators=(",", ":"))
 
 
+def build_hybrid_search_payload(query: MemorySearchQueryDTO, query_vector: Sequence[float]) -> str:
+    """构建 hybrid 检索（Form B）的 JSON DSL 载荷字符串。
+
+    ``DBMS_HYBRID_SEARCH.SEARCH`` 的请求契约（SeekDB v1.4.0 官方文档：
+    https://docs.seekdb.ai/seekdb/hybrid-search）：
+
+        - ``query.bool.must`` —— 关键词面：单条 ``query_string``
+          （fields=["content"]，query = 检索文本）；
+        - ``query.bool.filter`` —— 标量过滤面（数组，顺序锁定）：
+          persona_id term（**恒在且恒为首**——人格隔离谓词，任何过滤
+          组合下不省略）→ kind ``terms``（多值成员过滤）→ provenance
+          term → ts_ms range（gte / lte 各自独立条目，仅组装提供的
+          过滤）；
+        - ``knn`` —— 向量面：field="embedding"，k = ``query.limit``
+          （DTO 钳位 1-50），query_vector = 查询向量。
+
+    过滤形态经 live 实例（v1.4.0）实测验证：``terms`` 列表成员过滤
+    生效（备选 ``bool.should`` term 数组同样生效——首选 ``terms``，
+    更简洁且与官方文档一致）。
+
+    载荷字节确定性：键序由本函数构造序锁定（query → knn；bool 内
+    must → filter），紧凑分隔符 + 默认 ASCII 转义（与
+    :func:`encode_vector_literal` 同 ``json.dumps`` 约定）——同查询
+    恒产出同字节串（测试精确断言面）。
+
+    Args:
+        query: 检索查询 DTO（persona_id 必带——隔离谓词；kinds /
+            provenance / start_ms / end_ms 仅在提供时进 filter）。
+        query_vector: 查询向量（hybrid 必填——模式契约由
+            :func:`build_search_sql` 前置校验）。
+
+    Returns:
+        JSON DSL 字符串（SEARCH 语句的唯一绑定参数）。
+    """
+    filters: list[dict[str, Any]] = [{"term": {"persona_id": query.persona_id}}]
+    if query.kinds:
+        filters.append({"terms": {"kind": list(query.kinds)}})
+    if query.provenance is not None:
+        filters.append({"term": {"provenance": query.provenance.value}})
+    if query.start_ms is not None:
+        filters.append({"range": {"ts_ms": {"gte": query.start_ms}}})
+    if query.end_ms is not None:
+        filters.append({"range": {"ts_ms": {"lte": query.end_ms}}})
+    payload: dict[str, Any] = {
+        "query": {
+            "bool": {
+                "must": [{"query_string": {"fields": ["content"], "query": query.query}}],
+                "filter": filters,
+            }
+        },
+        "knn": {"field": "embedding", "k": query.limit, "query_vector": list(query_vector)},
+    }
+    return json.dumps(payload, separators=(",", ":"))
+
+
 def _require_mode_vector(query: MemorySearchQueryDTO, query_vector: Sequence[float] | None) -> None:
     """校验检索模式与查询向量的匹配契约（模式违规 fail loud）。
 
@@ -276,28 +341,36 @@ def _require_mode_vector(query: MemorySearchQueryDTO, query_vector: Sequence[flo
 def build_search_sql(
     query: MemorySearchQueryDTO, query_vector: Sequence[float] | None
 ) -> tuple[str, list[Any]]:
-    """构建三模式混合检索语句（Form A——单条 SQL，谓词下推 ANN 扫描）。
+    """构建三模式混合检索语句（dense / keyword = Form A；hybrid = Form B）。
 
-    模式 → SQL 形态（事实卡逐条对齐）：
+    模式 → SQL 形态（事实卡 + live 实测逐条对齐）：
 
         - **dense**：SELECT 含 ``cosine_distance(embedding, %s) AS score``；
           WHERE 无 MATCH；``ORDER BY score APPROXIMATE LIMIT %s``；
         - **keyword**：SELECT 含 ``MATCH(content) AGAINST(%s) AS score``；
           WHERE 含 MATCH 谓词；``ORDER BY MATCH(content) AGAINST(%s) DESC
           LIMIT %s``（**无 APPROXIMATE**——无 ANN 面）；
-        - **hybrid**：SELECT 含 cosine_distance score；WHERE 含 MATCH
-          谓词（关键词预过滤）；``ORDER BY score LIMIT %s``（**精确排序，
-          无 APPROXIMATE**——v1.4.0 实测 MATCH 谓词不进 ANN 扫描、组合式
-          静默空集；过滤后行集小，精确距离排序语义等价且正确）。
+        - **hybrid**（Form B）：单语句 ``SELECT DBMS_HYBRID_SEARCH.SEARCH(
+          'ff_memory_index', %s)``，唯一参数为 :func:
+          `build_hybrid_search_payload` 产出的 JSON DSL（关键词
+          query_string + 标量 filter + knn 向量经引擎**融合排序**——
+          ``_score`` 越大越相关，方向与 dense 的 cosine 距离**相反**；
+          结果为单行单列 JSON 数组字符串，空集为 SQL NULL——行映射
+          见 seekdb_store）。表组织须 HEAP（DDL 已锁定）。
 
-    谓词组装顺序（参数与 SQL 出现序一致——左到右，逐行）：
+    谓词组装顺序（Form A——参数与 SQL 出现序一致，左到右，逐行）：
 
         SELECT score 位（向量 JSON / 关键词）→ persona_id → kind IN
-        → provenance → ts_ms >= → ts_ms <= → WHERE MATCH（keyword /
-        hybrid）→ ORDER BY 关键词位（keyword）→ LIMIT。
+        → provenance → ts_ms >= → ts_ms <= → WHERE MATCH（keyword）→
+        ORDER BY 关键词位（keyword）→ LIMIT。
+
+        （hybrid 分支在模式校验后即刻返回 Form B 语句——过滤组装在
+        :func:`build_hybrid_search_payload` 的 DSL 内完成，filter 首条
+        恒为 persona_id 隔离谓词。）
 
     LIMIT 钳位：由查询 DTO 边界强制（1-50，``MemorySearchQueryDTO.limit``
-    的 ge/le 校验——超界请求在 DTO 构造即 422，SQL 层无需二次钳位）。
+    的 ge/le 校验——超界请求在 DTO 构造即 422，SQL 层无需二次钳位；
+    Form B 的 ``knn.k`` 同取 ``query.limit``）。
 
     Args:
         query: 检索查询 DTO。
@@ -305,12 +378,17 @@ def build_search_sql(
             违规即 ``VALIDATION_ERROR``，见 :func:`_require_mode_vector`）。
 
     Returns:
-        ``(sql, params)`` 二元组（params 为按序绑定参数列表）。
+        ``(sql, params)`` 二元组（params 为按序绑定参数列表；hybrid 为
+        单元素列表——JSON DSL 字符串）。
 
     Raises:
         BusinessException: 模式与向量不匹配（``VALIDATION_ERROR``）。
     """
     _require_mode_vector(query, query_vector)
+
+    if query.mode == MemorySearchMode.HYBRID:
+        payload = build_hybrid_search_payload(query, query_vector if query_vector is not None else [])
+        return "SELECT DBMS_HYBRID_SEARCH.SEARCH('ff_memory_index', %s)", [payload]
 
     select_columns = "id, ref_type, ref_id, kind, provenance, ts_ms, content"
     lines: list[str] = []
@@ -342,16 +420,14 @@ def build_search_sql(
     if query.end_ms is not None:
         lines.append("  AND ts_ms <= %s")
         params.append(query.end_ms)
-    if query.mode in (MemorySearchMode.KEYWORD, MemorySearchMode.HYBRID):
+    if query.mode == MemorySearchMode.KEYWORD:
         lines.append("  AND MATCH(content) AGAINST(%s)")
         params.append(query.query)
 
-    # ORDER BY + LIMIT（模式分派：keyword 无 score 位复用；hybrid 精确排序）
+    # ORDER BY + LIMIT（keyword 复用 MATCH 表达式；dense 走 ANN 近似）
     if query.mode == MemorySearchMode.KEYWORD:
         lines.append("ORDER BY MATCH(content) AGAINST(%s) DESC LIMIT %s")
         params.append(query.query)
-    elif query.mode == MemorySearchMode.HYBRID:
-        lines.append("ORDER BY score LIMIT %s")
     else:
         lines.append("ORDER BY score APPROXIMATE LIMIT %s")
     params.append(query.limit)

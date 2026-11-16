@@ -22,8 +22,8 @@
     upsert（ON DUPLICATE KEY 批量——运行期语法验证：若 SeekDB 拒绝
     ON DUPLICATE KEY，此处即失败，回退路径为 DELETE+INSERT，见
     memory.store.build_upsert_sql 文档）→ keyword 检索回读 →
-    hybrid 检索回读（MATCH 预过滤 + APPROXIMATE 向量排序）→
-    同键覆盖幂等 → delete 清理。
+    hybrid 检索回读（Form B——DBMS_HYBRID_SEARCH.SEARCH 官方融合
+    排序，_score 越大越相关）→ 同键覆盖幂等 → delete 清理。
 
 注：aiomysql 驱动为工程选型（原生 async；SeekDB 官方未文档化——风险
 与回退路径文档化于 docs/backend/memory.md 检索层一节）；本冒烟即
@@ -111,7 +111,7 @@ async def test_seekdb_smoke_round_trip() -> None:
         assert {result.ref_id for result in keyword} == {1, 2}
         assert all(result.score > 0 for result in keyword)
 
-        # hybrid 检索回读（MATCH 预过滤 + APPROXIMATE 向量排序）
+        # hybrid 检索回读（Form B——DBMS_HYBRID_SEARCH.SEARCH 融合排序）
         hybrid = await store.search(
             MemorySearchQueryDTO(
                 persona_id=900001, query="小鱼干", mode=MemorySearchMode.HYBRID, limit=5
@@ -119,8 +119,10 @@ async def test_seekdb_smoke_round_trip() -> None:
             [0.1, 0.2, 0.3, 0.4],
         )
         assert len(hybrid) >= 1
-        assert hybrid[0].ref_id == 1  # 查询向量与首行同向——cosine 距离最小
-        assert all(result.score >= 0 for result in hybrid)
+        assert 1 in {result.ref_id for result in hybrid}
+        assert all(result.score > 0 for result in hybrid)  # 融合 _score 越大越相关
+        scores = [result.score for result in hybrid]
+        assert scores == sorted(scores, reverse=True)  # 引擎融合分降序保持
 
         # 同键覆盖幂等（ON DUPLICATE KEY UPDATE 运行期验证）
         updated = entries[0].model_copy(update={"content": "主人今天吃了很多虾干"})

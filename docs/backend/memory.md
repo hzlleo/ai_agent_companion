@@ -19,7 +19,7 @@
 | `dtos.py` | 事件 / 策展 / 会话的创建 / 记录 / 查询 / 批量删除 DTO | `EpisodeCreateDTO` / `CuratedUpsertDTO` / `ChatSessionDetailDTO` 等 |
 | `service.py` | `MemoryService`（情景 + 策展；可选 indexer 联动）+ `ChatSessionService`（会话） | `MemoryService` / `ChatSessionService` |
 | `retrieval_models.py` | 检索层契约（模式 / 引用类型枚举 + 索引条目 / 检索查询 / 检索结果 / 请求体 DTO + SeekDBStoreConfig） | `MemorySearchQueryDTO` / `SeekDBStoreConfig` 等 |
-| `store.py` | `MemoryStore` 协议 + 纯 SQL 构建器（SeekDB 事实卡逐字对齐） | `build_search_sql` / `build_upsert_sql` / `build_ensure_schema_sql` |
+| `store.py` | `MemoryStore` 协议 + 纯 SQL 构建器（SeekDB 事实卡逐字对齐；hybrid = Form B JSON DSL 载荷构建） | `build_search_sql` / `build_hybrid_search_payload` / `build_upsert_sql` / `build_ensure_schema_sql` |
 | `seekdb_store.py` | SeekDB 生产存储（aiomysql raw SQL——自有池 / 注入池两形态） | `SeekDBStore` |
 | `sqlite_store.py` | SQLite 回退存储（keyword-only + `ff_memory_index_lite` 表） | `SQLiteFallbackStore` |
 | `retrieval.py` | 检索编排（MemoryIndexer 索引管道 + MemorySearchService + `build_memory_store` 装配工厂 + 条目构建辅助） | `MemoryIndexer` / `MemorySearchService` / `build_memory_store` |
@@ -252,11 +252,11 @@ chat 回合（reply / stream_reply）
 
 ## 模式矩阵
 
-| 模式 | 嵌入查询文本 | WHERE | ORDER BY | score 语义 | 回退存储 |
+| 模式 | 嵌入查询文本 | 过滤面 | 排序 | score 语义 | 回退存储 |
 |---|---|---|---|---|---|
-| `dense`（默认） | ✅ | persona + 标量过滤 | `score APPROXIMATE LIMIT` | cosine 距离（越小越相关） | ❌ 422 |
+| `dense`（默认） | ✅ | persona + 标量过滤（Form A WHERE） | `score APPROXIMATE LIMIT` | cosine 距离（越小越相关） | ❌ 422 |
 | `keyword` | ❌ | + `MATCH ... AGAINST` | `MATCH ... AGAINST DESC LIMIT`（无 APPROXIMATE） | MATCH 相关度（越大越相关） | ✅ LIKE + 子串计数 |
-| `hybrid` | ✅ | + `MATCH ... AGAINST`（预过滤） | `score LIMIT`（精确排序——v1.4.0 实测 MATCH 不进 ANN 扫描，组合式静默空集） | cosine 距离 | ❌ 422 |
+| `hybrid` | ✅ | Form B：DSL `query.bool.filter`（persona term 恒首 + kind terms / provenance / ts range） | 引擎融合排序（`knn.k = limit`） | 融合 `_score`（越大越相关——RRF 风格关键词 × 向量融合；**前置：表组织 HEAP**） | ❌ 422 |
 
 模式 / 向量契约（违规 `VALIDATION_ERROR`）：dense / hybrid 必须携带查询向量；keyword 不得携带。回退存储收到向量模式族 → 清晰错误「回退存储不支持向量检索」。检索时间范围为**闭区间**（`start_ms <= ts_ms <= end_ms`——与 SeekDB 事实卡一致；与情景事件查询 DTO 的左闭右开约定**有意不同**）。
 
@@ -278,22 +278,68 @@ CREATE TABLE IF NOT EXISTS ff_memory_index (
   FULLTEXT INDEX idx_ff_mem_ft (content) WITH PARSER ik PARSER_PROPERTIES=(ik_mode='max_word'),
   VECTOR INDEX idx_ff_mem_vec (embedding) WITH (DISTANCE=cosine, TYPE=hnsw, LIB=vsag),
   UNIQUE KEY uk_ff_mem_ref (persona_id, ref_type, ref_id)
-) ORGANIZATION = HEAP;                   -- HEAP：DBMS_HYBRID_SEARCH（Form B，后续 chunk）前置
+) ORGANIZATION = HEAP;                   -- HEAP：DBMS_HYBRID_SEARCH（Form B——hybrid 检索）前置
 ```
 
-混合检索（Form A——单条 SQL，WHERE 谓词下推 ANN 扫描；hybrid 形态）：
+Form A（**dense / keyword**——单条 SQL，WHERE 谓词下推 ANN 扫描）：
 
 ```sql
 SELECT id, ref_type, ref_id, kind, provenance, ts_ms, content,
-       cosine_distance(embedding, :qv) AS score
+       cosine_distance(embedding, :qv) AS score       -- dense；keyword 为 MATCH(content) AGAINST(:kw)
 FROM ff_memory_index
 WHERE persona_id = :pid
   [AND kind IN (...)] [AND provenance = :p] [AND ts_ms >= :t0] [AND ts_ms <= :t1]
-  AND MATCH(content) AGAINST(:kw)       -- keyword/hybrid 模式谓词（dense 无）
-ORDER BY score APPROXIMATE LIMIT :lim;  -- APPROXIMATE 必加（否则全表扫）
+  [AND MATCH(content) AGAINST(:kw)]                   -- keyword 谓词（dense 无）
+ORDER BY score APPROXIMATE LIMIT :lim;                -- dense；keyword 为 MATCH(...) DESC LIMIT（无 APPROXIMATE）
 ```
 
 要点：向量字面量是 JSON 数组**字符串**（`[0.1,0.2]`——经绑定参数传递）；`persona_id` 谓词每条查询必带（索引表无 PersonaMixin——隔离由 SQL 谓词强制，全部构建器路径覆盖）；keyword 模式无 APPROXIMATE（无 ANN 面）。upsert 用 `ON DUPLICATE KEY UPDATE`（作用于引用唯一键——同键幂等覆盖；若运行期 SeekDB 拒绝该语法，回退路径 DELETE+INSERT，由冒烟测试验证）。
+
+### DBMS_HYBRID_SEARCH（Form B——hybrid 官方融合引擎）
+
+hybrid 不再走 Form A 组合式 SQL（v1.4.0 实测 MATCH 谓词不进 ANN 扫描、组合式静默空集——stopgap 期为 MATCH 预过滤 + 精确 cosine 排序），改走官方融合引擎 **`DBMS_HYBRID_SEARCH.SEARCH`** 单语句委托（官方文档：<https://docs.seekdb.ai/seekdb/hybrid-search>，v1.4.0）：
+
+```sql
+SELECT DBMS_HYBRID_SEARCH.SEARCH('ff_memory_index', :dsl);
+-- :dsl = JSON 载荷字符串（build_hybrid_search_payload 产出，唯一绑定参数）
+```
+
+载荷形态（`build_hybrid_search_payload`——键序 / 过滤序锁定，字节确定，单测精确断言）：
+
+```json
+{
+  "query": {
+    "bool": {
+      "must": [{"query_string": {"fields": ["content"], "query": "小鱼干"}}],
+      "filter": [
+        {"term": {"persona_id": 7}},
+        {"terms": {"kind": ["chat", "duty"]}},
+        {"term": {"provenance": "owner"}},
+        {"range": {"ts_ms": {"gte": 100}}},
+        {"range": {"ts_ms": {"lte": 200}}}
+      ]
+    }
+  },
+  "knn": {"field": "embedding", "k": 10, "query_vector": [0.1, 0.2, 0.3, 0.4]}
+}
+```
+
+要点（live 实例 v1.4.0 逐条验证）：
+
+- **persona_id term 恒在且恒为 filter 首条**（隔离谓词——任何过滤组合下不省略，单测锁定）；
+- 过滤形态：`terms` 列表成员（kind 多值）与 `bool.should` term 数组**均生效**——工程取 `terms`（与官方文档一致、更简洁）；`range` gte / lte 各自独立条目；
+- `knn.k = query.limit`（DTO 钳位 1-50）；
+- 结果**单行单列**：命中集 = JSON 数组字符串（行 dict 含全表列 + `_score`，引擎按融合分降序）；**空集 = SQL NULL 单元格**（非 `"[]"`——存储层映射为空列表）；
+- 行级畸形（缺 `_score` / 引用与信任列非法）警告 + 跳过（永不逐行抛出）；载荷级形态异常 fail loud（`INTERNAL_ERROR`，operation=`hybrid_parse`）；
+- **前置**：表组织 `HEAP`（DDL 已锁定）。
+
+### score 方向（跨模式注——调用方按 mode 解释）
+
+| 模式 | score | 方向 |
+|---|---|---|
+| `dense` | cosine 距离 | **越小越相关**（升序返回） |
+| `keyword` | MATCH 相关度 | 越大越相关（降序返回） |
+| `hybrid` | 融合 `_score`（RRF 风格关键词 × 向量） | **越大越相关**（引擎降序返回）——与 dense 方向**相反** |
 
 ## aiomysql 驱动选型风险（文档化决策）
 
