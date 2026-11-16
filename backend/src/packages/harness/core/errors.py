@@ -3,7 +3,7 @@
 本模块是 ``BusinessException`` / ``ErrorCode`` / ``get_http_status_for_code``
 的物理定义位置，全工程统一的业务异常契约：
 
-- 后续 app 层（FastAPI 全局异常处理器，后续 chunk 落地）捕获
+- app 层（FastAPI 全局异常处理器）捕获
   ``BusinessException`` 后转为 ``ResultDTO.error()`` 响应；
 - ``packages.harness.*`` 各域包与 llm/ 网关均从此模块导入，
   依赖方向 ``packages.harness.* → packages.harness.core.errors``（同层，合法）。
@@ -115,7 +115,7 @@ class BusinessException(Exception):
 #   - code: 错误码字符串（同时也是 str 值，保证向后兼容字符串比较）
 #   - http_status: 对应的 HTTP 状态码（4xx 客户端错误 / 5xx 服务端错误）
 #
-# 后续域 chunk（persona / chat / usage / memory …）按各自域段在此追加成员，
+# 各业务域（persona / chat / usage / memory …）按各自域段在此追加成员，
 # 并同步 i18n_messages.py 消息表（1:1 对齐由测试锁定）。
 # =========================================================================== []
 
@@ -154,7 +154,7 @@ class ErrorCode(StrEnum):
     UNSUPPORTED_MEDIA_TYPE = ("UNSUPPORTED_MEDIA_TYPE", 415)
     RATE_LIMITED = ("RATE_LIMITED", 429)
 
-    # --- 鉴权（P1+ 管理后台 / 平台通道落地后扩展） ---
+    # --- 鉴权（供管理后台与平台通道的认证流程使用） ---
     UNAUTHORIZED = ("UNAUTHORIZED", 401)
     FORBIDDEN = ("FORBIDDEN", 403)
     TOKEN_EXPIRED = ("TOKEN_EXPIRED", 401)
@@ -166,14 +166,14 @@ class ErrorCode(StrEnum):
     # --- 人格上下文（database PersonaMixin 自动隔离的守卫面） ---
     PERSONA_CONTEXT_REQUIRED = ("PERSONA_CONTEXT_REQUIRED", 500)
 
-    # --- LLM 调用（远程 OpenAI 兼容端点；llm/ 网关 chunk 消费） ---
+    # --- LLM 调用（远程 OpenAI 兼容端点；LLM 网关 harness/llm 消费） ---
     LLM_CALL_FAILED = ("LLM_CALL_FAILED", 503)
     LLM_PROVIDER_NOT_SUPPORTED = ("LLM_PROVIDER_NOT_SUPPORTED", 422)
     LLM_API_KEY_MISSING = ("LLM_API_KEY_MISSING", 500)
     LLM_REQUEST_FAILED = ("LLM_REQUEST_FAILED", 503)
     MODEL_NOT_FOUND = ("MODEL_NOT_FOUND", 404)
 
-    # --- 平台通道（P3 channels 域；Telegram 首个适配器消费） ---
+    # --- 平台通道（channels 域；Telegram 首个适配器消费） ---
     CHANNEL_DISABLED = ("CHANNEL_DISABLED", 409)
     CHANNEL_TOKEN_MISSING = ("CHANNEL_TOKEN_MISSING", 500)
     CHANNEL_API_ERROR = ("CHANNEL_API_ERROR", 503)

@@ -1,6 +1,6 @@
-# pools — 共享池域（P0-3 交付；P1-2 增 SeekDB 检索池）
+# pools — 共享池域
 
-`backend/src/packages/harness/pools/` 承载全工程长生命周期池的统一装配 / 释放：core 共享线程池启停协调、共享 HTTP 池、LLM 条目池（per-entry 并发信号量 + 熔断状态机——P0-4 LLM 网关消费）、SeekDB 检索池（aiomysql plain pool——P1-2 检索层消费，仅 `SEEKDB_ENABLED=true` 时启动）。P0 决策：**NO Redis**——无 Redis 池（缓存走 core 进程内 TTL 实现）。
+`backend/src/packages/harness/pools/` 承载全工程长生命周期池的统一装配 / 释放：core 共享线程池启停协调、共享 HTTP 池、LLM 条目池（per-entry 并发信号量 + 熔断状态机——LLM 网关 `harness/llm` 消费）、SeekDB 检索池（aiomysql plain pool——检索层 `harness/memory` 消费，仅 `SEEKDB_ENABLED=true` 时启动）。工程决策：**NO Redis**——无 Redis 池（缓存走 core 进程内 TTL 实现）。
 
 ## 模块一览
 
@@ -16,7 +16,7 @@
 ## 装配 / 释放链（顺序）
 
 ```
-lifespan startup（P0-6 装配）:
+lifespan startup（app/main.py 装配）:
     init_pool_manager(settings)     # 构造单例（构造注入——不持全局单例引用）
     await pool_manager.start()
         1. core.init_shared_thread_pool(POOLS_THREAD_POOL_SIZE)   # 线程池下沉
@@ -34,7 +34,7 @@ lifespan shutdown（LIFO）:
 
 幂等语义：重复 start 为 no-op（既有池不重建）；未 start / 重复 stop 为 no-op；get_* 未 start 时抛 `INTERNAL_ERROR`（快速暴露编程错误）；`get_seekdb_pool` 在 `SEEKDB_ENABLED=false` 时同样 `INTERNAL_ERROR`。
 
-P0-6 app lifespan 的装配顺序契约：`init_pool_manager → start → load_all_config → init_database → …`（本域只提供 start/stop API，装配是 P0-6 职责）。
+app lifespan 的装配顺序契约（唯一真相 = `app/main.py`）：startup 为 `setup_logging → load_all_config → init_database → init_pool_manager + start → …`，shutdown 严格逆序（`pool_manager.stop()` 先于 `close_database()`）。本域只提供 start/stop API，装配顺序由 app 层决定——`init_database` 经 SQLAlchemy greenlet 桥建表、不依赖共享线程池，故数据库先于池初始化在功能上成立。
 
 ## PoolsConfig env 面
 
@@ -46,7 +46,7 @@ P0-6 app lifespan 的装配顺序契约：`init_pool_manager → start → load_
 | `POOLS_HTTP_CONNECT_TIMEOUT_SECONDS` | 5.0 | HTTP 连接建立超时 |
 | `POOLS_HTTP_TIMEOUT_SECONDS` | 30.0 | HTTP 单请求总超时 |
 | `POOLS_LLM_SEMAPHORE_LIMIT` | 5 | LLM 全局并发回落值（条目未声明 concurrency 时） |
-| `POOLS_LLM_REQUEST_TIMEOUT_SECONDS` | 120 | LLM 单请求超时（P0-4 网关） |
+| `POOLS_LLM_REQUEST_TIMEOUT_SECONDS` | 120 | LLM 单请求超时（LLM 网关） |
 | `POOLS_CB_FAIL_MAX` | 5 | 熔断失败阈值 |
 | `POOLS_CB_RESET_TIMEOUT_SECONDS` | 60 | 熔断冷却秒数 |
 | `SEEKDB_ENABLED` | false | SeekDB 检索池启动开关（false = 不启动，检索走 SQLite 回退） |
@@ -82,16 +82,16 @@ closed ──连续失败达 cb_fail_max──> open（冷却计时开始，拒�
 - 冲突规则（keep-max）：同键同限值幂等返回；限值上调立即替换信号量（新等待者用新值）；下调保留较大值并告警——下调唯一生效路径是热重建 `reconfigure`（清空注册表后按新配置重建）；
 - 熔断器按条目键隔离（坏条目熔断不牵连同端点好模型）；阈值来自 `POOLS_CB_*`；
 - `reconfigure(pools)` 热重建：信号量清空 + 熔断记忆保留（避免热重建瞬间旧故障记忆清零导致故障端点被立即打满）；
-- `entry_gate(entry)` 组合门（P0-4 网关调用点入口）：熔断预检（open → `LLM_REQUEST_FAILED`，details 含条目键与冷却剩余毫秒）→ 信号量获取 → 释放。
+- `entry_gate(entry)` 组合门（LLM 网关调用点入口）：熔断预检（open → `LLM_REQUEST_FAILED`，details 含条目键与冷却剩余毫秒）→ 信号量获取 → 释放。
 
 ```
 async with llm_entry_pool.entry_gate(entry):
     await client.chat(...)
     # 成功 → breaker.record_success()；失败 → breaker.record_failure()
-    # （结果上报由 P0-4 网关调用点承担——本域只提供池管道，无 HTTP 调用）
+    # （结果上报由 LLM 网关调用点承担——本域只提供池管道，无 HTTP 调用）
 ```
 
-## SeekDB 检索池（seekdb_compat.py——P1-2）
+## SeekDB 检索池（seekdb_compat.py）
 
 `create_seekdb_pool(...)` 创建 aiomysql 连接池（autocommit——单语句自决事务；检索层写路径全部单语句）。**plain pool**：无熔断 / 信号量（检索为可降级路径——存储失败经 SeekDBStore 映射为业务异常，不影响主链路）；启动期即建立 `POOL_MIN` 常驻连接——SeekDB 不可达时 `pool_manager.start()` fail loud（部署顺序契约：SeekDB 先于 app 就绪）。
 

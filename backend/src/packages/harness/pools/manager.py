@@ -1,24 +1,25 @@
 """公共池管理器——全工程长生命周期池的统一装配 / 释放（进程级单例）。
 
-管理以下异步资源（P0 决策：NO Redis——本工程无 Redis 池）：
+管理以下异步资源（工程决策：不引入 Redis——本工程无 Redis 池）：
 
     1. core 共享线程池（``ThreadPoolExecutor``）——同步/CPU 密集操作下沉
        （经 :func:`core.thread_pool.init_shared_thread_pool` 装配，生命周期
        由 core 自持，本管理器只负责启停协调）；
     2. 共享 HTTP 池（``httpx.AsyncClient``）——通用出站 HTTP；
     3. LLM 条目池（:class:`packages.harness.pools.llm_pool.LlmEntryPool`）
-       —— per-entry 并发信号量 + 熔断器（P0-4 网关消费）；
-    4. SeekDB 检索池（aiomysql——P1 chunk 2 检索层消费；仅
+       —— per-entry 并发信号量 + 熔断器（LLM 网关消费）；
+    4. SeekDB 检索池（aiomysql——记忆检索层消费；仅
        ``settings.seekdb.enabled`` 时启动，plain pool——无熔断 / 信号量
        复杂度，见 ``pools.seekdb_compat``）。
 
-初始化顺序（app lifespan startup，P0-6 装配）::
+初始化顺序（app lifespan startup，装配序列的单一真相见 ``app/main.py``）::
 
-    init_pool_manager(settings)  →  pool_manager.start()  →  init_database() → ...
+    load_all_config()  →  init_database()  →  init_pool_manager(settings)
+        →  pool_manager.start()  →  ...
 
-关闭顺序（LIFO，lifespan shutdown）::
+关闭顺序（LIFO，lifespan shutdown；池先于数据库关闭）::
 
-    ...  →  close_database()  →  pool_manager.stop()
+    ...  →  pool_manager.stop()  →  close_database()  →  ...
 
 使用方式::
 
@@ -68,7 +69,7 @@ class PoolManager:
     ``self._settings``——pools 域不持有全局单例引用，测试可注入隔离
     Settings。
 
-    P0 决策：NO Redis——无 Redis 客户端槽位（缓存走 core 进程内 TTL
+    工程决策：不引入 Redis——无 Redis 客户端槽位（缓存走 core 进程内 TTL
     实现，见 ``core.cache``）。
     """
 
@@ -92,15 +93,18 @@ class PoolManager:
     async def start(self) -> None:
         """装配全部池（从 ``self._settings`` 读取配置）。
 
-        必须在 lifespan startup 中先于数据库 / 业务服务调用——
-        ``run_blocking_ops`` 依赖线程池，通用 HTTP 出站依赖共享 client。
+        在 lifespan startup 中调用（``app/main.py`` 装配序列：数据库引擎
+        先行、本管理器随后）；必须在业务服务（网关 / 通道 / 调度器）装配
+        前 start——``run_blocking_ops`` 依赖线程池，通用 HTTP 出站依赖
+        共享 client。
 
         幂等：已 start 时为 no-op（重复 start 直接返回）。
 
         Raises:
             BusinessException: SeekDB 池创建失败（``enabled=True`` 且
                 实例不可达——fail loud，部署顺序契约：SeekDB 先于 app
-                就绪；``INTERNAL_ERROR``）。
+                就绪；``INTERNAL_ERROR``）。失败路径先释放已建共享
+                HTTP client（aclose 并置 None），不留半装配资源。
         """
         if self._started:
             return
@@ -130,6 +134,11 @@ class PoolManager:
                     pool_max=seekdb_settings.pool_max,
                 )
             except Exception as exc:
+                # 已建的共享 HTTP client 先释放（aclose 并置 None）——
+                # fail loud 前不留半装配异步资源
+                if self.http_client is not None:
+                    await self.http_client.aclose()
+                    self.http_client = None
                 raise BusinessException(
                     code=ErrorCode.INTERNAL_ERROR,
                     message="SeekDB 检索池创建失败（fail loud——检查 SEEKDB_* 配置与实例可达性）",
@@ -262,7 +271,7 @@ pool_manager: PoolManager | None = None
 def init_pool_manager(settings: Settings) -> PoolManager:
     """构造 ``PoolManager`` 单例并赋值到模块级 ``pool_manager``。
 
-    在 app lifespan（P0-6 装配）的 ``pool_manager.start()`` 之前调用。
+    在 app lifespan startup 的 ``pool_manager.start()`` 之前调用。
     重复调用覆盖既有单例（不关闭旧实例——调用方负责先 ``await pm.stop()``）。
 
     Args:

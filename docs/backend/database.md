@@ -97,7 +97,7 @@ pixi run alembic upgrade head                        # 应用迁移
 ```
 
 - `alembic/env.py`：异步引擎（`run_sync` 桥接）+ `sqlalchemy.url` 由 `settings.database.async_sqlalchemy_url` 动态注入（alembic.ini 留空）+ `sys.path` 注入 backend/src；
-- `versions/000000000001_initial.py`：空基线（本 chunk 无域表——版本链锚点；persona / chat / memory 等域表由后续 chunk 迁移创建）；
+- `versions/000000000001_initial.py`：空基线（版本链锚点）；域表迁移链：`0002_add_usage_records`（用量）→ `0003_add_personas`（人格注册表 + 状态）→ `0004_add_memory_tables`（记忆四表）→ `0005_add_dream_runs`（梦境运行日志）→ `0006_add_persona_voice_profile`（人格音色绑定）；
 - `target_metadata = Base.metadata`（autogenerate 对比基准）。
 
 ## 测试与门禁

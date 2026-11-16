@@ -180,20 +180,22 @@ core 不 import config 域（chunk 边界）：`setup_logging(config: LoggingCon
 | `module_levels` | `str` | `""` | 按模块覆盖（`"pkg.mod=DEBUG,app=WARNING"`，最长前缀优先） |
 | `text_format` | `str \| None` | `None` | 自定义文本模板（console + 文本文件共用；未含 `{exception}` 自动追加） |
 | `colorize_console` | `bool` | `True` | console 彩色输出 |
+| `diagnose_exceptions` | `bool` | `False` | console / 文本 sink 的异常 `diagnose`（traceback 帧变量展示；默认关闭防帧内密钥明文入日志，backtrace 保持 True） |
 
 ### 初始化链（顺序）
 
 ```
 setup_logging(config)
-    1. register_secret_masker()          ← patcher 注册（幂等）
-    2. parse_module_log_levels(config.module_levels)
-    3. logger.remove()                    ← 清默认 sink
-    4. add(console sink)                  ← stderr，text_format，colorize
-    5. add(文本文件 sink)                 ← rotation/retention，统一文本格式
-    6. add(JSON 文件 sink)                ← 同一轮转口径，单行 JSON
-    7. logger.configure(extra={"-"...})   ← 上下文轴默认占位
-    8. logger.info("日志系统已初始化", ...)
+    1. parse_module_log_levels(config.module_levels)
+    2. logger.remove()                    ← 清默认 sink
+    3. add(console sink)                  ← stderr，text_format，colorize，diagnose=config.diagnose_exceptions
+    4. add(文本文件 sink)                 ← rotation/retention，统一文本格式，diagnose=config.diagnose_exceptions
+    5. add(JSON 文件 sink)                ← 同一轮转口径，单行 JSON，diagnose 恒 False
+    6. logger.configure(extra={"-"...})   ← 上下文轴默认占位
+    7. logger.info("日志系统已初始化", ...)
 ```
+
+脱敏不在此链注册——每个 sink 的 format 函数在写入前内联调用 `mask_sensitive`（文本 sink 脱敏 `record["message"]`；JSON sink 额外脱敏 extra 字符串值与 `exception.value`）。不使用 loguru patcher 通道：`logger.patch(patcher)` 返回新 logger 且不修改全局 logger，对 `from loguru import logger` 的常规消费面不生效。
 
 ### 文本格式（默认模板）
 
@@ -219,7 +221,7 @@ setup_logging(config)
 }
 ```
 
-### 脱敏规则（写入前执行，全部 sink 生效）
+### 脱敏规则（per-sink formatter 写入前内联执行，全部 sink 生效）
 
 | 形态 | 示例 → 脱敏后 |
 |---|---|

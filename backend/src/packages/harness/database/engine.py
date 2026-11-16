@@ -107,7 +107,7 @@ async def _dispose_owned_engine_if_any() -> None:
 async def init_database(config: DatabaseConfig | None = None) -> EngineHolder:
     """初始化异步数据库引擎与会话工厂（写经持有器槽位）。
 
-    在 app lifespan（P0-6 装配）startup 中调用。重复调用安全：按所有权
+    在 app lifespan startup（装配序列见 ``app/main.py``）中调用。重复调用安全：按所有权
     令牌先 dispose 本生命周期先前创建的引擎再创建新引擎（外部安装的
     引擎原样保留）。
 

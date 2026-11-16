@@ -17,7 +17,7 @@ from generate_examples_helpers import (
 from pydantic_settings import BaseSettings
 
 from packages.harness.config.models import (
-    ChannelsSettings,
+    AsrSettings,
     DatabaseConfig,
     DreamScheduleSettings,
     DutySettings,
@@ -29,8 +29,9 @@ from packages.harness.config.models import (
     SeekDBSettings,
     ServerConfig,
     Settings,
+    TelegramSettings,
     ToolsSandboxSettings,
-    VoiceSettings,
+    TtsSettings,
 )
 
 # .env.example 分节标题: (section_title, config_classes)
@@ -41,13 +42,14 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("POOLS — 共享池配置（线程池 / HTTP 池 / LLM 信号量 / 熔断）", [PoolsConfig]),
     ("LLM — 默认端点 env 面（模型注册表经 config.yaml 配置）", [LlmEndpointConfig]),
     ("SEEKDB — 检索存储配置（enabled=False 走 SQLite 回退；密码经 SEEKDB_PASSWORD 间接）", [SeekDBSettings]),
-    ("CHANNELS — 平台通道配置（Telegram 先行；机器人令牌经 TELEGRAM_BOT_TOKEN 间接）", [ChannelsSettings]),
+    ("CHANNELS.TELEGRAM — Telegram 通道配置（机器人令牌经 TELEGRAM_BOT_TOKEN 间接）", [TelegramSettings]),
     ("CHANNELS.QQ — QQ 通道配置（NapCat OneBot v11；令牌经 QQ_ACCESS_TOKEN / QQ_WEBHOOK_TOKEN 间接）", [QqChannelSettings]),
     ("DUTY — 值班轮配置（charter 工具循环 + 报告属主投递）", [DutySettings]),
     ("DREAM_SCHEDULE — 夜间梦境定时触发配置", [DreamScheduleSettings]),
     ("SCHEDULER — 中央调度器配置（自研异步循环）", [SchedulerSettings]),
     ("TOOLS_SANDBOX — 工具沙盒配置（可选运行时；令牌经 SANDBOX_TOKEN 间接）", [ToolsSandboxSettings]),
-    ("VOICE — 语音配置（TTS=CosyVoice3 / ASR=Qwen3-ASR，独立本地服务端点）", [VoiceSettings]),
+    ("VOICE.TTS — 语音合成配置（CosyVoice3 服务端点）", [TtsSettings]),
+    ("VOICE.ASR — 语音识别配置（Qwen3-ASR 服务端点）", [AsrSettings]),
 ]
 
 

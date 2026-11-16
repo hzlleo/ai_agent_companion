@@ -6,7 +6,7 @@
 注入 request_id / session_id / user_id / persona_id，使所有日志行自动
 携带请求上下文，便于全链路追踪。
 
-（三 sink 架构，P0 规格每日轮转 + 30 天保留）:
+（三 sink 架构，工程规格：每日轮转 + 30 天保留）:
     - console sink：stderr 彩色输出（``colorize_console`` 可关）；
     - 文本文件 sink：``log_file``，统一文本格式（见下方模板）；
     - JSON 文件 sink：``log_json_file``，每行一个 JSON 对象，便于 ELK /
@@ -16,15 +16,23 @@
     - 通过 ``logger.configure(extra=...)`` 默认值确保未在上下文中的字段
       也有占位（``-``）。
 
-（敏感信息脱敏）:
-    - ``register_secret_masker()`` 注册 loguru ``patcher``，对 ``record``
-      的 ``message`` / ``extra`` 进行正则脱敏：
+（敏感信息脱敏——per-sink formatter 内联脱敏，唯一机制）:
+    - 每个 sink 的 ``format`` 函数在写入前调用 ``mask_sensitive`` 正则
+      脱敏：文本 sink（console + 文本文件）脱敏 ``record["message"]``；
+      JSON sink 额外脱敏 extra 字符串值，并将 ``exception.value`` 脱敏
+      后写入序列化载荷：
         - ``api_key=xxx`` / ``api_key:xxx`` → ``api_key=***``
         - ``token=xxx`` / ``password=xxx`` / ``secret=xxx`` → 同上
         - ``Authorization: Bearer xxx`` → ``Authorization: Bearer ***``
         - ``sk-xxxx`` / ``sk-ant-xxxx``（OpenAI / Anthropic API Key 前缀）
     - 长度阈值（默认 8）：短于阈值的值不脱敏（避免误伤 ``id=1`` 这类短值）
-    - 脱敏在 loguru sink 写入前执行，所有 sink（console / 文件 / JSON）均生效
+    - 不使用 loguru ``patcher`` 通道：``logger.patch(patcher)`` 返回新的
+      logger 对象而不修改全局 logger，对 ``from loguru import logger`` 的
+      常规消费面不生效（历史上曾按 patcher 实现，因 inert 已删除）
+    - 异常面防泄漏：console / 文本 sink 的 ``diagnose`` 由
+      ``LoggingConfig.diagnose_exceptions`` 控制（默认 False——traceback
+      不展示帧局部变量，杜绝异常帧内的 Authorization 头等密钥明文入
+      日志；backtrace 保持 True）；JSON sink 恒 ``diagnose=False``
 
 （按模块配置日志级别）:
     - ``LoggingConfig.module_levels`` 允许按模块前缀覆盖，如
@@ -53,7 +61,6 @@ from packages.harness.core.logging_models import LoggingConfig
 
 __all__ = [
     "setup_logging",
-    "register_secret_masker",
     "parse_module_log_levels",
     "mask_sensitive",
     "SENSITIVE_KEY_PARTS",
@@ -135,43 +142,6 @@ def mask_sensitive(text: str) -> str:
     text = _LONG_SECRET_PATTERN.sub("***", text)
 
     return text
-
-
-def _redact_record(record: Any) -> None:
-    """对 loguru record 中的 message 与 extra 字段进行脱敏。
-
-    作为 loguru ``patcher`` 使用——在 sink 写入前修改 record。
-    注：loguru patcher 收到的 record 是 dict（经 ``logger.patch(...)``
-    挂接时逐 record 调用），必须按 dict 契约访问（属性访问会在运行期
-    抛 AttributeError）；本函数由单测直测。
-    """
-    message = record.get("message")
-    if message:
-        record["message"] = mask_sensitive(message)
-
-    extra = record.get("extra")
-    if extra:
-        for key, value in list(extra.items()):
-            if isinstance(value, str) and value:
-                masked = mask_sensitive(value)
-                if masked != value:
-                    extra[key] = masked
-
-
-_masker_registered: bool = False
-
-
-def register_secret_masker() -> None:
-    """注册 loguru patcher 对所有日志记录进行敏感信息脱敏。
-
-    脱敏在 sink 写入前执行，所有 sink（console / 文件 / JSON）均生效。
-    重复调用幂等（用模块级标志避免重复注册）。
-    """
-    global _masker_registered
-    if _masker_registered:
-        return
-    logger.patch(_redact_record)
-    _masker_registered = True
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +240,10 @@ def _json_serializer(record: Any) -> str:
 
     包含全链路追踪字段：``timestamp`` / ``level`` / ``logger`` /
     ``message`` / ``request_id`` / ``session_id`` / ``user_id`` /
-    ``persona_id`` / ``module`` / ``function`` / ``line``。
+    ``persona_id`` / ``module`` / ``function`` / ``line``。异常段携带
+    ``exception.type`` / ``exception.value``——``value`` 经
+    :func:`mask_sensitive` 脱敏后写入（异常消息可能内嵌 Bearer 令牌 /
+    API Key）。
 
     入参兼容两种形态：loguru record dict（format callable 直传）与
     Message 形对象（带 ``.record`` 属性——历史 callable sink / 测试
@@ -306,7 +279,7 @@ def _json_serializer(record: Any) -> str:
         exc = record["exception"]
         payload["exception"] = {
             "type": type(exc.value).__name__ if exc.value else "",
-            "value": str(exc.value) if exc.value else "",
+            "value": mask_sensitive(str(exc.value)) if exc.value else "",
         }
 
     for key, value in extra.items():
@@ -346,16 +319,20 @@ def setup_logging(config: LoggingConfig) -> None:
           自定义模板未含 ``{exception}`` 时自动追加异常渲染段）；
         - JSON 文件：``config.log_json_file``，单行 JSON（全链路追踪字段）。
 
-    （轮转与保留，P0 规格）:
+    （轮转与保留，工程规格）:
         - 两个文件 sink 均为 ``config.rotation``（默认 ``1 day``——每日轮转）
           + ``config.retention``（默认 ``30 days``——30 天保留）。
           loguru 不支持「按天 + 按大小」复合轮转，按工程规格为纯每日
           轮转 + 30 天保留。
 
-    （脱敏）:
-        - 注册 ``register_secret_masker()`` patcher；
-        - 同时在每个 sink 的 ``format`` 函数中再次调用 ``mask_sensitive``，
-          双重保险（patcher 在某些 loguru 版本可能不影响全局 logger）。
+    （脱敏——per-sink formatter 内联，唯一机制）:
+        - 文本 sink（console + 文本文件）的 format 函数脱敏
+          ``record["message"]``；JSON sink 额外脱敏 extra 字符串值与
+          ``exception.value``（序列化载荷落盘前）。
+        - console / 文本 sink 的 ``diagnose`` 按
+          ``config.diagnose_exceptions`` 配置（默认 False——异常
+          traceback 不展示帧局部变量，防帧内密钥明文入日志；
+          backtrace 保持 True）；JSON sink 恒 ``diagnose=False``。
 
     （按模块级别）:
         - 解析 ``config.module_levels``，按模块前缀过滤日志级别
@@ -365,8 +342,6 @@ def setup_logging(config: LoggingConfig) -> None:
         config: 日志配置（``LoggingConfig`` 实例——测试经 fixture 显式构造，
             生产由 config 域 Settings 映射构造；core 不读取任何全局配置）。
     """
-    register_secret_masker()
-
     module_levels = parse_module_log_levels(config.module_levels)
     default_level = config.level
 
@@ -398,7 +373,7 @@ def setup_logging(config: LoggingConfig) -> None:
         format=text_formatter,
         colorize=config.colorize_console,
         backtrace=True,
-        diagnose=True,
+        diagnose=config.diagnose_exceptions,
         filter=_make_module_filter(module_levels, default_level),
     )
 
@@ -413,7 +388,7 @@ def setup_logging(config: LoggingConfig) -> None:
         retention=config.retention,
         encoding="utf-8",
         backtrace=True,
-        diagnose=True,
+        diagnose=config.diagnose_exceptions,
         filter=_make_module_filter(module_levels, default_level),
     )
 

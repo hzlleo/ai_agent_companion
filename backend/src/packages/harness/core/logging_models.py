@@ -1,6 +1,6 @@
 """日志配置 Model Class —— core.logging 的配置契约。
 
-core 层不 import config/（chunk 边界：config 是 P0-3 交付面，依赖方向
+core 层不 import config/（依赖方向
 必须 config → core），因此 core.logging 以本 Model Class 为配置入参契约：
 
 - app 层 lifespan 调用 ``setup_logging(config)`` 时，由 config 域的
@@ -38,6 +38,10 @@ class LoggingConfig(BaseModel):
         text_format: 自定义文本 sink 格式模板（loguru format 语法；
             ``None`` = 使用默认统一模板）。
         colorize_console: console sink 是否彩色输出（默认 True）。
+        diagnose_exceptions: console / 文本 sink 的异常 ``diagnose`` 开关
+            （默认 False——traceback 不展示帧局部变量；llm 客户端等帧内
+            的 Bearer 令牌 / API Key 不会因异常渲染明文入日志。backtrace
+            保持 True 不受本开关影响）。
     """
 
     level: str = Field(default="INFO", description="全局日志级别")
@@ -50,6 +54,10 @@ class LoggingConfig(BaseModel):
         default=None, description="自定义文本格式模板（None=默认统一模板）"
     )
     colorize_console: bool = Field(default=True, description="console sink 彩色输出")
+    diagnose_exceptions: bool = Field(
+        default=False,
+        description="异常 diagnose（traceback 帧变量展示；默认关闭防密钥泄漏）",
+    )
 
     @field_validator("level")
     @classmethod

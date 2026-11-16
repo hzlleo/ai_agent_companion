@@ -63,6 +63,21 @@ class TestMemoryTTLCache:
         assert await memory_cache.get("k1") == "new"
         assert await memory_cache.size() == 1
 
+    async def test_overwrite_refreshes_insertion_order(self) -> None:
+        """覆写刷新插入位：热 key 重写后不被 FIFO 误淘汰，最旧其他 key 先淘汰。"""
+        cache = MemoryTTLCache(max_entries=3)
+        await cache.set("A", 1, ttl_seconds=3600)
+        await cache.set("B", 2, ttl_seconds=3600)
+        await cache.set("C", 3, ttl_seconds=3600)
+        # 重写 A（首插序最旧）——插入位刷新为最新
+        await cache.set("A", 11, ttl_seconds=3600)
+        # 插入新 key D：容量满 FIFO 淘汰——按最新写入序弹 B（而非 A）
+        await cache.set("D", 4, ttl_seconds=3600)
+        assert await cache.get("A") == 11
+        assert await cache.get("B") is None
+        assert await cache.get("C") == 3
+        assert await cache.get("D") == 4
+
     async def test_delete_batch_counts(self, memory_cache: MemoryTTLCache) -> None:
         """批量删除：返回实际删除数（幂等——不存在的 key 忽略）。"""
         for i in range(4):

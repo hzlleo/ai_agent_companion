@@ -4,8 +4,7 @@
 （jwt.decode、zipfile/tarfile、同步 SDK 等）必须通过此函数下沉到线程池，
 避免阻塞事件循环。
 
-设计要点（pools 域是 P0-3 交付面，core 不 import
-pools/config——共享池由 core 自持）：
+设计要点（core 不 import pools/config 域——共享线程池由 core 自持）：
 
 - 共享 ``ThreadPoolExecutor`` 生命周期由本模块管理：
   ``init_shared_thread_pool(max_workers)`` 在 lifespan 启动期调用，

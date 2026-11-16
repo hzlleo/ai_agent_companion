@@ -58,7 +58,7 @@ SeekDB（v1.4.0，MySQL 线协议 2881 端口）承载记忆检索索引（见 m
 - `VECTOR_DIM` 插值进索引表 DDL 的 `VECTOR(dim)`——须与 embed 角色模型输出一致（默认 1024 = Qwen3-Embedding-0.6B）；
 - `POOL_MAX >= POOL_MIN` 模型校验强制。
 
-> 注：`SEEKDB_*` 键暂未出现在 `.env.example`——env 模板生成的分节清单（`scripts/generate_examples_env.py` 的 `_ENV_SECTIONS`）在仓库根 scripts/ 树，不在本 chunk 的可改文件清单内；本表即 env 面单一参考（后续在 scripts 侧补登记后 `pixi run gen-examples` 即并入模板）。
+`SEEKDB_*` 全部键位见 `.env.example` 的 SEEKDB 分节（env 模板由 `scripts/generate_examples_env.py` 自 Pydantic 模型自动生成——模板与模型不会漂移）。
 
 ## config.yaml — llm 段（模型注册表）
 

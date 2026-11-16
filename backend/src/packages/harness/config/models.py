@@ -1,4 +1,4 @@
-"""配置树 Model Classes —— 全工程配置的结构化真源（P0-3 交付面）。
+"""配置树 Model Classes —— 全工程配置的结构化真源。
 
 分层加载链（优先级从低到高，文档化于 docs/backend/config.md）::
 
@@ -21,19 +21,19 @@
       LLM 信号量 / 熔断阈值）
     - ``LlmEndpointConfig``  —— LLM 默认端点 env 面（env_prefix=``LLM_``）
     - ``ChannelsSettings``   —— 通道域分节（``Settings.channels``；telegram
-      子模型 env_prefix=``TELEGRAM_``——P3 chunk 1；qq 子模型 env_prefix=
-      ``QQ_``——P4 chunk 4）
+      子模型 env_prefix=``TELEGRAM_``；qq 子模型 env_prefix=
+      ``QQ_``）
     - ``DutySettings``       —— 值班轮分节（``Settings.duty``；env_prefix=
-      ``DUTY_``——P3 chunk 2）
+      ``DUTY_``——duty 域）
     - ``DreamScheduleSettings`` —— 梦境调度分节（``Settings.dream_schedule``；
-      env_prefix=``DREAM_SCHEDULE_``——P3 chunk 2）
+      env_prefix=``DREAM_SCHEDULE_``——dream 域）
     - ``SchedulerSettings``  —— 中央调度器分节（``Settings.scheduler``；
-      env_prefix=``SCHEDULER_``——P3 chunk 2）
+      env_prefix=``SCHEDULER_``）
     - ``ToolsSandboxSettings`` —— 工具沙盒分节（``Settings.tools_sandbox``；
-      env_prefix=``TOOLS_SANDBOX_``——P3 chunk 3）
+      env_prefix=``TOOLS_SANDBOX_``——tools 域）
     - ``TtsSettings`` / ``AsrSettings`` / ``VoiceSettings`` —— 语音域分节
       （``Settings.voice``；子模型 env_prefix=``VOICE_TTS_`` /
-      ``VOICE_ASR_``——P4 chunk 1）
+      ``VOICE_ASR_``——voice 域）
     - ``Settings``           —— 聚合器（全局单例 ``settings``）
     - ``LlmConfig``          —— config.yaml 的 ``llm`` 段（模型注册表 / 角色绑定 /
       多模态回退链）
@@ -41,7 +41,7 @@
     - ``JsonSchema`` / ``ExtensionTool`` / ``ExtensionsConfig`` —— extensions_config.json
       的运行时表示
 
-依赖方向：config → core（合法）；core 不 import config（chunk 边界）。
+依赖方向：config → core（合法；core 不反向 import config）。
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ from urllib.parse import quote_plus
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from packages.harness.config.model_entry import LlmModelEntry
+from packages.harness.config.model_entry import LlmModelEntry, ModelRole
 from packages.harness.core.logging_models import LoggingConfig
 
 __all__ = [
@@ -216,6 +216,9 @@ class LogConfig(BaseSettings):
         retention: 保留时长（默认 30 天）。
         module_levels: 按模块覆盖级别的规格串（空串 = 无覆盖）。
         colorize_console: console sink 是否彩色输出。
+        diagnose_exceptions: console / 文本 sink 的异常 ``diagnose`` 开关
+            （默认 False——traceback 不展示帧局部变量，防异常帧内的
+            Bearer 令牌 / API Key 明文入日志；backtrace 不受影响）。
     """
 
     level: str = Field(default="INFO", description="全局日志级别")
@@ -225,6 +228,10 @@ class LogConfig(BaseSettings):
     retention: str = Field(default="30 days", description="保留时长（30 天）")
     module_levels: str = Field(default="", description="按模块覆盖级别规格串")
     colorize_console: bool = Field(default=True, description="console sink 彩色输出")
+    diagnose_exceptions: bool = Field(
+        default=False,
+        description="异常 diagnose（traceback 帧变量展示；默认关闭防密钥泄漏）",
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="LOG_",
@@ -247,6 +254,7 @@ class LogConfig(BaseSettings):
             retention=self.retention,
             module_levels=self.module_levels,
             colorize_console=self.colorize_console,
+            diagnose_exceptions=self.diagnose_exceptions,
         )
 
 
@@ -260,7 +268,7 @@ class PoolsConfig(BaseSettings):
         http_connect_timeout_seconds: HTTP 连接建立超时（秒）。
         http_timeout_seconds: HTTP 单请求总超时（秒）。
         llm_semaphore_limit: LLM 全局并发信号量上限（条目未配置并发时的回落值）。
-        llm_request_timeout_seconds: LLM 单请求超时秒数（P0-4 网关消费）。
+        llm_request_timeout_seconds: LLM 单请求超时秒数（LLM 网关消费）。
         cb_fail_max: 熔断失败阈值——连续失败达此次数后熔断。
         cb_reset_timeout_seconds: 熔断冷却秒数——冷却期满进入半开探测。
     """
@@ -318,7 +326,7 @@ class LlmEndpointConfig(BaseSettings):
 
 
 class SeekDBSettings(BaseSettings):
-    """SeekDB 检索存储配置（env_prefix=``SEEKDB_``——P1 chunk 2 检索层）。
+    """SeekDB 检索存储配置（env_prefix=``SEEKDB_``——记忆检索层消费）。
 
     SeekDB（v1.4.0，MySQL 线协议 server 模式 2881 端口）承载记忆检索
     索引表 ``ff_memory_index``（向量 + 全文 + 标量混合检索，见
@@ -385,7 +393,7 @@ class SeekDBSettings(BaseSettings):
 
 
 class DutySettings(BaseSettings):
-    """值班轮配置（env_prefix=``DUTY_``——P3 chunk 2 duty 域）。
+    """值班轮配置（env_prefix=``DUTY_``——duty 域）。
 
     锁定决策：``enabled=False``（默认）——零配置开发可用、测试 hermetic；
     ``enabled=True`` 时 app lifespan 装配中央调度器并注册 duty 每日作业
@@ -448,10 +456,10 @@ class DutySettings(BaseSettings):
 
 
 class DreamScheduleSettings(BaseSettings):
-    """梦境调度配置（env_prefix=``DREAM_SCHEDULE_``——P3 chunk 2）。
+    """梦境调度配置（env_prefix=``DREAM_SCHEDULE_``）。
 
-    锁定决策：``enabled=False``（默认）——梦境经 admin API 手工触发
-    （P1 chunk 3 交付面）；``enabled=True`` 时 app lifespan 在中央调度器
+    锁定决策：``enabled=False``（默认）——梦境经 admin API 手工触发；
+    ``enabled=True`` 时 app lifespan 在中央调度器
     注册 dream 每日作业（DreamService.run_dream 复用——as-is）。
 
     Attributes:
@@ -487,7 +495,7 @@ class DreamScheduleSettings(BaseSettings):
 
 
 class SchedulerSettings(BaseSettings):
-    """中央调度器配置（env_prefix=``SCHEDULER_``——P3 chunk 2）。
+    """中央调度器配置（env_prefix=``SCHEDULER_``）。
 
     Attributes:
         tick_seconds: 调度器 tick 循环间隔秒（到期判定分辨率下限；
@@ -505,7 +513,7 @@ class SchedulerSettings(BaseSettings):
 
 
 class ToolsSandboxSettings(BaseSettings):
-    """工具沙盒配置（env_prefix=``TOOLS_SANDBOX_``——P3 chunk 3 工具沙盒）。
+    """工具沙盒配置（env_prefix=``TOOLS_SANDBOX_``——tools 域沙盒运行时）。
 
     锁定决策：``enabled=False``（默认）——沙盒是**可选运行时**：全工程
     无沙盒照常运行（duty 工具面回落到内置工具）；``enabled=True`` 时
@@ -546,7 +554,7 @@ class ToolsSandboxSettings(BaseSettings):
 
 
 class TelegramSettings(BaseSettings):
-    """Telegram 通道配置（env_prefix=``TELEGRAM_``——P3 chunk 1 通道层）。
+    """Telegram 通道配置（env_prefix=``TELEGRAM_``——channels 域）。
 
     锁定决策：``enabled=False``（默认）——零配置开发可用、测试 hermetic；
     ``enabled=True`` 时 app lifespan 装配 Telegram 通道 runner（长轮询
@@ -565,7 +573,8 @@ class TelegramSettings(BaseSettings):
         poll_timeout_seconds: getUpdates 长轮询超时秒数（Bot API 长轮询
             上限 50 秒——请求超时为该值 + 传输裕量）。
         owner_chat_id: 属主会话 ID（Telegram chat id 字符串形态；None =
-            未配置。P3 duty 轮值班通知的投递目标，通道层本 chunk 不消费）。
+            未配置——duty 轮值班通知的投递目标，由 duty 域消费，
+            通道层自身不读此值）。
         backoff_base_seconds: 轮询失败退避基数秒（指数退避起点）。
         backoff_max_seconds: 退避封顶秒数（不得小于基数）。
         state_dir: 通道状态目录（offset 持久化 JSON 文件落此；相对路径
@@ -633,7 +642,7 @@ class TelegramSettings(BaseSettings):
 
 
 class QqChannelSettings(BaseSettings):
-    """QQ 通道配置（env_prefix=``QQ_``——P4 chunk 4 通道层）。
+    """QQ 通道配置（env_prefix=``QQ_``——channels 域）。
 
     锁定决策：``enabled=False``（默认）——零配置开发可用、测试 hermetic；
     ``enabled=True`` 时 app lifespan 装配 QQ 通道适配器（NapCat OneBot
@@ -688,8 +697,8 @@ class QqChannelSettings(BaseSettings):
 class ChannelsSettings(BaseModel):
     """通道域配置分节（``Settings.channels``——多平台通道聚合容器）。
 
-    P3 chunk 1 含 telegram 子模型；P4 chunk 4 增 qq 子模型（NapCat /
-    OneBot v11）；后续多通道扩展（B站等）在此追加同级子模型（各自独立
+    当前含 telegram 与 qq（NapCat /
+    OneBot v11）两个子模型；多通道扩展（B站等）在此追加同级子模型（各自独立
     env_prefix 的 ``BaseSettings``——本工程约定：env 面子配置为
     BaseSettings，聚合容器为普通 BaseModel）。
 
@@ -705,11 +714,11 @@ class ChannelsSettings(BaseModel):
 
 
 class TtsSettings(BaseSettings):
-    """TTS 语音合成配置（env_prefix=``VOICE_TTS_``——P4 chunk 1 voice 域）。
+    """TTS 语音合成配置（env_prefix=``VOICE_TTS_``——voice 域）。
 
     锁定决策：``enabled=False``（默认）——语音是可选能力面：CosyVoice3
     包装服务是部署机上的外部本地进程（权重经 ``models/`` 子模块承载，
-    compose 接线属后续部署 chunk），缺省零配置开发可用、测试 hermetic；
+    compose 接线属部署侧事务），缺省零配置开发可用、测试 hermetic；
     ``enabled=True`` 时 voice 域 API / CLI ``--voice`` 方可消费。
 
     Attributes:
@@ -748,7 +757,7 @@ class TtsSettings(BaseSettings):
 
 
 class AsrSettings(BaseSettings):
-    """ASR 语音识别配置（env_prefix=``VOICE_ASR_``——P4 chunk 1 voice 域）。
+    """ASR 语音识别配置（env_prefix=``VOICE_ASR_``——voice 域）。
 
     锁定决策：``enabled=False``（默认）——与 TtsSettings 同可选能力面
     语义（Qwen3-ASR 经 vLLM 工具链以 OpenAI 兼容 audio 端点部署——
@@ -836,15 +845,14 @@ class Settings(BaseSettings):
         pools: 共享池配置。
         llm: LLM 默认端点 env 面。
         seekdb: SeekDB 检索存储配置（enabled=False 默认——SQLite 回退）。
-        channels: 通道域配置分节（telegram / qq 默认关闭——P3 chunk 1 /
-            P4 chunk 4）。
-        duty: 值班轮配置（默认关闭——P3 chunk 2）。
-        dream_schedule: 梦境定时调度配置（默认关闭——P3 chunk 2）。
-        scheduler: 中央调度器配置（tick 间隔——P3 chunk 2）。
-        tools_sandbox: 工具沙盒配置（默认关闭——P3 chunk 3；沙盒为可选
+        channels: 通道域配置分节（telegram / qq 默认关闭）。
+        duty: 值班轮配置（默认关闭）。
+        dream_schedule: 梦境定时调度配置（默认关闭）。
+        scheduler: 中央调度器配置（tick 间隔）。
+        tools_sandbox: 工具沙盒配置（默认关闭；沙盒为可选
             运行时，duty 工具面在沙盒不可达时回落到内置工具）。
-        voice: 语音域配置（TTS / ASR 默认关闭——P4 chunk 1；外部本地
-            模型服务经 HTTP 契约消费，部署接线属后续 chunk）。
+        voice: 语音域配置（TTS / ASR 默认关闭；外部本地
+            模型服务经 HTTP 契约消费，部署接线属部署侧事务）。
         env: 运行环境标识（local / dev / prod）。
     """
 
@@ -957,8 +965,6 @@ class LlmConfig(BaseModel):
         Raises:
             ValueError: 含未知角色名。
         """
-        from packages.harness.config.model_entry import ModelRole
-
         valid_roles = {member.value for member in ModelRole}
         invalid = [role for role in value if role not in valid_roles]
         if invalid:

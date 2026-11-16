@@ -1,6 +1,6 @@
 """config.yaml + extensions_config.json 运行时加载器（分层加载 + 热重载地基）。
 
-在 app lifespan（P0-6 装配）最先调用 ``load_all_config()``，将
+在 app lifespan 启动序列（见 ``app/main.py``）最先调用 ``load_all_config()``，将
 config.yaml 的 ``llm`` 段（模型注册表 / 角色绑定 / 多模态回退链）与
 extensions_config.json 的 ``tools`` 加载到进程内运行时状态：
 
@@ -26,7 +26,7 @@ CWD）；文件存在但解析失败为 ``CONFIG_INVALID`` fail loud（半生效
 
 热重载地基：``register_reload_callback`` 注册重载后回调（轻量状态重置），
 ``load_all_config`` 每次完成即通知全部回调——重资源（引擎 / 池）重建由
-P0-6 lifespan 装配时按需接线，本模块只提供通知机制。
+app 层 lifespan 装配时按需接线，本模块只提供通知机制。
 """
 
 from __future__ import annotations
@@ -83,7 +83,8 @@ runtime_llm_config: LlmConfig = LlmConfig()
 #: extensions_config.json 解析结果（工具清单）。
 extensions_config: ExtensionsConfig = ExtensionsConfig()
 
-#: 最近一次成功加载使用的 config.yaml 路径（P2 注册表管理写路径消费——
+#: 最近一次成功加载使用的 config.yaml 路径（注册表管理服务
+#: ``registry_admin`` 写路径消费——
 #: 管理面原子持久化必须落在进程实际加载的同一文件上；None = 尚未加载）。
 _loaded_config_yaml_path: Path | None = None
 
@@ -155,7 +156,8 @@ def load_config_yaml(path: Path | None = None, *, config_dir: Path | None = None
     yaml_path = path or (config_dir / "config.yaml" if config_dir else _CONFIG_YAML_PATH)
     if not yaml_path.is_file():
         logger.debug("config.yaml 不存在 (path={})，跳过加载", yaml_path)
-        # 文件缺失为合法状态：仍记录解析路径——P2 注册表管理写路径在
+        # 文件缺失为合法状态：仍记录解析路径——注册表管理写路径
+        # （``registry_admin``）在
         # 首次部署（尚无 config.yaml）时经本路径创建该文件。
         _loaded_config_yaml_path = yaml_path
         return runtime_llm_config
@@ -306,7 +308,7 @@ def load_extensions_config(
 def load_all_config(*, config_dir: Path | None = None) -> tuple[LlmConfig, ExtensionsConfig]:
     """一次性加载 config.yaml + extensions_config.json 并通知重载回调。
 
-    在 app lifespan（P0-6 装配）最先调用（先于 pool_manager.start()）。
+    在 app lifespan 启动序列（见 ``app/main.py``）最先调用（先于 ``pool_manager.start()``）。
     同步是知情决策：启动路径一次性、事件循环尚未服务请求，毫秒级本地
     文件读零影响；重资源热重建由重载回调 / lifespan 接线承担。
 
@@ -341,8 +343,8 @@ def get_loaded_config_yaml_path() -> Path:
 
     优先返回最近一次 :func:`load_config_yaml` 实际解析的路径（显式
     ``path`` / ``config_dir`` / CWD 相对默认三者中实际生效者——含文件
-    缺失的合法跳过形态）；从未加载过时回落 CWD 相对默认路径。P2 注册表
-    管理的原子持久化必须落在进程实际加载的同一文件上——经本访问器取径。
+    缺失的合法跳过形态）；从未加载过时回落 CWD 相对默认路径。注册表
+    管理服务的原子持久化必须落在进程实际加载的同一文件上——经本访问器取径。
 
     Returns:
         当前绑定的 :class:`Path`（未加载过 = CWD 相对 ``config.yaml``）。
@@ -356,8 +358,8 @@ def apply_llm_config_to_runtime(config: LlmConfig) -> None:
     """将 :class:`LlmConfig` 整体应用到运行时状态（最小公开重建入口）。
 
     与 :func:`load_config_yaml` 的差异：入参是内存模型而非文件——供
-    「已有可信配置对象、需整体换血运行时」的消费面使用（P2 注册表管理
-    的**回滚路径**：热重建失败后把写前快照恢复到运行时）。三步与
+    「已有可信配置对象、需整体换血运行时」的消费面使用（注册表管理
+    服务 ``registry_admin`` 的**回滚路径**：热重建失败后把写前快照恢复到运行时）。三步与
     ``load_config_yaml`` 成功尾段完全一致（runtime_llm_config 赋值 →
     解析器重建 → 回退链记录），保证两条路径行为不漂移。
 
@@ -373,7 +375,7 @@ def apply_llm_config_to_runtime(config: LlmConfig) -> None:
 def setup_logging_from_settings(settings: Settings) -> None:
     """Settings.log → core ``setup_logging`` 接线（app lifespan 启动期调用）。
 
-    依赖方向 config → core（合法）；core 不感知 config（chunk 边界），
+    依赖方向 config → core（合法；core 不反向感知 config），
     由本函数完成 ``LogConfig`` → ``core.logging_models.LoggingConfig``
     的字段映射。
 

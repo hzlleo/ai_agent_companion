@@ -6,7 +6,7 @@
     - :func:`session_scope`   —— ``async with`` 作用域封装（提交 / 回滚 /
       关闭一体；服务层主入口）
     - :func:`get_async_db`    —— FastAPI ``Depends`` 形态的 async generator
-      （P0-6 app 层装配时直接 ``Depends(get_async_db)``；本模块不 import
+      （app 层装配时直接 ``Depends(get_async_db)``；本模块不 import
       FastAPI——纯 async generator 契约）
 
 Session 关闭异常防御：请求任务取消与中间件清理竞争时 ``close()`` 可能
@@ -101,7 +101,7 @@ async def session_scope() -> AsyncGenerator[AsyncSession, None]:
 async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI 依赖注入形态：获取异步 Session（请求结束自动关闭）。
 
-    P0-6 app 层装配::
+    app 层依赖注入装配示例::
 
         @app.get("/items")
         async def list_items(db: AsyncSession = Depends(get_async_db)):

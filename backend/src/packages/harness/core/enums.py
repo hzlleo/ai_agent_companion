@@ -3,13 +3,13 @@
 使用 Python 3.12 ``StrEnum``，所有枚举值可直接作为字符串使用
 （如存入数据库、序列化为 JSON、用于 API 响应）。
 
-本模块只承载**跨域通用**枚举（P0-2 交付面）：
+本模块只承载**跨域通用**枚举：
 
 - ``Locale`` —— i18n locale 值域（context / i18n / logging 共用）；
 - ``TaskStatus`` —— 后台任务状态值域（background_tasks / 后续 duty 调度共用）。
 
 各业务域专属枚举（persona 状态机 / chat 会话状态 / usage 维度等）由
-各自域包定义（后续 chunk 交付），core 不前置实现。
+各自域包定义，core 不前置实现。
 """
 
 from __future__ import annotations

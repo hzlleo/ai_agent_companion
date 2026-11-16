@@ -4,7 +4,7 @@
 # 本工程环境管理约定：
 #   - pixi 仅管理 Python 解释器 + 系统工具（见 backend/pixi.toml）；
 #   - 全部 Python 包依赖（运行时 + dev extras）在此声明；
-#   - P0 决策：NO Redis——缓存走 core 进程内 TTL 缓存（harness/core/cache.py）。
+#   - 工程决策：NO Redis——缓存走 core 进程内 TTL 缓存（harness/core/cache.py）。
 
 [project]
 name = "ai-agent-companion-backend"
@@ -95,7 +95,7 @@ indent-style = "space"
 # ---------------------------------------------------------------------------
 # testpaths 与 backend/pixi.toml tasks 保持一致：
 #   - src/tests                    — 单元（unit/）+ 集成（integration/）测试
-#   - src/packages/harness        — harness 域包内嵌测试（后续 chunk 落地）
+#   - src/packages/harness        — harness 域包内嵌测试（当前无；域包自带测试时自动并入收集）
 # 覆盖率参数（--cov / --cov-fail-under）由 pixi 各测试任务按 scope 分别指定，
 # 不放在 addopts 中全局生效（逐模块门禁由 coverage-gates 承担）。
 [tool.pytest.ini_options]
@@ -143,10 +143,14 @@ exclude = [
     'src/tests/',
 ]
 
-# 第三方库缺 stubs（types-PyYAML 未入依赖清单——锁定决策不新增依赖）：
-# 忽略 import-untyped / import-not-found。
+# 第三方库缺 stubs / py.typed（stub 包均未入依赖清单——锁定决策不新增
+# 依赖）：忽略 import-untyped / import-not-found。
+# - yaml：types-PyYAML 未入依赖清单；
+# - aiomysql：0.3.2 未随包发布 py.typed（harness/pools/seekdb_compat.py
+#   静态导入消费——代码零 type: ignore 的文档化豁免面）。
 [[tool.mypy.overrides]]
 module = [
     "yaml",
+    "aiomysql",
 ]
 ignore_missing_imports = true

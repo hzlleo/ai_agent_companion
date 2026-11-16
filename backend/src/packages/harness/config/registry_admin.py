@@ -1,4 +1,4 @@
-"""LLM 注册表管理服务——config.yaml 写路径（P2 chunk 1 管理面后端）。
+"""LLM 注册表管理服务——config.yaml 写路径（/api/v1/models 管理面后端）。
 
 链路顺序（单一真相，文档化于 docs/backend/llm.md 注册表管理一节）::
 
@@ -392,7 +392,9 @@ class RegistryAdminService:
             await self._persist_and_rebuild(
                 new_config, snapshot=current.model_copy(deep=True), yaml_path=path
             )
-        return await self.state()
+            # 状态快照在写锁内读取并返回——锁外读会与下一次写突变的
+            # 校验→持久化窗口交错（读到半更新视图）
+            return await self.state()
 
     async def update_entry(
         self, name: str, req: ModelEntryUpdateDTO, *, yaml_path: Path | None = None
@@ -449,7 +451,9 @@ class RegistryAdminService:
             await self._persist_and_rebuild(
                 new_config, snapshot=current.model_copy(deep=True), yaml_path=path
             )
-        return await self.state()
+            # 状态快照在写锁内读取并返回——锁外读会与下一次写突变的
+            # 校验→持久化窗口交错（读到半更新视图）
+            return await self.state()
 
     async def delete_entry(self, name: str, *, yaml_path: Path | None = None) -> RegistryStateDTO:
         """删除模型条目（角色绑定守卫：仍承接任一角色的条目禁止删除）。
@@ -506,7 +510,9 @@ class RegistryAdminService:
             await self._persist_and_rebuild(
                 new_config, snapshot=current.model_copy(deep=True), yaml_path=path
             )
-        return await self.state()
+            # 状态快照在写锁内读取并返回——锁外读会与下一次写突变的
+            # 校验→持久化窗口交错（读到半更新视图）
+            return await self.state()
 
     async def _persist_and_rebuild(
         self, new_config: LlmConfig, *, snapshot: LlmConfig, yaml_path: Path

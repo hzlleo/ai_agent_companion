@@ -6,6 +6,7 @@
     - ``_is_sensitive_key``: 判断 key 是否为敏感字段
     - ``_is_bool_value``: 判断值是否为布尔型
     - ``_is_numeric_value``: 判断值是否为纯数字
+    - ``parse_bool_answer``: 严格解析布尔应答（y/yes/true/n/no/false）
     - ``stringify_env_value``: 将值转换为 .env 字符串格式
 
 依赖 ``wizard_ui._FIELD_LABELS`` 提供字段中文标签映射。
@@ -108,6 +109,27 @@ def _is_numeric_value(value: str) -> bool:
     if not value:
         return False
     return value.lstrip("-").isdigit()
+
+
+def parse_bool_answer(value: str) -> bool | None:
+    """严格解析布尔应答字面量（大小写不敏感）。
+
+    合法字面量：``y`` / ``yes`` / ``true`` → True；``n`` / ``no`` /
+    ``false`` → False。交互提示与注入式应答共用本判定，非法输入不
+    默认可 / 默认否——由调用方按「重新提示」或「按未提供处理」。
+
+    Args:
+        value: 用户输入 / 注入应答的原始字符串（前后空白容忍）。
+
+    Returns:
+        解析出的布尔值；无效应答（含空串）返回 ``None``。
+    """
+    normalized = value.strip().lower()
+    if normalized in ("y", "yes", "true"):
+        return True
+    if normalized in ("n", "no", "false"):
+        return False
+    return None
 
 
 def stringify_env_value(value: str | int | bool | float) -> str:

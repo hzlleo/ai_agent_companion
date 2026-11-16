@@ -1,4 +1,4 @@
-"""LLM 注册表管理 DTO——/api/v1/models 管理面的传输契约（P2 chunk 1）。
+"""LLM 注册表管理 DTO——/api/v1/models 管理面的传输契约。
 
 契约分层：
 

@@ -11,7 +11,8 @@
   ``str.format`` 插值（``details`` 字段透传）。
 
 通知文案模板（非 ErrorCode 体系，``notification.<场景>`` 小写点分风格）
-在对应域 chunk 落地时再入表——P0-2 无通知域。
+不设预置条目——需要通知文案的域在各自落地时按本表条目形态登记
+（当前表内无此类键）。
 """
 
 from __future__ import annotations
@@ -100,7 +101,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh-CN": "模型不存在",
         "en": "Model not found",
     },
-    # --- 平台通道（P3 channels 域） ---
+    # --- 平台通道（channels 域） ---
     "CHANNEL_DISABLED": {
         "zh-CN": "该平台通道未启用",
         "en": "This platform channel is not enabled",

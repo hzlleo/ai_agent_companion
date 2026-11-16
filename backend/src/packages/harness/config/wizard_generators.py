@@ -6,22 +6,27 @@
     - ``generate_env_content``: 基于模板和用户值生成 .env 文件内容
     - ``mask_sensitive``: 敏感值打码（用于摘要展示）
     - ``write_config_files``: 写入 .env / config.yaml / extensions_config.json
+      （后两者覆写既有相异文件前需经确认通道放行）
 
-路径常量（``ENV_EXAMPLE`` / ``ENV_FILE`` 等）定义在 ``wizard.py``（facade）
-中，本模块通过 ``import packages.harness.config.wizard as _w`` 延迟访问——
-函数体内引用 ``_w.ENV_EXAMPLE`` 等属性发生在运行时（wizard.py 完成加载
-后），以便测试 ``monkeypatch.setattr("packages.harness.config.wizard.ENV_FILE", ...)``
-后本模块函数能感知到 patched 值。
+路径常量（``ENV_EXAMPLE`` / ``ENV_FILE`` 等）定义在
+:mod:`packages.harness.config.wizard_paths`（两模块共享的叶子模块，
+无循环依赖）；本模块经模块对象限定访问（函数体内解析
+``wizard_paths.ENV_EXAMPLE`` 等属性），因此测试
+``monkeypatch.setattr(wizard_paths, "ENV_FILE", ...)`` 一次替换即对
+全部消费方生效。
 
-这种「模块对象延迟属性访问」是处理 facade 循环依赖的标准模式：
-``import`` 时仅捕获模块对象引用，不访问其属性，因此不会触发 ImportError。
+步骤定义（``_STEP_DEFINITIONS``）覆盖 .env.example 的全部分节前缀
+（SERVER / DATABASE / LOG / POOLS / LLM / SEEKDB / TELEGRAM / QQ /
+DUTY / DREAM_SCHEDULE / SCHEDULER / TOOLS_SANDBOX / VOICE_TTS /
+VOICE_ASR / ENV），与模板分节顺序一致。
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
-import packages.harness.config.wizard as _w
+from packages.harness.config import wizard_paths
 from packages.harness.config.wizard_dtos import (
     SetupConfigFileEntry,
     SetupField,
@@ -30,19 +35,30 @@ from packages.harness.config.wizard_dtos import (
 )
 from packages.harness.config.wizard_fields import _is_sensitive_key
 from packages.harness.config.wizard_parsers import _ENV_KEY_PATTERN, parse_env_template
+from packages.harness.config.wizard_ui import _print_error, _print_info
 
 # ---------------------------------------------------------------------------
 # 常量
 # ---------------------------------------------------------------------------
 
 # 步骤定义: (步骤名, 匹配前缀列表)
-# 按配置域分组，与 .env.example 分节顺序一致
+# 按配置域分组，与 .env.example 分节顺序一致（gen-examples 产物的
+# 分节顺序 = scripts/generate_examples_env.py 的 _ENV_SECTIONS 顺序）
 _STEP_DEFINITIONS: list[tuple[str, list[str]]] = [
     ("服务配置", ["SERVER_"]),
     ("数据库配置", ["DATABASE_"]),
     ("日志配置", ["LOG_"]),
     ("连接池配置", ["POOLS_"]),
     ("LLM 端点配置", ["LLM_"]),
+    ("SeekDB 检索配置", ["SEEKDB_"]),
+    ("Telegram 通道配置", ["TELEGRAM_"]),
+    ("QQ 通道配置", ["QQ_"]),
+    ("值班轮配置", ["DUTY_"]),
+    ("梦境调度配置", ["DREAM_SCHEDULE_"]),
+    ("中央调度器配置", ["SCHEDULER_"]),
+    ("工具沙盒配置", ["TOOLS_SANDBOX_"]),
+    ("语音合成配置", ["VOICE_TTS_"]),
+    ("语音识别配置", ["VOICE_ASR_"]),
     ("其他配置", ["ENV"]),
 ]
 
@@ -62,7 +78,7 @@ def build_setup_schema() -> SetupSchema:
         每个 step 包含 ``name`` 和 ``fields`` 列表，每个 field 包含
         ``key`` / ``label`` / ``type`` / ``default``。
     """
-    fields = parse_env_template(_w.ENV_EXAMPLE)
+    fields = parse_env_template(wizard_paths.ENV_EXAMPLE)
 
     steps: list[SetupStep] = []
     for step_name, prefixes in _STEP_DEFINITIONS:
@@ -149,6 +165,42 @@ def mask_sensitive(values: dict[str, str]) -> dict[str, str]:
     return result
 
 
+def _write_managed_file(
+    output: Path,
+    content: str,
+    *,
+    confirm_overwrite: Callable[[Path], bool] | None,
+) -> None:
+    """写入 registry_admin 管理的结构化配置文件（覆写需确认）。
+
+    目标文件（config.yaml / extensions_config.json）不存在或与待写
+    内容一致时直接写入；已存在且内容相异时打印中文警告（文件位置 /
+    registry_admin 管理面语义 / ``.bak-<epoch-ms>`` 备份恢复路径），
+    经 ``confirm_overwrite`` 确认通道放行后才覆写——通道未提供或
+    拒绝时跳过写入并提示（fail-safe：不静默丢弃既有管理内容）。
+
+    Args:
+        output: 目标输出路径。
+        content: 待写入的模板渲染内容。
+        confirm_overwrite: 覆写确认通道（收到目标路径，返回是否放行
+            覆写）；``None`` 时按拒绝处理。
+    """
+    if not output.exists() or output.read_text(encoding="utf-8") == content:
+        output.write_text(content, encoding="utf-8")
+        return
+
+    _print_error(f"检测到已存在的管理面配置文件，内容与模板不同: {output}")
+    _print_error(
+        "  该文件由 registry_admin 管理面维护（LLM 模型注册表 / 角色绑定 / 多模态回退链）。"
+    )
+    _print_error("  覆写将丢弃现有内容；历史版本可从同目录 .bak-<epoch-ms> 备份文件恢复。")
+    approved = confirm_overwrite(output) if confirm_overwrite is not None else False
+    if not approved:
+        _print_info(f"已跳过覆写（未确认）: {output}")
+        return
+    output.write_text(content, encoding="utf-8")
+
+
 def write_config_files(
     values: dict[str, str],
     *,
@@ -159,12 +211,16 @@ def write_config_files(
     env_output: Path | None = None,
     config_output: Path | None = None,
     extensions_output: Path | None = None,
+    confirm_overwrite: Callable[[Path], bool] | None = None,
 ) -> dict[str, str]:
     """写入三个配置文件。
 
-    - .env: 基于 .env.example 模板，用 ``values`` 替换对应字段
-    - config.yaml: 从 config.example.yaml 复制（结构化配置，用户可手动编辑）
+    - .env: 基于 .env.example 模板，用 ``values`` 替换对应字段（保留
+      既有合并语义——既有值作为默认值回流，无条件写入）
+    - config.yaml: 从 config.example.yaml 复制（已存在且内容相异时
+      需经 ``confirm_overwrite`` 确认，见 :func:`_write_managed_file`）
     - extensions_config.json: 从 extensions_config.example.json 复制
+      （覆写确认语义同 config.yaml）
 
     Args:
         values: 用户输入的 .env 配置值。
@@ -175,17 +231,20 @@ def write_config_files(
         env_output: 自定义 .env 输出路径（默认 ENV_FILE）。
         config_output: 自定义 config.yaml 输出路径（默认 CONFIG_FILE）。
         extensions_output: 自定义 extensions 输出路径（默认 EXTENSIONS_FILE）。
+        confirm_overwrite: 覆写确认通道（config.yaml / extensions_config.json
+            已存在且内容相异时调用；``None`` = 拒绝覆写）。
 
     Returns:
         ``{filename: content}`` 字典，包含三个文件的内容（用于预览/dry-run）。
     """
-    # 路径常量通过 _w 延迟访问，以便测试 monkeypatch wizard.ENV_FILE 等后能感知
-    env_tmpl = env_template or _w.ENV_EXAMPLE
-    config_tmpl = config_template or _w.CONFIG_EXAMPLE
-    ext_tmpl = extensions_template or _w.EXTENSIONS_EXAMPLE
-    env_out = env_output or _w.ENV_FILE
-    config_out = config_output or _w.CONFIG_FILE
-    ext_out = extensions_output or _w.EXTENSIONS_FILE
+    # 路径常量经 wizard_paths 模块对象限定访问，测试 monkeypatch
+    # wizard_paths.ENV_FILE 等一次即对全部消费方生效
+    env_tmpl = env_template or wizard_paths.ENV_EXAMPLE
+    config_tmpl = config_template or wizard_paths.CONFIG_EXAMPLE
+    ext_tmpl = extensions_template or wizard_paths.EXTENSIONS_EXAMPLE
+    env_out = env_output or wizard_paths.ENV_FILE
+    config_out = config_output or wizard_paths.CONFIG_FILE
+    ext_out = extensions_output or wizard_paths.EXTENSIONS_FILE
 
     # 生成 .env 内容（模板替换）
     env_content = generate_env_content(env_tmpl, values)
@@ -204,8 +263,9 @@ def write_config_files(
     if dry_run:
         return result
 
+    # .env 保留既有合并语义（无条件写入——既有值已作为默认值并入 values）
     env_out.write_text(env_content, encoding="utf-8")
-    config_out.write_text(config_content, encoding="utf-8")
-    ext_out.write_text(ext_content, encoding="utf-8")
+    _write_managed_file(config_out, config_content, confirm_overwrite=confirm_overwrite)
+    _write_managed_file(ext_out, ext_content, confirm_overwrite=confirm_overwrite)
 
     return result

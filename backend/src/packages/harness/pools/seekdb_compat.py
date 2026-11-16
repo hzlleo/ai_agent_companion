@@ -1,12 +1,14 @@
-"""aiomysql 类型化访问面——SeekDB 连接池装配 / 密码解析 / 错误基类（兼容层）。
+"""aiomysql 类型化访问面——SeekDB 连接池装配 / 密码解析 / 错误基类。
 
-为什么存在本模块（文档化工程决策）：
+工程约定（文档化决策）：
 
-    - aiomysql 0.3.2 未随包发布 ``py.typed`` 标记——mypy 严格模式拒绝
-      直连 ``import aiomysql``（import-untyped）；本工程约束不允许新增
-      依赖（stub 包）也不允许修改 pyproject —— 故经 ``importlib`` 动态
-      加载 + Protocol 类型面收口：真实池 / 连接 / 游标对象为鸭子类型，
-      本模块声明的 Protocol 即调用方依赖的全部表面；
+    - aiomysql 0.3.2 未随包发布 ``py.typed`` 标记——静态
+      ``import aiomysql`` 在 mypy 严格模式下属 import-untyped。工程约定
+      在 ``backend/pyproject.toml`` 的 ``[tool.mypy]`` overrides 中为
+      aiomysql 单模块开启 ``ignore_missing_imports``（配置级豁免，代码
+      零 ``type: ignore`` / 无运行期动态导入）；驱动对象经 Protocol
+      类型面收口：真实池 / 连接 / 游标对象为鸭子类型，本模块声明的
+      Protocol 即调用方依赖的全部表面；
     - SeekDB（v1.4.0）官方仅文档化 PyMySQL / mysqlclient 驱动，**aiomysql
       无官方背书**（MySQL 线协议标准，大概率可用）——原生 async 符合
       本工程约束（I/O 全 async），选定 aiomysql 为默认驱动并文档化
@@ -20,13 +22,12 @@
 
 from __future__ import annotations
 
-import importlib
 import os
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
-from types import ModuleType
 from typing import Any, Protocol, cast
 
+import aiomysql
 from loguru import logger
 
 __all__ = [
@@ -37,10 +38,6 @@ __all__ = [
     "resolve_seekdb_password",
     "seekdb_error_base",
 ]
-
-#: aiomysql 模块缓存（importlib 动态加载——见模块 docstring；纯 import
-#: 零连接副作用，模块加载期安全）。
-_AIOMYSQL_MODULE: ModuleType | None = None
 
 
 class SeekDbCursorProtocol(Protocol):
@@ -104,18 +101,6 @@ class SeekDbPoolProtocol(Protocol):
         ...
 
 
-def _load_aiomysql() -> ModuleType:
-    """加载并缓存 aiomysql 模块（importlib 动态加载——mypy 兼容面）。
-
-    Returns:
-        aiomysql 模块对象（进程内缓存——重复调用零开销）。
-    """
-    global _AIOMYSQL_MODULE
-    if _AIOMYSQL_MODULE is None:
-        _AIOMYSQL_MODULE = importlib.import_module("aiomysql")
-    return _AIOMYSQL_MODULE
-
-
 async def create_seekdb_pool(
     *,
     host: str,
@@ -144,8 +129,7 @@ async def create_seekdb_pool(
         符合 :class:`SeekDbPoolProtocol` 的连接池（生命周期归调用方——
         ``close`` + ``wait_closed`` 收口）。
     """
-    module = _load_aiomysql()
-    pool = await module.create_pool(
+    pool = await aiomysql.create_pool(
         minsize=pool_min,
         maxsize=pool_max,
         host=host,
@@ -192,5 +176,4 @@ def seekdb_error_base() -> type[Exception]:
         驱动异常基类（存储层 except 子句的捕获面——运行期 TypeError /
         OperationalError / ProgrammingError 等皆为其子类）。
     """
-    module = _load_aiomysql()
-    return cast("type[Exception]", module.Error)
+    return cast("type[Exception]", aiomysql.Error)

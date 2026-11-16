@@ -1,7 +1,9 @@
 """harness/config wizard 六件套测试——解析 / 生成 / 注入式应答主流程 / CLI。
 
 测试驱动方式：注入式应答（``answers`` 参数 + ``input_fn`` / ``secret_fn``
-注入点 / ``--non-interactive``），永不真实交互。
+注入点 / ``--non-interactive``），永不真实交互；路径重定向经
+``monkeypatch.setattr(wizard_paths, ...)``（两消费模块均经模块对象
+限定访问路径属性，一次替换全局生效）。
 """
 
 from __future__ import annotations
@@ -10,11 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from packages.harness.config import wizard as wizard_module
+from packages.harness.config import wizard_paths
 from packages.harness.config.wizard import (
-    CONFIG_EXAMPLE,
-    ENV_EXAMPLE,
-    EXTENSIONS_EXAMPLE,
+    _BOOL_PROMPT_MAX_ATTEMPTS,
     _prompt_field,
     main,
     run_wizard,
@@ -24,9 +24,11 @@ from packages.harness.config.wizard_fields import (
     _is_bool_value,
     _is_numeric_value,
     _is_sensitive_key,
+    parse_bool_answer,
     stringify_env_value,
 )
 from packages.harness.config.wizard_generators import (
+    _STEP_DEFINITIONS,
     build_setup_schema,
     generate_env_content,
     mask_sensitive,
@@ -54,9 +56,9 @@ from packages.harness.config.wizard_ui import (
 
 async def test_example_templates_exist() -> None:
     """三件套 .example 模板存在（gen-examples 产物契约）。"""
-    assert ENV_EXAMPLE.is_file()
-    assert CONFIG_EXAMPLE.is_file()
-    assert EXTENSIONS_EXAMPLE.is_file()
+    assert wizard_paths.ENV_EXAMPLE.is_file()
+    assert wizard_paths.CONFIG_EXAMPLE.is_file()
+    assert wizard_paths.EXTENSIONS_EXAMPLE.is_file()
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +146,7 @@ async def test_parse_env_template_missing_file_raises(tmp_path: Path) -> None:
 
 async def test_parse_yaml_template_returns_dict() -> None:
     """解析 YAML 模板为顶层 dict。"""
-    data = parse_yaml_template(CONFIG_EXAMPLE)
+    data = parse_yaml_template(wizard_paths.CONFIG_EXAMPLE)
     assert isinstance(data, dict)
     assert "llm" in data
 
@@ -159,7 +161,7 @@ async def test_parse_yaml_template_invalid_structure_raises(tmp_path: Path) -> N
 
 async def test_parse_json_template_returns_dict() -> None:
     """解析 JSON 模板为顶层 dict。"""
-    data = parse_json_template(EXTENSIONS_EXAMPLE)
+    data = parse_json_template(wizard_paths.EXTENSIONS_EXAMPLE)
     assert isinstance(data, dict)
     assert "tools" in data
 
@@ -179,7 +181,7 @@ async def test_parse_json_template_invalid_structure_raises(tmp_path: Path) -> N
 
 async def test_generate_env_content_replaces_values_only() -> None:
     """env 内容生成：仅替换命中 key，模板结构（注释/空行）保留。"""
-    template = ENV_EXAMPLE
+    template = wizard_paths.ENV_EXAMPLE
     values = {"SERVER_PORT": "9000", "DATABASE_TYPE": "sqlite"}
     content = generate_env_content(template, values)
     lines = content.splitlines()
@@ -230,15 +232,58 @@ async def test_build_setup_schema_groups_steps() -> None:
     assert schema.config_files["extensions"].output == "extensions_config.json"
 
 
+async def test_step_definitions_cover_all_settings_scalar_env_fields() -> None:
+    """步骤定义全量覆盖：九个分节配置类的全部标量 env 字段均有步骤承接。"""
+    from packages.harness.config.models import (
+        AsrSettings,
+        DreamScheduleSettings,
+        DutySettings,
+        QqChannelSettings,
+        SchedulerSettings,
+        SeekDBSettings,
+        TelegramSettings,
+        ToolsSandboxSettings,
+        TtsSettings,
+    )
+
+    classes = (
+        TelegramSettings,
+        TtsSettings,
+        AsrSettings,
+        QqChannelSettings,
+        SeekDBSettings,
+        DutySettings,
+        DreamScheduleSettings,
+        SchedulerSettings,
+        ToolsSandboxSettings,
+    )
+    all_prefixes = [prefix for _, prefixes in _STEP_DEFINITIONS for prefix in prefixes]
+    for cls in classes:
+        env_prefix = cls.model_config.get("env_prefix", "")
+        for field_name in cls.model_fields:
+            env_name = f"{env_prefix}{field_name.upper()}"
+            matched = any(env_name.startswith(prefix) for prefix in all_prefixes)
+            assert matched, f"{cls.__name__} 的 env 字段 {env_name} 未被任何向导步骤覆盖"
+
+
+async def test_step_definitions_match_env_example_key_surface() -> None:
+    """步骤定义 ↔ .env.example 键面闭环：模板每个 key 均被某步骤承接。"""
+    fields = parse_env_template(wizard_paths.ENV_EXAMPLE)
+    all_prefixes = [prefix for _, prefixes in _STEP_DEFINITIONS for prefix in prefixes]
+    for f in fields:
+        matched = any(f.key.startswith(prefix) for prefix in all_prefixes)
+        assert matched, f".env.example 的 key {f.key} 未被任何向导步骤覆盖"
+
+
 async def test_write_config_files_dry_run_no_write(tmp_path: Path) -> None:
     """dry_run：返回内容预览但不落盘。"""
     out_env = tmp_path / "out.env"
     result = write_config_files(
         {"SERVER_PORT": "9000"},
         dry_run=True,
-        env_template=ENV_EXAMPLE,
-        config_template=CONFIG_EXAMPLE,
-        extensions_template=EXTENSIONS_EXAMPLE,
+        env_template=wizard_paths.ENV_EXAMPLE,
+        config_template=wizard_paths.CONFIG_EXAMPLE,
+        extensions_template=wizard_paths.EXTENSIONS_EXAMPLE,
         env_output=out_env,
         config_output=tmp_path / "out.yaml",
         extensions_output=tmp_path / "out.json",
@@ -249,22 +294,26 @@ async def test_write_config_files_dry_run_no_write(tmp_path: Path) -> None:
 
 
 async def test_write_config_files_writes_three_files(tmp_path: Path) -> None:
-    """写入三件套：.env 值替换 + yaml/json 模板复制。"""
+    """写入三件套：.env 值替换 + yaml/json 模板复制（目标不存在——正常写入）。"""
     out_env = tmp_path / "out.env"
     out_yaml = tmp_path / "out.yaml"
     out_json = tmp_path / "out.json"
     write_config_files(
         {"DATABASE_TYPE": "sqlite"},
-        env_template=ENV_EXAMPLE,
-        config_template=CONFIG_EXAMPLE,
-        extensions_template=EXTENSIONS_EXAMPLE,
+        env_template=wizard_paths.ENV_EXAMPLE,
+        config_template=wizard_paths.CONFIG_EXAMPLE,
+        extensions_template=wizard_paths.EXTENSIONS_EXAMPLE,
         env_output=out_env,
         config_output=out_yaml,
         extensions_output=out_json,
     )
     assert "DATABASE_TYPE=sqlite" in out_env.read_text(encoding="utf-8")
-    assert out_yaml.read_text(encoding="utf-8") == CONFIG_EXAMPLE.read_text(encoding="utf-8")
-    assert out_json.read_text(encoding="utf-8") == EXTENSIONS_EXAMPLE.read_text(encoding="utf-8")
+    assert out_yaml.read_text(encoding="utf-8") == wizard_paths.CONFIG_EXAMPLE.read_text(
+        encoding="utf-8"
+    )
+    assert out_json.read_text(encoding="utf-8") == (
+        wizard_paths.EXTENSIONS_EXAMPLE.read_text(encoding="utf-8")
+    )
 
 
 async def test_write_config_files_env_key_not_in_template_ignored(tmp_path: Path) -> None:
@@ -272,14 +321,118 @@ async def test_write_config_files_env_key_not_in_template_ignored(tmp_path: Path
     out_env = tmp_path / "out.env"
     write_config_files(
         {"HACKED_KEY": "x"},
-        env_template=ENV_EXAMPLE,
-        config_template=CONFIG_EXAMPLE,
-        extensions_template=EXTENSIONS_EXAMPLE,
+        env_template=wizard_paths.ENV_EXAMPLE,
+        config_template=wizard_paths.CONFIG_EXAMPLE,
+        extensions_template=wizard_paths.EXTENSIONS_EXAMPLE,
         env_output=out_env,
         config_output=tmp_path / "y.yaml",
         extensions_output=tmp_path / "z.json",
     )
     assert "HACKED_KEY" not in out_env.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# write_config_files 覆写确认（config.yaml / extensions_config.json）
+# ---------------------------------------------------------------------------
+
+
+def _write_outputs_with_existing_config(tmp_path: Path, existing: str) -> tuple[Path, Path]:
+    """构造「config.yaml 已存在且内容相异」的输出环境，返回 (env, yaml) 路径。"""
+    out_env = tmp_path / "out.env"
+    out_yaml = tmp_path / "out.yaml"
+    out_yaml.write_text(existing, encoding="utf-8")
+    return out_env, out_yaml
+
+
+async def test_write_config_files_overwrite_confirmed_writes(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """覆写确认放行：既有相异 config.yaml 被模板内容覆写。"""
+    existing = "llm:\n  models: []\n  role_bindings:\n    chat: registry-managed-entry\n"
+    out_env, out_yaml = _write_outputs_with_existing_config(tmp_path, existing)
+
+    write_config_files(
+        {"SERVER_PORT": "9000"},
+        env_template=wizard_paths.ENV_EXAMPLE,
+        config_template=wizard_paths.CONFIG_EXAMPLE,
+        extensions_template=wizard_paths.EXTENSIONS_EXAMPLE,
+        env_output=out_env,
+        config_output=out_yaml,
+        extensions_output=tmp_path / "out.json",
+        confirm_overwrite=lambda _path: True,
+    )
+    captured = capsys.readouterr()
+    assert "registry_admin" in captured.out
+    assert out_yaml.read_text(encoding="utf-8") == wizard_paths.CONFIG_EXAMPLE.read_text(
+        encoding="utf-8"
+    )
+    assert "registry-managed-entry" not in out_yaml.read_text(encoding="utf-8")
+
+
+async def test_write_config_files_overwrite_declined_skips(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """覆写确认拒绝：既有相异 config.yaml 原样保留（.env 照常写入）。"""
+    existing = "llm:\n  models: []\n  role_bindings:\n    chat: registry-managed-entry\n"
+    out_env, out_yaml = _write_outputs_with_existing_config(tmp_path, existing)
+
+    write_config_files(
+        {"SERVER_PORT": "9000"},
+        env_template=wizard_paths.ENV_EXAMPLE,
+        config_template=wizard_paths.CONFIG_EXAMPLE,
+        extensions_template=wizard_paths.EXTENSIONS_EXAMPLE,
+        env_output=out_env,
+        config_output=out_yaml,
+        extensions_output=tmp_path / "out.json",
+        confirm_overwrite=lambda _path: False,
+    )
+    captured = capsys.readouterr()
+    assert "已跳过覆写" in captured.out
+    # 既有管理内容原样保留
+    assert "registry-managed-entry" in out_yaml.read_text(encoding="utf-8")
+    # .env 保留既有合并语义（无条件写入）
+    assert "SERVER_PORT=9000" in out_env.read_text(encoding="utf-8")
+
+
+async def test_write_config_files_overwrite_default_declines_without_channel(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """确认通道未提供（None）：既有相异文件按拒绝处理（fail-safe）。"""
+    existing = "llm:\n  models: []\n"
+    out_env, out_yaml = _write_outputs_with_existing_config(tmp_path, existing)
+
+    write_config_files(
+        {"SERVER_PORT": "9000"},
+        env_template=wizard_paths.ENV_EXAMPLE,
+        config_template=wizard_paths.CONFIG_EXAMPLE,
+        extensions_template=wizard_paths.EXTENSIONS_EXAMPLE,
+        env_output=out_env,
+        config_output=out_yaml,
+        extensions_output=tmp_path / "out.json",
+    )
+    assert "已跳过覆写" in capsys.readouterr().out
+    assert out_yaml.read_text(encoding="utf-8") == existing
+
+
+async def test_write_config_files_identical_existing_writes_without_confirm(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """既有文件与模板内容一致：直接写入（无覆写确认交互）。"""
+    template_text = wizard_paths.CONFIG_EXAMPLE.read_text(encoding="utf-8")
+    out_env, out_yaml = _write_outputs_with_existing_config(tmp_path, template_text)
+
+    write_config_files(
+        {"SERVER_PORT": "9000"},
+        env_template=wizard_paths.ENV_EXAMPLE,
+        config_template=wizard_paths.CONFIG_EXAMPLE,
+        extensions_template=wizard_paths.EXTENSIONS_EXAMPLE,
+        env_output=out_env,
+        config_output=out_yaml,
+        extensions_output=tmp_path / "out.json",
+        confirm_overwrite=lambda _path: True,
+    )
+    assert "已跳过覆写" not in capsys.readouterr().out
+    assert out_yaml.read_text(encoding="utf-8") == template_text
 
 
 # ---------------------------------------------------------------------------
@@ -300,14 +453,52 @@ async def test_prompt_field_text_input_and_empty_keeps_current() -> None:
     assert _prompt_field(field, "old", False, input_fn=lambda _: "") == "old"
 
 
-async def test_prompt_field_boolean_y_n_semantics() -> None:
-    """布尔字段：y/yes → true；其他 → false；空输入保留当前值。"""
+async def test_parse_bool_answer_strict_literals() -> None:
+    """严格布尔应答解析：合法字面量全形态 + 非法输入返回 None。"""
+    for raw in ("y", "Y", "yes", "YES", "true", "TRUE", " true "):
+        assert parse_bool_answer(raw) is True, raw
+    for raw in ("n", "N", "no", "NO", "false", "False", " false "):
+        assert parse_bool_answer(raw) is False, raw
+    for raw in ("", "  ", "1", "0", "maybe", "是", "yess", "truthy"):
+        assert parse_bool_answer(raw) is None, raw
+
+
+async def test_prompt_field_boolean_strict_semantics() -> None:
+    """布尔字段严格解析：合法字面量精确映射 true/false。"""
     field = EnvField(key="DATABASE_POOL_PRE_PING", default="true")
     assert _prompt_field(field, "true", False, input_fn=lambda _: "y") == "true"
-    assert _prompt_field(field, "true", False, input_fn=lambda _: "yes") == "true"
+    assert _prompt_field(field, "true", False, input_fn=lambda _: "YES") == "true"
+    assert _prompt_field(field, "false", False, input_fn=lambda _: "true") == "true"
     assert _prompt_field(field, "true", False, input_fn=lambda _: "n") == "false"
+    assert _prompt_field(field, "true", False, input_fn=lambda _: "NO") == "false"
+    assert _prompt_field(field, "true", False, input_fn=lambda _: "false") == "false"
+    # 空输入保留当前值（既有契约不变）
     assert _prompt_field(field, "true", False, input_fn=lambda _: "") == "true"
     assert _prompt_field(field, "false", False, input_fn=lambda _: "") == "false"
+
+
+async def test_prompt_field_boolean_invalid_input_reprompts() -> None:
+    """布尔字段非法输入：重新提示（不默认可/否），合法后返回。"""
+    field = EnvField(key="DATABASE_POOL_PRE_PING", default="true")
+    inputs = iter(["maybe", "1", "y"])
+    calls: list[str] = []
+
+    def _input(prompt: str) -> str:
+        calls.append(prompt)
+        return next(inputs)
+
+    assert _prompt_field(field, "false", False, input_fn=_input) == "true"
+    assert len(calls) == _BOOL_PROMPT_MAX_ATTEMPTS, "非法输入应触发重新提示"
+
+
+async def test_prompt_field_boolean_three_invalid_treated_as_no(
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """布尔字段连续达到重试上限的非法输入：按 n 处理并提示。"""
+    field = EnvField(key="DATABASE_POOL_PRE_PING", default="true")
+    assert _prompt_field(field, "true", False, input_fn=lambda _: "junk") == "false"
+    captured = capsys.readouterr()
+    assert "无效输入" in captured.out
 
 
 async def test_prompt_field_number_rejects_non_numeric() -> None:
@@ -355,9 +546,9 @@ async def test_run_wizard_dry_run_previews_without_writing(
 ) -> None:
     """dry-run：打印预览，不写任何文件。"""
     out_env = tmp_path / "w.env"
-    monkeypatch.setattr(wizard_module, "ENV_FILE", out_env)
-    monkeypatch.setattr(wizard_module, "CONFIG_FILE", tmp_path / "w.yaml")
-    monkeypatch.setattr(wizard_module, "EXTENSIONS_FILE", tmp_path / "w.json")
+    monkeypatch.setattr(wizard_paths, "ENV_FILE", out_env)
+    monkeypatch.setattr(wizard_paths, "CONFIG_FILE", tmp_path / "w.yaml")
+    monkeypatch.setattr(wizard_paths, "EXTENSIONS_FILE", tmp_path / "w.json")
 
     run_wizard(dry_run=True, non_interactive=True)
     captured = capsys.readouterr()
@@ -372,9 +563,9 @@ async def test_run_wizard_non_interactive_writes_defaults(
     out_env = tmp_path / "w.env"
     out_yaml = tmp_path / "w.yaml"
     out_json = tmp_path / "w.json"
-    monkeypatch.setattr(wizard_module, "ENV_FILE", out_env)
-    monkeypatch.setattr(wizard_module, "CONFIG_FILE", out_yaml)
-    monkeypatch.setattr(wizard_module, "EXTENSIONS_FILE", out_json)
+    monkeypatch.setattr(wizard_paths, "ENV_FILE", out_env)
+    monkeypatch.setattr(wizard_paths, "CONFIG_FILE", out_yaml)
+    monkeypatch.setattr(wizard_paths, "EXTENSIONS_FILE", out_json)
 
     run_wizard(non_interactive=True)
     env_text = out_env.read_text(encoding="utf-8")
@@ -388,9 +579,9 @@ async def test_run_wizard_injected_answers_flow_to_output(
 ) -> None:
     """注入式应答：answers 中的值流入 .env（测试驱动主路径）。"""
     out_env = tmp_path / "w.env"
-    monkeypatch.setattr(wizard_module, "ENV_FILE", out_env)
-    monkeypatch.setattr(wizard_module, "CONFIG_FILE", tmp_path / "w.yaml")
-    monkeypatch.setattr(wizard_module, "EXTENSIONS_FILE", tmp_path / "w.json")
+    monkeypatch.setattr(wizard_paths, "ENV_FILE", out_env)
+    monkeypatch.setattr(wizard_paths, "CONFIG_FILE", tmp_path / "w.yaml")
+    monkeypatch.setattr(wizard_paths, "EXTENSIONS_FILE", tmp_path / "w.json")
 
     run_wizard(
         non_interactive=False,
@@ -402,15 +593,55 @@ async def test_run_wizard_injected_answers_flow_to_output(
     assert "SERVER_PORT=9100" in env_text
 
 
+async def test_run_wizard_injected_bool_answer_normalized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """注入式布尔应答：合法字面量归一为 true/false 落 .env。"""
+    out_env = tmp_path / "w.env"
+    monkeypatch.setattr(wizard_paths, "ENV_FILE", out_env)
+    monkeypatch.setattr(wizard_paths, "CONFIG_FILE", tmp_path / "w.yaml")
+    monkeypatch.setattr(wizard_paths, "EXTENSIONS_FILE", tmp_path / "w.json")
+
+    run_wizard(
+        non_interactive=False,
+        answers={"DATABASE_POOL_PRE_PING": "n", "SEEKDB_ENABLED": "YES"},
+        confirm="y",
+    )
+    env_text = out_env.read_text(encoding="utf-8")
+    assert "DATABASE_POOL_PRE_PING=false" in env_text
+    assert "SEEKDB_ENABLED=true" in env_text
+
+
+async def test_run_wizard_injected_invalid_bool_falls_back_with_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """注入式布尔应答非法：按未提供处理（回退当前值）并告警。"""
+    out_env = tmp_path / "w.env"
+    monkeypatch.setattr(wizard_paths, "ENV_FILE", out_env)
+    monkeypatch.setattr(wizard_paths, "CONFIG_FILE", tmp_path / "w.yaml")
+    monkeypatch.setattr(wizard_paths, "EXTENSIONS_FILE", tmp_path / "w.json")
+
+    run_wizard(
+        non_interactive=False,
+        answers={"DATABASE_POOL_PRE_PING": "maybe"},
+        confirm="y",
+    )
+    captured = capsys.readouterr()
+    assert "非法布尔值" in captured.out
+    env_text = out_env.read_text(encoding="utf-8")
+    # 回退模板默认值 true
+    assert "DATABASE_POOL_PRE_PING=true" in env_text
+
+
 async def test_run_wizard_existing_env_used_as_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """已有 .env：现有值作为默认值（空应答回退现有值而非模板值）。"""
     existing = tmp_path / "w.env"
     existing.write_text("SERVER_PORT=7777\n", encoding="utf-8")
-    monkeypatch.setattr(wizard_module, "ENV_FILE", existing)
-    monkeypatch.setattr(wizard_module, "CONFIG_FILE", tmp_path / "w.yaml")
-    monkeypatch.setattr(wizard_module, "EXTENSIONS_FILE", tmp_path / "w.json")
+    monkeypatch.setattr(wizard_paths, "ENV_FILE", existing)
+    monkeypatch.setattr(wizard_paths, "CONFIG_FILE", tmp_path / "w.yaml")
+    monkeypatch.setattr(wizard_paths, "EXTENSIONS_FILE", tmp_path / "w.json")
 
     run_wizard(non_interactive=True)
     env_text = existing.read_text(encoding="utf-8")
@@ -423,9 +654,9 @@ async def test_run_wizard_confirm_declined_cancels(
 ) -> None:
     """确认拒绝：不写入任何文件。"""
     out_env = tmp_path / "w.env"
-    monkeypatch.setattr(wizard_module, "ENV_FILE", out_env)
-    monkeypatch.setattr(wizard_module, "CONFIG_FILE", tmp_path / "w.yaml")
-    monkeypatch.setattr(wizard_module, "EXTENSIONS_FILE", tmp_path / "w.json")
+    monkeypatch.setattr(wizard_paths, "ENV_FILE", out_env)
+    monkeypatch.setattr(wizard_paths, "CONFIG_FILE", tmp_path / "w.yaml")
+    monkeypatch.setattr(wizard_paths, "EXTENSIONS_FILE", tmp_path / "w.json")
 
     run_wizard(non_interactive=False, answers={}, confirm="n")
     captured = capsys.readouterr()
@@ -437,10 +668,93 @@ async def test_run_wizard_missing_template_exits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """模板缺失：sys.exit(1) fail fast。"""
-    monkeypatch.setattr(wizard_module, "ENV_EXAMPLE", tmp_path / "nope.env")
+    monkeypatch.setattr(wizard_paths, "ENV_EXAMPLE", tmp_path / "nope.env")
     with pytest.raises(SystemExit) as exc_info:
         run_wizard(non_interactive=True)
     assert exc_info.value.code == 1
+
+
+async def test_run_wizard_injected_overwrite_confirmed_writes_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """注入式覆写确认：confirm_overwrite=y → 既有相异 config.yaml 被覆写。"""
+    out_env = tmp_path / "w.env"
+    out_yaml = tmp_path / "w.yaml"
+    out_yaml.write_text(
+        "llm:\n  models: []\n  role_bindings:\n    chat: keep-me\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(wizard_paths, "ENV_FILE", out_env)
+    monkeypatch.setattr(wizard_paths, "CONFIG_FILE", out_yaml)
+    monkeypatch.setattr(wizard_paths, "EXTENSIONS_FILE", tmp_path / "w.json")
+
+    run_wizard(
+        non_interactive=False,
+        answers={"confirm_overwrite": "y"},
+        confirm="y",
+    )
+    captured = capsys.readouterr()
+    assert "已跳过覆写" not in captured.out
+    assert "keep-me" not in out_yaml.read_text(encoding="utf-8")
+
+
+async def test_run_wizard_injected_overwrite_default_declines_skips_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """注入式覆写默认拒绝：confirm_overwrite 缺省 → 跳过 config.yaml 并提示。"""
+    out_env = tmp_path / "w.env"
+    out_yaml = tmp_path / "w.yaml"
+    out_yaml.write_text(
+        "llm:\n  models: []\n  role_bindings:\n    chat: keep-me\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(wizard_paths, "ENV_FILE", out_env)
+    monkeypatch.setattr(wizard_paths, "CONFIG_FILE", out_yaml)
+    monkeypatch.setattr(wizard_paths, "EXTENSIONS_FILE", tmp_path / "w.json")
+
+    run_wizard(non_interactive=False, answers={}, confirm="y")
+    captured = capsys.readouterr()
+    assert "已跳过覆写" in captured.out
+    # 既有管理内容保留；.env 照常写入（合并语义不受覆写确认影响）
+    assert "keep-me" in out_yaml.read_text(encoding="utf-8")
+    assert out_env.exists()
+
+
+async def test_run_wizard_injected_overwrite_invalid_bool_declines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """注入式覆写确认非法布尔值：按未提供处理（拒绝）并告警。"""
+    out_yaml = tmp_path / "w.yaml"
+    out_yaml.write_text("llm:\n  models: []\n", encoding="utf-8")
+    monkeypatch.setattr(wizard_paths, "ENV_FILE", tmp_path / "w.env")
+    monkeypatch.setattr(wizard_paths, "CONFIG_FILE", out_yaml)
+    monkeypatch.setattr(wizard_paths, "EXTENSIONS_FILE", tmp_path / "w.json")
+
+    run_wizard(
+        non_interactive=False,
+        answers={"confirm_overwrite": "whatever"},
+        confirm="y",
+    )
+    captured = capsys.readouterr()
+    assert "confirm_overwrite" in captured.out
+    assert "已跳过覆写" in captured.out
+    assert out_yaml.read_text(encoding="utf-8") == "llm:\n  models: []\n"
+
+
+async def test_run_wizard_non_interactive_never_overwrites_diverged_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """非交互模式：既有相异 config.yaml 一律不覆写（无终端确认通道）。"""
+    out_env = tmp_path / "w.env"
+    out_yaml = tmp_path / "w.yaml"
+    out_yaml.write_text(
+        "llm:\n  models: []\n  role_bindings:\n    chat: keep-me\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(wizard_paths, "ENV_FILE", out_env)
+    monkeypatch.setattr(wizard_paths, "CONFIG_FILE", out_yaml)
+    monkeypatch.setattr(wizard_paths, "EXTENSIONS_FILE", tmp_path / "w.json")
+
+    run_wizard(non_interactive=True)
+    assert "keep-me" in out_yaml.read_text(encoding="utf-8")
+    assert "已跳过覆写" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------
@@ -467,9 +781,9 @@ async def test_main_dry_run_flag_dispatch(
 ) -> None:
     """CLI --dry-run 分发到 run_wizard(dry_run=True)。"""
     monkeypatch.setattr("sys.argv", ["wizard.py", "--dry-run"])
-    monkeypatch.setattr(wizard_module, "ENV_FILE", tmp_path / "w.env")
-    monkeypatch.setattr(wizard_module, "CONFIG_FILE", tmp_path / "w.yaml")
-    monkeypatch.setattr(wizard_module, "EXTENSIONS_FILE", tmp_path / "w.json")
+    monkeypatch.setattr(wizard_paths, "ENV_FILE", tmp_path / "w.env")
+    monkeypatch.setattr(wizard_paths, "CONFIG_FILE", tmp_path / "w.yaml")
+    monkeypatch.setattr(wizard_paths, "EXTENSIONS_FILE", tmp_path / "w.json")
     main()
     assert "dry-run" in capsys.readouterr().out
 

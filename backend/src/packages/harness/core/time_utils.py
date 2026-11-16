@@ -5,9 +5,11 @@
 行为差异与时区问题。
 
 - ``now_ms()``   —— 当前时间的 epoch 毫秒（用作 ORM ``default`` / ``onupdate``）
-- ``to_ms(dt)``  —— ``datetime`` → epoch 毫秒（None 安全，返回 0）
+- ``to_ms(dt)``  —— ``datetime`` → epoch 毫秒（None 安全，返回 0；
+  naive datetime 统一按 UTC 解释）
 - ``from_ms(ms)``—— epoch 毫秒 → ``datetime``（仅用于展示/日志，不写库）
-- ``format_duration_ms(ms)`` —— 毫秒 → 人类可读时长（RATIFIED 三档规格）
+- ``format_duration_ms(ms)`` —— 毫秒 → 人类可读时长（三档规格：
+  ≥60000 → X分Y秒，≥1000 → X.Y秒，<1000 → N毫秒）
 """
 
 from __future__ import annotations
@@ -31,19 +33,25 @@ def now_ms() -> int:
 
 
 def to_ms(dt: datetime | None) -> int:
-    """将 ``datetime`` 转换为 epoch 毫秒。
+    """将 ``datetime`` 转换为 epoch 毫秒（naive 统一按 UTC 解释）。
 
     用于将外部 ``datetime``（如 API 查询参数）转换为 DB 比较所需的
     epoch 毫秒整数。``dt`` 为 ``None`` 时返回 0（避免 ``None`` 比较）。
+    naive datetime 的解释约定为 **UTC**（显式 ``replace(tzinfo=UTC)``
+    后取 timestamp）——不随进程本地时区漂移（``datetime.timestamp()``
+    对 naive 值按本地时区解释，跨时区部署会产生相同输入不同结果的
+    漂移；UTC 约定与 ``from_ms`` 的输出时区及 DB 列的 epoch 语义对齐）。
 
     Args:
-        dt: 待转换的 ``datetime``（naive 或 aware 均可）。
+        dt: 待转换的 ``datetime``（naive 按 UTC 解释；aware 原样转换）。
 
     Returns:
         epoch 毫秒整数；``dt`` 为 ``None`` 时返回 0。
     """
     if dt is None:
         return 0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
     return int(dt.timestamp() * 1000)
 
 
@@ -71,7 +79,7 @@ def format_duration_ms(
     unit_seconds: str = "秒",
     unit_minutes: str = "分",
 ) -> str | None:
-    """毫秒 → 人类可读时长字符串（RATIFIED 三档规格）。
+    """毫秒 → 人类可读时长字符串（三档规格）。
 
     规格边界：
 
