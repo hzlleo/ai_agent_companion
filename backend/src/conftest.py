@@ -108,6 +108,51 @@ os.environ["SEEKDB_POOL_MAX"] = "2"
 os.environ["SEEKDB_TEST_PASSWORD"] = "test-only-seekdb-password"
 os.environ["SEEKDB_PASSWORD"] = "test-only-seekdb-password"
 
+# --- Telegram 通道（TELEGRAM_ 前缀 → TelegramSettings；默认关闭 → 测试零
+#     真实连接；S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入
+#     测试。bot token 经 TELEGRAM_TEST_BOT_TOKEN 间接——测试专用值，
+#     不可触达真实 bot；单测经 MockTransport / fake 消费，永不真实连接） ---
+os.environ["TELEGRAM_ENABLED"] = "false"
+os.environ["TELEGRAM_BOT_TOKEN_ENV"] = "TELEGRAM_TEST_BOT_TOKEN"
+os.environ["TELEGRAM_API_BASE"] = "https://api.telegram.org"
+os.environ["TELEGRAM_POLL_TIMEOUT_SECONDS"] = "25"
+os.environ["TELEGRAM_OWNER_CHAT_ID"] = ""
+os.environ["TELEGRAM_BACKOFF_BASE_SECONDS"] = "1.0"
+os.environ["TELEGRAM_BACKOFF_MAX_SECONDS"] = "60.0"
+os.environ["TELEGRAM_STATE_DIR"] = "data/channels"
+# token 本值（bot_token_env 指向的变量 + 默认变量名——测试专用值）
+os.environ["TELEGRAM_TEST_BOT_TOKEN"] = "test-only-telegram-bot-token"
+os.environ["TELEGRAM_BOT_TOKEN"] = "test-only-telegram-bot-token"
+
+# --- 值班轮（DUTY_ 前缀 → DutySettings；默认关闭 → 测试零调度副作用；
+#     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试） ---
+os.environ["DUTY_ENABLED"] = "false"
+os.environ["DUTY_DAILY_AT"] = "22:00"
+os.environ["DUTY_MAX_TOOL_STEPS"] = "8"
+os.environ["DUTY_REPORT_TO_OWNER"] = "true"
+os.environ["DUTY_CHARTER_TEXT"] = ""
+
+# --- 梦境调度（DREAM_SCHEDULE_ 前缀 → DreamScheduleSettings；默认关闭
+#     → 测试零调度副作用；S3 硬覆盖模式） ---
+os.environ["DREAM_SCHEDULE_ENABLED"] = "false"
+os.environ["DREAM_SCHEDULE_DAILY_AT"] = "03:00"
+
+# --- 中央调度器（SCHEDULER_ 前缀 → SchedulerSettings；S3 硬覆盖模式） ---
+os.environ["SCHEDULER_TICK_SECONDS"] = "1.0"
+
+# --- 工具沙盒（TOOLS_SANDBOX_ 前缀 → ToolsSandboxSettings；默认关闭 →
+#     测试零沙盒探测 / 零真实连接；S3 硬覆盖模式——开发者 shell 导出的
+#     同名真实配置不得泄入测试。token 经 SANDBOX_TEST_TOKEN 间接——测试
+#     专用值，不可触达真实沙盒；单测经 MockTransport / fake 消费，永不
+#     真实连接） ---
+os.environ["TOOLS_SANDBOX_ENABLED"] = "false"
+os.environ["TOOLS_SANDBOX_BASE_URL"] = "http://127.0.0.1:8765"
+os.environ["TOOLS_SANDBOX_TOKEN_ENV"] = "SANDBOX_TEST_TOKEN"
+os.environ["TOOLS_SANDBOX_REQUEST_TIMEOUT_SECONDS"] = "15"
+# token 本值（token_env 指向的变量 + 默认变量名——测试专用值）
+os.environ["SANDBOX_TEST_TOKEN"] = "test-only-sandbox-token"
+os.environ["SANDBOX_TOKEN"] = "test-only-sandbox-token"
+
 # --- 运行环境标识（Settings.env → ENV） ---
 os.environ["ENV"] = "test"
 

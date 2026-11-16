@@ -87,7 +87,9 @@ class ModelEntryCreateDTO(BaseModel):
     name: str = Field(min_length=1, max_length=128, description="条目唯一标识")
     provider: str = Field(default="openai_compatible", description="provider 类型")
     base_url: str = Field(min_length=1, description="API 基础 URL（http(s)）")
-    api_key_env: str = Field(default="", max_length=128, description="API Key 环境变量名（空=免鉴权）")
+    api_key_env: str = Field(
+        default="", max_length=128, description="API Key 环境变量名（空=免鉴权）"
+    )
     model: str = Field(min_length=1, max_length=256, description="模型名（provider model 参数）")
     roles: list[ModelRole] = Field(default_factory=list, description="条目承接的角色集")
     concurrency: int | None = Field(default=None, ge=1, description="条目并发上限（None=全局默认）")
@@ -172,8 +174,12 @@ class ModelEntryUpdateDTO(BaseModel):
     api_key_env: str | None = Field(
         default=None, max_length=128, description="新 API Key 环境变量名（None=不变；空串=免鉴权）"
     )
-    model: str | None = Field(default=None, min_length=1, max_length=256, description="新模型名（None=不变）")
-    roles: list[ModelRole] | None = Field(default=None, description="新角色集（None=不变；空列表=清空）")
+    model: str | None = Field(
+        default=None, min_length=1, max_length=256, description="新模型名（None=不变）"
+    )
+    roles: list[ModelRole] | None = Field(
+        default=None, description="新角色集（None=不变；空列表=清空）"
+    )
     concurrency: int | None = Field(
         default=None, ge=1, description="新并发上限（缺席=不变；显式 null=重置全局默认）"
     )
@@ -275,7 +281,9 @@ class RegistryStateDTO(BaseModel):
         role_bindings: 显式角色绑定（角色 → 条目名；优先于条目声明）。
     """
 
-    entries: list[ModelEntryMaskedDTO] = Field(default_factory=list, description="注册表条目（脱敏）")
+    entries: list[ModelEntryMaskedDTO] = Field(
+        default_factory=list, description="注册表条目（脱敏）"
+    )
     role_bindings: dict[str, str] = Field(
         default_factory=dict, description="显式角色绑定（角色 → 条目名）"
     )

@@ -1,0 +1,94 @@
+# ai_agent_companion — 工具沙盒代理独立 Pixi 项目
+#
+# 职责：管理沙盒 Python 3.12 运行时 + dev 工具 + 本树全部 tasks。
+# 本文件与 pyproject.toml 同目录（docker/tool-sandbox-agent/），
+# editable = { path = "." } 解析到本目录。
+# 依赖声明（运行时 + dev extras）在 pyproject.toml，pixi 通过 editable install 读取；
+# pixi 仅管理 Python 解释器 + 系统工具（约束：Python 包依赖单一数据源 = pyproject）。
+#
+# 本树为独立部署单元（docker 镜像经 python:3.12-slim + pip install 构建，
+# 不经 pixi——见本目录 Dockerfile）；pixi 面向本树开发 / 测试 / 静态检查。
+# 运行时依赖最小面：fastapi / uvicorn / pydantic（无 httpx / 无数据库——见 pyproject）。
+#
+# 环境：
+#   default = [dev]   本地开发（runtime + dev 工具：pytest/ruff/mypy）
+#
+# 用法：
+#   cd docker/tool-sandbox-agent && pixi install    # 安装 default 环境
+#   cd docker/tool-sandbox-agent && pixi run tests-unit   # 单元测试（覆盖率 ≥80 enforce）
+#   cd docker/tool-sandbox-agent && pixi run lint    # ruff 静态检查
+#   cd docker/tool-sandbox-agent && pixi run typecheck    # mypy 类型检查
+#
+# 任务名契约：tests-unit / lint / typecheck 为跨树契约名（与 backend 子项目
+# 同名同义）——严禁更名。
+#
+# 鉴权 / 域名允许清单等运行时环境变量见本目录 README.md。
+
+[workspace]
+name = "tool-sandbox-agent"
+version = "0.1.0"
+description = "工具沙盒代理——执行器无关工具的隔离运行时（独立 pixi 项目，与后端零代码共享）"
+channels = [
+    "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/",
+    "conda-forge",
+]
+platforms = ["linux-64"]
+
+# ─── 运行时依赖（仅解释器 + pip 系统工具；Python 包依赖在 pyproject）───
+[dependencies]
+python = { version = ">=3.12,<3.13", channel = "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/" }
+pip = { version = ">=26.0,<27", channel = "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/" }
+
+# ─── PyPI 镜像配置（与 backend 子项目同镜像面）───
+[pypi-options]
+index-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+extra-index-urls = [
+    "https://mirrors.aliyun.com/pypi/simple",
+    "https://mirrors.ustc.edu.cn/pypi/simple",
+    "https://pypi.org/simple",
+]
+
+# ─── 本地 editable 包（运行时依赖由 pyproject.toml [project.dependencies] 声明）───
+[pypi-dependencies]
+tool-sandbox-agent = { path = ".", editable = true }
+
+# ─── 激活环境变量（pixi 项目根 = 本目录，所以 PYTHONPATH = $PIXI_PROJECT_ROOT/src；
+#     树根 server.py 经 pytest pythonpath（"."）入导入面）───
+[activation.env]
+PYTHONIOENCODING = "utf-8"
+PYTHONNOUSERSITE = "1"
+UV_DEFAULT_INDEX = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+UV_EXTRA_INDEX = "https://mirrors.aliyun.com/pypi/simple https://mirrors.ustc.edu.cn/pypi/simple https://pypi.org/simple"
+PYTHONPATH = "$PIXI_PROJECT_ROOT/src"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tasks — 本树全部 tasks（runtime + dev 共享）
+# ═══════════════════════════════════════════════════════════════════════════════
+[tasks]
+# 单元测试：src/tests/unit/ 下的纯单元测试（hermetic——零真实网络：
+# http_fetch 经注入 fetch 函数 / monkeypatch 测试；server 经手写 ASGI 调用）。
+# 覆盖率阈值 80（--cov-fail-under，镜像后端 80% 门禁数值）；逐模块读数经
+# term-missing 报告核对（tool_sandbox 各模块 + server 均须 ≥80）。
+tests-unit = { cmd = "pytest src/tests/unit/ -v --asyncio-mode=auto --cov=tool_sandbox --cov=server --cov-report=term-missing --cov-fail-under=80", description = "运行单元测试（src/tests/unit/；asyncio auto + 覆盖率 ≥80 enforce）" }
+# 静态检查：ruff（树根 server.py + src/ 全量——含测试）
+lint = { cmd = "ruff check server.py src/", description = "ruff 静态检查（server.py + src/）" }
+# 格式化
+format = { cmd = "ruff format server.py src/", description = "ruff 格式化" }
+# 类型检查：mypy（生产面：server.py + src/tool_sandbox；测试不入严格门——镜像后端约定）
+typecheck = { cmd = "mypy server.py src/", description = "mypy 静态类型检查（严格模式）" }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Feature: dev — 开发/测试工具（在 runtime 基础上叠加）
+# ═══════════════════════════════════════════════════════════════════════════════
+[feature.dev.pypi-dependencies]
+# dev 工具由 pyproject.toml [project.optional-dependencies.dev] 声明，
+# 通过 editable install extras=["dev"] 自动读取。
+tool-sandbox-agent = { path = ".", editable = true, extras = ["dev"] }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Environments — 组合 features 用于不同场景
+# ═══════════════════════════════════════════════════════════════════════════════
+[environments]
+# 本地开发：runtime + dev 工具（pytest/ruff/mypy）。
+# 镜像构建不经 pixi（python:3.12-slim + pip install——见 Dockerfile），无 prod 环境。
+default = ["dev"]

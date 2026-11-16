@@ -136,9 +136,7 @@ def _llm_section(config: LlmConfig) -> dict[str, Any]:
     }
 
 
-def render_config_yaml_text(
-    config: LlmConfig, raw_existing: dict[str, Any] | None
-) -> str:
+def render_config_yaml_text(config: LlmConfig, raw_existing: dict[str, Any] | None) -> str:
     """渲染完整 config.yaml 文本（保留 ``llm`` 段之外的未知顶层键）。
 
     Args:
@@ -152,9 +150,7 @@ def render_config_yaml_text(
     """
     data: dict[str, Any] = dict(raw_existing) if raw_existing else {}
     data["llm"] = _llm_section(config)
-    text: str = yaml.safe_dump(
-        data, allow_unicode=True, sort_keys=False, default_flow_style=False
-    )
+    text: str = yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False)
     return text
 
 

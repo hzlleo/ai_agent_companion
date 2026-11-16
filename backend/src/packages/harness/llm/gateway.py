@@ -48,6 +48,7 @@ from packages.harness.llm.llm_models import (
     EmbeddingsResponseModel,
     LlmUsageEvent,
     TokenUsageModel,
+    ToolDefinitionModel,
 )
 from packages.harness.pools.llm_pool import LlmEntryPool
 from packages.harness.pools.manager import PoolManager, get_pool_manager
@@ -117,25 +118,32 @@ class LlmGateway:
         persona_id: str | None = None,
         purpose: str | None = None,
         request_id: str | None = None,
+        tools: Sequence[ToolDefinitionModel] | None = None,
+        tool_choice: str | None = None,
     ) -> ChatResponseModel:
-        """按角色非流式调用（角色解析 → 条目直连链）。
+        """按角色非流式调用（角色解析 → 条目直连链；含原生工具调用面）。
 
         Args:
             role: 模型角色（chat / duty / dream / look_at / embed）。
-            messages: 聊天消息序列。
+            messages: 聊天消息序列（含 assistant 工具调用轮 / tool 结果轮）。
             params: 采样参数（None = 端点默认）。
             persona_id: 人格 ID（None = 读请求上下文；无人格上下文则
                 用量记录 persona_id 为空——系统调用）。
             purpose: 用量用途覆盖（None = 角色名）。
             request_id: 请求追踪 ID（None = 读请求上下文）。
+            tools: 原生工具定义列表（None / 空 = 不携带工具面；仅非流式
+                ——流式传输面恒 content-only，与 tools 组合在请求体构建层
+                拒绝）。
+            tool_choice: 工具选择策略（None = ``auto``——模型自行决定）。
 
         Returns:
-            归一响应。
+            归一响应（content 与 tool_calls 可并存——tool_calls 非空时
+            调用方走工具循环；用量发射契约不变）。
 
         Raises:
             BusinessException: 角色未绑定（``MODEL_NOT_FOUND``）；条目
                 熔断中（``LLM_REQUEST_FAILED``）；传输失败（见 client
-                映射表）。
+                映射表——含 tool_calls arguments 非法 JSON）。
         """
         entry = self._resolve_role(role)
         return await self.chat_for_entry(
@@ -145,6 +153,8 @@ class LlmGateway:
             persona_id=persona_id,
             purpose=purpose if purpose is not None else _role_value(role),
             request_id=request_id,
+            tools=tools,
+            tool_choice=tool_choice,
         )
 
     async def stream_by_role(
@@ -271,27 +281,32 @@ class LlmGateway:
         persona_id: str | None = None,
         purpose: str = "chat",
         request_id: str | None = None,
+        tools: Sequence[ToolDefinitionModel] | None = None,
+        tool_choice: str | None = None,
     ) -> ChatResponseModel:
-        """按显式条目非流式调用（跳过角色解析；回退链消费面）。
+        """按显式条目非流式调用（跳过角色解析；回退链消费面；含工具面）。
 
         全链：wire 构建 → entry_gate（熔断 + 信号量）→ client.chat →
         用量发射（成功 / 失败均落账）。
 
         Args:
             entry: 模型条目（注册表条目或回退链条目）。
-            messages: 聊天消息序列。
+            messages: 聊天消息序列（含 assistant 工具调用轮 / tool 结果轮）。
             params: 采样参数（None = 端点默认）。
             persona_id: 人格 ID（None = 读请求上下文）。
             purpose: 用量用途（chat / duty / dream / look_at / embed /
                 tts / asr / tool；usage 域枚举校验）。
             request_id: 请求追踪 ID（None = 读请求上下文）。
+            tools: 原生工具定义列表（None / 空 = 不携带工具面；仅非流式）。
+            tool_choice: 工具选择策略（None = ``auto``）。
 
         Returns:
-            归一响应。
+            归一响应（content 与 tool_calls 可并存）。
 
         Raises:
             BusinessException: 条目熔断中（``LLM_REQUEST_FAILED``，details
-                含冷却剩余毫秒）；传输失败（见 client 映射表）。
+                含冷却剩余毫秒）；传输失败（见 client 映射表——含
+                tool_calls arguments 非法 JSON）。
         """
         resolved_persona = persona_id if persona_id is not None else persona_id_var.get()
         resolved_request_id = request_id if request_id is not None else request_id_var.get()
@@ -302,7 +317,9 @@ class LlmGateway:
         try:
             async with entry_pool.entry_gate(entry):
                 try:
-                    response = await client.chat(messages, params)
+                    response = await client.chat(
+                        messages, params, tools=tools, tool_choice=tool_choice
+                    )
                 except BusinessException:
                     breaker.record_failure()
                     raise

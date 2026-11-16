@@ -8,10 +8,15 @@
 职责边界：
 
     - 非流式 ``chat()``：POST /chat/completions → 归一
-      :class:`ChatResponseModel`；
+      :class:`ChatResponseModel`（P3-2 起携带原生工具调用：请求 ``tools``
+      面透传 + 响应 ``tool_calls`` robust 解析——arguments JSON 字符串
+      归一为 dict）；
     - 流式 ``stream()``：SSE 行解析 → 异步迭代产出
       :class:`ChatStreamChunkModel`（末块 usage 经 ``stream_options.
-      include_usage`` 声明回传）；
+      include_usage`` 声明回传）；**流式恒 content-only**——原生工具调用
+      与流式组合在请求体构建层直接拒绝（``VALIDATION_ERROR``，见
+      llm_models.build_chat_request_body——client ``stream()`` 不设
+      tools 参数面）；
     - 重试（tenacity）：仅覆盖**幂等安全失败集**——连接错误 / 5xx /
       408 / 429（429 尊重 Retry-After 头，等待封顶可配）；流式请求仅
       「发起 → 2xx 确认」阶段可重试（首块产出后重放会重复消费，不重试）；
@@ -19,7 +24,7 @@
       ``settings.pools.llm_request_timeout_seconds``）——缺省回落共享
       client 自身超时；
     - 错误映射：全部 HTTP / 状态 / 超时 / 流失败映射 ``BusinessException``
-      （复用既有 LLM_* 错误码——本 chunk 零新增）。
+      （复用既有 LLM_* 错误码——P3-2 零新增）。
 
 错误码映射表：
 
@@ -29,17 +34,20 @@
     连接错误（ConnectError /       LLM_CALL_FAILED          是
     ConnectTimeout）
     HTTP 5xx / 408 / 429           LLM_CALL_FAILED          是（429 尊重
-                                                        Retry-After）
+                                                         Retry-After）
     HTTP 401 / 403（鉴权失败）     LLM_API_KEY_MISSING      否
     其余 HTTP 4xx                  LLM_CALL_FAILED          否
     读 / 写 / 池超时               LLM_REQUEST_FAILED       否
     响应 JSON 非法 / choices 空    LLM_CALL_FAILED          否
+    tool_calls arguments 非法      LLM_CALL_FAILED          否
+    JSON / 非 JSON 对象
     SSE data 块非法                LLM_CALL_FAILED          否
     ============================  ======================  ==================
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -66,10 +74,13 @@ from packages.harness.llm.llm_models import (
     ChatStreamChunkModel,
     EmbeddingsResponseModel,
     TokenUsageModel,
+    ToolCallModel,
+    ToolDefinitionModel,
     WireChatCompletionResponse,
     WireEmbeddingsResponse,
     WireStreamChunk,
     WireTokenUsage,
+    WireToolCall,
     build_chat_request_body,
     build_embeddings_request_body,
 )
@@ -251,22 +262,38 @@ class LlmHttpClient:
         self,
         messages: Sequence[ChatMessageModel],
         params: ChatRequestParams | None = None,
+        *,
+        tools: Sequence[ToolDefinitionModel] | None = None,
+        tool_choice: str | None = None,
     ) -> ChatResponseModel:
-        """非流式聊天补全（POST /chat/completions）。
+        """非流式聊天补全（POST /chat/completions——含原生工具调用面）。
 
         Args:
-            messages: 聊天消息序列。
+            messages: 聊天消息序列（含 assistant 工具调用轮 / tool 结果轮）。
             params: 采样参数（None = 端点默认）。
+            tools: 原生工具定义列表（None / 空 = 不携带工具面）。
+            tool_choice: 工具选择策略（None = ``auto``——仅 tools 非空时
+                进入请求体）。
 
         Returns:
-            归一响应（含用量与时延）。
+            归一响应（含用量与时延；content 与 tool_calls 可并存——
+            tool_calls 非空时调用方走工具循环）。
 
         Raises:
             BusinessException: 连接 / 状态 / 超时 / 解析失败（映射表见
-                模块 docstring；可重试失败在重试耗尽后上抛）。
+                模块 docstring；含 tool_calls arguments 非法 JSON /
+                非 JSON 对象——``LLM_CALL_FAILED``）；可重试失败在重试
+                耗尽后上抛。
         """
         started_ms = now_ms()
-        body = build_chat_request_body(self._wire.model, list(messages), params, stream=False)
+        body = build_chat_request_body(
+            self._wire.model,
+            list(messages),
+            params,
+            stream=False,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
         response = await self._post_with_retry(body)
         wire = self._parse_response_json(response)
         latency_ms = now_ms() - started_ms
@@ -584,17 +611,19 @@ class LlmHttpClient:
     def _to_chat_response(
         self, wire: WireChatCompletionResponse, *, latency_ms: int
     ) -> ChatResponseModel:
-        """wire 响应 → 域内归一响应（choices 空即非法）。
+        """wire 响应 → 域内归一响应（choices 空即非法；tool_calls robust 解析）。
 
         Args:
             wire: wire 响应。
             latency_ms: 端到端时延毫秒。
 
         Returns:
-            归一响应（首个 choice）。
+            归一响应（首个 choice；content 与 tool_calls 可并存——
+            content 为 None 归一空串）。
 
         Raises:
-            BusinessException: choices 为空（``LLM_CALL_FAILED``）。
+            BusinessException: choices 为空 / tool_calls arguments 不是
+            合法 JSON 对象（``LLM_CALL_FAILED``）。
         """
         if not wire.choices:
             raise BusinessException(
@@ -606,13 +635,72 @@ class LlmHttpClient:
                 },
             )
         choice = wire.choices[0]
+        tool_calls = self._parse_wire_tool_calls(choice.message.tool_calls)
         return ChatResponseModel(
-            content=choice.message.content,
+            content=choice.message.content or "",
+            tool_calls=tool_calls,
             finish_reason=choice.finish_reason,
             model=wire.model or self._wire.model,
             usage=_map_wire_usage(wire.usage) if wire.usage is not None else None,
             latency_ms=latency_ms,
         )
+
+    def _parse_wire_tool_calls(self, wire_calls: list[WireToolCall] | None) -> list[ToolCallModel]:
+        """wire 工具调用声明列表 → 域内归一（arguments JSON robust 解析）。
+
+        Args:
+            wire_calls: wire 声明列表（None / 空 = 纯文本回复——空列表）。
+
+        Returns:
+            归一声明列表（arguments 为已解析 dict）。
+
+        Raises:
+            BusinessException: arguments 不是合法 JSON / 不是 JSON 对象
+                （``LLM_CALL_FAILED``——携带 tool_call_id 与解析错误片段）。
+        """
+        if not wire_calls:
+            return []
+        parsed_calls: list[ToolCallModel] = []
+        for wire_call in wire_calls:
+            raw_arguments = wire_call.function.arguments
+            arguments: dict[str, Any]
+            if not raw_arguments:
+                arguments = {}
+            else:
+                try:
+                    loaded = json.loads(raw_arguments)
+                except json.JSONDecodeError as exc:
+                    raise BusinessException(
+                        code=ErrorCode.LLM_CALL_FAILED,
+                        details={
+                            "reason": "LLM 工具调用 arguments 不是合法 JSON",
+                            "model": self._wire.model,
+                            "tool_call_id": wire_call.id,
+                            "tool_name": wire_call.function.name,
+                            "parse_error": str(exc)[:300],
+                        },
+                    ) from exc
+                if not isinstance(loaded, dict):
+                    raise BusinessException(
+                        code=ErrorCode.LLM_CALL_FAILED,
+                        details={
+                            "reason": "LLM 工具调用 arguments 必须是 JSON 对象",
+                            "model": self._wire.model,
+                            "tool_call_id": wire_call.id,
+                            "tool_name": wire_call.function.name,
+                            "got": type(loaded).__name__,
+                        },
+                    )
+                arguments = loaded
+            parsed_calls.append(
+                ToolCallModel(
+                    id=wire_call.id,
+                    type=wire_call.type,
+                    name=wire_call.function.name,
+                    arguments=arguments,
+                )
+            )
+        return parsed_calls
 
     def _to_embeddings_response(
         self, wire: WireEmbeddingsResponse, input_count: int, *, latency_ms: int

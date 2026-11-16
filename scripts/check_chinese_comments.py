@@ -46,6 +46,10 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 # 各树扫描根（相对仓库根）；frontend 树无 Python 源码，无需登记。
 _TREE_ROOTS: dict[str, list[str]] = {
     "backend": ["backend/src"],
+    "tool-sandbox": [
+        "docker/tool-sandbox-agent/src",
+        "docker/tool-sandbox-agent/server.py",
+    ],
     "scripts": ["scripts"],
 }
 

@@ -20,6 +20,16 @@
     - ``PoolsConfig``        —— 共享池（env_prefix=``POOLS_``；线程池 / HTTP 池 /
       LLM 信号量 / 熔断阈值）
     - ``LlmEndpointConfig``  —— LLM 默认端点 env 面（env_prefix=``LLM_``）
+    - ``ChannelsSettings``   —— 通道域分节（``Settings.channels``；telegram
+      子模型 env_prefix=``TELEGRAM_``——P3 chunk 1）
+    - ``DutySettings``       —— 值班轮分节（``Settings.duty``；env_prefix=
+      ``DUTY_``——P3 chunk 2）
+    - ``DreamScheduleSettings`` —— 梦境调度分节（``Settings.dream_schedule``；
+      env_prefix=``DREAM_SCHEDULE_``——P3 chunk 2）
+    - ``SchedulerSettings``  —— 中央调度器分节（``Settings.scheduler``；
+      env_prefix=``SCHEDULER_``——P3 chunk 2）
+    - ``ToolsSandboxSettings`` —— 工具沙盒分节（``Settings.tools_sandbox``；
+      env_prefix=``TOOLS_SANDBOX_``——P3 chunk 3）
     - ``Settings``           —— 聚合器（全局单例 ``settings``）
     - ``LlmConfig``          —— config.yaml 的 ``llm`` 段（模型注册表 / 角色绑定 /
       多模态回退链）
@@ -32,6 +42,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 from urllib.parse import quote_plus
 
@@ -48,6 +59,12 @@ __all__ = [
     "PoolsConfig",
     "LlmEndpointConfig",
     "SeekDBSettings",
+    "TelegramSettings",
+    "ChannelsSettings",
+    "DutySettings",
+    "DreamScheduleSettings",
+    "SchedulerSettings",
+    "ToolsSandboxSettings",
     "Settings",
     "settings",
     "LlmConfig",
@@ -56,6 +73,27 @@ __all__ = [
     "ExtensionTool",
     "ExtensionsConfig",
 ]
+
+#: 每日时刻 "HH:MM" 合法形态（24 小时制——duty / dream_schedule 共用）。
+_DAILY_AT_RE = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+
+
+def _validate_daily_at_shape(value: str) -> str:
+    """校验每日时刻形态（``HH:MM`` 24 小时制——strip 后 fullmatch）。
+
+    Args:
+        value: 每日时刻字符串。
+
+    Returns:
+        校验通过的 strip 后原值。
+
+    Raises:
+        ValueError: 形态非法（装配错误面）。
+    """
+    stripped = value.strip()
+    if not _DAILY_AT_RE.fullmatch(stripped):
+        raise ValueError(f"daily_at 须为 HH:MM 形态（24 小时制）: {value!r}")
+    return stripped
 
 
 class ServerConfig(BaseSettings):
@@ -338,6 +376,270 @@ class SeekDBSettings(BaseSettings):
         return self
 
 
+class DutySettings(BaseSettings):
+    """值班轮配置（env_prefix=``DUTY_``——P3 chunk 2 duty 域）。
+
+    锁定决策：``enabled=False``（默认）——零配置开发可用、测试 hermetic；
+    ``enabled=True`` 时 app lifespan 装配中央调度器并注册 duty 每日作业
+    （见 docs/backend/duty.md）。
+
+    Attributes:
+        enabled: 是否启用值班轮（False = 不注册 duty 调度作业）。
+        daily_at: 每日值班时刻（"HH:MM" 24 小时制——naive 本地时间；
+            scheduler 无 cron 语法 / 时区数据库）。
+        max_tool_steps: 单轮工具调用步数上限（超出 → 强制最终报告指令；
+            1-64）。
+        report_to_owner: 值班报告是否投递属主（False = 仅落记忆）。
+        charter_text: 值班任务书覆写（空 / None = duty_prompts 正典模板；
+            非空整体替换——env 面空字符串归一 None）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用值班轮")
+    daily_at: str = Field(default="22:00", description="每日值班时刻（HH:MM）")
+    max_tool_steps: int = Field(default=8, ge=1, le=64, description="单轮工具调用步数上限")
+    report_to_owner: bool = Field(default=True, description="值班报告是否投递属主")
+    charter_text: str | None = Field(default=None, description="值班任务书覆写（None = 正典模板）")
+
+    model_config = SettingsConfigDict(
+        env_prefix="DUTY_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @field_validator("charter_text", mode="before")
+    @classmethod
+    def _empty_charter_text_to_none(cls, value: object) -> object:
+        """env 面空字符串 / 纯空白归一为 None（未覆写语义）。
+
+        Args:
+            value: 原始值（env 注入时空字符串 = 未设置）。
+
+        Returns:
+            空 / 纯空白字符串归一为 None；其余原样返回。
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("daily_at")
+    @classmethod
+    def _validate_daily_at(cls, value: str) -> str:
+        """校验每日时刻形态（共享规则见 :func:`_validate_daily_at_shape`）。
+
+        Args:
+            value: 每日时刻字符串。
+
+        Returns:
+            校验通过的原值。
+
+        Raises:
+            ValueError: 形态非法（装配错误面）。
+        """
+        return _validate_daily_at_shape(value)
+
+
+class DreamScheduleSettings(BaseSettings):
+    """梦境调度配置（env_prefix=``DREAM_SCHEDULE_``——P3 chunk 2）。
+
+    锁定决策：``enabled=False``（默认）——梦境经 admin API 手工触发
+    （P1 chunk 3 交付面）；``enabled=True`` 时 app lifespan 在中央调度器
+    注册 dream 每日作业（DreamService.run_dream 复用——as-is）。
+
+    Attributes:
+        enabled: 是否启用梦境定时调度（False = 仅手工触发面）。
+        daily_at: 每日梦境时刻（"HH:MM" 24 小时制——naive 本地时间）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用梦境定时调度")
+    daily_at: str = Field(default="03:00", description="每日梦境时刻（HH:MM）")
+
+    model_config = SettingsConfigDict(
+        env_prefix="DREAM_SCHEDULE_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @field_validator("daily_at")
+    @classmethod
+    def _validate_daily_at(cls, value: str) -> str:
+        """校验每日时刻形态（共享规则见 :func:`_validate_daily_at_shape`）。
+
+        Args:
+            value: 每日时刻字符串。
+
+        Returns:
+            校验通过的原值。
+
+        Raises:
+            ValueError: 形态非法（装配错误面）。
+        """
+        return _validate_daily_at_shape(value)
+
+
+class SchedulerSettings(BaseSettings):
+    """中央调度器配置（env_prefix=``SCHEDULER_``——P3 chunk 2）。
+
+    Attributes:
+        tick_seconds: 调度器 tick 循环间隔秒（到期判定分辨率下限；
+            > 0）。
+    """
+
+    tick_seconds: float = Field(default=1.0, gt=0, description="调度器 tick 循环间隔秒")
+
+    model_config = SettingsConfigDict(
+        env_prefix="SCHEDULER_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+class ToolsSandboxSettings(BaseSettings):
+    """工具沙盒配置（env_prefix=``TOOLS_SANDBOX_``——P3 chunk 3 工具沙盒）。
+
+    锁定决策：``enabled=False``（默认）——沙盒是**可选运行时**：全工程
+    无沙盒照常运行（duty 工具面回落到内置工具）；``enabled=True`` 时
+    app lifespan 在 duty 装配后经 ``/health`` 探测（bounded 超时）——
+    探测失败 / token 未配置 → 跳过沙盒工具注册并告警
+    （warn-and-continue，见 docs/backend/tools-sandbox.md）。
+
+    鉴权 token 经环境变量间接（与 llm 条目 ``api_key_env`` / telegram
+    ``bot_token_env`` 同模式——**密钥永不落 yaml / 配置树**）：本配置只
+    持有变量名 ``token_env``，实际 token 由 tools 域沙盒客户端在构造期
+    从该变量读取。
+
+    Attributes:
+        enabled: 是否启用工具沙盒（False = 不探测 / 不注册沙盒工具）。
+        base_url: 沙盒服务基础 URL（compose 形态 127.0.0.1:8765）。
+        token_env: 鉴权 token 环境变量名（实际 token 从该变量读取）。
+        request_timeout_seconds: 单次请求超时秒数（invoke / 健康探测
+            共用——启动期探测的 bounded 上限）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用工具沙盒")
+    base_url: str = Field(
+        default="http://127.0.0.1:8765", min_length=1, description="沙盒服务基础 URL"
+    )
+    token_env: str = Field(
+        default="SANDBOX_TOKEN", min_length=1, description="鉴权 token 环境变量名"
+    )
+    request_timeout_seconds: float = Field(
+        default=15.0, gt=0, description="单次请求超时（invoke / 健康探测共用）"
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="TOOLS_SANDBOX_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+class TelegramSettings(BaseSettings):
+    """Telegram 通道配置（env_prefix=``TELEGRAM_``——P3 chunk 1 通道层）。
+
+    锁定决策：``enabled=False``（默认）——零配置开发可用、测试 hermetic；
+    ``enabled=True`` 时 app lifespan 装配 Telegram 通道 runner（长轮询
+    后台任务，见 docs/backend/channels.md）。
+
+    bot token 经环境变量间接（与 llm 条目 ``api_key_env`` / SeekDB
+    ``password_env`` 同模式——**密钥永不落 yaml / 配置树**）：本配置只
+    持有变量名 ``bot_token_env``，实际 token 由 channels 域客户端在
+    构造期从该变量读取；``enabled=True`` 且变量缺失 / 为空时启动期
+    fail fast（``CHANNEL_TOKEN_MISSING``，中文错误信息）。
+
+    Attributes:
+        enabled: 是否启用 Telegram 通道（False = 不装配 runner）。
+        bot_token_env: bot token 环境变量名（实际 token 从该变量读取）。
+        api_base: Bot API 基础 URL（默认官方端点；可指向自建代理）。
+        poll_timeout_seconds: getUpdates 长轮询超时秒数（Bot API 长轮询
+            上限 50 秒——请求超时为该值 + 传输裕量）。
+        owner_chat_id: 属主会话 ID（Telegram chat id 字符串形态；None =
+            未配置。P3 duty 轮值班通知的投递目标，通道层本 chunk 不消费）。
+        backoff_base_seconds: 轮询失败退避基数秒（指数退避起点）。
+        backoff_max_seconds: 退避封顶秒数（不得小于基数）。
+        state_dir: 通道状态目录（offset 持久化 JSON 文件落此；相对路径
+            按进程 CWD 解析）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用 Telegram 通道")
+    bot_token_env: str = Field(
+        default="TELEGRAM_BOT_TOKEN", min_length=1, description="bot token 环境变量名"
+    )
+    api_base: str = Field(
+        default="https://api.telegram.org", min_length=1, description="Bot API 基础 URL"
+    )
+    poll_timeout_seconds: int = Field(
+        default=25, ge=1, le=50, description="getUpdates 长轮询超时秒数（Bot API 上限 50）"
+    )
+    owner_chat_id: str | None = Field(
+        default=None, description="属主会话 ID（duty 通知目标；None = 未配置）"
+    )
+    backoff_base_seconds: float = Field(default=1.0, gt=0, description="退避基数秒")
+    backoff_max_seconds: float = Field(default=60.0, gt=0, description="退避封顶秒数")
+    state_dir: str = Field(
+        default="data/channels", min_length=1, description="通道状态目录（offset 持久化）"
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="TELEGRAM_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @field_validator("owner_chat_id", mode="before")
+    @classmethod
+    def _empty_owner_chat_id_to_none(cls, value: object) -> object:
+        """env 面空字符串归一为 None（未配置语义）。
+
+        Args:
+            value: 原始值（env 注入时空字符串 = 未设置）。
+
+        Returns:
+            空字符串归一为 None；其余原样返回。
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _verify_backoff_bounds(self) -> TelegramSettings:
+        """校验退避边界（backoff_max 不得小于 backoff_base）。
+
+        Returns:
+            校验通过的实例。
+
+        Raises:
+            ValueError: backoff_max_seconds < backoff_base_seconds（装配
+                错误面——封顶必须不小于基数）。
+        """
+        if self.backoff_max_seconds < self.backoff_base_seconds:
+            raise ValueError(
+                f"backoff_max_seconds({self.backoff_max_seconds}) 不得小于 "
+                f"backoff_base_seconds({self.backoff_base_seconds})"
+            )
+        return self
+
+
+class ChannelsSettings(BaseModel):
+    """通道域配置分节（``Settings.channels``——多平台通道聚合容器）。
+
+    P3 chunk 1 仅含 telegram 子模型；P4 多通道扩展（B站 / QQ 等）在此
+    追加同级子模型（各自独立 env_prefix 的 ``BaseSettings``——本工程
+    约定：env 面子配置为 BaseSettings，聚合容器为普通 BaseModel）。
+
+    Attributes:
+        telegram: Telegram 通道配置（默认关闭）。
+    """
+
+    telegram: TelegramSettings = Field(
+        default_factory=TelegramSettings, description="Telegram 通道配置"
+    )
+
+
 class Settings(BaseSettings):
     """全局配置聚合器——所有 env 面子配置的聚合入口。
 
@@ -359,6 +661,12 @@ class Settings(BaseSettings):
         pools: 共享池配置。
         llm: LLM 默认端点 env 面。
         seekdb: SeekDB 检索存储配置（enabled=False 默认——SQLite 回退）。
+        channels: 通道域配置分节（telegram 默认关闭——P3 chunk 1）。
+        duty: 值班轮配置（默认关闭——P3 chunk 2）。
+        dream_schedule: 梦境定时调度配置（默认关闭——P3 chunk 2）。
+        scheduler: 中央调度器配置（tick 间隔——P3 chunk 2）。
+        tools_sandbox: 工具沙盒配置（默认关闭——P3 chunk 3；沙盒为可选
+            运行时，duty 工具面在沙盒不可达时回落到内置工具）。
         env: 运行环境标识（local / dev / prod）。
     """
 
@@ -368,6 +676,11 @@ class Settings(BaseSettings):
     pools: PoolsConfig = PoolsConfig()
     llm: LlmEndpointConfig = LlmEndpointConfig()
     seekdb: SeekDBSettings = SeekDBSettings()
+    channels: ChannelsSettings = ChannelsSettings()
+    duty: DutySettings = DutySettings()
+    dream_schedule: DreamScheduleSettings = DreamScheduleSettings()
+    scheduler: SchedulerSettings = SchedulerSettings()
+    tools_sandbox: ToolsSandboxSettings = ToolsSandboxSettings()
     env: str = Field(default="local", description="运行环境标识（local / dev / prod）")
 
     model_config = SettingsConfigDict(

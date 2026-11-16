@@ -52,7 +52,7 @@ jobs:
       - name: Coverage gates (per-module >= 80%, enforce)
         run: cd backend && pixi run coverage-gates
 
-      - name: Engineering gates (comments / sync-test ratchet / noqa freeze)
+      - name: Engineering gates (comments / sync-test ratchet / noqa freeze / sandbox drift)
         run: pixi run gates
 
       - name: Lint (ruff)
@@ -97,3 +97,27 @@ jobs:
 
       - name: Build (tsc + vite build)
         run: cd frontend && pixi run build
+
+  # ─── Tool sandbox: docker 隔离树（独立 pixi 工程） ──────────────────────────
+  tool-sandbox:
+    name: Tool sandbox (tests + lint + typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pixi (single install of the env, lock-keyed cache)
+        uses: prefix-dev/setup-pixi@v0.11.3
+        with:
+          pixi-version: v0.82.0
+          manifest-path: docker/tool-sandbox-agent/pixi.toml
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+
+      - name: Tests (pytest, coverage >= 80% enforced)
+        run: cd docker/tool-sandbox-agent && pixi run tests-unit
+
+      - name: Lint (ruff)
+        run: cd docker/tool-sandbox-agent && pixi run lint
+
+      - name: Typecheck (mypy)
+        run: cd docker/tool-sandbox-agent && pixi run typecheck
