@@ -1,4 +1,4 @@
-"""用量记录表迁移——P0-4 交付（ff_usage_records）。
+"""用量记录表迁移（ff_usage_records）。
 
 harness/usage 域的 token 用量记录表（llm 网关用量发射 → usage 服务
 落库）。persona_id 为普通可空索引列而非 PersonaMixin（跨人格聚合
@@ -9,7 +9,6 @@ INTEGER——rowid 自增）。
 
 Revision ID: 000000000002
 Revises: 000000000001
-Create Date: 2026-11-12
 """
 
 from typing import Sequence, Union

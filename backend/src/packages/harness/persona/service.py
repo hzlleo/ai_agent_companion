@@ -36,12 +36,14 @@ database.session.get_async_db 的分工约定）。
 
 from __future__ import annotations
 
+import copy
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
 from loguru import logger
 from sqlalchemy import delete, desc, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.harness.core.context import RequestContext, bind_context
@@ -218,7 +220,9 @@ class PersonaService:
             落库后的记录 DTO（含主键）。
 
         Raises:
-            BusinessException: 注册名已占用（``CONFLICT``）。
+            BusinessException: 注册名已占用（``CONFLICT``——含唯一名校验
+                命中与并发写入撞唯一约束两形态；后者经 ``IntegrityError``
+                捕获归一为同语义 409）。
         """
         await self._ensure_name_free(session, dto.name)
         row = PersonaRow(
@@ -230,7 +234,16 @@ class PersonaService:
             voice_profile=dto.voice_profile.model_dump() if dto.voice_profile is not None else None,
         )
         session.add(row)
-        await self._commit(session)
+        try:
+            await self._commit(session)
+        except IntegrityError as exc:
+            # 并发同名竞态：唯一性预检窗口外的撞约束——归一为 CONFLICT
+            # （_commit 出口已回滚会话，此处无需再回滚）。
+            raise BusinessException(
+                code=ErrorCode.CONFLICT,
+                message="人格注册名已存在（并发写入冲突）",
+                details={"name": dto.name},
+            ) from exc
         logger.info("人格已创建: id={}, name={}", row.id, row.name)
         return PersonaRecordDTO.model_validate(row)
 
@@ -300,7 +313,8 @@ class PersonaService:
 
         Raises:
             BusinessException: 人格不存在（``NOT_FOUND``）；注册名被占用
-                （``CONFLICT``）；卡片合并校验失败（``VALIDATION_ERROR``）。
+                （``CONFLICT``——含并发重命名撞唯一约束形态）；卡片合并
+                校验失败（``VALIDATION_ERROR``）。
         """
         row = await self._require_row(session, persona_id)
         if dto.name is not None and dto.name != row.name:
@@ -321,7 +335,17 @@ class PersonaService:
             row.voice_profile = (
                 dto.voice_profile.model_dump() if dto.voice_profile is not None else None
             )
-        await self._commit(session)
+        # 提交前留存目标名（IntegrityError 回滚会过期行属性——不可再读行）
+        target_name = dto.name if dto.name is not None else row.name
+        try:
+            await self._commit(session)
+        except IntegrityError as exc:
+            # 并发重命名竞态：两个会话同窗通过预检后撞 name 唯一约束。
+            raise BusinessException(
+                code=ErrorCode.CONFLICT,
+                message="人格注册名已存在（并发写入冲突）",
+                details={"name": target_name, "persona_id": persona_id},
+            ) from exc
         return PersonaRecordDTO.model_validate(row)
 
     async def copy(
@@ -369,7 +393,7 @@ class PersonaService:
                     PersonaStateRow(
                         persona_id=new_row.id,
                         layer=state_row.layer,
-                        state=dict(state_row.state),
+                        state=copy.deepcopy(state_row.state),
                     )
                 )
         await self._commit(session)
@@ -417,6 +441,11 @@ class PersonaService:
     ) -> PersonaBatchDeleteResponseDTO:
         """批量删除（部分成功形态——逐 id 独立事务，单项失败不阻塞其余）。
 
+        单项失败捕获面为**全部异常**：``BusinessException`` 沿用其错误码
+        与消息；其余未知异常归一为 ``INTERNAL_ERROR`` 失败项 + 告警日志
+        （partial-success 承诺——任何单项故障都不阻塞其余 id 的删除，
+        也不向调用方注入原始异常打断整批）。
+
         Args:
             session: 注入的异步 Session。
             ids: 待删除人格主键序列（去重由调用方约束；重复 id 的后续
@@ -440,6 +469,20 @@ class PersonaService:
                         success=False,
                         code=exc.code,
                         message=exc.message,
+                    )
+                )
+            except Exception:
+                await _rollback_quietly(session)
+                logger.opt(exception=True).warning(
+                    "批量删除单项出现未知异常（归一为 INTERNAL_ERROR 失败项）: persona_id={}",
+                    persona_id,
+                )
+                items.append(
+                    PersonaBatchDeleteItemDTO(
+                        id=persona_id,
+                        success=False,
+                        code=ErrorCode.INTERNAL_ERROR,
+                        message="删除人格时发生内部错误",
                     )
                 )
         succeeded = sum(1 for item in items if item.success)

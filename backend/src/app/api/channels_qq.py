@@ -1,4 +1,4 @@
-"""QQ 通道 webhook API——NapCat OneBot v11 事件上报接收面（P4 chunk 4）。
+"""QQ 通道 webhook API——NapCat OneBot v11 事件上报接收面。
 
     - POST /api/v1/channels/qq/webhook —— NapCat（部署机）配置的 HTTP POST
       事件上报目标；接收 OneBot 事件 JSON，委托 ``qq_webhook`` 处理器

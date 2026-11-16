@@ -1,6 +1,6 @@
 # chat — 会话循环 / 世界书 / 控制台 CLI（P0-6 交付；P1-1 会话持久化）
 
-`backend/src/packages/harness/chat/` 承载人格感知的会话循环：chara card 正典 + 世界书 → LLM 请求消息组装（prompt Unit 文件唯一真源），经 llm 网关（role=chat）非流式 / 流式调用；P1 记忆层 chunk 1 落地**可选会话持久化**（`ff_chat_sessions` / `ff_chat_messages`——回合落库 + 会话恢复，缺省关闭保持 P0 行为）。控制台 REPL（`pixi run chat`）为用户可见交付面；app 层已完成最终装配（`app/main.py` create_app + lifespan + `/api/v1/health` 存活面 + personas / memories 路由）。
+`backend/src/packages/harness/chat/` 承载人格感知的会话循环：chara card 正典 + 世界书 → LLM 请求消息组装（prompt Unit 文件唯一真源），经 llm 网关（role=chat）非流式 / 流式调用；P1 记忆层 chunk 1 落地**可选会话持久化**（`ff_chat_sessions` / `ff_chat_messages`——回合落库 + 会话恢复，缺省关闭保持 P0 行为）。控制台 REPL（`pixi run chat`）为用户可见交付面；app 层已完成最终装配（`app/main.py` create_app + lifespan——personas / memories / usage / voice / look_at / models / channels-qq webhooks / health 共八路由）。
 
 ## 模块一览
 
@@ -75,8 +75,8 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 **会话持久化（P1 记忆层——可选绑定，缺省关闭）**：`ChatService` 构造注入 `session_service`（memory 域 `ChatSessionService`）后：
 
 - `create_session(db_session=..., title=...)` 同步落 `ff_chat_sessions` 行（经 `bind_persona_context` 绑定人格上下文——PersonaMixin 自动注入），状态携带 `session_id`；未给 `db_session` 时纯内存态；
-- `reply / stream_reply` 的用户与助手回合经 `session_scope` 短事务逐条落 `ff_chat_messages`（seq 递增；**开场白不落库**——正典确定性回放，resume 后幂等重现）；网关失败时用户回合保留在库（重试即重新生成）；流式提前终止不落半截助手回合；持久化写入失败原样上抛（append-only 日志不静默丢行）；
-- `resume_session(session_id, db_session=...)` 把持久化会话回放进内存态（全量消息重放进 `turns`；卡片按会话归属人格重取**当前**正典）；调用方须先绑定目标人格上下文（他人格会话 NOT_FOUND）；未绑定持久化服务的 resume → `INTERNAL_ERROR`；
+- `reply / stream_reply` 的用户与助手回合经 `session_scope` 短事务逐条落 `ff_chat_messages`（seq 递增；**开场白不落库**——正典确定性回放，resume 后幂等重现）；网关失败时用户回合保留在库——调用方重试是**完整重发**（用户消息再次进入历史与数据库，append-only；显式「重生成 / 复用上一条用户输入」API 有意推迟至后续 swipes 特性）；流式提前终止不落半截助手回合；持久化写入失败原样上抛（append-only 日志不静默丢行）；
+- `resume_session(session_id, db_session=...)` 全量读取持久化会话、经 `max_history_turns` 窗口截断后回放进内存态 `turns`（保留最新回合；卡片按会话归属人格重取**当前**正典）；调用方须先绑定目标人格上下文（他人格会话 NOT_FOUND）；未绑定持久化服务的 resume → `INTERNAL_ERROR`；
 - 持久化消息不受 `max_history_turns` 滑动窗口约束（全量记录——内存窗口只是上下文组装面）；
 - 未绑定持久化服务（P0 形态）时行为与既有完全一致——`/clear` 仅清内存历史（持久化消息保留）。
 
@@ -111,18 +111,29 @@ REPL 命令面：`/quit`（退出码 0；EOF 等效）/ `/clear`（清空内存�
 ```
 create_app() → FastAPI(title/version/lifespan)
     ├─ register_exception_handlers(app)          共享异常处理器
-    ├─ include_router(personas_router)           /api/v1/personas*
-    ├─ include_router(memories_router)           /api/v1/memories*（P1-1 记忆管理面）
-    └─ include_router(health_router)             /api/v1/health
+    ├─ include_router(personas_router)           /api/v1/personas*（人格管理面）
+    ├─ include_router(memories_router)           /api/v1/memories*（记忆管理面：episodes / curated /
+    │                                             sessions / search / dream）
+    ├─ include_router(usage_router)              /api/v1/usage*（跨人格用量观测面）
+    ├─ include_router(voice_router)              /api/v1/voice*（语音合成 / 识别）
+    ├─ include_router(look_at_router)            /api/v1/look_at（图像理解 multipart 上传）
+    ├─ include_router(models_router)             /api/v1/models*（LLM 注册表管理面）
+    ├─ include_router(qq_channels_router)        /api/v1/channels/qq*（QQ webhook 入站）
+    └─ include_router(health_router)             /api/v1/health（零依赖存活面）
 
-startup_app_state(app, settings[, config_dir])   可独立驱动的纯异步函数对
+startup_app_state(app, settings[, config_dir])   可独立驱动的纯异步函数对（八步启动链）
     setup_logging_from_settings → load_all_config
-    → init_database → pool_manager.start → app.state.gateway = LlmGateway(默认用量接线)
-shutdown_app_state(app)                          LIFO：pool stop → close_database → 线程池幂等兜底
+    → init_database → pool_manager.start
+    → app.state.gateway = LlmGateway(默认用量接线)
+    → app.state.memory_store = build_memory_store(检索 / 梦境 / 调度器共用)
+    → _startup_channels(TELEGRAM / QQ 启用时装配；缺省 no-op)
+    → _startup_scheduler(DUTY / DREAM_SCHEDULE 启用时装配；缺省 no-op)
+shutdown_app_state(app)                          LIFO 五步停机链：scheduler → channels
+                                                 → pool stop → close_database → 线程池幂等兜底
 lifespan                                          上述函数对的 asynccontextmanager 薄封装
 ```
 
-函数对不藏在 lifespan 闭包内——测试无需 ASGI lifespan runner 直调（本工程不引入 asgi-lifespan 依赖）。`app.state.gateway` 为后续 API 消费方预装配；CLI 自建等价栈。persona / usage ORM 在 main.py 导入期注册（fresh SQLite 首启 create_all 即全表；生产 schema 以 Alembic 为准）。
+函数对不藏在 lifespan 闭包内——测试无需 ASGI lifespan runner 直调（本工程不引入 asgi-lifespan 依赖）。`app.state.gateway` 为后续 API 消费方预装配；`app.state.memory_store` 为检索 / 梦境端点与调度器共用存储；CLI 自建等价栈。persona / usage ORM 在 main.py 导入期注册（memory 域经 memories 路由导入链注册——fresh SQLite 首启 create_all 即全表；生产 schema 以 Alembic 为准）。
 
 ### GET /api/v1/health（liveness）
 

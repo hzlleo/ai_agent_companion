@@ -4,7 +4,7 @@
 
     - :class:`UsagePurpose` —— 调用用途：五大模型角色（chat / duty /
       dream / look_at / embed，与 ``config.ModelRole`` 一一对应）加上
-      辅助能力用途（tts / asr / tool——后续 chunk 落地的语音与工具面）；
+      辅助能力用途（tts / asr / tool——语音与工具面）；
     - :class:`UsageStatus`   —— 调用结果（success / error）；
     - :class:`UsageGroupBy`  —— 聚合维度（model_entry / purpose /
       time_bucket）；
@@ -32,9 +32,9 @@ class UsagePurpose(StrEnum):
     - ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；
     - ``look_at``：多模态查看（图像理解）；
     - ``embed``：向量化（记忆检索 / 语义嵌入）；
-    - ``tts``：语音合成（后续 chunk 落地）；
-    - ``asr``：语音识别（后续 chunk 落地）；
-    - ``tool``：工具调用编排（后续 chunk 落地）。
+    - ``tts``：语音合成；
+    - ``asr``：语音识别；
+    - ``tool``：工具调用编排。
     """
 
     CHAT = "chat"

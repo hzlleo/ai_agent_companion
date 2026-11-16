@@ -8,7 +8,7 @@
 职责边界：
 
     - 非流式 ``chat()``：POST /chat/completions → 归一
-      :class:`ChatResponseModel`（P3-2 起携带原生工具调用：请求 ``tools``
+      :class:`ChatResponseModel`（携带原生工具调用：请求 ``tools``
       面透传 + 响应 ``tool_calls`` robust 解析——arguments JSON 字符串
       归一为 dict）；
     - 流式 ``stream()``：SSE 行解析 → 异步迭代产出
@@ -24,7 +24,7 @@
       ``settings.pools.llm_request_timeout_seconds``）——缺省回落共享
       client 自身超时；
     - 错误映射：全部 HTTP / 状态 / 超时 / 流失败映射 ``BusinessException``
-      （复用既有 LLM_* 错误码——P3-2 零新增）。
+      （复用既有 LLM_* 错误码——零新增）。
 
 错误码映射表：
 
@@ -38,6 +38,8 @@
     HTTP 401 / 403（鉴权失败）     LLM_API_KEY_MISSING      否
     其余 HTTP 4xx                  LLM_CALL_FAILED          否
     读 / 写 / 池超时               LLM_REQUEST_FAILED       否
+    流中段传输中断（ReadError /    LLM_CALL_FAILED          否
+    RemoteProtocolError——非超时）
     响应 JSON 非法 / choices 空    LLM_CALL_FAILED          否
     tool_calls arguments 非法      LLM_CALL_FAILED          否
     JSON / 非 JSON 对象
@@ -363,7 +365,11 @@ class LlmHttpClient:
 
         Raises:
             BusinessException: 发起阶段失败（可重试集同 ``chat``）；流中段
-                SSE data 块非法（``LLM_CALL_FAILED``，不重试）。
+                SSE data 块非法（``LLM_CALL_FAILED``，不重试）；流中段
+                传输中断——非超时传输异常（ReadError /
+                RemoteProtocolError 等）按映射表落 ``LLM_CALL_FAILED``，
+                ReadTimeout 落 ``LLM_REQUEST_FAILED``（均不重试——首块
+                产出后重放非幂等）。
         """
         body = build_chat_request_body(self._wire.model, list(messages), params, stream=True)
         response = await self._open_stream_with_retry(body)
@@ -375,6 +381,9 @@ class LlmHttpClient:
                 if payload == _SSE_DONE_MARKER:
                     break
                 yield self._parse_stream_chunk(payload)
+        except httpx.HTTPError as exc:
+            await response.aclose()
+            raise self._map_transport_exception(exc) from exc
         except BaseException:
             await response.aclose()
             raise
@@ -465,7 +474,11 @@ class LlmHttpClient:
             已进入流式态的 2xx 响应（调用方迭代后 ``aclose()`` 关闭）。
 
         Raises:
-            BusinessException: 发起阶段失败（重试耗尽 / 不可重试）。
+            BusinessException: 发起阶段失败（重试耗尽 / 不可重试）；非
+                2xx 响应体读取阶段的传输失败（ReadError /
+                RemoteProtocolError 等非超时异常 → ``LLM_CALL_FAILED``；
+                ReadTimeout → ``LLM_REQUEST_FAILED``——经
+                ``_map_transport_exception`` 映射，原始 httpx 异常不逃逸）。
         """
         async for attempt in self._retrying():
             with attempt:
@@ -484,6 +497,9 @@ class LlmHttpClient:
                     if not response.is_success:
                         await response.aread()
                         self._raise_for_llm_status(response)
+                except httpx.HTTPError as exc:
+                    await response.aclose()
+                    raise self._map_transport_exception(exc) from exc
                 except BaseException:
                     await response.aclose()
                     raise

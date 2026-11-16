@@ -19,14 +19,15 @@
     - 关键词条目按 ``(position, insertion_order)`` 升序累计
       ``estimate_text_tokens``，超出 ``token_budget`` 即截断（其后关键
       字条目不再注入——预算耗尽语义）；
-    - ``recursive_scanning`` 标志读取但 P0 未启用（P1 记忆层扩展点）。
+    - ``recursive_scanning`` 标志为卡片模型保留字段——筛选恒单轮扫描，
+      未实现条目内容命中后的递归再触发。
 
 调用链（网关面）：``chat_by_role / stream_by_role``，role=chat、
 purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；显式参数
 优先于上下文变量——与 ``bind_persona_context`` 语义等价，选直传因其
 可测性与可读性）。
 
-会话持久化（P1 记忆层——**可选绑定，缺省关闭**）：
+会话持久化（**可选绑定，缺省关闭**）：
 
     - 构造注入 ``session_service``（memory 域 ``ChatSessionService``）
       后，``create_session(db_session=...)`` 同步落 ``ff_chat_sessions``
@@ -34,9 +35,10 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
     - 绑定 + 已落库时，``reply / stream_reply`` 的用户与助手回合经
       ``session_scope`` 逐条落 ``ff_chat_messages``（seq 递增；开场白
       不落库——正典确定性回放，resume 后幂等重现）；
-    - ``resume_session(session_id)`` 把持久化会话（含全量消息）回放进
-      内存态（回合重放进历史；卡片按会话归属人格重取当前正典）；
-    - 未绑定持久化服务（P0 形态）时行为与既有完全一致——既有测试面
+    - ``resume_session(session_id)`` 全量读取持久化会话消息，经
+      ``max_history_turns`` 窗口截断后回放进内存态（保留最新回合；
+      卡片按会话归属人格重取当前正典）；
+    - 未绑定持久化服务（纯内存形态）时行为与既有完全一致——既有测试面
       零变更。
 """
 
@@ -90,7 +92,7 @@ CHAT_PURPOSE: str = "chat"
 
 
 # ---------------------------------------------------------------------------
-# token 近似估算（P0 无 tokenizer——结构性预算的确定性估算）
+# token 近似估算（无 tokenizer——结构性预算的确定性估算）
 # ---------------------------------------------------------------------------
 
 
@@ -114,7 +116,7 @@ def _is_cjk_char(ch: str) -> bool:
 
 
 def estimate_text_tokens(text: str) -> int:
-    """粗估文本 token 数（P0 无 tokenizer 的确定性近似）。
+    """粗估文本 token 数（无 tokenizer 的确定性近似）。
 
     估算规则（本工程约定）：CJK 区段字符按 1 token/字计；其余字符按
     4 字符 ≈ 1 token 计（拉丁 BPE 经验值）。世界书 ``token_budget``
@@ -292,7 +294,7 @@ class ChatService:
 
     构造注入（测试 / 装配友好）：网关 / 人格服务 / 会话持久化服务均可
     显式注入；测试注入 fake 网关记录组装消息断言组装契约（零真实网络）。
-    ``session_service=None``（缺省）即 P0 纯内存形态——持久化可选。
+    ``session_service=None``（缺省）即纯内存形态——持久化可选。
     """
 
     def __init__(
@@ -308,8 +310,8 @@ class ChatService:
             gateway: LLM 网关（chat 角色调用面）。
             persona_service: 人格注册表服务（激活人格查找；None = 现场
                 构造无状态默认实例）。
-            session_service: 会话持久化服务（None = 纯内存态——P0 兼容；
-                绑定后 create_session(db_session=...) 落库、reply /
+            session_service: 会话持久化服务（None = 纯内存态——兼容既有
+                形态；绑定后 create_session(db_session=...) 落库、reply /
                 stream_reply 逐回合持久化、resume_session 可用）。
         """
         self._gateway = gateway
@@ -330,7 +332,7 @@ class ChatService:
         """创建聊天会话（快照人格正典 + 绑定 persona 轴；持久化可选）。
 
         持久化条件：``session_service`` 已绑定 **且** ``db_session`` 已
-        提供（二者缺一即纯内存态——P0 兼容）；落库经
+        提供（二者缺一即纯内存态）；落库经
         ``bind_persona_context`` 绑定人格上下文（PersonaMixin 自动注入）。
 
         Args:
@@ -381,7 +383,12 @@ class ChatService:
     async def resume_session(
         self, session_id: int, *, db_session: AsyncSession
     ) -> ChatSessionStateModel:
-        """恢复持久化会话到内存态（消息回放进历史；卡片重取当前正典）。
+        """恢复持久化会话到内存态（全量读取、窗口截断后回放；卡片重取当前正典）。
+
+        回放语义：持久化消息**全量读取**（append-only 完整记录不丢失），
+        但仅回放**最近 ``max_history_turns`` 条**进内存态 ``turns``——
+        与 ``append_turn`` 的滑动窗口同口径（内存窗口是上下文组装面，
+        超窗历史不再进入后续 compose；持久化行不受影响）。
 
         人格作用域契约：会话行经 PersonaMixin 自动过滤——**调用方须先
         绑定目标人格上下文**（``bind_persona_context``）；他人格会话
@@ -393,7 +400,7 @@ class ChatService:
 
         Returns:
             恢复后的 :class:`ChatSessionStateModel`（携带 session_id +
-            回放回合列表）。
+            窗口截断后的回放回合列表——保留最新回合）。
 
         Raises:
             BusinessException: 持久化服务未绑定（``INTERNAL_ERROR``）；
@@ -414,15 +421,17 @@ class ChatService:
             card=persona.card,
             session_id=detail.id,
         )
-        for message in detail.messages:
+        replay_window = detail.messages[-state.max_history_turns :]
+        for message in replay_window:
             state.turns.append(
                 ChatTurnModel(role=message.role, content=message.content, ts_ms=message.ts_ms)
             )
         logger.info(
-            "聊天会话已恢复: session_id={}, persona_id={}, turns={}",
+            "聊天会话已恢复: session_id={}, persona_id={}, persisted={}, replayed={}",
             detail.id,
             persona.id,
-            len(state.turns),
+            len(detail.messages),
+            len(replay_window),
         )
         return state
 
@@ -453,9 +462,12 @@ class ChatService:
     async def reply(self, state: ChatSessionStateModel, user_text: str) -> str:
         """单轮回复（非流式）：追加用户回合 → 组装 → 网关 chat_by_role。
 
-        失败语义：网关异常原样上抛（用户回合保留在历史——调用方决定重试
-        或提示；持久化绑定且已落库时用户回合同样保留在库——重试即重新
-        生成，不重复落用户消息）。
+        失败语义：网关异常原样上抛（用户回合保留在历史——调用方决定
+        重试或提示）。重试语义（文档化决策）：调用方对 ``reply`` 的任何
+        重试都是**完整重发**——用户消息再次进入会话历史；持久化绑定且
+        已落库时同样再落一行用户消息（append-only 日志不静默丢行）。
+        显式的「重生成 / 复用上一条用户输入」API 有意不在本方法提供
+        （推迟至后续 swipes 重试面特性）。
 
         Args:
             state: 会话状态。
@@ -498,8 +510,9 @@ class ChatService:
         增量语义：逐块 ``yield chunk.content``（空增量块跳过）；流自然
         结束后聚合全文追加为 assistant 回合。消费方提前终止
         （``GeneratorExit``）时**不追加助手回合**——半截回复不入历史
-        （文档化决策；持久化面同语义——半截助手回合不落库；用户回合
-        已落，重试即重新生成）。
+        （文档化决策；持久化面同语义——半截助手回合不落库）。重试语义
+        同 ``reply``：调用方重试是完整重发——用户回合已落库时再落一行
+        （append-only；显式重生成 / 复用 API 推迟至后续 swipes 特性）。
 
         Args:
             state: 会话状态。

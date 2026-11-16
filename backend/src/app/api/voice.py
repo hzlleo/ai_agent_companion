@@ -1,4 +1,4 @@
-"""voice 管理 API——TTS 合成 / ASR 转写端点（P4 chunk 1 交付面）。
+"""voice 管理 API——TTS 合成 / ASR 转写端点。
 
     - POST /api/v1/voice/tts —— 文本 → WAV 音频字节（``audio/wav`` 响应 +
       ``X-Latency-Ms`` 合成时延头；人格绑定优先级：请求参数 >

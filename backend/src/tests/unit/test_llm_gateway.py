@@ -347,6 +347,67 @@ async def test_usage_recorder_failure_does_not_break_call(
     assert failing.events == []
 
 
+async def test_local_validation_errors_do_not_pollute_breaker() -> None:
+    """本地校验失败不计熔断：空向量化输入与流式内容分块循环 10 次——计数恒 0。
+
+    端点健康信号只反映真实传输结果：本地编程错误（空输入 / 流式携带
+    多模态分块）在 entry_gate 之前拒绝，健康端点不因调用方缺陷被打开。
+    """
+    manager = await _make_pool_manager(lambda request: _ok_response())
+    try:
+        recorder = RecordingUsageRecorder()
+        embed_entry = _entry("embed-worker", roles=("embed",), base_url="http://embed.test/v1")
+        chat_entry = _entry("main-chat", roles=("chat",))
+        gateway = _gateway(
+            manager,
+            resolver=ModelResolver([embed_entry, chat_entry]),
+            usage_recorder=recorder,
+        )
+        embed_breaker = manager.get_llm_entry_pool().get_entry_breaker(embed_entry)
+        chat_breaker = manager.get_llm_entry_pool().get_entry_breaker(chat_entry)
+
+        for _ in range(10):
+            with pytest.raises(BusinessException) as exc_info:
+                await gateway.embed_by_role([])
+            assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
+        assert embed_breaker.consecutive_failures == 0
+
+        multimodal_messages = [
+            ChatMessageModel(
+                role=ChatMessageRole.USER,
+                content=[{"type": "text", "text": "看图"}],
+            )
+        ]
+        for _ in range(10):
+            with pytest.raises(BusinessException) as exc_info:
+                async for _chunk in gateway.stream_by_role("chat", multimodal_messages):
+                    pass
+            assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
+        assert chat_breaker.consecutive_failures == 0
+
+        # 本地校验失败仍落 error 用量行（观测面保留）
+        validation_events = [e for e in recorder.events if e.status == "error"]
+        assert len(validation_events) == 20
+        assert all(e.error_code == "VALIDATION_ERROR" for e in validation_events)
+    finally:
+        await manager.stop()
+
+
+async def test_embed_transport_failure_still_records_breaker() -> None:
+    """真实传输失败仍计熔断：本地校验豁免不弱化端点健康信号。"""
+    manager = await _make_pool_manager(lambda request: httpx.Response(500, text="down"))
+    try:
+        entry = _entry("embed-worker", roles=("embed",), base_url="http://embed.test/v1")
+        gateway = _gateway(manager, resolver=ModelResolver([entry]))
+        breaker = manager.get_llm_entry_pool().get_entry_breaker(entry)
+        with pytest.raises(BusinessException) as exc_info:
+            await gateway.embed_by_role(["文本"])
+        assert exc_info.value.code == ErrorCode.LLM_CALL_FAILED
+        assert breaker.consecutive_failures == 1
+    finally:
+        await manager.stop()
+
+
 async def test_gateway_requires_started_pools() -> None:
     """池未装配：INTERNAL_ERROR（fail loud——装配顺序错误尽早暴露）。"""
     settings = build_isolated_settings()
@@ -526,6 +587,67 @@ async def test_stream_failure_emits_error_and_records_breaker() -> None:
         event = recorder.events[0]
         assert event.status == "error"
         assert event.error_code == "LLM_CALL_FAILED"
+    finally:
+        await manager.stop()
+
+
+class _ExplodingStream(httpx.AsyncByteStream):
+    """产出若干字节块后抛传输异常的假流（流中段失败注入）。"""
+
+    def __init__(self, chunks: list[bytes], error: httpx.HTTPError) -> None:
+        """初始化假流。
+
+        Args:
+            chunks: 中断前依次产出的字节块。
+            error: 字节块耗尽后抛出的 httpx 传输异常。
+        """
+        self._chunks = list(chunks)
+        self._error = error
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        """逐块产出后抛注入的传输异常。"""
+        for chunk in self._chunks:
+            yield chunk
+        raise self._error
+
+
+async def test_stream_mid_iteration_transport_error_full_chain() -> None:
+    """流中段传输失败全链：映射 BusinessException + 熔断计失败 + error 用量行。
+
+    修复回归面：中段 ReadError 此前以原始 httpx 异常逃逸——网关
+    ``except BusinessException`` 接不住（熔断不计失败、用量 error 行
+    丢失、CLI REPL 被击穿）。映射收口后三面全恢复。
+    """
+    sse_text = 'data: {"choices":[{"index":0,"delta":{"content":"早"},"finish_reason":null}]}\n\n'
+    sse_line = sse_text.encode("utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=_ExplodingStream([sse_line], httpx.ReadError("connection dropped")),
+        )
+
+    manager = await _make_pool_manager(handler)
+    try:
+        recorder = RecordingUsageRecorder()
+        entry = _entry("main-chat", roles=("chat",))
+        gateway = _gateway(manager, resolver=ModelResolver([entry]), usage_recorder=recorder)
+        received: list[str] = []
+        with pytest.raises(BusinessException) as exc_info:
+            async for chunk in gateway.stream_by_role("chat", _messages()):
+                received.append(chunk.content)
+        assert exc_info.value.code == ErrorCode.LLM_CALL_FAILED
+        assert received == ["早"]
+
+        breaker = manager.get_llm_entry_pool().get_entry_breaker(entry)
+        assert breaker.consecutive_failures == 1
+
+        assert len(recorder.events) == 1
+        event = recorder.events[0]
+        assert event.status == "error"
+        assert event.error_code == "LLM_CALL_FAILED"
+        assert event.model_entry == "main-chat"
     finally:
         await manager.stop()
 

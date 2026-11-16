@@ -1,4 +1,4 @@
-"""look_at 管理 API——图像理解端点（P4 chunk 2 交付面）。
+"""look_at 管理 API——图像理解端点。
 
     - POST /api/v1/look_at —— 图片 multipart 上传 + 可选 question 字段 →
       ``ResultDTO`` 包裹的结构化中文描述（description / model_entry /
@@ -22,10 +22,11 @@
       聚焦问题 ≤200 字符）在本层先行校验（系统边界校验——``pydantic
       ValidationError`` 包裹为 ``VALIDATION_ERROR``）；服务层同模型
       复校（直调 / 工具面单一真源）；
-    - **服务装配**：模块级 :class:`LookAtService`（网关注入
-      ``LlmGateway(usage_recorder=...)``——look_at 用量行由网关
-      ``purpose="look_at"`` 自动发射）；测试经 monkeypatch 替换模块级
-      实例注入 fake；
+    - **服务装配**：``LookAtService`` 按请求构造，网关经
+      ``_resolve_request_gateway`` 解析（``app.state.gateway`` 优先
+      ——lifespan 装配形态，用量随装配网关发射；未装配回落裸构造
+      ——与 memories 路由同一解析口径）；测试经 monkeypatch 替换
+      模块级 ``LookAtService`` 构造面注入 fake；
     - **人格绑定**：缺省取当前激活人格（用量 persona_id 归属）；无
       激活人格 → 未绑定形态（persona_id 为空——look_at 是管理面工具，
       不因无人格而拒绝）。
@@ -45,7 +46,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from packages.harness.core.dtos import ResultDTO
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.database.session import get_async_db
-from packages.harness.llm.gateway import LlmGateway, wire_default_usage_recorder
+from packages.harness.llm.gateway import LlmGateway
 from packages.harness.multimodal.look_at import LookAtService
 from packages.harness.multimodal.mm_models import (
     LOOK_AT_IMAGE_MIME_ALLOWLIST,
@@ -58,10 +59,6 @@ router = APIRouter(prefix="/api/v1/look_at", tags=["look_at"])
 
 #: 人格服务实例（无状态——Session 逐请求注入，服务可安全共享）。
 persona_service = PersonaService()
-#: 图像理解服务实例（网关用量默认接线——purpose="look_at" 自动落账）。
-look_at_service = LookAtService(
-    gateway=LlmGateway(usage_recorder=wire_default_usage_recorder())
-)
 
 #: 文件扩展名 → MIME 映射（声明 Content-Type 不在允许清单时的兜底）。
 _EXTENSION_MIME_MAP: dict[str, str] = {
@@ -92,6 +89,23 @@ def _resolve_mime_type(declared: str | None, filename: str) -> str:
     if mapped is not None:
         return mapped
     return (declared or "").strip().lower()
+
+
+def _resolve_request_gateway(request: Request) -> LlmGateway:
+    """解析请求可用的 LLM 网关（app.state.gateway 优先；缺省等价兜底）。
+
+    Args:
+        request: 当前请求（app.state.gateway 由 lifespan 装配）。
+
+    Returns:
+        用于 look_at 调用的 :class:`LlmGateway`（未装配 lifespan 的本地
+        测试面回落裸构造——与装配形态同语义：全局单例延迟解析；用量
+        接线归 lifespan 装配网关，与 memories 路由同一解析口径）。
+    """
+    gateway = cast("LlmGateway | None", getattr(request.app.state, "gateway", None))
+    if gateway is None:
+        return LlmGateway()
+    return gateway
 
 
 async def _parse_look_at_upload(request: Request) -> tuple[bytes, str, str | None]:
@@ -185,8 +199,9 @@ async def look_at_image(
     Args:
         request: 原始 ASGI 请求（multipart/form-data：``image`` 图片字段 +
             可选 ``question`` 聚焦问题字段——解析见
-            ``_parse_look_at_upload``）。
-        db: 注入的异步 Session。
+            ``_parse_look_at_upload``；网关经 ``app.state.gateway``
+            优先解析）。
+        db: 注入的 Session。
 
     Returns:
         ``ResultDTO`` 包裹的图像理解结果（description / model_entry /
@@ -207,7 +222,8 @@ async def look_at_image(
             details={"reason": str(exc)[:300]},
         ) from exc
     persona = await persona_service.get_active_persona(db)
-    result = await look_at_service.describe(
+    service = LookAtService(gateway=_resolve_request_gateway(request))
+    result = await service.describe(
         payload.image,
         payload.mime_type,
         payload.question,

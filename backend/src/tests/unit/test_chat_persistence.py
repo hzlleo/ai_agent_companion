@@ -296,6 +296,33 @@ async def test_resume_roundtrip(persist_env: tuple) -> None:
     assert detail.message_count == 6
 
 
+async def test_resume_truncates_to_history_window(persist_env: tuple) -> None:
+    """resume 窗口截断：超出 max_history_turns 的会话仅回放最新窗口。"""
+    _, service, session_service, persona, db_session = persist_env
+    state = await service.create_session(persona=persona, db_session=db_session)
+    assert state.max_history_turns == 64
+
+    total = state.max_history_turns + 6
+    async with bind_persona_context(persona.id):
+        for index in range(total):
+            await session_service.append_message(
+                db_session,
+                state.session_id,
+                role=ChatMessageRole.USER if index % 2 == 0 else ChatMessageRole.ASSISTANT,
+                content=f"第{index}句",
+            )
+        resumed = await service.resume_session(state.session_id or 0, db_session=db_session)
+
+    assert len(resumed.turns) == state.max_history_turns
+    assert [t.content for t in resumed.turns] == [
+        f"第{index}句" for index in range(total - state.max_history_turns, total)
+    ]
+    # 持久化行不受窗口影响（append-only 全量记录）
+    async with bind_persona_context(persona.id):
+        detail = await session_service.get_session(db_session, state.session_id or 0)
+    assert detail.message_count == total
+
+
 async def test_resume_other_persona_session_not_found(persist_env: tuple) -> None:
     """跨人格恢复：他人格会话经自动过滤不可见（NOT_FOUND）。"""
     _, service, _, persona_a, db_session = persist_env

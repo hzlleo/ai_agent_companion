@@ -7,7 +7,7 @@
     人格。PersonaMixin 的请求上下文自动过滤（无人格上下文即 fail loud）
     与该语义直接冲突（自引用：人格行自身的 persona_id 该是什么？）。
     故两张表均为普通全局表（与 usage 域同一决策模式——跨人格管理面
-    真源不入 PersonaMixin）。P1 记忆表才是 PersonaMixin 的消费面
+    真源不入 PersonaMixin）。memory 域记忆表才是 PersonaMixin 的消费面
     （per-persona 逻辑隔离）。
 
 列与不变式约定：
@@ -21,9 +21,8 @@
           （L 层正典——会话期不可变）；
         - ``voice_profile`` JSON 可空列存储人格语音绑定
           （:class:`~packages.harness.voice.voice_models.VoiceProfileModel`
-          序列化形态——P4 chunk 1 增列；未绑定为 NULL → 合成回落
-          settings 缺省发音人；语音绑定与卡片正交——管理面独立增删，
-          不参与卡片补丁合并语义）；
+          序列化形态；未绑定为 NULL → 合成回落 settings 缺省发音人；
+          语音绑定与卡片正交——管理面独立增删，不参与卡片补丁合并语义）；
         - 乐观锁版本列：**本工程 ORM 无版本计数约定**（database/base.py
           仅有 BigIntIdMixin / TimestampMixin / PersonaMixin，usage 域表
           亦无版本列）——遵循既有约定不引入 version 列；注册表写路径

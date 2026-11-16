@@ -1,4 +1,4 @@
-"""LLM 注册表管理 admin 路由——/api/v1/models（P2 chunk 1 交付）。
+"""LLM 注册表管理 admin 路由——/api/v1/models。
 
     - GET    /api/v1/models/entries          —— 注册表条目（脱敏）+ 解析状态
     - GET    /api/v1/models/roles            —— 五角色绑定面（bound / unbound）

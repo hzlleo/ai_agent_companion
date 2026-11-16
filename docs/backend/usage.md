@@ -51,10 +51,10 @@ llm 网关调用（chat_by_role / chat_for_entry / stream_by_role）
 
 ## 值域
 
-- `UsagePurpose`：`chat` / `duty` / `dream` / `look_at` / `embed`（与 config.ModelRole 一一对应）+ `tts` / `asr` / `tool`（后续 chunk 语音与工具面预留）；
+- `UsagePurpose`：`chat` / `duty` / `dream` / `look_at` / `embed`（与 config.ModelRole 一一对应）+ `tts` / `asr` / `tool`（语音与工具面已接线——tts / asr 经 voice 域 `wire_default_voice_usage_recorder` 默认接线落账；`tool` 为工具循环调用面的 purpose 值域成员，duty 工具循环当前按 `duty` 用途归账）；
 - `UsageStatus`：`success` / `error`；
 - `UsageGroupBy`：`model_entry` / `purpose` / `time_bucket`；
-- `UsageTimeBucket`：`minute`（60_000ms）/ `hour`（3_600_000ms）/ `day`（86_400_000ms）——桶起点 = `floor(ts_ms / 桶宽) * 桶宽`（跨方言经 `floor` 归一整数除法语义）。
+- `UsageTimeBucket`：`minute`（60_000ms）/ `hour`（3_600_000ms）/ `day`（86_400_000ms）——桶起点 = `floor(ts_ms / 桶宽) * 桶宽`（跨方言经 `floor` 归一整数除法语义）；**时间桶起点按 UTC 对齐**（epoch 毫秒整除口径，`day` 桶边界为 UTC 零点——与本地日界无关；如需按本地日界切桶再议）。
 
 ## UsageService API
 

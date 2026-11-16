@@ -133,6 +133,27 @@ def _tail_only_sse(request: httpx.Request) -> httpx.Response:
     )
 
 
+class ExplodingStream(httpx.AsyncByteStream):
+    """产出若干字节块后抛传输异常的假流（流中段失败注入）。"""
+
+    def __init__(self, chunks: list[bytes], error: httpx.HTTPError) -> None:
+        """初始化假流。
+
+        Args:
+            chunks: 中断前依次产出的字节块。
+            error: 字节块耗尽后抛出的 httpx 传输异常（ReadError /
+                ReadTimeout / RemoteProtocolError 等）。
+        """
+        self._chunks = list(chunks)
+        self._error = error
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        """逐块产出后抛注入的传输异常。"""
+        for chunk in self._chunks:
+            yield chunk
+        raise self._error
+
+
 @pytest.fixture
 async def make_client() -> AsyncIterator[Callable[..., LlmHttpClient]]:
     """client 工厂（每用例注入 MockTransport 共享 client；用后统一关闭）。
@@ -437,6 +458,83 @@ async def test_stream_usage_only_and_empty_tail_chunks(
     assert chunks[0].usage.total_tokens == 2
     assert chunks[1].usage is None
     assert chunks[1].content == ""
+
+
+async def test_stream_mid_iteration_read_error_mapped(
+    make_client: Callable[..., LlmHttpClient],
+) -> None:
+    """流中段 ReadError：已产出块照常交付，异常映射 LLM_CALL_FAILED（不重试）。"""
+    calls: list[int] = []
+    sse_text = 'data: {"choices":[{"index":0,"delta":{"content":"你"},"finish_reason":null}]}\n\n'
+    sse_line = sse_text.encode("utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=ExplodingStream([sse_line], httpx.ReadError("connection dropped")),
+        )
+
+    client = make_client(handler, retry_attempts=3, retry_wait_seconds=0.0)
+    received: list[str] = []
+    with pytest.raises(BusinessException) as exc_info:
+        async for chunk in client.stream(_user_message()):
+            received.append(chunk.content)
+    assert exc_info.value.code == ErrorCode.LLM_CALL_FAILED
+    assert exc_info.value.details is not None
+    assert exc_info.value.details["reason"] == "LLM 传输失败"
+    assert received == ["你"]
+    assert len(calls) == 1  # 首块产出后的中断不重放
+
+
+async def test_stream_mid_iteration_read_timeout_maps_request_failed(
+    make_client: Callable[..., LlmHttpClient],
+) -> None:
+    """流中段 ReadTimeout：映射 LLM_REQUEST_FAILED（超时语义——不重试）。"""
+    sse_text = 'data: {"choices":[{"index":0,"delta":{"content":"早"},"finish_reason":null}]}\n\n'
+    sse_line = sse_text.encode("utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=ExplodingStream([sse_line], httpx.ReadTimeout("read timed out")),
+        )
+
+    client = make_client(
+        handler, retry_attempts=3, retry_wait_seconds=0.0, request_timeout_seconds=7.0
+    )
+    with pytest.raises(BusinessException) as exc_info:
+        async for _chunk in client.stream(_user_message()):
+            pass
+    assert exc_info.value.code == ErrorCode.LLM_REQUEST_FAILED
+    assert exc_info.value.details is not None
+    assert exc_info.value.details["timeout_type"] == "ReadTimeout"
+
+
+async def test_stream_open_phase_aread_failure_mapped(
+    make_client: Callable[..., LlmHttpClient],
+) -> None:
+    """发起阶段非 2xx 且响应体读取失败：aread 传输异常映射 LLM_CALL_FAILED。"""
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(
+            500,
+            headers={"Content-Type": "text/plain"},
+            stream=ExplodingStream([], httpx.RemoteProtocolError("peer closed early")),
+        )
+
+    client = make_client(handler, retry_attempts=3, retry_wait_seconds=0.0)
+    with pytest.raises(BusinessException) as exc_info:
+        async for _chunk in client.stream(_user_message()):
+            pass
+    assert exc_info.value.code == ErrorCode.LLM_CALL_FAILED
+    assert exc_info.value.details is not None
+    assert exc_info.value.details["reason"] == "LLM 传输失败"
+    assert len(calls) == 1  # 非超时传输失败不可重试——单次发起
 
 
 # ---------------------------------------------------------------------------

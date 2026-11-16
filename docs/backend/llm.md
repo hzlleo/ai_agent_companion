@@ -6,7 +6,7 @@
 
 | 模块 | 职责 | 关键导出 |
 |---|---|---|
-| `llm_models.py` | 消息 / 参数 / 响应 / embeddings / wire DTO / 用量事件 Model Classes | `ChatMessageModel` / `ChatRequestParams` / `ChatResponseModel` / `ChatStreamChunkModel` / `EmbeddingsResponseModel` / `LlmUsageEvent` |
+| `llm_models.py` | 消息 / 参数 / 响应 / embeddings / wire DTO / 用量事件 Model Classes（含原生工具调用与多模态内容分块契约） | `ChatMessageModel` / `ChatRequestParams` / `ChatResponseModel` / `ChatStreamChunkModel` / `EmbeddingsResponseModel` / `LlmUsageEvent` / `ToolDefinitionModel` / `ToolCallModel` / `TextContentPart` / `ImageContentPart` / `ContentPartModel` / `build_chat_request_body` / `messages_have_content_parts` |
 | `client.py` | OpenAI 兼容客户端（非流式 + SSE 流式 + embeddings + tenacity 重试 + 错误映射） | `LlmHttpClient` / `LlmRetryableError` / `parse_retry_after_seconds` |
 | `gateway.py` | 角色路由门面（wire 构建 → entry_gate → client → 用量发射；chat 与 embed 双面） | `LlmGateway` / `UsageRecorder` / `wire_default_usage_recorder` |
 
@@ -63,8 +63,11 @@ gateway = LlmGateway(
 | HTTP 5xx / 408 / 429 | `LLM_CALL_FAILED` | 503 | 是（429 尊重 Retry-After） |
 | HTTP 401 / 403（鉴权失败） | `LLM_API_KEY_MISSING` | 500 | 否 |
 | 其余 HTTP 4xx | `LLM_CALL_FAILED` | 503 | 否 |
-| 读 / 写 / 池超时 | `LLM_REQUEST_FAILED` | 503 | 否 |
+| 读 / 写 / 池超时（含流中段 ReadTimeout） | `LLM_REQUEST_FAILED` | 503 | 否 |
+| 流中段传输中断（ReadError / RemoteProtocolError——非超时） | `LLM_CALL_FAILED` | 503 | 否 |
 | 响应 JSON 非法 / choices 空 / SSE 块非法 | `LLM_CALL_FAILED` | 503 | 否 |
+| tool_calls arguments 非法 JSON | `LLM_CALL_FAILED` | 503 | 否 |
+| tool_calls arguments 非 JSON 对象 | `LLM_CALL_FAILED` | 503 | 否 |
 | 条目熔断中（entry_gate 预检） | `LLM_REQUEST_FAILED` | 503 | —（冷却剩余毫秒在 details） |
 | 角色未绑定条目 | `MODEL_NOT_FOUND` | 404 | — |
 
@@ -88,7 +91,34 @@ gateway = LlmGateway(
 }
 ```
 
-流式请求体额外携带 `"stream": true` + `"stream_options": {"include_usage": true}`；未设置的采样参数不进入请求体；`params.extra` 原样并入顶层（provider 特有参数透传）。
+携带原生工具面时（`tools` 非空进入请求体，`tool_choice` 缺省 `auto`）：
+
+```json
+{
+  "model": "glm-5.3",
+  "messages": [
+    {"role": "system", "content": "你是值班助手"},
+    {"role": "user", "content": "现在几点了"}
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_time",
+        "description": "获取当前时间",
+        "parameters": {
+          "type": "object",
+          "properties": {"tz": {"type": "string", "description": "时区名"}},
+          "required": []
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto"
+}
+```
+
+流式请求体额外携带 `"stream": true` + `"stream_options": {"include_usage": true}`（**流式恒 content-only 纯文本**——与 `tools` / 多模态内容分块组合在 `build_chat_request_body` 直接拒绝 `VALIDATION_ERROR`，网关流式面在 entry_gate 之前同语义预检）；未设置的采样参数不进入请求体；`params.extra` 原样并入顶层（provider 特有参数透传）。
 
 非流式响应（wire，`extra="ignore"` 容忍端点附加字段）：
 
@@ -151,13 +181,62 @@ data: [DONE]
 - `EmbeddingsResponseModel`：`model` / `vectors: list[list[float]]` / `usage: TokenUsageModel | None` / `latency_ms`；
 - chat 路径零变更（`embeddings` 为 client 新增方法；`_post_with_retry` 增加 `url` 参数默认回落 chat 端点）。
 
+## 工具调用与多模态内容分块（已落地形态）
+
+**原生工具调用**（非流式 `chat` 面）：请求 `tools` 透传（`ToolDefinitionModel` 列表——wire 包裹为 `{"type": "function", "function": {...}}`）+ `tool_choice`（缺省 `auto`）；响应 `tool_calls` 经 client robust 解析归一为 `ToolCallModel` 列表（`arguments` JSON 字符串 → dict，非法 JSON / 非 JSON 对象 → `LLM_CALL_FAILED`）。工具循环链路顺序（单一真相）：调用方组装 `tools` → `chat_by_role` / `chat_for_entry`（非流式）→ 响应 `tool_calls` 非空 → 调用方执行工具 → 以 `assistant`（携带 `tool_calls` 声明轮）+ `tool`（`tool_call_id` 关联 + content 承载反馈）消息回放历史 → 下一轮 `chat`，直至 `tool_calls` 为空或步数上限。流式传输面恒 content-only——`stream=True` 与 `tools` 组合在请求体构建层拒绝（`VALIDATION_ERROR`）。
+
+工具调用响应 wire 形态（`content` 与 `tool_calls` 可并存——模型边说明边调用）：
+
+```json
+{
+  "id": "resp-2",
+  "model": "glm-5.3",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "get_current_time", "arguments": "{\"tz\":\"Asia/Shanghai\"}"}
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {"prompt_tokens": 61, "completion_tokens": 12, "total_tokens": 73}
+}
+```
+
+**多模态内容分块**（非流式面）：`ChatMessageModel.content` 支持 `list[ContentPartModel]`（`TextContentPart` / `ImageContentPart` 判别联合——user 轮携带 `[image, text]` 视觉理解形态；图片经 data URL 内联，不落盘不外发）。纯字符串形态在全部既有调用面原样有效（wire 序列化保持二键 `{"role", "content"}`）；仅分块列表形态序列化为 parts 数组。流式传输面拒绝分块形态（同上 `VALIDATION_ERROR`——网关 `messages_have_content_parts` 预检 + 请求体构建层守卫双层一致）。
+
+```json
+{
+  "model": "qwen2.5-vl-7b",
+  "messages": [
+    {"role": "system", "content": "你是图像理解助手"},
+    {
+      "role": "user",
+      "content": [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,<载荷>"}},
+        {"type": "text", "text": "图里有什么"}
+      ]
+    }
+  ]
+}
+```
+
 ## Model Classes 字段表
 
-`ChatMessageModel`：`role`（system/user/assistant）/ `content`（文本；多模态内容分块由后续多模态 chunk 扩展）。
+`ChatMessageModel`：`role`（system / user / assistant / **tool**——工具结果回放轮，`tool_call_id` 关联 assistant 声明轮）/ `content`（**纯文本或多模态内容分块列表**——`str | list[ContentPartModel]`，多模态分块已落地；assistant 工具调用轮可为空串）/ `tool_calls`（assistant 轮的工具调用声明）/ `tool_call_id`（tool 轮关联 ID）。
 
 `ChatRequestParams`：`temperature`（0.0-2.0）/ `max_tokens`（≥1）/ `top_p`（0-1.0）/ `extra`（provider 透传 dict）——未设置字段不进 wire 请求体。
 
-`ChatResponseModel`：`content` / `finish_reason` / `model`（端点回显，缺省回落请求名）/ `usage: TokenUsageModel | None` / `latency_ms`（epoch 毫秒差）。
+`ChatResponseModel`：`content` / **`tool_calls`**（`list[ToolCallModel]`——空列表 = 纯文本回复；content 与 tool_calls 可并存，调用方按 tool_calls 非空优先走工具循环）/ `finish_reason` / `model`（端点回显，缺省回落请求名）/ `usage: TokenUsageModel | None` / `latency_ms`（epoch 毫秒差）。
 
 `TokenUsageModel`：`input_tokens` / `output_tokens` / `total_tokens`（未提供时按 input+output 归一）。
 

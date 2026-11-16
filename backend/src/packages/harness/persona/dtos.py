@@ -58,7 +58,7 @@ class PersonaCreateDTO(BaseModel):
         status: 可用性状态（默认 disabled——启用是显式管理动作）。
         card: 人格卡片（chara card v2 文档；必填——无卡片的人格无意义）。
         voice_profile: 人格语音绑定（None = 不绑定——合成回落 settings
-            缺省发音人；P4 chunk 1 增字段）。
+            缺省发音人）。
     """
 
     name: str = Field(min_length=1, max_length=128, description="注册名（全局唯一）")

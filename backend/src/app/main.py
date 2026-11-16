@@ -1,4 +1,4 @@
-"""app 装配——create_app 工厂 + lifespan 生命周期（P0-6 最终装配面）。
+"""app 装配——create_app 工厂 + lifespan 生命周期（最终装配面）。
 
 装配契约：
 
@@ -16,6 +16,9 @@
         ↓ init_database(settings.database)     引擎 + 会话工厂（槽位）
         ↓ init_pool_manager + start            公共池（线程 / HTTP / LLM 条目）
         ↓ app.state.gateway = LlmGateway(...)  网关上挂（默认用量接线）
+        ↓ app.state.memory_store = build_memory_store(settings)
+                                                 记忆检索存储上挂（检索 /
+                                                 梦境 / 调度器共用同一产出）
         ↓ _startup_channels(app, settings)  通道层（TELEGRAM_ENABLED 时
                                                 装配 runner 后台任务；token
                                                 缺失 fail fast；QQ_ENABLED
@@ -40,10 +43,12 @@
         ↓ shutdown_shared_thread_pool()        幂等兜底（pool stop 已关）
 
 ``app.state.gateway``：为后续 API 消费方（会话路由 / 通道层）预装配的
-chat 角色网关；P0 的对话入口为控制台 CLI（自建等价栈，见
-harness.chat.cli）。
+chat 角色网关；当前对话入口为控制台 CLI（自建等价栈，见
+harness.chat.cli）。``app.state.memory_store``：记忆检索存储（检索 /
+梦境端点与调度器共用——memories 路由经 ``request.app.state`` 读取，
+未装配 lifespan 的本地测试面回落按请求设置 once 构建上挂）。
 
-CORS（P2 chunk 1）：``ServerConfig.cors_origins`` 驱动——非空时挂
+CORS：``ServerConfig.cors_origins`` 驱动——非空时挂
 ``CORSMiddleware``（``allow_credentials=True`` + 显式 methods / headers；
 默认来源为 Vite dev server 两形态），空列表 = 不挂中间件（同源部署
 形态，CORS 关闭）。隔离测试经 ``create_app(settings=...)`` 注入自定义
@@ -142,7 +147,8 @@ async def startup_app_state(
     """启动全部进程级组件并装配 ``app.state``（可独立驱动的纯异步函数）。
 
     Args:
-        app: 待装配的 FastAPI 应用（gateway 上挂到 ``app.state``）。
+        app: 待装配的 FastAPI 应用（gateway / memory_store 上挂到
+            ``app.state``）。
         settings: Settings（生产传全局单例；测试传隔离实例）。
         config_dir: 结构化配置目录（None = CWD 发现；测试注入 tmp_path）。
 
@@ -160,6 +166,7 @@ async def startup_app_state(
         settings=settings,
         usage_recorder=wire_default_usage_recorder(),
     )
+    app.state.memory_store = build_memory_store(settings)
     await _startup_channels(app, settings)
     await _startup_scheduler(app, settings)
 
@@ -168,7 +175,8 @@ async def shutdown_app_state(app: FastAPI) -> None:
     """停机全部进程级组件（启动严格逆序；幂等——组件未启动时 no-op）。
 
     Args:
-        app: 待收尾的 FastAPI 应用（``app.state.gateway`` 置 None）。
+        app: 待收尾的 FastAPI 应用（``app.state.gateway`` /
+            ``app.state.memory_store`` 置 None）。
     """
     await _shutdown_scheduler(app)
     await _shutdown_channels(app)
@@ -179,6 +187,7 @@ async def shutdown_app_state(app: FastAPI) -> None:
     # 共享线程池幂等兜底（pool stop 已关闭；防御独立初始化路径）。
     shutdown_shared_thread_pool(wait=True)
     app.state.gateway = None
+    app.state.memory_store = None
 
 
 async def _startup_channels(app: FastAPI, settings: Settings) -> None:
@@ -350,8 +359,9 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
     """装配中央调度器（duty / dream 任一启用时注册作业并启动后台任务）。
 
     装配链（顺序锁定）：工具注册表（内置工具——get_current_time 恒注册；
-    search_memory 经记忆检索服务注入，存储与 dream 作业共用同一
-    ``build_memory_store`` 产出——SeekDB 形态下不双建池）→ DutyService
+    search_memory 经记忆检索服务注入，存储与 dream 作业共用
+    ``app.state.memory_store``（startup 装配的同一产出——SeekDB 形态下
+    不双建池））→ DutyService
     （网关 / 注册表 / 通道路由器 + 属主会话——**通道先行装配**，未启用
     通道时路由器为 None → 报告仅落记忆）→ Scheduler（tick 来自
     Settings.scheduler）→ 注册 duty 每日作业 + dream 每日作业（按开关）
@@ -373,7 +383,7 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
     if not duty_enabled and not dream_enabled:
         logger.info("中央调度器未启用（DUTY_ENABLED / DREAM_SCHEDULE_ENABLED 均关闭）——跳过装配")
         return
-    store = build_memory_store(settings)
+    store = app.state.memory_store
     scheduler = Scheduler(tick_seconds=settings.scheduler.tick_seconds)
     if duty_enabled:
         registry = ToolRegistry()

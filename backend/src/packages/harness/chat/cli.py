@@ -1,4 +1,4 @@
-"""chat 域控制台 REPL——用户可见交付面（与当前激活人格流式对话）。
+"""chat 域控制台 REPL——用户可见对话入口（与当前激活人格流式对话）。
 
 启动序列（isolated-safe——全部组件可注入，测试零真实网络 / 零真实配置）::
 
@@ -17,7 +17,7 @@ REPL 命令面：``/quit`` 退出（码 0）/ ``/clear`` 清空会话历史 / ``
 :class:`ChatService` 流式回复（增量 token 直写 stdout）。回车 / EOF
 （Ctrl-D）等效 ``/quit``。
 
-语音回复（P4 chunk 1，``--voice`` 可选旗标）：
+语音回复（``--voice`` 可选旗标）：
 
     - **opt-in**：``--voice`` 传入且 ``settings.voice.tts.enabled=True``
       时，每条人格回复在文本流写完后追加语音合成 + 播放；旗标缺省 =
@@ -32,7 +32,7 @@ REPL 命令面：``/quit`` 退出（码 0）/ ``/clear`` 清空会话历史 / ``
     - **TTS 未启用**：``--voice`` 传入但 ``VOICE_TTS_ENABLED`` 未开 →
       启动期一行提示后按纯文本对话（语音是叠加面，不是前置条件）。
 
-会话持久化（P1 记忆层）：CLI 恒绑定 ``ChatSessionService``——会话与
+会话持久化：CLI 恒绑定 ``ChatSessionService``——会话与
 回合自动落库；``/clear`` 仅清内存历史（持久化消息保留——全量记录），
 ``/new`` 起新会话，``/resume`` 回放历史会话续聊。
 
@@ -87,8 +87,8 @@ from packages.harness.voice.voice_service import (
 
 # ORM 模型注册（导入副作用——init_database 的 create_all 兜底建表依赖
 # Base.metadata 注册；usage 域经网关默认用量接线在 init 之后才 import，
-# 此处显式注册保证 fresh SQLite 启动即有全部表；memory 域四表随 P1
-# 会话持久化落地一并注册）。
+# 此处显式注册保证 fresh SQLite 启动即有全部表；memory 域四表为会话
+# 持久化的落库面，一并注册）。
 _ORM_REGISTRY = (persona_orm, usage_orm, memory_orm)
 
 #: 输入契约（prompt 参数 + 返回一行文本；EOF 以 EOFError 表达）。
@@ -293,7 +293,9 @@ async def run_chat_cli(
         persona_service: 人格服务（None = 现场构造无状态实例）。
         session_service: 会话持久化服务（None = 现场构造——CLI 恒持久化；
             测试可注入绑定共享引擎的实例）。
-        input_fn: 输入回调（默认 ``input``；测试注入序列假输入）。
+            input_fn: 输入回调（默认 ``input``；测试注入序列假输入——
+                同步阻塞读取经 ``run_blocking_ops`` 下沉线程池，不占事件
+                循环；注入面不变，同步 callable 照常兼容）。
         output_fn: 输出回调（默认 stdout 原样写出；测试注入记录器）。
         voice: 是否启用语音回复（``--voice`` 旗标；须
             ``settings.voice.tts.enabled=True`` 方生效——未启用时提示后
@@ -383,7 +385,7 @@ async def run_chat_cli(
 
         while True:
             try:
-                line = input_fn("你> ")
+                line = await run_blocking_ops(input_fn, "你> ")
             except EOFError:
                 output_fn("再见。\n")
                 break
