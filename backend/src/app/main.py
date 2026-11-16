@@ -16,9 +16,11 @@
         ↓ init_database(settings.database)     引擎 + 会话工厂（槽位）
         ↓ init_pool_manager + start            公共池（线程 / HTTP / LLM 条目）
         ↓ app.state.gateway = LlmGateway(...)  网关上挂（默认用量接线）
-        ↓ _startup_channels(app, settings)     通道层（TELEGRAM_ENABLED 时
+        ↓ _startup_channels(app, settings)  通道层（TELEGRAM_ENABLED 时
                                                 装配 runner 后台任务；token
-                                                缺失 fail fast；缺省 no-op）
+                                                缺失 fail fast；QQ_ENABLED
+                                                时注册适配器 + 启动校验
+                                                warn-and-continue；缺省 no-op）
         ↓ _startup_scheduler(app, settings)    中央调度器（DUTY_ENABLED /
                                                  DREAM_SCHEDULE_ENABLED 任一
                                                  开启时装配；**后于通道**——
@@ -67,6 +69,7 @@ from loguru import logger
 
 import packages.harness.persona.orm as persona_orm
 import packages.harness.usage.orm as usage_orm
+from app.api.channels_qq import router as qq_channels_router
 from app.api.health import APP_VERSION
 from app.api.health import router as health_router
 from app.api.look_at import router as look_at_router
@@ -78,6 +81,8 @@ from app.api.voice import router as voice_router
 from app.middleware.error_handler import register_exception_handlers
 from packages.harness.channels.channel_models import ChannelType
 from packages.harness.channels.channel_service import ChannelRouter
+from packages.harness.channels.qq.qq_adapter import NapCatQQAdapter
+from packages.harness.channels.qq.qq_client import NapCatOneBotClient
 from packages.harness.channels.telegram.tg_client import TelegramClient
 from packages.harness.channels.telegram.tg_runner import TelegramChannelRunner
 from packages.harness.chat.service import ChatService
@@ -177,20 +182,33 @@ async def shutdown_app_state(app: FastAPI) -> None:
 
 
 async def _startup_channels(app: FastAPI, settings: Settings) -> None:
-    """装配通道层（``TELEGRAM_ENABLED=true`` 时启动 runner 后台任务）。
+    """装配通道层（``TELEGRAM_ENABLED`` 长轮询 runner + ``QQ_ENABLED`` 适配器）。
 
-    装配链：TelegramClient（token 解析 fail fast）→ ChannelRouter（逐消息
-    ChatService 工厂闭包 ``app.state.gateway`` + ``session_scope`` 持久化）
-    → TelegramChannelRunner → ``router.register_adapter`` → create_task +
-    ``background_task_manager`` 托管。禁用时 no-op（零通道对象构造）。
+    装配链（单一 ChannelRouter 服务全部通道——会话按 ``channel:chat_id``
+    维度天然隔离）：任一通道启用时构造 ChannelRouter（逐消息 ChatService
+    工厂闭包 ``app.state.gateway`` + ``session_scope`` 持久化）；telegram
+    启用时再装配 TelegramClient + TelegramChannelRunner → create_task +
+    ``background_task_manager`` 托管；QQ 启用时装配 NapCatOneBotClient +
+    NapCatQQAdapter → ``router.register_adapter`` + 启动校验
+    get_login_info。全部关闭时 no-op（零通道对象构造）。
+
+    **QQ 与 telegram 的失败语义差异（锁定决策）**：telegram token 缺失
+    fail loud（``CHANNEL_TOKEN_MISSING``——app 拒绝启动）；QQ 启动校验
+    失败（NapCat 不可达 / token 无效）**warn-and-continue**——适配器仍
+    注册（入站 webhook 照常确认），出站发送失败逐消息经路由器兜底隔离。
+    理由：QQ 入站是推送式（NapCat 侧配置上报目标——后端启动时 NapCat
+    尚未就绪是常见部署时序），且 QQ 通道无长驻任务可终止；fail fast
+    只会因部署顺序杀掉整个 app。
 
     Args:
         app: 待装配的 FastAPI 应用（router / runner / task 上挂
-            ``app.state``——router 供后续 duty 等出站投递面复用）。
-        settings: 生效 Settings（``settings.channels.telegram`` 分节）。
+            ``app.state``——router 供后续 duty 等出站投递面复用 + QQ
+            webhook 端点入站消费）。
+        settings: 生效 Settings（``settings.channels.telegram`` /
+            ``settings.channels.qq`` 分节）。
 
     Raises:
-        BusinessException: token 环境变量缺失 / 为空
+        BusinessException: telegram token 环境变量缺失 / 为空
             （``CHANNEL_TOKEN_MISSING``——fail loud）；公共池未启动
             （``INTERNAL_ERROR``——调用顺序契约破坏面）。
     """
@@ -198,8 +216,9 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     app.state.channels_task = None
     app.state.channels_router = None
     telegram = settings.channels.telegram
-    if not telegram.enabled:
-        logger.info("Telegram 通道未启用（TELEGRAM_ENABLED=false）——跳过装配")
+    qq = settings.channels.qq
+    if not telegram.enabled and not qq.enabled:
+        logger.info("通道层未启用（TELEGRAM_ENABLED / QQ_ENABLED 均关闭）——跳过装配")
         return
     manager = get_pool_manager()
     if manager is None or not manager.started:
@@ -208,12 +227,6 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
             message="通道装配前置失败：公共池未启动（lifespan 装配顺序破坏）",
         )
     gateway = app.state.gateway
-    client = TelegramClient(
-        manager.get_http_client(),
-        bot_token_env=telegram.bot_token_env,
-        api_base=telegram.api_base,
-        poll_timeout_seconds=telegram.poll_timeout_seconds,
-    )
     router = ChannelRouter(
         chat_service_factory=lambda: ChatService(
             gateway=gateway,
@@ -221,31 +234,80 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
         ),
         session_factory=session_scope,
     )
-    runner = TelegramChannelRunner(
-        client=client,
-        router=router,
-        backoff_base_seconds=telegram.backoff_base_seconds,
-        backoff_max_seconds=telegram.backoff_max_seconds,
-        state_dir=telegram.state_dir,
-    )
-    router.register_adapter(ChannelType.TELEGRAM, runner)
-    task = asyncio.create_task(runner.run(), name="telegram-channel-runner")
-    background_task_manager.register(task)
-    task.add_done_callback(_log_channel_task_termination)
+    if telegram.enabled:
+        client = TelegramClient(
+            manager.get_http_client(),
+            bot_token_env=telegram.bot_token_env,
+            api_base=telegram.api_base,
+            poll_timeout_seconds=telegram.poll_timeout_seconds,
+        )
+        runner = TelegramChannelRunner(
+            client=client,
+            router=router,
+            backoff_base_seconds=telegram.backoff_base_seconds,
+            backoff_max_seconds=telegram.backoff_max_seconds,
+            state_dir=telegram.state_dir,
+        )
+        router.register_adapter(ChannelType.TELEGRAM, runner)
+        task = asyncio.create_task(runner.run(), name="telegram-channel-runner")
+        background_task_manager.register(task)
+        task.add_done_callback(_log_channel_task_termination)
+        app.state.channels_runner = runner
+        app.state.channels_task = task
+        logger.info(
+            "Telegram 通道 runner 已启动（managed background task）: state_dir={}",
+            telegram.state_dir,
+        )
+    if qq.enabled:
+        qq_client = NapCatOneBotClient(
+            manager.get_http_client(),
+            base_url=qq.http_api_base_url,
+            access_token_env=qq.access_token_env,
+            request_timeout_seconds=qq.request_timeout_seconds,
+        )
+        adapter = NapCatQQAdapter(client=qq_client)
+        router.register_adapter(ChannelType.QQ, adapter)
+        await _validate_qq_startup(qq_client)
+        logger.info(
+            "QQ 通道适配器已注册（webhook 入站 + NapCat HTTP API 出站）: base_url={}",
+            qq.http_api_base_url,
+        )
     app.state.channels_router = router
-    app.state.channels_runner = runner
-    app.state.channels_task = task
+
+
+async def _validate_qq_startup(client: NapCatOneBotClient) -> None:
+    """QQ 启动校验 get_login_info（warn-and-continue——不阻断启动）。
+
+    与 telegram ``_startup_validate`` 的差异（文档化决策）：telegram 是
+    长驻轮询任务（token 无效 fail fast 终止任务 + 错误日志）；QQ 无长驻
+    任务且入站为推送式——校验失败仅告警，适配器保持注册（出站失败逐
+    消息经路由器兜底隔离，不因启动时序杀 app）。
+
+    Args:
+        client: NapCat OneBot v11 客户端（共享池 client 承载）。
+    """
+    try:
+        login = await client.get_login_info()
+    except BusinessException as exc:
+        logger.warning(
+            "QQ 通道启动校验失败（warn-and-continue——适配器仍注册，出站失败将逐消息报错）: {}",
+            exc.message,
+        )
+        return
     logger.info(
-        "Telegram 通道 runner 已启动（managed background task）: state_dir={}",
-        telegram.state_dir,
+        "QQ 通道启动校验通过: user_id={}, nickname={}",
+        login.user_id,
+        login.nickname or "(未提供)",
     )
 
 
 async def _shutdown_channels(app: FastAPI) -> None:
-    """停机通道层（先于公共池——runner 消费共享 HTTP client；幂等）。
+    """停机通道层（先于公共池——通道组件消费共享 HTTP client；幂等）。
 
-    停机链：``request_stop``（优雅）→ bounded 等待任务收尾 → 超时
-    ``cancel`` 兜底（在途长轮询被取消——offset 已逐批持久化，重启安全）。
+    停机链（telegram runner）：``request_stop``（优雅）→ bounded 等待任务
+    收尾 → 超时 ``cancel`` 兜底（在途长轮询被取消——offset 已逐批持久化，
+    重启安全）。QQ 通道无长驻任务（推送式入站 + 适配器注册态）——仅随
+    ``channels_router`` 槽位复位（共享池 client 生命周期归 pools）。
 
     Args:
         app: 待收尾的 FastAPI 应用（``channels_router`` / ``channels_runner``
@@ -539,6 +601,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(voice_router)
     app.include_router(look_at_router)
     app.include_router(models_router)
+    app.include_router(qq_channels_router)
     app.include_router(health_router)
     app.state.settings = effective_settings
     return app

@@ -21,7 +21,8 @@
       LLM 信号量 / 熔断阈值）
     - ``LlmEndpointConfig``  —— LLM 默认端点 env 面（env_prefix=``LLM_``）
     - ``ChannelsSettings``   —— 通道域分节（``Settings.channels``；telegram
-      子模型 env_prefix=``TELEGRAM_``——P3 chunk 1）
+      子模型 env_prefix=``TELEGRAM_``——P3 chunk 1；qq 子模型 env_prefix=
+      ``QQ_``——P4 chunk 4）
     - ``DutySettings``       —— 值班轮分节（``Settings.duty``；env_prefix=
       ``DUTY_``——P3 chunk 2）
     - ``DreamScheduleSettings`` —— 梦境调度分节（``Settings.dream_schedule``；
@@ -63,6 +64,7 @@ __all__ = [
     "LlmEndpointConfig",
     "SeekDBSettings",
     "TelegramSettings",
+    "QqChannelSettings",
     "ChannelsSettings",
     "DutySettings",
     "DreamScheduleSettings",
@@ -630,20 +632,76 @@ class TelegramSettings(BaseSettings):
         return self
 
 
+class QqChannelSettings(BaseSettings):
+    """QQ 通道配置（env_prefix=``QQ_``——P4 chunk 4 通道层）。
+
+    锁定决策：``enabled=False``（默认）——零配置开发可用、测试 hermetic；
+    ``enabled=True`` 时 app lifespan 装配 QQ 通道适配器（NapCat OneBot
+    v11 HTTP API 出站 + webhook 推送入站——**无长驻 runner**，与
+    telegram 的差异见 docs/backend/channels.md QQ 一节）。
+
+    双 token 环境变量间接（密钥永不落 yaml / 配置树——与 telegram
+    ``bot_token_env`` 同模式；QQ 的差异是 token **可选**）：
+
+        - ``access_token_env``——**出站**鉴权（NapCat HTTP API 侧的
+          access token；配置时以 ``Authorization: Bearer`` 头携带）；
+          NapCat 未开启鉴权是合法部署形态 → 变量为空时照常调用（无
+          Authorization 头）；NapCat 开启而本侧未配 → 调用得 401/403 →
+          ``CHANNEL_TOKEN_MISSING``（逐消息隔离，不阻断启动）；
+        - ``webhook_token_env``——**入站**校验（NapCat 事件上报侧配置
+          的 access token；webhook 端点按 ``Authorization: Bearer`` 恒时
+          比较）。**空 = 鉴权关闭**（文档化取舍：仅适合 NapCat 与后端
+          同机 / 可信内网部署；公网暴露必须配置，否则任何人可向
+          webhook 注入伪造事件）。
+
+    Attributes:
+        enabled: 是否启用 QQ 通道（False = 不装配适配器 / webhook 直传忽略）。
+        http_api_base_url: NapCat HTTP API 基础 URL（单一动作对象包裹
+            POST 的目标——见 harness/channels/qq/qq_client）。
+        access_token_env: 出站 access token 环境变量名（实际 token 从该
+            变量读取；空 = NapCat 未开启鉴权形态）。
+        webhook_token_env: 入站 webhook 校验 token 环境变量名（实际
+            token 从该变量读取；空 = 入站鉴权关闭——见类 docstring 取舍）。
+        request_timeout_seconds: 单次动作请求超时秒数。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用 QQ 通道")
+    http_api_base_url: str = Field(
+        default="http://127.0.0.1:3000", min_length=1, description="NapCat HTTP API 基础 URL"
+    )
+    access_token_env: str = Field(
+        default="QQ_ACCESS_TOKEN", min_length=1, description="出站 access token 环境变量名"
+    )
+    webhook_token_env: str = Field(
+        default="QQ_WEBHOOK_TOKEN", min_length=1, description="入站 webhook 校验 token 环境变量名"
+    )
+    request_timeout_seconds: float = Field(default=15.0, gt=0, description="单次动作请求超时（秒）")
+
+    model_config = SettingsConfigDict(
+        env_prefix="QQ_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class ChannelsSettings(BaseModel):
     """通道域配置分节（``Settings.channels``——多平台通道聚合容器）。
 
-    P3 chunk 1 仅含 telegram 子模型；P4 多通道扩展（B站 / QQ 等）在此
-    追加同级子模型（各自独立 env_prefix 的 ``BaseSettings``——本工程
-    约定：env 面子配置为 BaseSettings，聚合容器为普通 BaseModel）。
+    P3 chunk 1 含 telegram 子模型；P4 chunk 4 增 qq 子模型（NapCat /
+    OneBot v11）；后续多通道扩展（B站等）在此追加同级子模型（各自独立
+    env_prefix 的 ``BaseSettings``——本工程约定：env 面子配置为
+    BaseSettings，聚合容器为普通 BaseModel）。
 
     Attributes:
         telegram: Telegram 通道配置（默认关闭）。
+        qq: QQ 通道配置（默认关闭——NapCat OneBot v11）。
     """
 
     telegram: TelegramSettings = Field(
         default_factory=TelegramSettings, description="Telegram 通道配置"
     )
+    qq: QqChannelSettings = Field(default_factory=QqChannelSettings, description="QQ 通道配置")
 
 
 class TtsSettings(BaseSettings):
@@ -778,7 +836,8 @@ class Settings(BaseSettings):
         pools: 共享池配置。
         llm: LLM 默认端点 env 面。
         seekdb: SeekDB 检索存储配置（enabled=False 默认——SQLite 回退）。
-        channels: 通道域配置分节（telegram 默认关闭——P3 chunk 1）。
+        channels: 通道域配置分节（telegram / qq 默认关闭——P3 chunk 1 /
+            P4 chunk 4）。
         duty: 值班轮配置（默认关闭——P3 chunk 2）。
         dream_schedule: 梦境定时调度配置（默认关闭——P3 chunk 2）。
         scheduler: 中央调度器配置（tick 间隔——P3 chunk 2）。

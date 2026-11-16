@@ -124,6 +124,23 @@ os.environ["TELEGRAM_STATE_DIR"] = "data/channels"
 os.environ["TELEGRAM_TEST_BOT_TOKEN"] = "test-only-telegram-bot-token"
 os.environ["TELEGRAM_BOT_TOKEN"] = "test-only-telegram-bot-token"
 
+# --- QQ 通道（QQ_ 前缀 → QqChannelSettings；默认关闭 → 测试零真实连接；
+#     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试。双
+#     token 间接：出站 access token 经 QQ_TEST_ACCESS_TOKEN（NapCat HTTP
+#     API 鉴权）；入站 webhook token 经 QQ_TEST_WEBHOOK_TOKEN（上报校验
+#     ——默认非空 = 测试默认开启入站鉴权，鉴权矩阵按需 monkeypatch）；
+#     单测经 MockTransport / fake 消费，永不真实连接） ---
+os.environ["QQ_ENABLED"] = "false"
+os.environ["QQ_HTTP_API_BASE_URL"] = "http://127.0.0.1:3000"
+os.environ["QQ_ACCESS_TOKEN_ENV"] = "QQ_TEST_ACCESS_TOKEN"
+os.environ["QQ_WEBHOOK_TOKEN_ENV"] = "QQ_TEST_WEBHOOK_TOKEN"
+os.environ["QQ_REQUEST_TIMEOUT_SECONDS"] = "15"
+# 双 token 本值（指向的变量 + 默认变量名——测试专用值，不可触达真实 NapCat）
+os.environ["QQ_TEST_ACCESS_TOKEN"] = "test-only-qq-access-token"
+os.environ["QQ_ACCESS_TOKEN"] = "test-only-qq-access-token"
+os.environ["QQ_TEST_WEBHOOK_TOKEN"] = "test-only-qq-webhook-token"
+os.environ["QQ_WEBHOOK_TOKEN"] = "test-only-qq-webhook-token"
+
 # --- 值班轮（DUTY_ 前缀 → DutySettings；默认关闭 → 测试零调度副作用；
 #     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试） ---
 os.environ["DUTY_ENABLED"] = "false"
