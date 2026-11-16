@@ -14,7 +14,7 @@ import { renderWithProviders } from '@/test/utils'
 
 describe('PersonaListPage', () => {
   it('首页加载渲染行（游标分页首页 2 条）', async () => {
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     expect(await screen.findByTestId('persona-row-2')).toBeInTheDocument()
     expect(screen.getByTestId('persona-row-1')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '加载更多' })).toBeInTheDocument()
@@ -26,7 +26,7 @@ describe('PersonaListPage', () => {
 
   it('加载更多：追加末页并终止翻页', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     await screen.findByTestId('persona-row-2')
     await user.click(screen.getByRole('button', { name: '加载更多' }))
     await waitFor(() => expect(screen.getByTestId('persona-row-3')).toBeInTheDocument())
@@ -35,7 +35,7 @@ describe('PersonaListPage', () => {
 
   it('status 过滤：仅停用（disabled）行呈现', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     await screen.findByTestId('persona-row-2')
     await user.selectOptions(screen.getByLabelText('状态'), 'disabled')
     await waitFor(() => expect(screen.getByTestId('persona-row-3')).toBeInTheDocument())
@@ -50,7 +50,7 @@ describe('PersonaListPage', () => {
         ),
       ),
     )
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     expect(await screen.findByText('暂无人格')).toBeInTheDocument()
   })
 
@@ -61,7 +61,7 @@ describe('PersonaListPage', () => {
         HttpResponse.json(errorResult('服务暂不可用', 'UNAVAILABLE'), { status: 503 }),
       ),
     )
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     expect(await screen.findByText(/人格列表加载失败：服务暂不可用/)).toBeInTheDocument()
     // 重试 → 默认 handlers（成功形态）恢复可见。
     server.use(
@@ -84,7 +84,7 @@ describe('PersonaListPage', () => {
 
   it('激活：确认对话框 → 成功 toast', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     await screen.findByTestId('persona-row-2')
     // companion-2（active 状态、未激活位）可激活。
     await user.click(withinRow(screen.getByTestId('persona-row-2'), '激活'))
@@ -101,7 +101,7 @@ describe('PersonaListPage', () => {
         HttpResponse.json(errorResult('停用状态的人格不可激活', 'CONFLICT'), { status: 409 }),
       ),
     )
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     await screen.findByTestId('persona-row-2')
     await user.click(withinRow(screen.getByTestId('persona-row-2'), '激活'))
     await user.click(screen.getByRole('button', { name: '激活' }))
@@ -110,7 +110,7 @@ describe('PersonaListPage', () => {
 
   it('停用状态行：激活按钮禁用', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     await screen.findByTestId('persona-row-2')
     await user.click(screen.getByRole('button', { name: '加载更多' }))
     const disabledRow = await waitFor(() => screen.getByTestId('persona-row-3'))
@@ -123,7 +123,7 @@ describe('PersonaListPage', () => {
 
   it('停用激活：确认 → 成功 toast', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     await screen.findByTestId('persona-row-1')
     await user.click(withinRow(screen.getByTestId('persona-row-1'), '停用'))
     expect(screen.getByRole('heading', { name: '停用激活' })).toBeInTheDocument()
@@ -133,7 +133,7 @@ describe('PersonaListPage', () => {
 
   it('删除：激活守卫 409 → toast 呈现后端提示', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     await screen.findByTestId('persona-row-1')
     await user.click(withinRow(screen.getByTestId('persona-row-1'), '删除'))
     expect(screen.getByText(/该操作不可恢复/)).toBeInTheDocument()
@@ -143,7 +143,7 @@ describe('PersonaListPage', () => {
 
   it('删除：非激活人格成功 → toast', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     await screen.findByTestId('persona-row-2')
     await user.click(withinRow(screen.getByTestId('persona-row-2'), '删除'))
     await user.click(screen.getByRole('button', { name: '删除' }))
@@ -152,7 +152,7 @@ describe('PersonaListPage', () => {
 
   it('复制：对话框打开并成功复制', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     await screen.findByTestId('persona-row-2')
     await user.click(withinRow(screen.getByTestId('persona-row-2'), '复制'))
     expect(await screen.findByText('复制人格')).toBeInTheDocument()
@@ -163,7 +163,7 @@ describe('PersonaListPage', () => {
 
   it('批量选择 + 批量删除：部分成功结果对话框逐项呈现', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     await screen.findByTestId('persona-row-1')
     screen.getByTestId('persona-row-2')
 
@@ -185,7 +185,7 @@ describe('PersonaListPage', () => {
 
   it('全选开关作用于已加载行', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     await screen.findByTestId('persona-row-2')
     await user.click(screen.getByLabelText('全选当前已加载人格'))
     expect(screen.getByRole('button', { name: /批量删除（已选 2）/ })).toBeInTheDocument()
@@ -194,14 +194,14 @@ describe('PersonaListPage', () => {
   })
 
   it('未选择时批量删除禁用', async () => {
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     await screen.findByTestId('persona-row-2')
     expect(screen.getByRole('button', { name: /批量删除/ })).toBeDisabled()
   })
 
   it('取消确认对话框不触发请求', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<PersonaListPage />, { route: '/personas' })
+    renderWithProviders(<PersonaListPage />, { route: '/personas', path: '/personas' })
     await screen.findByTestId('persona-row-1')
     await user.click(withinRow(screen.getByTestId('persona-row-1'), '删除'))
     await user.click(screen.getByRole('button', { name: '取消' }))

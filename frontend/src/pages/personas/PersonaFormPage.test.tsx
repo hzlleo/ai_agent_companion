@@ -11,7 +11,7 @@ import {
   okResult,
   server,
 } from '@/test/server'
-import { renderWithProviders } from '@/test/utils'
+import { renderWithProviders, NAVIGATED_AWAY_TESTID } from '@/test/utils'
 
 describe('PersonaFormPage — 创建模式', () => {
   it('空表单提交：校验错误内联呈现（不发请求）', async () => {
@@ -108,6 +108,7 @@ describe('PersonaFormPage — 创建模式', () => {
     await user.type(screen.getByLabelText('称呼名'), '小夜')
     await user.click(screen.getByRole('button', { name: '创建人格' }))
     expect(await screen.findByText(/已创建/)).toBeInTheDocument()
+    expect(await screen.findByTestId(NAVIGATED_AWAY_TESTID)).toBeInTheDocument()
   })
 
   it('创建 409（注册名占用）→ toast 呈现后端提示', async () => {
@@ -200,6 +201,7 @@ describe('PersonaFormPage — 编辑模式', () => {
     expect(putBodies[1]?.url).toBe('/api/v1/personas/1/card')
     expect((putBodies[1]?.body as { name: string }).name).toBe('新称呼')
     expect(await screen.findByText('人格已更新（基础字段 + 卡片）')).toBeInTheDocument()
+    expect(await screen.findByTestId(NAVIGATED_AWAY_TESTID)).toBeInTheDocument()
   })
 
   it('基础字段更新失败 → toast 且不触发卡片替换', async () => {
