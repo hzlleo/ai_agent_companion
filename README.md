@@ -7,17 +7,17 @@
 - **多人格注册表**：chara card v2 人设卡 + L/M/S 三层心理状态 + 人格切换/复制，记忆与平台账号按人格隔离
 - **三层记忆**：情景（append-only 事件日志 + 每日日记）/ 策展（MEMORY.md + USER.md + 关系状态）/ 夜间梦境整理（规则门控 + provenance 分级）
 - **统一检索**：SeekDB（向量 + BM25 + 标量过滤单一引擎，MySQL 协议原生 async）+ MySQL 权威关系库；双时间线先以关系建模落地
-- **值班轮 + 调度**：任务书（charter）模式 + 写操作审批门 + 全量审计
-- **工具层**：MCP 工具协议 + `look_at` 视觉理解（本地 Qwen3-VL，主模型无需多模态）
+- **值班轮 + 调度**：任务书（charter）模式 + 写入类平台工具经 safety 审批门接入（规划中）+ 全量审计
+- **工具层**：OpenAI 兼容原生工具调用 + docker 沙盒隔离执行 + `look_at` 视觉理解（本地 Qwen3-VL，主模型无需多模态）
 - **管理后台**：人格/记忆/配置/工具全管理 + Token 用量多维分析（时间 × 模型 × 用途 × 输入/输出/总量）
-- **语音**（P4）：CosyVoice3-0.5B TTS + Qwen3-ASR-0.6B 流式识别，独立本地服务进程
+- **语音**：CosyVoice3-0.5B TTS + Qwen3-ASR-0.6B 流式识别，独立本地服务进程
 
 ## 技术栈
 
 | 层 | 选型 |
 |---|---|
 | 后端 | Python 3.12 + FastAPI + Pydantic v2 + SQLAlchemy 2.0 async |
-| 前端 | React 19 + Vite（P2 落地） |
+| 前端 | React 19 + Vite |
 | 关系库 | MySQL 8.x（aiomysql 异步驱动） |
 | 检索 | SeekDB（AI-native 搜索数据库，MySQL 协议） |
 | 主 LLM | 远端 vLLM 0.32+（多 provider 网关，OpenAI 兼容） |
@@ -52,8 +52,8 @@ cd ../frontend && pixi install && pixi run install  # 前端环境（Node 22 + n
 pixi run dev                # 前端开发服务器（5173，连本机后端 8000）
 ```
 
-配置三件套（`.env.example` / `config.example.yaml` / `extensions_config.json.example`）由
-`pixi run setup` 交互式向导生成（config 模块落地后可用），全部配置项均受管理。
+配置 example 三件套（`.env.example` / `config.example.yaml` / `extensions_config.example.json`）由
+`pixi run gen-examples` 从 Pydantic 配置类自动生成；真实配置经 `pixi run setup` 交互式向导生成，全部配置项均受管理。
 
 ## 工程约束
 

@@ -1,4 +1,4 @@
-# persona — 多人格注册表（P0-5 交付）
+# persona — 多人格注册表
 
 `backend/src/packages/harness/persona/` 承载多人格注册表：chara card v2 人格卡片（L 层正典）+ M/S 心理状态层 + 事务性单激活切换。表名 `ff_personas` / `ff_persona_states`（本工程 `ff_` 前缀约定）。首个 app 层交付面（`app/api/personas.py` 管理 API + `app/middleware/error_handler.py` 共享异常处理器）随本域落地。
 
@@ -26,7 +26,7 @@ L 层不入状态表的理由：身份正典与可变状态的生命周期不同
 
 ## 关键设计决策
 
-1. **注册表是全局管理面数据（非 PersonaMixin）**：admin 需在无人格上下文下跨人格列出 / 切换 / 复制 / 删除人格；PersonaMixin 的请求上下文自动过滤（缺上下文即 fail loud）与该语义直接冲突（人格行自身的 persona_id 无从定义）。P1 记忆表才是 PersonaMixin 消费面（per-persona 逻辑隔离）。
+1. **注册表是全局管理面数据（非 PersonaMixin）**：admin 需在无人格上下文下跨人格列出 / 切换 / 复制 / 删除人格；PersonaMixin 的请求上下文自动过滤（缺上下文即 fail loud）与该语义直接冲突（人格行自身的 persona_id 无从定义）。记忆表才是 PersonaMixin 消费面（per-persona 逻辑隔离）。
 2. **status（可用性）与 is_active（单激活位）正交**：`status=active/disabled` 是管理面可用性开关；`is_active` 是「当前唯一激活人格」绑定位——全表至多一行 `True`。激活要求 `status=active`；status 切 disabled 时自动清激活位（停用即下线，杜绝矛盾态）。
 3. **事务性单激活切换**：`activate` 在单事务内「全表清激活位 → 激活目标」——激活 B 必然去激活 A；任一步失败整体回滚。`deactivate` 允许归零（系统态），幂等。
 4. **删除守卫（本工程锁定语义）**：删除**当前激活人格被禁止**（`CONFLICT`，调用方须先 `deactivate` 显式两步）；删除非激活人格时同事务清理其 M/S 状态行（SQLite 测试方言默认不启用 FK 强制，服务层显式删除保证跨方言一致；DB 级 `ON DELETE CASCADE` 仅作直删 SQL 兜底）。
@@ -42,7 +42,7 @@ L 层不入状态表的理由：身份正典与可变状态的生命周期不同
     ↓ 唯一名校验（CONFLICT fail loud）→ PersonaRow（status 缺省 disabled，is_active=False）
     ↓ 管理面 PUT /{id}（status=active 启用）
     ↓ 管理面 POST /{id}/activate（单事务：全表清位 → 激活目标）
-    ↓ 运行期（P0-6 chat 会话）async with bind_persona_context(persona.id):
+    ↓ 运行期（chat 会话）async with bind_persona_context(persona.id):
     ↓     PersonaMixin 表自动按 str(persona.id) 隔离；llm 网关用量记账携带 persona_id
 ```
 

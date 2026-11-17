@@ -293,9 +293,9 @@ async def run_chat_cli(
         persona_service: 人格服务（None = 现场构造无状态实例）。
         session_service: 会话持久化服务（None = 现场构造——CLI 恒持久化；
             测试可注入绑定共享引擎的实例）。
-            input_fn: 输入回调（默认 ``input``；测试注入序列假输入——
-                同步阻塞读取经 ``run_blocking_ops`` 下沉线程池，不占事件
-                循环；注入面不变，同步 callable 照常兼容）。
+        input_fn: 输入回调（默认 ``input``；测试注入序列假输入——同步
+            阻塞读取经 ``run_blocking_ops`` 下沉线程池，不占事件循环；
+            注入面不变，同步 callable 照常兼容）。
         output_fn: 输出回调（默认 stdout 原样写出；测试注入记录器）。
         voice: 是否启用语音回复（``--voice`` 旗标；须
             ``settings.voice.tts.enabled=True`` 方生效——未启用时提示后

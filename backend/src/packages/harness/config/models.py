@@ -770,6 +770,9 @@ class AsrSettings(BaseSettings):
             值——与部署侧模型 id 同名约定）。
         request_timeout_seconds: 单次转写请求超时秒数（音频上传 + 转写）。
         language: 缺省语言提示（None = 端点自动检测；请求级参数覆盖）。
+        max_upload_bytes: ASR 上传请求体大小上限（字节；25MB 量级——
+            音频载荷体积天然大于截图，与 look_at 图像 10MB 上限同为
+            资源面守卫但量级不同）。
     """
 
     enabled: bool = Field(default=False, description="是否启用 ASR 语音识别")
@@ -784,6 +787,12 @@ class AsrSettings(BaseSettings):
     )
     language: str | None = Field(
         default=None, description="缺省语言提示（None = 端点自动检测）"
+    )
+    max_upload_bytes: int = Field(
+        default=26214400,
+        ge=1024,
+        description="ASR 上传请求体上限（字节；25MB 量级——音频体积天然大于截图，"
+        "与 look_at 图像 10MB 上限同为资源面守卫）",
     )
 
     model_config = SettingsConfigDict(

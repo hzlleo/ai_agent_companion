@@ -5,11 +5,14 @@
     - disabled（缺省）：零沙盒装配（build_sandbox_client 零调用）；
     - enabled + 探测成功 + token 就绪：http_fetch 注册进 duty 注册表
       （内置工具面之后追加）+ 代理执行器回路（fake 客户端）；
-    - enabled + 探测失败：跳过注册（duty 工具面仅内置工具）；
+    - enabled + 探测失败：跳过注册（沙盒工具面不出现）；
     - enabled + token 未配置：跳过注册（同上）；
     - duty 关闭 + sandbox 开启：零注册表（沙盒消费面是 duty 工具循环）；
     - build_sandbox_client 接线：共享池 http client + settings.tools_sandbox
       配置面透传。
+
+全部矩阵行均含 look_at 工具（生产接线——duty 分支恒注册，不受沙盒
+开关影响）。
 
 零真实网络：FakeScheduler / FakeSandboxClient 注入（真实装配对象零
 调用副作用）。
@@ -32,6 +35,7 @@ from packages.harness.config.models import (
     ToolsSandboxSettings,
 )
 from packages.harness.config.settings import build_isolated_settings
+from packages.harness.multimodal.look_at import LOOK_AT_TOOL_NAME
 from packages.harness.tools.sandbox_models import (
     BILI_TOOL_NAMES,
     BILI_VIDEO_INFO_TOOL_NAME,
@@ -41,6 +45,8 @@ from packages.harness.tools.tool_models import ToolResultModel
 
 #: 内置工具面（装配矩阵断言基准——duty 启用 + 检索服务注入形态）。
 _BUILTIN_TOOLS = ["get_current_time", "search_memory"]
+#: look_at 工具（duty 分支恒注册——不受沙盒开关影响）。
+_LOOK_AT_TOOLS = [LOOK_AT_TOOL_NAME]
 
 
 def _settings(
@@ -153,7 +159,7 @@ class TestWiringMatrix:
     async def test_disabled_skips_sandbox(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """disabled：零沙盒装配（工厂零调用；工具面仅内置工具）。"""
+        """disabled：零沙盒装配（工厂零调用；工具面 = 内置 + look_at）。"""
         monkeypatch.setattr(app_main, "Scheduler", FakeScheduler)
         factory_called: list[bool] = []
 
@@ -171,7 +177,7 @@ class TestWiringMatrix:
         try:
             registry = app.state.duty_registry
             assert registry is not None
-            assert registry.tool_names == _BUILTIN_TOOLS
+            assert registry.tool_names == _BUILTIN_TOOLS + _LOOK_AT_TOOLS
         finally:
             await shutdown_app_state(app)
         assert factory_called == []
@@ -200,6 +206,7 @@ class TestWiringMatrix:
             assert registry.tool_names == _BUILTIN_TOOLS + [
                 HTTP_FETCH_TOOL_NAME,
                 *BILI_TOOL_NAMES,
+                *_LOOK_AT_TOOLS,
             ]
             # 工厂接线：共享池 http client + settings.tools_sandbox 配置面
             assert captured["settings_face"] is settings.tools_sandbox
@@ -229,7 +236,7 @@ class TestWiringMatrix:
     async def test_enabled_but_unhealthy_skips_with_warning(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """enabled + 探测失败：跳过注册（duty 工具面仅内置工具——warn-and-continue）。"""
+        """enabled + 探测失败：跳过沙盒注册（工具面 = 内置 + look_at——warn-and-continue）。"""
         monkeypatch.setattr(app_main, "Scheduler", FakeScheduler)
         fake = FakeSandboxClient(healthy=False)
         _install_fake_client(monkeypatch, fake)
@@ -242,7 +249,7 @@ class TestWiringMatrix:
         try:
             registry = app.state.duty_registry
             assert registry is not None
-            assert registry.tool_names == _BUILTIN_TOOLS
+            assert registry.tool_names == _BUILTIN_TOOLS + _LOOK_AT_TOOLS
             assert fake.probe_calls == 1
         finally:
             await shutdown_app_state(app)
@@ -250,7 +257,7 @@ class TestWiringMatrix:
     async def test_enabled_but_token_missing_skips(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """enabled + token 未配置：跳过注册（探测零调用——本地检查先行）。"""
+        """enabled + token 未配置：跳过沙盒注册（探测零调用——本地检查先行）。"""
         monkeypatch.setattr(app_main, "Scheduler", FakeScheduler)
         fake = FakeSandboxClient(has_token=False, healthy=True)
         _install_fake_client(monkeypatch, fake)
@@ -263,7 +270,7 @@ class TestWiringMatrix:
         try:
             registry = app.state.duty_registry
             assert registry is not None
-            assert registry.tool_names == _BUILTIN_TOOLS
+            assert registry.tool_names == _BUILTIN_TOOLS + _LOOK_AT_TOOLS
             assert fake.probe_calls == 0
         finally:
             await shutdown_app_state(app)

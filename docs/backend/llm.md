@@ -1,6 +1,6 @@
-# llm — 模型网关域（P0-4 交付；P1-1 扩展 embeddings；P2-1 增注册表管理 API）
+# llm — 模型网关域（含 embeddings 传输面 + 注册表管理 API）
 
-`backend/src/packages/harness/llm/` 承载模型无关的 LLM 网关 TRANSPORT 层：OpenAI 兼容 chat/completions 客户端（手写协议——锁定决策：**不引入 openai SDK**）、角色路由门面、池门控与用量埋点；P1 记忆层 chunk 1 扩展了 embeddings 传输面（`POST /embeddings`——记忆检索的向量化前置）。本 chunk 不含 prompt 组装（chat/ 域持有 prompt Unit 文件）。
+`backend/src/packages/harness/llm/` 承载模型无关的 LLM 网关 TRANSPORT 层：OpenAI 兼容 chat/completions 客户端（手写协议——锁定决策：**不引入 openai SDK**）、角色路由门面、池门控与用量埋点；记忆层扩展了 embeddings 传输面（`POST /embeddings`——记忆检索的向量化前置）。本域不含 prompt 组装（chat/ 域持有 prompt Unit 文件）。
 
 ## 模块一览
 
@@ -45,7 +45,7 @@ gateway = LlmGateway(
 )
 ```
 
-`wire_default_usage_recorder()` 是 llm → usage 的唯一接线点（函数体内惰性 import——llm 模块导入期零耦合；P0-6 app 装配调用）。
+`wire_default_usage_recorder()` 是 llm → usage 的唯一接线点（函数体内惰性 import——llm 模块导入期零耦合；app 装配调用）。
 
 ## 传输客户端（client.py）
 
@@ -55,7 +55,7 @@ gateway = LlmGateway(
 - **重试（tenacity）**：幂等安全集 = 连接错误（ConnectError / ConnectTimeout）/ HTTP 5xx / 408 / 429；429 尊重 `Retry-After` 头（秒数或 HTTP-date；封顶 `retry_after_max_seconds`），缺失回落指数退避；**流式仅「发起 → 2xx 确认」阶段可重试**（首块产出后重放非幂等）；
 - **超时**：`settings.pools.llm_request_timeout_seconds`（env `POOLS_LLM_REQUEST_TIMEOUT_SECONDS`，默认 120）。
 
-### 错误码映射表（复用既有 LLM_*——本 chunk 零新增）
+### 错误码映射表（复用既有 LLM_*——本域零新增）
 
 | 失败类别 | 错误码 | HTTP | 可重试 |
 |---|---|---|---|
@@ -151,7 +151,7 @@ data: {"id":"resp-1","model":"glm-5.3","choices":[],"usage":{"prompt_tokens":52,
 data: [DONE]
 ```
 
-## embeddings 传输面（P1-1——记忆检索的向量化前置）
+## embeddings 传输面（记忆检索的向量化前置）
 
 `gateway.embed_by_role(texts, persona_id=None, request_id=None) -> EmbeddingsResponseModel`：解析 **embed 角色**条目（本地向量化端点为生产形态；测试 MockTransport）→ wire 构建 → `entry_gate`（熔断 + 信号量）→ `client.embeddings(texts)`（`POST {base_url}/embeddings`）→ 用量发射（**purpose 恒 `embed`**——usage 域枚举既有成员；token 计数取响应 `usage.prompt_tokens / total_tokens`，未回传按零用量落账）。
 
@@ -263,7 +263,7 @@ data: [DONE]
 - persona_id / request_id 解析序：显式参数 → `core.context` 上下文变量（请求中间件已绑定则自动携带）→ None；
 - 记录器异常**仅告警不阻断主调用**（用量是观测面不是业务面）；未接线（recorder=None）零记录。
 
-## 注册表管理 API（P2 chunk 1——`app/api/models.py` + `harness/config/registry_admin.py`）
+## 注册表管理 API（`app/api/models.py` + `harness/config/registry_admin.py`）
 
 config.yaml 是 LLM 注册表**唯一真源**：`/api/v1/models` 管理面对注册表的全部突变经 harness.config.registry_admin 完成「校验 → 原子持久化 → 热重建 → 失败回滚」链；`.env` 与 `extensions_config.json` 不在该路由触达范围。全局管理面（无人格上下文——注册表是进程级配置真源，非 PersonaMixin 数据）。
 
@@ -348,7 +348,7 @@ config.yaml 是 LLM 注册表**唯一真源**：`/api/v1/models` 管理面对注
 仍承接任一角色的条目禁止删除（409 `CONFLICT`，`details.bound_roles` 为显式绑定 + 条目声明合并的绑定集）。解除路径（两步）：
 
 1. 条目**声明**的角色：`PUT /api/v1/models/entries/{name}` 置 `roles: []`；
-2. **显式 `role_bindings`** 指向的条目：先在 config.yaml 手工移除该绑定（本管理面不提供显式绑定编辑端点——显式绑定编辑属后续 chunk 评审面）。
+2. **显式 `role_bindings`** 指向的条目：先在 config.yaml 手工移除该绑定（本管理面不提供显式绑定编辑端点——显式绑定编辑属后续评审面）。
 
 再执行 `DELETE`。
 

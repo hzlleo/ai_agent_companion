@@ -1,8 +1,8 @@
-# multimodal — 多模态 look_at 域（P4 chunk 2 交付：LLM 内容分块 + 图像理解）
+# multimodal — 多模态 look_at 域（LLM 内容分块 + 图像理解）
 
-`backend/src/packages/harness/multimodal/` 承载**图像理解能力面**（look_at）：llm 域的**多模态内容分块**（OpenAI 兼容 vision 消息形态——`ChatMessageModel.content` 升级为 `str | list[ContentPartModel]`，纯文本全量向后兼容）、**LookAtService 编排门面**（请求校验 → data URL 构建 → 条目链解析 → 网关调用）+ **look_at 工具注册面**（duty / persona 工具循环消费——图像经 base64 携带）+ app 层 **look_at 管理 API**（multipart 上传）。
+`backend/src/packages/harness/multimodal/` 承载**图像理解能力面**（look_at）：llm 域的**多模态内容分块**（OpenAI 兼容 vision 消息形态——`ChatMessageModel.content` 升级为 `str | list[ContentPartModel]`，纯文本全量向后兼容）、**LookAtService 编排门面**（请求校验 → data URL 构建 → 条目链解析 → 网关调用）+ **look_at 工具注册面**（duty 工具循环消费——图像经 base64 携带；app 装配在 `_startup_scheduler` duty 分支经装配网关注册）+ app 层 **look_at 管理 API**（multipart 上传）。
 
-锁定设计决策：**视觉模型是 llm 注册表的一个条目**（`multimodal: true`，绑定 `look_at` 角色）——生产形态为本地 llama-server 服务 `models/Qwen3-VL-4B-Instruct-GGUF` 子模块权重（部署机关注；compose 接线属后续部署 chunk），后端只经 OpenAI 兼容 HTTP 契约消费，永不读取模型文件路径（与 llm / voice 域「只连端点」同约定）。look_at 角色绑定的条目**非多模态**时走 config 域的**多模态回退链**（`llm.multimodal_fallback` 段——本 chunk 消费既有裁决，不重新实现）。
+锁定设计决策：**视觉模型是 llm 注册表的一个条目**（`multimodal: true`，绑定 `look_at` 角色）——生产形态为本地 llama-server 服务 `models/Qwen3-VL-4B-Instruct-GGUF` 子模块权重（部署机关注；compose 接线由部署侧另行承接），后端只经 OpenAI 兼容 HTTP 契约消费，永不读取模型文件路径（与 llm / voice 域「只连端点」同约定）。look_at 角色绑定的条目**非多模态**时走 config 域的**多模态回退链**（`llm.multimodal_fallback` 段——本域消费既有裁决，不重新实现）。
 
 ## 模块一览
 
@@ -45,7 +45,7 @@
 ## 架构：look_at 调用链路顺序
 
 ```
-调用方（look_at API / duty / persona 工具循环）
+调用方（look_at API / duty 工具循环）
     ↓ LookAtService.describe(image, mime_type, question)   ① 请求校验
       （LookAtRequestModel——MIME 允许清单 png/jpeg/webp/gif + 10MB 上限
        + 聚焦问题 ≤200 字符；ValidationError → VALIDATION_ERROR）
@@ -105,7 +105,7 @@ llm:
 
 ## 工具面（LLM 工具循环消费）
 
-`register_look_at_tool(registry, service)` 注册 `look_at` 工具（注册即出现在 `registry.list_specs()`——duty / persona 轮自动获得；未注册 = 工具面不出现）：
+`register_look_at_tool(registry, service)` 注册 `look_at` 工具（注册即出现在 `registry.list_specs()`——duty 工具循环自动获得；app 装配在 `_startup_scheduler` duty 分支经装配网关注册；未注册 = 工具面不出现）：
 
 | 参数 | 类型 | 语义 |
 |---|---|---|

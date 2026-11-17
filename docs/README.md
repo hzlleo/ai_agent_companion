@@ -6,11 +6,11 @@
 
 | 路径 | 内容 |
 |---|---|
-| [backend/](backend/README.md) | 后端模块文档（core / config / database / pools / llm / persona / memory / chat / usage / duty / tools / safety …按模块逐份） |
+| [backend/](backend/README.md) | 后端模块文档（core / config / database / pools / llm / persona / memory / chat / usage / duty / channels / voice / multimodal / tools-sandbox …按模块逐份；safety 审批面规划中暂无文档） |
 | [test-strategy/](test-strategy/README.md) | 测试策略（全异步 / 无真实配置 / 共享资源 / 覆盖率门 / 棘轮门） |
 | [models.md](models.md) | 模型子模组（ModelScope 源清单 / UA 覆写 / lfs 拉取 / 升级流程） |
 
-## 路线图（P0 骨架 → 完整形态）
+## 路线图（历史规划——P0 至 P4 已全部落地，保留作交付历程记录）
 
 | 阶段 | 内容 |
 |---|---|
@@ -22,4 +22,4 @@
 
 ## 已知事项
 
-1. `.env` / `config.yaml` / `extensions_config.json` 严禁入库（.gitignore 已拦截）；example 三件套由 `pixi run setup` 从 Pydantic 模型自动生成（config 模块落地后生效）。
+1. `.env` / `config.yaml` / `extensions_config.json` 严禁入库（.gitignore 已拦截）；example 三件套由 `pixi run gen-examples` 从 Pydantic 模型自动生成。

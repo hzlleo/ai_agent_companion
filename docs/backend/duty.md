@@ -226,7 +226,7 @@ settings = build_isolated_settings(
 #   DREAM_SCHEDULE__DAILY_AT=04:00
 ```
 
-> 注：`backend/.env.example` 分节登记属根 scripts/ 生成器（主 agent 面）——duty / dream / scheduler env 键面以本表 + `src/conftest.py` 硬覆盖清单为准（`DUTY_*` / `DREAM_SCHEDULE_*` / `SCHEDULER_*`）。
+> 注：`backend/.env.example` 键面以 `.env.example`（`pixi run gen-examples` 生成）为真源，本表为语义说明（`DUTY_*` / `DREAM_SCHEDULE_*` / `SCHEDULER_*`）。
 
 ## app 装配（`app/main.py` lifespan——顺序锁定）
 
@@ -235,12 +235,16 @@ settings = build_isolated_settings(
     → _startup_scheduler（duty / dream 任一启用时）：
         build_memory_store（单一产出——SeekDB 形态不双建池）
         → ToolRegistry + register_builtin_tools（检索服务注入）
+          + 沙盒工具（按开关 warn-and-continue 追加）+ look_at 工具
+          （装配网关注册——图像理解消费面）
         → DutyService（gateway / registry / channels_router / owner_chat_id / report_to_owner）
         → Scheduler（tick_seconds）→ register_daily("duty", …) / register_daily("dream", …)
         → create_task(scheduler.run()) + background_task_manager 托管
         （app.state.scheduler / scheduler_task / duty_service / duty_registry 四槽位）
-停机（LIFO）：_shutdown_scheduler（先于通道——duty 出站消费通道路由器）
-    → _shutdown_channels → pool_manager.stop → close_database → shutdown_shared_thread_pool
+停机（LIFO 六步）：_shutdown_scheduler（先于通道——duty 出站消费通道路由器）
+    → _shutdown_channels → 后台任务 drain（background_task_manager.shutdown
+    ——fire-and-forget 在途任务先于池关闭排空）→ pool_manager.stop
+    → close_database → shutdown_shared_thread_pool
 ```
 
 停机链：`request_stop`（优雅——tick 收尾 + 在途作业排水 5s 封顶）→ bounded 等待（10s）→ 超时 `cancel` 兜底。**装配顺序依据**：调度器后于通道启动（duty 报告出站复用通道路由器——通道先行则路由器可达）；停机先于通道（LIFO——出站消费方先收口）。全部关闭时 no-op（零调度器对象构造）。

@@ -1,4 +1,4 @@
-# database — 数据库域（P0-3 交付）
+# database — 数据库域
 
 `backend/src/packages/harness/database/` 承载 SQLAlchemy 2.0 async 引擎工厂（MySQL 8 权威 / SQLite 测试）、声明式基类与 Mixin（含 PersonaMixin 人格作用域自动隔离）、会话门面与引擎持有器；`backend/alembic/` 承载异步迁移环境。
 
@@ -10,7 +10,7 @@
 | `base.py` | 声明式 Base + Mixin + PersonaMixin 自动隔离 event listener | `Base` / `PersonaMixin` / `TimestampMixin` |
 | `session.py` | 会话工厂获取 / session_scope / 依赖注入形态 | `session_scope` / `get_async_db` |
 | `units/engine_holder.py` | 引擎/会话工厂槽位持有器（所有权治理） | `EngineHolder` / `db_engine_holder` |
-| `backend/alembic/` | 异步迁移环境 + 初始基线迁移（本 chunk 无域表） | `pixi run alembic upgrade head` |
+| `backend/alembic/` | 异步迁移环境 + 初始基线迁移（基线无域表） | `pixi run alembic upgrade head` |
 
 依赖方向：database → config（DatabaseConfig）+ core（context / errors / time_utils），合法。
 
@@ -84,7 +84,7 @@ lifespan shutdown:
 |---|---|
 | `get_session_factory()` | 持有器槽位调用时读；未初始化 → `INTERNAL_ERROR`（含初始化指引） |
 | `session_scope()` | `async with` 作用域：正常退出 commit / 异常 rollback / 恒关闭（服务层主入口） |
-| `get_async_db()` | FastAPI `Depends` 形态 async generator（P0-6 装配；本模块不 import FastAPI） |
+| `get_async_db()` | FastAPI `Depends` 形态 async generator（app 装配消费；本模块不 import FastAPI） |
 
 Session 关闭防御：请求任务取消与清理竞争时 `close()` 可能抛 `IllegalStateChangeError` → 降级 `invalidate()` 丢弃底层连接（连接池 pre_ping / recycle 兜底），不向调用方注入新异常。
 
@@ -92,12 +92,12 @@ Session 关闭防御：请求任务取消与清理竞争时 `close()` 可能抛 
 
 ```
 cd backend
-pixi run alembic revision --autogenerate -m "..."   # 生成新迁移（域 chunk 落地模型后在 env.py 补 import）
+pixi run alembic revision --autogenerate -m "..."   # 生成新迁移（新域模型落地后在 env.py 补 import）
 pixi run alembic upgrade head                        # 应用迁移
 ```
 
 - `alembic/env.py`：异步引擎（`run_sync` 桥接）+ `sqlalchemy.url` 由 `settings.database.async_sqlalchemy_url` 动态注入（alembic.ini 留空）+ `sys.path` 注入 backend/src；
-- `versions/000000000001_initial.py`：空基线（版本链锚点）；域表迁移链：`0002_add_usage_records`（用量）→ `0003_add_personas`（人格注册表 + 状态）→ `0004_add_memory_tables`（记忆四表）→ `0005_add_dream_runs`（梦境运行日志）→ `0006_add_persona_voice_profile`（人格音色绑定）；
+- `versions/000000000001_initial.py`：空基线（版本链锚点）；域表迁移链：`0002_add_usage_records`（用量）→ `0003_add_personas`（人格注册表 + 状态）→ `0004_add_memory_tables`（记忆四表）→ `0005_add_dream_runs`（梦境运行日志）→ `0006_add_persona_voice_profile`（人格音色绑定）→ `0007_memory_concurrency_constraints`（策展单 active 唯一键 + 会话消息 seq 唯一键——memory 域并发不变式）；
 - `target_metadata = Base.metadata`（autogenerate 对比基准）。
 
 ## 测试与门禁

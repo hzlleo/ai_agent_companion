@@ -314,7 +314,8 @@ function validateInsertionOrder(value: string): string | null {
  * - 条目 selective=false 时不得携带副触发键，selective=true 时必须
  *   携带至少一个非空副触发键（后端规格一致性校验的对称双分支）；
  * - 语音绑定：speaker 1-128 字符（填写指令 / 语速时必填）；
- *   speed 0.5-2.0（后端 VoiceProfileModel 值域）。
+ *   instruct_text ≤2000 字符；speed 0.5-2.0（后端 VoiceProfileModel
+ *   值域）。
  *
  * @returns 错误集（空对象 = 校验通过）。
  */
@@ -362,6 +363,9 @@ export function validatePersonaForm(form: PersonaFormState): PersonaFormErrors {
   }
   if (voiceSpeaker !== '' && voiceSpeaker.length > 128) {
     errors['voice.speaker'] = '发音人长度不得超过 128 个字符'
+  }
+  if (form.voice.instruct_text.trim().length > 2000) {
+    errors['voice.instruct_text'] = '风格指令长度不得超过 2000 个字符'
   }
   if (form.voice.speed.trim() !== '') {
     const speedParsed = Number(form.voice.speed)

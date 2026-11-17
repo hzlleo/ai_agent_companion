@@ -57,7 +57,7 @@ app lifespan 的装配顺序契约（唯一真相 = `app/main.py`）：startup �
 
 ## 共享 HTTP 池（http_pool.py）
 
-`build_shared_http_client(pools)` → `httpx.AsyncClient(limits=..., timeout=...)`（连接惰性建立；生命周期归 PoolManager——stop 期 aclose）。LLM 端点专用连接隔离由 P0-4 网关按模型条目自建 client 承担（带 per-entry 超时）；本池只管「通用出站」。
+`build_shared_http_client(pools)` → `httpx.AsyncClient(limits=..., timeout=...)`（连接惰性建立；生命周期归 PoolManager——stop 期 aclose）。LLM 端点专用连接隔离由 llm 网关按模型条目自建 client 承担（带 per-entry 超时）；本池只管「通用出站」。
 
 ## 熔断状态机（llm_pool.CircuitBreaker）
 

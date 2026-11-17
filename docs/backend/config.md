@@ -1,6 +1,6 @@
-# config — 配置域（P0-3 交付）
+# config — 配置域
 
-`backend/src/packages/harness/config/` 承载全工程配置：env 面 Settings（server / database / log / pools / llm）、config.yaml 结构化面（模型注册表 / 角色绑定 / 多模态回退链）、extensions_config.json 工具清单、运行时加载器（含热重载地基）、模型解析器、wire 构建器与交互式配置向导。
+`backend/src/packages/harness/config/` 承载全工程配置：env 面 Settings（server / database / log / pools / llm 等十五分节）、config.yaml 结构化面（模型注册表 / 角色绑定 / 多模态回退链）、extensions_config.json 工具清单、运行时加载器（含热重载地基）、模型解析器、wire 构建器与交互式配置向导。
 
 ## 模块一览
 
@@ -15,7 +15,7 @@
 | `multimodal_fallback_loader.py` | look_at 非多模态时的回退链裁决 | `resolve_multimodal_chain` |
 | `wizard.py`（facade）+ `wizard_ui/_fields/_parsers/_generators/_dtos` | 交互式配置向导六件套 | `run_wizard` / `main` |
 
-依赖方向：config → core（合法）；core 不 import config（chunk 边界，`LogConfig.to_core_config()` 完成映射接线）。
+依赖方向：config → core（合法）；core 不 import config（依赖边界，`LogConfig.to_core_config()` 完成映射接线）。
 
 ## 分层加载链（顺序）
 
@@ -38,18 +38,28 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 |---|---|---|
 | ServerConfig | `SERVER_` | `HOST`(127.0.0.1) · `PORT`(8000) · `WORKERS`(1) |
 | DatabaseConfig | `DATABASE_` | `TYPE`(mysql) · `HOST`(127.0.0.1) · `PORT`(3306) · `NAME`(ai_agent_companion) · `USER`(root) · `PASSWORD`("") · `POOL_SIZE`(10) · `MAX_OVERFLOW`(20) · `POOL_RECYCLE`(3600) · `POOL_PRE_PING`(true) |
-| LogConfig | `LOG_` | `LEVEL`(INFO) · `FILE`(logs/app.log) · `JSON_FILE`(logs/app.json.log) · `ROTATION`(1 day) · `RETENTION`(30 days) · `MODULE_LEVELS`("") · `COLORIZE_CONSOLE`(true) |
+| LogConfig | `LOG_` | `LEVEL`(INFO) · `FILE`(logs/app.log) · `JSON_FILE`(logs/app.json.log) · `ROTATION`(1 day) · `RETENTION`(30 days) · `MODULE_LEVELS`("") · `COLORIZE_CONSOLE`(true) · `DIAGNOSE_EXCEPTIONS`(false) |
 | PoolsConfig | `POOLS_` | `THREAD_POOL_SIZE`(8) · `HTTP_MAX_CONNECTIONS`(100) · `HTTP_MAX_KEEPALIVE_CONNECTIONS`(20) · `HTTP_CONNECT_TIMEOUT_SECONDS`(5.0) · `HTTP_TIMEOUT_SECONDS`(30.0) · `LLM_SEMAPHORE_LIMIT`(5) · `LLM_REQUEST_TIMEOUT_SECONDS`(120) · `CB_FAIL_MAX`(5) · `CB_RESET_TIMEOUT_SECONDS`(60) |
 | LlmEndpointConfig | `LLM_` | `BASE_URL`("") · `API_KEY`("") · `MODEL`("") |
 | SeekDBSettings | `SEEKDB_` | `ENABLED`(false) · `HOST`(127.0.0.1) · `PORT`(2881) · `USER`(root) · `PASSWORD_ENV`(SEEKDB_PASSWORD) · `DATABASE`(test) · `VECTOR_DIM`(1024) · `POOL_MIN`(1) · `POOL_MAX`(4) |
+| TelegramSettings | `TELEGRAM_` | `ENABLED`(false) · `BOT_TOKEN_ENV`(TELEGRAM_BOT_TOKEN) · `API_BASE`(https://api.telegram.org) · `POLL_TIMEOUT_SECONDS`(25) · `OWNER_CHAT_ID`(null) · `BACKOFF_BASE_SECONDS`(1.0) · `BACKOFF_MAX_SECONDS`(60.0) · `STATE_DIR`(data/channels) |
+| QqChannelSettings | `QQ_` | `ENABLED`(false) · `HTTP_API_BASE_URL`(http://127.0.0.1:3000) · `ACCESS_TOKEN_ENV`(QQ_ACCESS_TOKEN) · `WEBHOOK_TOKEN_ENV`(QQ_WEBHOOK_TOKEN) · `REQUEST_TIMEOUT_SECONDS`(15.0) |
+| DutySettings | `DUTY_` | `ENABLED`(false) · `DAILY_AT`(22:00) · `MAX_TOOL_STEPS`(8) · `REPORT_TO_OWNER`(true) · `CHARTER_TEXT`(null) |
+| DreamScheduleSettings | `DREAM_SCHEDULE_` | `ENABLED`(false) · `DAILY_AT`(03:00) |
+| SchedulerSettings | `SCHEDULER_` | `TICK_SECONDS`(1.0) |
+| ToolsSandboxSettings | `TOOLS_SANDBOX_` | `ENABLED`(false) · `BASE_URL`(http://127.0.0.1:8765) · `TOKEN_ENV`(SANDBOX_TOKEN) · `REQUEST_TIMEOUT_SECONDS`(15.0) |
+| VoiceSettings.tts（TtsSettings） | `VOICE_TTS_` | `ENABLED`(false) · `BASE_URL`(http://127.0.0.1:9880) · `MODEL_ENTRY`(cosyvoice3) · `REQUEST_TIMEOUT_SECONDS`(30.0) · `DEFAULT_SPEAKER`(中文女) · `DEFAULT_SPEED`(1.0) |
+| VoiceSettings.asr（AsrSettings） | `VOICE_ASR_` | `ENABLED`(false) · `BASE_URL`(http://127.0.0.1:8082) · `MODEL_ENTRY`(qwen3-asr-0.6b) · `REQUEST_TIMEOUT_SECONDS`(60.0) · `LANGUAGE`(null) · `MAX_UPLOAD_BYTES`(26214400) |
 | Settings | （无前缀） | `ENV`(local) |
+
+分节与 `.env.example` 逐分节对齐（生成器 `scripts/generate_examples_env.py` 的 `_ENV_SECTIONS` 登记表为序——键面以 `.env.example` 为真源，本表为语义说明；敏感字段在 example 中恒留空）。各分节语义详见所属域文档（channels / duty / tools-sandbox / voice）。
 
 - `DatabaseConfig.async_sqlalchemy_url`：`mysql` → `mysql+aiomysql://user:pwd@host:port/db?charset=utf8mb4`（用户名/密码 URL 编码）；`sqlite` → `sqlite+aiosqlite:///{name}`（`name=":memory:"` 内存库）。
 - `LogConfig.to_core_config()`：字段一一映射为 `core.LoggingConfig`（`file→log_file` / `json_file→log_json_file`）；app lifespan 经 `setup_logging_from_settings(settings)` 接线 `core.setup_logging`。
 - 嵌套覆盖：`Settings` 开启 `env_nested_delimiter="__"`（如 `DATABASE__POOL_SIZE`），与各分节自身 `env_prefix` 并行生效。
 - 测试隔离：`build_isolated_settings(database=..., pools=..., seekdb=...)` 显式值构造（子配置实例 pass-through，不重读 env）。
 
-### SeekDBSettings（P1 chunk 2 检索层 env 面）
+### SeekDBSettings（检索层 env 面）
 
 SeekDB（v1.4.0，MySQL 线协议 2881 端口）承载记忆检索索引（见 memory.md「检索层」）。要点：
 
@@ -130,7 +140,7 @@ look_at 角色绑定的条目 multimodal=true？
                         multimodal 条目)
 ```
 
-## llm_wire — 网关下发契约（P0-4 消费）
+## llm_wire — 网关下发契约（llm 网关消费）
 
 `build_llm_wire_config(entry, fallback_api_key=None)` 构建 `LlmClientConfigModel`（provider / base_url / api_key / model / concurrency / multimodal）。密钥解析收口于此：条目 `api_key_env` → 环境变量明文；声明了变量但未设置且给兜底 → 兜底明文；免鉴权条目（`api_key_env=""`）恒空串（不注入兜底）。`api_key` 字段 repr 隐藏（不落日志）。
 

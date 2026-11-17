@@ -134,7 +134,7 @@ B 站 2026-07 曾对第三方 Python 库采取法律行动——暴露面收敛�
 
 沙盒容器内 env：`SANDBOX_TOKEN`（必填）、`SANDBOX_HTTP_ALLOWLIST`（可选，空 = http_fetch 禁用）、`BILI_API_ALLOWLIST`（可选，未设置 = 默认清单 `api.bilibili.com,app.bilibili.com`；空串 = B 站工具组禁用）、`BILI_COOKIE`（可选，B 站 Cookie 头原值——永不入日志）、`SANDBOX_HOST` / `SANDBOX_PORT`（缺省 `0.0.0.0:8765`——容器形态）。
 
-> 注：`backend/.env.example` 分节登记属根 scripts/ 生成器（主 agent 面）——沙盒 env 键面以本表 + `src/conftest.py` 硬覆盖清单为准（`TOOLS_SANDBOX_*` / `SANDBOX_TOKEN` / `SANDBOX_TEST_TOKEN`）。
+> 注：`backend/.env.example` 键面以 `.env.example`（`pixi run gen-examples` 生成）为真源，本表为语义说明（`TOOLS_SANDBOX_*` / `SANDBOX_TOKEN` / `SANDBOX_TEST_TOKEN`）。
 
 ## app 装配（`app/main.py`——顺序锁定）
 

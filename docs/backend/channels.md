@@ -59,7 +59,7 @@ QQ_ENABLED=true 时（同一 ChannelRouter——任一通道启用即构造）�
 TELEGRAM_ENABLED=false 且 QQ_ENABLED=false（缺省）：no-op——零通道对象构造
 ```
 
-停机 LIFO（`shutdown_app_state`）：`_shutdown_channels`（先于公共池——runner 消费共享 HTTP client）→ `pool_manager.stop()` → `close_database()` → `shutdown_shared_thread_pool()`。通道停机链：`request_stop()`（优雅——轮询态在途长轮询最多再等一个窗口；退避态的退避睡眠最长 `backoff_max_seconds`（默认 60s）不可被 request_stop 中断）→ bounded 等待（5s）→ 超时 `cancel` 兜底（cancel 语义覆盖两种形态——优雅等待不保证收口，5s 上限后强制终止；offset 已逐批持久化，重启安全）。
+停机 LIFO（`shutdown_app_state` 六步）：`_shutdown_channels`（先于公共池——runner 消费共享 HTTP client）→ 后台任务 drain（`background_task_manager.shutdown`——fire-and-forget 在途任务先于池关闭排空）→ `pool_manager.stop()` → `close_database()` → `shutdown_shared_thread_pool()`。通道停机链：`request_stop()`（优雅——轮询态在途长轮询最多再等一个窗口；退避态的退避睡眠最长 `backoff_max_seconds`（默认 60s）不可被 request_stop 中断）→ bounded 等待（5s）→ 超时 `cancel` 兜底（cancel 语义覆盖两种形态——优雅等待不保证收口，5s 上限后强制终止；offset 已逐批持久化，重启安全）。
 
 ## 人格语义（锁定决策）
 
@@ -261,7 +261,7 @@ settings = build_isolated_settings(
 )
 ```
 
-> 注：`backend/.env.example` 由根 `scripts/generate_examples*.py` 从配置类内省生成；其分节登记表当前未变更（scripts/ 生成器属主 agent 面），QQ_* 键面以本表 + `src/conftest.py` 硬覆盖清单为准（`QQ_ENABLED` / `QQ_HTTP_API_BASE_URL` / `QQ_ACCESS_TOKEN_ENV` / `QQ_WEBHOOK_TOKEN_ENV` / `QQ_REQUEST_TIMEOUT_SECONDS` / 双 token 本值变量）。
+> 注：`backend/.env.example` 键面以 `.env.example`（`pixi run gen-examples` 生成）为真源，本表为语义说明（`QQ_*` / 双 token 本值变量）。
 
 ## Settings（`Settings.channels`）——telegram 分节
 
@@ -310,7 +310,7 @@ settings = build_isolated_settings(
 )
 ```
 
-> 注：`backend/.env.example` 由根 `scripts/generate_examples*.py` 从配置类内省生成；其分节登记表当前未变更（scripts/ 生成器属主 agent 面），TELEGRAM_* 键面以本表 + `src/conftest.py` 硬覆盖清单为准。
+> 注：`backend/.env.example` 键面以 `.env.example`（`pixi run gen-examples` 生成）为真源，本表为语义说明（`TELEGRAM_*`）。
 
 ## 测试面
 

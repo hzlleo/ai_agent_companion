@@ -3662,11 +3662,12 @@
           "type": "string"
         },
         "VoiceProfileModel": {
-          "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（P4 锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；提供时\n        随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
+          "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；≤2000\n        字符；提供时随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
           "properties": {
             "instruct_text": {
               "anyOf": [
                 {
+                  "maxLength": 2000,
                   "type": "string"
                 },
                 {
@@ -3674,7 +3675,7 @@
                 }
               ],
               "default": null,
-              "description": "instruct2 风格指令（None = 普通合成）",
+              "description": "instruct2 风格指令（None = 普通合成；≤2000 字符）",
               "title": "Instruct Text"
             },
             "speaker": {
@@ -4017,11 +4018,12 @@
           "type": "string"
         },
         "VoiceProfileModel": {
-          "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（P4 锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；提供时\n        随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
+          "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；≤2000\n        字符；提供时随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
           "properties": {
             "instruct_text": {
               "anyOf": [
                 {
+                  "maxLength": 2000,
                   "type": "string"
                 },
                 {
@@ -4029,7 +4031,7 @@
                 }
               ],
               "default": null,
-              "description": "instruct2 风格指令（None = 普通合成）",
+              "description": "instruct2 风格指令（None = 普通合成；≤2000 字符）",
               "title": "Instruct Text"
             },
             "speaker": {
@@ -4454,11 +4456,12 @@
           "type": "string"
         },
         "VoiceProfileModel": {
-          "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（P4 锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；提供时\n        随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
+          "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；≤2000\n        字符；提供时随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
           "properties": {
             "instruct_text": {
               "anyOf": [
                 {
+                  "maxLength": 2000,
                   "type": "string"
                 },
                 {
@@ -4466,7 +4469,7 @@
                 }
               ],
               "default": null,
-              "description": "instruct2 风格指令（None = 普通合成）",
+              "description": "instruct2 风格指令（None = 普通合成；≤2000 字符）",
               "title": "Instruct Text"
             },
             "speaker": {
@@ -5479,11 +5482,12 @@
       "type": "object"
     },
     "VoiceProfileModel": {
-      "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（P4 锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；提供时\n        随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
+      "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；≤2000\n        字符；提供时随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
       "properties": {
         "instruct_text": {
           "anyOf": [
             {
+              "maxLength": 2000,
               "type": "string"
             },
             {
@@ -5491,7 +5495,7 @@
             }
           ],
           "default": null,
-          "description": "instruct2 风格指令（None = 普通合成）",
+          "description": "instruct2 风格指令（None = 普通合成；≤2000 字符）",
           "title": "Instruct Text"
         },
         "speaker": {

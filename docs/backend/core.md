@@ -1,4 +1,4 @@
-# core — harness 基础设施包（P0-2 交付）
+# core — harness 基础设施包
 
 `backend/src/packages/harness/core/` 是全后端的共享基座：业务异常契约、统一响应封装、epoch 毫秒时间、三 sink 日志、共享线程池、后台任务调度、请求上下文、i18n 消息、进程内 TTL 缓存与跨域枚举。后续全部域包（config / database / pools / llm / persona / chat / usage …）依赖 core，core 不依赖它们（依赖方向单向：`域包 → core`）。
 
@@ -16,7 +16,7 @@
 | `context.py` | 请求级 ContextVars + 快照绑定 | `bind_context` / `current_context` / `context_log_fields` |
 | `i18n_messages.py` | 错误消息表（与 ErrorCode 1:1） | `MESSAGES` |
 | `i18n.py` | 消息查找 + locale 解析 + resolver 注册 | `get_message` / `resolve_locale` |
-| `cache.py` | 进程内 TTL 缓存 + 装饰器（P0 决策：NO Redis） | `async_ttl_cache` / `MemoryTTLCache` |
+| `cache.py` | 进程内 TTL 缓存 + 装饰器（锁定决策：NO Redis） | `async_ttl_cache` / `MemoryTTLCache` |
 | `enums.py` | 跨域通用枚举 | `Locale` / `TaskStatus` / `SUPPORTED_LOCALES` |
 
 ## errors.py — 业务异常与错误码
@@ -26,7 +26,7 @@
 ```
 业务代码 raise BusinessException(code, details)
     ↓
-app 层全局异常处理器（后续 chunk 落地）捕获
+app 层全局异常处理器捕获
     ↓
 get_http_status_for_code(code) → 语义化 HTTP 状态码
     ↓
@@ -56,7 +56,7 @@ str(code)
 
 依赖反转：core 不能反向 import app 层 i18n——`core.i18n` 模块加载时把 `get_message` 注册为回调（`i18n.py` 末行）。
 
-### ErrorCode 值域（P0-2 交付面）
+### ErrorCode 值域
 
 | 分组 | 成员 → HTTP 状态码 |
 |---|---|
@@ -65,7 +65,7 @@ str(code)
 | 配置 | `CONFIG_INVALID`→422 |
 | LLM 调用 | `LLM_CALL_FAILED`→503 · `LLM_PROVIDER_NOT_SUPPORTED`→422 · `LLM_API_KEY_MISSING`→500 · `LLM_REQUEST_FAILED`→503 · `MODEL_NOT_FOUND`→404 |
 
-后续域 chunk（persona / chat / usage …）按各自域段追加成员，并**同步** `i18n_messages.py`（1:1 对齐由 `test_core_i18n.py` 双向锁强制——新增错误码未注册消息即红）。
+后续域包（persona / chat / usage …）按各自域段追加成员，并**同步** `i18n_messages.py`（1:1 对齐由 `test_core_i18n.py` 双向锁强制——新增错误码未注册消息即红）。
 
 ### 失败响应 JSON 示例
 
@@ -166,7 +166,7 @@ _apply_context(base)   ← 退出恢复（嵌套 / 并发任务天然隔离，Co
 
 ## logging.py + logging_models.py — 三 sink 日志
 
-core 不 import config 域（chunk 边界）：`setup_logging(config: LoggingConfig)` 以 Model Class 为入参契约，app 层 lifespan 由 Settings 映射构造传入（依赖方向 config → core）；测试经 fixture 显式构造（tmp_path 落盘，零真实配置）。
+core 不 import config 域（依赖边界）：`setup_logging(config: LoggingConfig)` 以 Model Class 为入参契约，app 层 lifespan 由 Settings 映射构造传入（依赖方向 config → core）；测试经 fixture 显式构造（tmp_path 落盘，零真实配置）。
 
 ### LoggingConfig 字段
 
@@ -233,7 +233,7 @@ setup_logging(config)
 
 ## thread_pool.py — 共享线程池
 
-pools 域是 P0-3 交付面，core 不 import pools/config——共享 `ThreadPoolExecutor` 由 core 自持：
+pools 域为独立交付的共享池面，core 不 import pools/config——共享 `ThreadPoolExecutor` 由 core 自持：
 
 | API | 语义 |
 |---|---|
@@ -275,9 +275,9 @@ pending ──worker 拾取──> running ──成功──> completed（resul
 
 TaskRecord 字段：`task_id` / `status` / `result` / `error` / `created_at` / `started_at` / `completed_at` / `name`（单调时钟计时）。
 
-## cache.py — 进程内 TTL 缓存（P0 决策：NO Redis）
+## cache.py — 进程内 TTL 缓存（锁定决策：NO Redis）
 
-P0 无 Redis（锁定决策）——缓存走进程内实现（单实例部署的自然推论；多实例阶段再评审分布式缓存）。API 形态：key_func / prefix / TTL / 降级 / 防穿透，后端存储为进程内表。
+当前无 Redis（锁定决策）——缓存走进程内实现（单实例部署的自然推论；多实例形态再评审分布式缓存）。API 形态：key_func / prefix / TTL / 降级 / 防穿透，后端存储为进程内表。
 
 ### MemoryTTLCache API
 

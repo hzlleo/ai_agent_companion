@@ -221,6 +221,17 @@ describe('validatePersonaForm', () => {
     expect(validatePersonaForm(form)['voice.speed']).toBe('语速须在 0.5-2.0 之间')
   })
 
+  it('语音绑定：风格指令超 2000 字符 → 报错；恰 2000 通过', () => {
+    const form = createEmptyForm()
+    form.name = 'x'
+    form.card.name = 'y'
+    form.voice.speaker = '温柔女声'
+    form.voice.instruct_text = '柔'.repeat(2001)
+    expect(validatePersonaForm(form)['voice.instruct_text']).toBe('风格指令长度不得超过 2000 个字符')
+    form.voice.instruct_text = '柔'.repeat(2000)
+    expect(validatePersonaForm(form)['voice.instruct_text']).toBeUndefined()
+  })
+
   it('语音绑定：发音人 + 合法语速通过', () => {
     const form = createEmptyForm()
     form.name = 'x'

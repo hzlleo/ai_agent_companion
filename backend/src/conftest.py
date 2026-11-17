@@ -188,6 +188,9 @@ os.environ["VOICE_ASR_BASE_URL"] = "http://127.0.0.1:8082"
 os.environ["VOICE_ASR_MODEL_ENTRY"] = "qwen3-asr-0.6b"
 os.environ["VOICE_ASR_REQUEST_TIMEOUT_SECONDS"] = "60"
 os.environ["VOICE_ASR_LANGUAGE"] = ""
+# 上传上限（与生产默认同值——字节精确边界测试经 app.state.settings
+# 注入小上限隔离驱动，不依赖本全局值）
+os.environ["VOICE_ASR_MAX_UPLOAD_BYTES"] = "26214400"
 
 # --- 运行环境标识（Settings.env → ENV） ---
 os.environ["ENV"] = "test"

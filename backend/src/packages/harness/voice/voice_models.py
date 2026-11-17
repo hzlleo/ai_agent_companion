@@ -21,7 +21,7 @@
       均满足——与 tools 域 SandboxClientFace 同约定）。
 
 大输出边界（文档化决策）：TTS 结果为**内存字节**（``audio: bytes``）——
-单次合成上限受请求文本 500 字符约束，音频体量在 MB 量级内；若后续 chunk
+单次合成上限受请求文本 500 字符约束，音频体量在 MB 量级内；若后续
 需要长文本 / 流式音频，在服务层演进为流式传输面（本模型保持归一结果
 形态不变）。
 """
@@ -124,21 +124,23 @@ class AsrResultModel(BaseModel):
 class VoiceProfileModel(BaseModel):
     """人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。
 
-    绑定语义（P4 锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定
+    绑定语义（锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定
     存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的
     default_speaker / default_speed；请求级显式参数又覆盖人格绑定。
     优先级：请求参数 > 人格绑定 > settings 缺省。
 
     Attributes:
         speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。
-        instruct_text: instruct2 模式风格指令（None = 普通合成；提供时
-            随合成请求透传给 CosyVoice instruct2 模式）。
+        instruct_text: instruct2 模式风格指令（None = 普通合成；≤2000
+            字符；提供时随合成请求透传给 CosyVoice instruct2 模式）。
         speed: 语速（0.5-2.0，默认 1.0）。
     """
 
     speaker: str = Field(min_length=1, max_length=128, description="发音人（speaker id）")
     instruct_text: str | None = Field(
-        default=None, description="instruct2 风格指令（None = 普通合成）"
+        default=None,
+        max_length=2000,
+        description="instruct2 风格指令（None = 普通合成；≤2000 字符）",
     )
     speed: float = Field(default=1.0, ge=0.5, le=2.0, description="语速（0.5-2.0）")
 

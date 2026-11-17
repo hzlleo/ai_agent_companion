@@ -116,7 +116,7 @@ toast 呈现，含 400 校验 / 404 / 409 冲突等后端语义）。
 
 `src/types/` 是后端 pydantic DTO 的手写镜像（前后端源码隔离），漂移
 由**双侧门禁**拦截（数据源为提交态 fixture
-`src/test/contract/dtoSchemas.json`，约 45 组共享 wire 契约）：
+`src/test/contract/dtoSchemas.json`，49 组共享 wire 契约）：
 
 - **改后端 DTO** → 先 `cd backend && pixi run export-dto-schemas`
   重新导出 fixture 并随改动一并提交——否则后端

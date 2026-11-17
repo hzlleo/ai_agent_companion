@@ -3,7 +3,8 @@
 装配契约：
 
     - :func:`create_app` —— FastAPI 工厂（共享异常处理器 + personas /
-      memories / usage / models / voice / health 路由 + CORS + lifespan）；
+      memories / usage / voice / look_at / models / channels-qq / health
+      共八路由 + CORS + lifespan）；
     - :func:`startup_app_state` / :func:`shutdown_app_state` —— **可独立
       驱动的纯异步函数对**（不藏在 lifespan 闭包内——测试无需 ASGI
       lifespan runner 即可直调，本工程不引入 asgi-lifespan 依赖）；
@@ -28,9 +29,9 @@
                                                  DREAM_SCHEDULE_ENABLED 任一
                                                  开启时装配；**后于通道**——
                                                  duty 报告出站复用通道路由器；
-                                                 缺省 no-op；duty 启用时
-                                                 _register_sandbox_tools 在
-                                                 内置工具后追加沙盒工具面）
+                                                 缺省 no-op；duty 启用时工具
+                                                 注册表在内置工具后追加沙盒
+                                                 工具面与 look_at 工具）
 
 停机序列（启动逆序）::
 
@@ -110,6 +111,7 @@ from packages.harness.llm.gateway import LlmGateway, wire_default_usage_recorder
 from packages.harness.memory.dreaming import DreamService
 from packages.harness.memory.retrieval import MemorySearchService, build_memory_store
 from packages.harness.memory.service import ChatSessionService, MemoryService
+from packages.harness.multimodal.look_at import LookAtService, register_look_at_tool
 from packages.harness.persona.service import PersonaService
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
 from packages.harness.scheduler import Scheduler, build_dream_trigger_job
@@ -376,7 +378,8 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
     装配链（顺序锁定）：工具注册表（内置工具——get_current_time 恒注册；
     search_memory 经记忆检索服务注入，存储与 dream 作业共用
     ``app.state.memory_store``（startup 装配的同一产出——SeekDB 形态下
-    不双建池））→ DutyService
+    不双建池）；沙盒工具按开关 warn-and-continue 追加；look_at 工具
+    经装配网关注册（duty 工具循环的图像理解消费面））→ DutyService
     （网关 / 注册表 / 通道路由器 + 属主会话——**通道先行装配**，未启用
     通道时路由器为 None → 报告仅落记忆）→ Scheduler（tick 来自
     Settings.scheduler）→ 注册 duty 每日作业 + dream 每日作业（按开关）
@@ -410,6 +413,9 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
             ),
         )
         await _register_sandbox_tools(app, settings, registry)
+        # look_at 工具（图像理解——duty 工具循环消费面）：经装配网关
+        # 构建服务（用量随网关发射），在内置 + 沙盒工具后注册。
+        register_look_at_tool(registry, LookAtService(gateway=app.state.gateway))
         duty_service = DutyService(
             gateway=app.state.gateway,
             registry=registry,

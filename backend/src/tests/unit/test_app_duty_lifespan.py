@@ -6,7 +6,8 @@
       None）；
     - duty enabled（FakeScheduler 注入）：作业注册（duty 每日 + 时刻 +
       tick 透传）+ 任务启动 + background_task_manager 托管 + 优雅停机 +
-      槽位复位；工具注册表装配（内置工具面 + search_memory 经检索服务）；
+      槽位复位；工具注册表装配（内置工具面 + search_memory 经检索服务
+      + look_at 工具经装配网关注册）；
     - dream only enabled：dream 作业注册（duty 槽位保持 None）；
     - 真实 Scheduler 烟雾装配（daily_at 取一小时后——测试窗口内零触发）；
     - 停机顺序：调度器先于通道（LIFO——duty 出站消费通道路由器）；
@@ -184,9 +185,10 @@ class TestEnabledWiring:
             assert task is not None and not task.done()
             assert task in background_task_manager.tasks
             # 工具注册表装配：内置工具面（get_current_time + search_memory）
+            # + look_at 工具（生产接线——装配网关构建服务后注册）
             registry = app.state.duty_registry
             assert registry is not None
-            assert registry.tool_names == ["get_current_time", "search_memory"]
+            assert registry.tool_names == ["get_current_time", "search_memory", "look_at"]
             assert app.state.duty_service is not None
         finally:
             await shutdown_app_state(app)
