@@ -17,7 +17,7 @@
 #   pixi run typecheck        # 后端 mypy
 #   pixi run coverage-gates   # 后端按模块覆盖率门禁（≥80%）
 #   pixi run coverage-frontend # 前端覆盖率门禁（perFile ≥80%）
-#   pixi run gates            # 工程门禁集（注释/同步测试棘轮/noqa 冻结）
+#   pixi run gates            # 工程门禁集（注释/同步测试棘轮/noqa 冻结/沙盒契约漂移）
 #
 # 子项目命令（在子项目目录执行）：
 #   cd backend && pixi run tests-all     # 后端全量测试

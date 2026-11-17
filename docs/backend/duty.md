@@ -1,4 +1,4 @@
-# duty / tools / scheduler — 值班轮 · 工具注册表 · 中央调度器（P3 chunk 2 交付）
+# duty / tools / scheduler — 值班轮 · 工具注册表 · 中央调度器
 
 `backend/src/packages/harness/duty/`（值班轮编排）+ `harness/tools/`（原生工具调用注册表）+ `harness/scheduler.py`（手滚中央调度器）+ `harness/llm` 原生工具调用扩展，共同构成「章程驱动的值班工具循环」：**每日定时 → 章程 + 工具面 → LLM 原生 tool_calls 循环 → 隔离执行 → 第一人称日报 → 落记忆 + 投递属主**。
 
@@ -40,10 +40,10 @@ ToolResultModel(tool, ok, result, error, latency_ms)
 ```
 
 - **list_specs()**：直接产出 `list[ToolDefinitionModel]`（llm 请求 `tools` 面——duty 轮经 `gateway.chat_by_role(..., tools=registry.list_specs())` 透传）；
-- **executor 无关**（锁定决策）：注册面只依赖 `ToolExecutor` 契约——P3 chunk 3 的 docker 沙盒执行器以同一契约接入，registry 零改动；
+- **executor 无关**（锁定决策）：注册面只依赖 `ToolExecutor` 契约——docker 沙盒执行器以同一契约接入（见 tools-sandbox.md），registry 零改动；
 - **同名注册后写覆盖前写**（与 `ChannelRouter.register_adapter` 同语义——热装配覆盖面）。
 
-### 内置工具（本 chunk 全集——红线：无网络 / 无文件系统，依赖一律构造注入）
+### 内置工具（红线：无网络 / 无文件系统，依赖一律构造注入）
 
 | 工具 | 参数（JSON Schema） | 结果 | 依赖注入 |
 |---|---|---|---|
@@ -226,7 +226,7 @@ settings = build_isolated_settings(
 #   DREAM_SCHEDULE__DAILY_AT=04:00
 ```
 
-> 注：`backend/.env.example` 分节登记属根 scripts/ 生成器（主 agent 面）——本 chunk 新增 env 键面以本表 + `src/conftest.py` 硬覆盖清单为准（`DUTY_*` / `DREAM_SCHEDULE_*` / `SCHEDULER_*`）。
+> 注：`backend/.env.example` 分节登记属根 scripts/ 生成器（主 agent 面）——duty / dream / scheduler env 键面以本表 + `src/conftest.py` 硬覆盖清单为准（`DUTY_*` / `DREAM_SCHEDULE_*` / `SCHEDULER_*`）。
 
 ## app 装配（`app/main.py` lifespan——顺序锁定）
 
@@ -245,7 +245,7 @@ settings = build_isolated_settings(
 
 停机链：`request_stop`（优雅——tick 收尾 + 在途作业排水 5s 封顶）→ bounded 等待（10s）→ 超时 `cancel` 兜底。**装配顺序依据**：调度器后于通道启动（duty 报告出站复用通道路由器——通道先行则路由器可达）；停机先于通道（LIFO——出站消费方先收口）。全部关闭时 no-op（零调度器对象构造）。
 
-## 错误码（本 chunk 零新增）
+## 错误码（零新增）
 
 复用既有错误码：malformed tool arguments → `LLM_CALL_FAILED`（llm 域段）；工具人格上下文缺失 → `PERSONA_CONTEXT_REQUIRED`；调度装配校验 → `VALIDATION_ERROR` / `INTERNAL_ERROR` / `NOT_FOUND`（观测面）。i18n 消息表零改动。
 

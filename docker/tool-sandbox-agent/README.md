@@ -1,7 +1,7 @@
 # tool-sandbox-agent — 工具沙盒代理
 
 执行器无关工具的**隔离运行时**：后端把「必须隔离执行的工具」（当前
-`http_fetch` + B 站只读工具组 `bili_*`；P4 平台工具按同一范式接入）代理
+`http_fetch` + B 站只读工具组 `bili_*`；平台工具按同一范式接入）代理
 到本沙盒进程执行，与后端**零代码共享**——唯一的耦合点是人为镜像的
 wire 契约 Model Classes（`src/tool_sandbox/wire_models.py` ↔ 后端
 `harness/tools/sandbox_models.py`，两侧类定义块 byte 级一致，契约漂移由
@@ -82,7 +82,7 @@ POST /invoke {"tool": "http_fetch", "arguments": {"url": "https://example.com/x"
 - 沙盒侧运行时**恒不抛**：未知工具 / 参数校验失败 / 受控失败 / 执行器
   异常四类失败均归一 `ok=false` + error（镜像后端 ToolRegistry 语义）。
 
-### 示例工具 `http_fetch`（P4 平台工具的落地范式）
+### 示例工具 `http_fetch`（平台工具的落地范式）
 
 | 项 | 值 |
 |---|---|
@@ -93,7 +93,7 @@ POST /invoke {"tool": "http_fetch", "arguments": {"url": "https://example.com/x"
 | 失败 | 全部归一受控失败（ok=false 终态——执行器恒不抛未受控异常） |
 | 阻塞 I/O | stdlib urllib 经 `asyncio.to_thread` 下沉（零 httpx 依赖） |
 
-### B 站只读工具组 `bili_*`（P4 平台工具——公开 JSON 接口读取面）
+### B 站只读工具组 `bili_*`（公开 JSON 接口读取面）
 
 四工具全部**只读**（红线：零评论 / 弹幕发布等写入端点），共享一个客户端
 核心（进程内限速 1 秒最小间隔 + HTTP 412 硬冷却 600→1200→1800 秒封顶 +
@@ -103,8 +103,8 @@ WBI 键 TTL 缓存）：
 |---|---|---|
 | `bili_search_videos` | `/x/web-interface/wbi/search/type`（WBI 签名） | 关键词视频搜索（`search_type=video`；keyword 1-64 / page 1-5 / page_size 10/20/30） |
 | `bili_video_info` | `/x/web-interface/view`（非 WBI） | 视频详情白名单裁剪（owner / stat 子集 / 首 P cid） |
-| `bili_video_comments` | `/x/v2/reply/main`（mode=2 时间序游标） | view→aid 换算 + 游标分页（ps≤20；page 1-50） |
-| `bili_video_subtitle` | `/x/player/v2`（view→cid 换算） | 字幕清单 + 可选首个字幕正文抓取（`fetch_subtitle` 默认 false；CDN 后缀清单 `biliapi.net` / `bilivideo.com` 管制） |
+| `bili_video_comments` | `/x/v2/reply`（sort=2 时间序 + pn/ps 页序） | view→aid 换算 + 页序分页（ps≤20；page 1-50） |
+| `bili_video_subtitle` | `/x/player/v2`（view→cid 换算） | 字幕清单 + 可选首个字幕正文抓取（`fetch_subtitle` 默认 false；CDN 后缀清单 `biliapi.net` / `bilivideo.com` / `hdslb.com` 管制） |
 
 - **响应白名单裁剪 + JSON 序列化上限约 16KB**（超限自列表尾部整项裁剪 + `truncated` 标记）；
 - **JSON code -352**（风控）按不重试受控失败处理；**code!=0** 携带 code + message 入受控文案；

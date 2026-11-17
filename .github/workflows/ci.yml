@@ -121,3 +121,8 @@ jobs:
 
       - name: Typecheck (mypy)
         run: cd docker/tool-sandbox-agent && pixi run typecheck
+
+      # 镜像构建验证（Dockerfile 变更 CI 即红——pip install 打包面 / tini /
+      # HEALTHCHECK / 非 root 等加固步骤不经测试任务覆盖，构建是唯一验证面）。
+      - name: Docker build (tool-sandbox-agent image)
+        run: docker build -t tool-sandbox-agent:ci docker/tool-sandbox-agent/

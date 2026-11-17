@@ -18,9 +18,10 @@
       可信内网部署形态——公网暴露必须配置，见 QqChannelSettings 类
       docstring 取舍）。token 经 env 间接（永不落配置树）。
     - **请求体校验**：仅要求 JSON **对象**形态（OneBot 事件面）；非对象
-      （数组 / 字面量 / 非法 JSON）→ 400（``BAD_REQUEST``）。对象内字段
-      的合法性由 webhook 处理器容错解析承担（隔离确认——不进 HTTP 错误
-      面）。
+      （数组 / 字面量 / 非法 JSON）→ 400（``BAD_REQUEST``）；极深嵌套
+      JSON 的 ``RecursionError`` 同归 400（解析器递归上限面——恒 200/4xx
+      契约不破）。对象内字段的合法性由 webhook 处理器容错解析承担
+      （隔离确认——不进 HTTP 错误面）。
     - **路由器未装配**（QQ / 全通道关闭形态）：确认并丢弃（warning 日志
       ——通道层是可选装配面，webhook 端点不因配置缺失而 5xx）。
     - **路由器装配面**：``app.state.channels_router``（lifespan 装配——
@@ -124,7 +125,7 @@ async def receive_qq_webhook(request: Request) -> QqWebhookAckDTO:
     _require_webhook_auth(request, qq.webhook_token_env)
     try:
         payload = await request.json()
-    except (ValueError, UnicodeDecodeError) as exc:
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         raise BusinessException(
             code=ErrorCode.BAD_REQUEST,
             message="QQ webhook 请求体不是合法 JSON",

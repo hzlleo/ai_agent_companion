@@ -21,7 +21,7 @@
     4. ``reply_to_message_id`` 只挂首段（后续段是续文——逐段引用会
        在客户端渲染成多条引用噪声）。
 
-错误码映射表（channels 域段——本 chunk 新增，见 core errors 注册表）：
+错误码映射表（channels 域段，见 core errors 注册表）：
 
     ============================  ========================  ==========
     失败类别                       错误码                    可重试
@@ -87,7 +87,13 @@ def split_tg_message_text(text: str, *, max_chars: int = TG_MESSAGE_MAX_CHARS) -
 
     Returns:
         切分后的段列表（原文本 ≤ 上限时为单元素列表）。
+
+    Raises:
+        ValueError: ``max_chars < 1``（公共纯函数参数面——零上限会令
+            切分循环无法推进，入口拒绝而非死循环）。
     """
+    if max_chars < 1:
+        raise ValueError("max_chars 须 ≥ 1")
     if len(text) <= max_chars:
         return [text]
     parts: list[str] = []

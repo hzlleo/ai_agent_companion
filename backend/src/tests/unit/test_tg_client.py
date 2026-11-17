@@ -364,6 +364,12 @@ class TestSplitFunction:
         assert split_tg_message_text("hello") == ["hello"]
         assert split_tg_message_text("x" * TG_MESSAGE_MAX_CHARS) == ["x" * TG_MESSAGE_MAX_CHARS]
 
+    async def test_max_chars_below_one_rejected(self) -> None:
+        """max_chars < 1：入口 ValueError（防零上限切分死循环）。"""
+        for invalid in (0, -1):
+            with pytest.raises(ValueError, match="max_chars 须 ≥ 1"):
+                split_tg_message_text("任意文本", max_chars=invalid)
+
     async def test_boundary_newline_at_window_start_uses_hard_cut(self) -> None:
         """窗口首字符即换行：硬切（防零长段 / 死循环边界）。"""
         text = "\n" + "y" * (TG_MESSAGE_MAX_CHARS + 10)

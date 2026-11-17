@@ -1,4 +1,4 @@
-# channels — 平台通道层（P3 chunk 1 交付：Telegram 首个适配器；P4 chunk 4 交付：QQ / NapCat OneBot v11）
+# channels — 平台通道层（Telegram 首个适配器；QQ / NapCat OneBot v11）
 
 `backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram——手写 Bot API 客户端 + 长轮询 runner；QQ——NapCat OneBot v11 客户端 + webhook 推送入站）。通道抽象保持类型可扩展（`ChannelType` StrEnum——B站等后续通道在此追加成员与同级子模型）。
 
@@ -27,6 +27,7 @@ TelegramChannelRunner（telegram/tg_runner.py）
     ↓ TgUpdateModel → InboundMessageModel（ID 字符串化 / epoch 秒 ×1000 归一）
 ChannelRouter.handle_inbound（channel_service.py）
     ① 适配器寻址（未注册 → CHANNEL_DISABLED，仅记录不抛）
+    ①′ per-chat 串行化锁（asyncio.Lock——同聊天全链路串行 / 不同聊天互不阻塞）
     ② 每聊天会话懒建（身份键 channel:chat_id——见「会话语义」）
     ③ bind_persona_context(state.persona_id)
     ④ ChatService.reply(state, text)          组装 → LlmGateway（role=chat）
@@ -58,17 +59,17 @@ QQ_ENABLED=true 时（同一 ChannelRouter——任一通道启用即构造）�
 TELEGRAM_ENABLED=false 且 QQ_ENABLED=false（缺省）：no-op——零通道对象构造
 ```
 
-停机 LIFO（`shutdown_app_state`）：`_shutdown_channels`（先于公共池——runner 消费共享 HTTP client）→ `pool_manager.stop()` → `close_database()` → `shutdown_shared_thread_pool()`。通道停机链：`request_stop()`（优雅——在途长轮询最多再等一个窗口）→ bounded 等待（5s）→ 超时 `cancel` 兜底（offset 已逐批持久化，重启安全）。
+停机 LIFO（`shutdown_app_state`）：`_shutdown_channels`（先于公共池——runner 消费共享 HTTP client）→ `pool_manager.stop()` → `close_database()` → `shutdown_shared_thread_pool()`。通道停机链：`request_stop()`（优雅——轮询态在途长轮询最多再等一个窗口；退避态的退避睡眠最长 `backoff_max_seconds`（默认 60s）不可被 request_stop 中断）→ bounded 等待（5s）→ 超时 `cancel` 兜底（cancel 语义覆盖两种形态——优雅等待不保证收口，5s 上限后强制终止；offset 已逐批持久化，重启安全）。
 
-## 人格语义（P3 锁定决策）
+## 人格语义（锁定决策）
 
-**单一激活人格应答全部通道消息**：会话懒建经 `ChatService.create_session(db_session=...)` 内部解析当前激活人格（persona 域注册表的事务性单激活不变式消费面）；每聊天按会话身份绑定人格随 P4 多通道扩展交付。`reply` 全程经 `bind_persona_context(state.persona_id)` 绑定人格上下文（PersonaMixin 表作用域——与 chat 域会话持久化同语义）。
+**单一激活人格应答全部通道消息**：会话懒建经 `ChatService.create_session(db_session=...)` 内部解析当前激活人格（persona 域注册表的事务性单激活不变式消费面）；每聊天按会话身份绑定人格属后续多通道扩展交付面。`reply` 全程经 `bind_persona_context(state.persona_id)` 绑定人格上下文（PersonaMixin 表作用域——与 chat 域会话持久化同语义）。
 
 ## 会话语义（每聊天懒建 + 持久化）
 
 - **身份键**：`channel:chat_id`（如 `channel:telegram:10086`）——路由器内存字典维度；持久化会话标题同值（`ff_chat_sessions.title`，便于管理台溯源）；
 - **懒建**：每聊天首条消息建会话（`create_session(db_session=...)` → 落库携 `session_id`）；其后消息复用同一 `ChatSessionStateModel`（内存回合累积 + `ChatService.reply` 逐回合持久化——`ff_chat_messages`，经 ChatService 自持 `session_scope`，通道层零额外持久化路径）；
-- **重启行为（文档化边界）**：进程重启后路由器内存字典为空——同聊天新消息起新会话（新 `session_id`；历史行保留在库）。按身份键恢复既有会话属 P4 多通道扩展面（需会话身份列 / 查询 API，当前 memory 域未提供）；
+- **重启行为（文档化边界）**：进程重启后路由器内存字典为空——同聊天新消息起新会话（新 `session_id`；历史行保留在库）。按身份键恢复既有会话属后续多通道扩展面（需会话身份列 / 查询 API，当前 memory 域未提供）；
 - **纯内存降级形态**（`session_factory=None`——测试 / 诊断用）：会话创建不落库；真实 `ChatService` 将抛 `INTERNAL_ERROR` → 走兜底回发。
 
 ## 错误隔离（铁律）
@@ -88,7 +89,8 @@ runner 循环层另有兜底：getUpdates 失败按指数退避重试（见下�
 
 - **游标语义**：批末推进 `offset = max(update_id) + 1`；下一轮 `getUpdates(offset=...)` 携带（服务端据此丢弃更早更新——确认语义）；非消息更新与无文本消息**跳过路由但 offset 照常推进**（否则服务端无限重投）；
 - **状态文件**：`state_dir/telegram_offset.json`（`{"offset": N}` 单键）；
-- **原子写**：临时文件（`.tmp-<epoch-ms>`）+ flush + fsync + `os.replace` 原子换名（config 域 registry_admin 同模式）；**不做 .bak 备份轮换**——offset 是单键可重建状态（丢失 = 重消费一遍待处理更新，幂等无害），不值得备份成本（文档化决策，与 registry_admin 的差异点）；
+- **原子写**：临时文件（`.tmp-<epoch-ms>`）+ flush + fsync + `os.replace` 原子换名（config 域 registry_admin 同模式）；**不做 .bak 备份轮换**——offset 是单键可重建状态，不值得备份成本（文档化决策，与 registry_admin 的差异点）；
+- **崩溃重放窗口（批末持久化的取舍）**：offset 在**整批消息处理完后**才推进落盘——批内消息已回复、但批末 offset 未持久化时进程崩溃，重启后该批整体重放，**已回复过的消息会再次回复**（用户可见的重复回复；原子写只保证「旧值或新值、无半写态」，不缩短批内窗口）。取舍依据：逐 update 持久化把每次回复后置一次 fsync（ms 级放大到消息级），对单用户陪伴机器人的低流量形态，批末持久化 + 罕见崩溃窗口的重复回复是更优交换；窗口大小 = 单批处理时长（LLM 回复耗时 × 批内消息数）；
 - **降级**：文件损坏 → 告警 + 视为首次拉取；写失败 → 告警 + 内存态继续——两种降级均不让 runner 死；
 - **阻塞 I/O 下沉**：读写均经 `run_blocking_ops`（core 共享线程池 / 事件循环默认执行器——不占事件循环）。
 
@@ -113,16 +115,16 @@ runner 循环层另有兜底：getUpdates 失败按指数退避重试（见下�
 | `reply_to_message_id` | 只挂首段（续文逐段引用会渲染成多条引用噪声） |
 | 空文本 / 非数字引用 ID | `VALIDATION_ERROR`（调用方 bug 面——不进重试） |
 
-## 错误码映射（channels 域段——P3 chunk 1 新增于 core ErrorCode 注册表）
+## 错误码映射（channels 域段——core ErrorCode 注册表既有成员）
 
 | 失败类别 | 错误码 | HTTP | 可重试 |
 |---|---|---|---|
 | token 环境变量缺失 / 为空（构造期） | `CHANNEL_TOKEN_MISSING` | 500 | 否（fail fast） |
 | HTTP 401 / 403 或 ok=False + error_code 401/403（token 无效） | `CHANNEL_TOKEN_MISSING` | 500 | 否 |
 | 其余 HTTP 非 200 / ok=False / 传输异常 / JSON 非法 | `CHANNEL_API_ERROR` | 503 | runner 退避 |
-| 路由器收到未注册适配器通道的入站消息 | `CHANNEL_DISABLED` | 409 | 否（装配面） |
+| 路由器收到未注册适配器通道的入站消息 | `CHANNEL_DISABLED`（**仅预留不 raise**——运行时为静默空结果，见「错误隔离」表；409 映射未接线） | （预留） | 否（装配面） |
 
-## QQ 通道（P4 chunk 4——NapCat / OneBot v11）
+## QQ 通道（NapCat / OneBot v11）
 
 ### 架构：推送式入站 vs Telegram 拉取式
 
@@ -185,7 +187,7 @@ OneBot v11 `message` 字段双形态：段数组（`[{"type": "text", "data": {.
 ### 去重与顺序（文档化边界）
 
 - **去重**：`message_id` 进程内有界 FIFO 窗口（1024——tg_runner 同语义同容量）；兜底「NapCat 重启 / 网络重试」窗口内的重投。进程重启清零（重启窗口内的重投可能重消费——QQ 无 offset 持久化等价物，OneBot v11 HTTP POST 上报无确认游标；NapCat 侧重试窗口短，影响面小）；
-- **顺序**：HTTP POST 上报不保证事件顺序（群消息并发上报可能乱序到达）——路由器按会话串行消费到达序，非平台发送序；
+- **顺序**：HTTP POST 上报不保证事件顺序（群消息并发上报可能乱序到达）——路由器以 per-chat `asyncio.Lock` 串行消费**到达序**（同聊天全链路串行：会话懒建 + 回复 + 兜底回发；不同聊天互不阻塞；并发首消息不重复建会话行）；到达序非平台发送序；
 - **message_id 负值**：NapCat 实现下常见——合法形态（去重键与入站 `message_id` 字符串化承载）。
 
 ### webhook 确认语义（铁律）
@@ -216,7 +218,7 @@ OneBot v11 `message` 字段双形态：段数组（`[{"type": "text", "data": {.
 | chat_id grammar 非法 / 空文本 | `VALIDATION_ERROR` | 422 | 否（调用方 bug） |
 | webhook 鉴权失败（入站） | `UNAUTHORIZED` | 401 | 否 |
 | webhook 请求体非 JSON 对象 | `BAD_REQUEST` | 400 | 否 |
-| 路由器收到未注册适配器通道的入站消息 | `CHANNEL_DISABLED` | 409 | 否（装配面） |
+| 路由器收到未注册适配器通道的入站消息 | `CHANNEL_DISABLED`（**仅预留不 raise**——同 telegram 段；运行时静默空结果） | （预留） | 否（装配面） |
 
 ### Settings（QQ 分节）
 
@@ -259,7 +261,7 @@ settings = build_isolated_settings(
 )
 ```
 
-> 注：`backend/.env.example` 由根 `scripts/generate_examples*.py` 从配置类内省生成；其分节登记表本 chunk 未变更（scripts/ 不在交付面），QQ_* 键面以本表 + `src/conftest.py` 硬覆盖清单为准（`QQ_ENABLED` / `QQ_HTTP_API_BASE_URL` / `QQ_ACCESS_TOKEN_ENV` / `QQ_WEBHOOK_TOKEN_ENV` / `QQ_REQUEST_TIMEOUT_SECONDS` / 双 token 本值变量）。
+> 注：`backend/.env.example` 由根 `scripts/generate_examples*.py` 从配置类内省生成；其分节登记表当前未变更（scripts/ 生成器属主 agent 面），QQ_* 键面以本表 + `src/conftest.py` 硬覆盖清单为准（`QQ_ENABLED` / `QQ_HTTP_API_BASE_URL` / `QQ_ACCESS_TOKEN_ENV` / `QQ_WEBHOOK_TOKEN_ENV` / `QQ_REQUEST_TIMEOUT_SECONDS` / 双 token 本值变量）。
 
 ## Settings（`Settings.channels`）——telegram 分节
 
@@ -271,7 +273,7 @@ env 面（`env_prefix=TELEGRAM_`；嵌套覆写 `CHANNELS__TELEGRAM__*` 亦可�
 | `bot_token_env` | `TELEGRAM_BOT_TOKEN_ENV` | `TELEGRAM_BOT_TOKEN` | bot token 环境变量名（**间接**——token 本值永不落配置树） |
 | `api_base` | `TELEGRAM_API_BASE` | `https://api.telegram.org` | Bot API 基础 URL（可指向自建代理） |
 | `poll_timeout_seconds` | `TELEGRAM_POLL_TIMEOUT_SECONDS` | `25` | 长轮询超时秒数（1–50；请求超时 = 该值 + 5s 传输裕量） |
-| `owner_chat_id` | `TELEGRAM_OWNER_CHAT_ID` | `null` | 属主会话 ID（空字符串归一 null；P3 duty 轮值班通知目标——本 chunk 不消费） |
+| `owner_chat_id` | `TELEGRAM_OWNER_CHAT_ID` | `null` | 属主会话 ID（空字符串归一 null；duty 值班报告投递目标——`app/main.py` 装配传入 `DutyService(owner_chat_id=...)`，见 duty.md「报告路由」） |
 | `backoff_base_seconds` | `TELEGRAM_BACKOFF_BASE_SECONDS` | `1.0` | 轮询失败退避基数秒 |
 | `backoff_max_seconds` | `TELEGRAM_BACKOFF_MAX_SECONDS` | `60.0` | 退避封顶秒数（校验 ≥ 基数） |
 | `state_dir` | `TELEGRAM_STATE_DIR` | `data/channels` | offset 状态目录（相对路径按进程 CWD 解析） |
@@ -308,7 +310,7 @@ settings = build_isolated_settings(
 )
 ```
 
-> 注：`backend/.env.example` 由根 `scripts/generate_examples*.py` 从配置类内省生成；其分节登记表本 chunk 未变更（scripts/ 不在交付面），TELEGRAM_* 键面以本表 + `src/conftest.py` 硬覆盖清单为准。
+> 注：`backend/.env.example` 由根 `scripts/generate_examples*.py` 从配置类内省生成；其分节登记表当前未变更（scripts/ 生成器属主 agent 面），TELEGRAM_* 键面以本表 + `src/conftest.py` 硬覆盖清单为准。
 
 ## 测试面
 

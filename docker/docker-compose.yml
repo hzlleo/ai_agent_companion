@@ -1,4 +1,4 @@
-# 工具沙盒代理编排 —— 独立部署面（P3 chunk 3 交付）
+# 工具沙盒代理编排 —— 独立部署面
 #
 # 后端**不进 compose**（经 backend/ pixi 运行——本文件只编排沙盒）：
 # 后端经 http://127.0.0.1:8765 消费沙盒 /invoke（共享 httpx 池 + Bearer token，
@@ -12,7 +12,7 @@
 #   # 可选辅助模型服务（look_at 视觉 + embed 嵌入；需 NVIDIA Container Toolkit）：
 #   docker compose up -d llama-server-vision llama-server-embed
 #
-# 辅助模型服务（P4）：
+# 辅助模型服务：
 #   - llama-server-vision：Qwen3-VL-4B（Q4_K_M + F16 mmproj）——look_at 角色
 #     端点（backend llm 注册表条目 base_url=http://127.0.0.1:8080/v1，
 #     multimodal=true 绑定 look_at 角色）；
@@ -21,6 +21,19 @@
 #   - 权重经 git-lfs 拉取的 models/ 子模组只读挂载（见 docs/models.md）；
 #   - 显存预算（16GB）：视觉 ~4GB + 嵌入 ~0.8GB——余量充足；
 #   - TTS（CosyVoice3）与 ASR（Qwen3-ASR）需各自服务包装面，见文件尾注释占位。
+#
+# GPU 服务加固窗口（部署验证面——当前有意未挂 directives，不盲加）：
+#   - 现状：两 llama-server 服务仅具备卷 :ro + mem_limit；cap_drop /
+#     no-new-privileges / user 覆盖**未**应用（与 tool-sandbox-agent 的
+#     加固面差异是有意的待办，不是疏漏）；
+#   - 约束：NVIDIA Container Toolkit 的 GPU 注入（`gpus: all` →
+#     nvidia-container-runtime 设备挂载）与 `cap_drop: ALL` 等强收敛存在
+#     兼容面风险——CUDA / NVML 需要的 capability 与设备 cgroup 规则须在
+#     真实部署机上实测，盲加会以「服务起来但 GPU 不可用」的静默形态失败；
+#   - 部署验证窗口的动作项：在部署机上按「cap_drop 最小集 + user 非
+#     root + no-new-privileges:true + device_cgroup_rules（GPU 设备号）」
+#     逐项加挂并验证 `nvidia-smi` / 推理可用后固化到本文件——加固验证
+#     未完成前，该差异以本注释显式登记。
 #
 # 加固面（与 Dockerfile 内加固共同构成沙盒边界）：
 #   - 端口仅回环暴露（127.0.0.1:8765:8765——后端本机消费，不对局域网开放）；

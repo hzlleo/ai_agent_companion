@@ -53,11 +53,30 @@ from packages.harness.tools.sandbox_models import (
 from packages.harness.tools.tool_models import ToolResultModel, ToolSpecModel
 
 __all__ = [
+    "SANDBOX_HEALTH_PATH",
+    "SANDBOX_INVOKE_PATH",
+    "SANDBOX_TOKEN_ENV_DEFAULT",
     "ToolSandboxClient",
     "build_sandbox_client",
     "register_sandbox_tool",
     "register_sandbox_tools_for_bili",
 ]
+
+
+# ---------------------------------------------------------------------------
+# 部署契约常量（与沙盒树 server.py 同名常量镜像——漂移门禁比对项）
+# ---------------------------------------------------------------------------
+
+#: 沙盒 invoke 端点路径（沙盒树 server.py 路由定义的镜像——改任一侧
+#: 须同步另一侧，漂移门禁看护）。
+SANDBOX_INVOKE_PATH: str = "/invoke"
+
+#: 沙盒 health 端点路径（同上——启动探测 / 容器 HEALTHCHECK 消费面）。
+SANDBOX_HEALTH_PATH: str = "/health"
+
+#: 鉴权 token 环境变量缺省名（沙盒树 _TOKEN_ENV 同名镜像——compose 注入
+#: 契约；settings ``token_env`` 缺省同值）。
+SANDBOX_TOKEN_ENV_DEFAULT: str = "SANDBOX_TOKEN"
 
 
 class ToolSandboxClient:
@@ -77,7 +96,7 @@ class ToolSandboxClient:
         http_client: httpx.AsyncClient,
         *,
         base_url: str = "http://127.0.0.1:8765",
-        token_env: str = "SANDBOX_TOKEN",
+        token_env: str = SANDBOX_TOKEN_ENV_DEFAULT,
         request_timeout_seconds: float = 15.0,
     ) -> None:
         """初始化客户端（token 环境变量间接解析——缺失仅告警不 fail fast）。
@@ -122,7 +141,9 @@ class ToolSandboxClient:
             均为 False——装配层 warn-and-continue 判定面）。
         """
         try:
-            response = await self._http.get(f"{self._base_url}/health", timeout=self._timeout)
+            response = await self._http.get(
+                f"{self._base_url}{SANDBOX_HEALTH_PATH}", timeout=self._timeout
+            )
         except httpx.HTTPError:
             logger.warning("工具沙盒健康探测失败（传输异常）: base_url={}", self._base_url)
             return False
@@ -159,7 +180,7 @@ class ToolSandboxClient:
         request = InvokeRequestModel(tool=tool, arguments=arguments)
         try:
             response = await self._http.post(
-                f"{self._base_url}/invoke",
+                f"{self._base_url}{SANDBOX_INVOKE_PATH}",
                 json=request.model_dump(),
                 headers={"Authorization": f"Bearer {self._token}"},
                 timeout=self._timeout,

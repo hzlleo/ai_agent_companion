@@ -174,6 +174,7 @@ class ErrorCode(StrEnum):
     MODEL_NOT_FOUND = ("MODEL_NOT_FOUND", 404)
 
     # --- 平台通道（channels 域；Telegram 首个适配器消费） ---
+    # CHANNEL_DISABLED 仅预留不 raise（路由器对未注册适配器为静默空结果——409 映射未接线）。
     CHANNEL_DISABLED = ("CHANNEL_DISABLED", 409)
     CHANNEL_TOKEN_MISSING = ("CHANNEL_TOKEN_MISSING", 500)
     CHANNEL_API_ERROR = ("CHANNEL_API_ERROR", 503)

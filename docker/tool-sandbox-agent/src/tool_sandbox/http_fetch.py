@@ -1,6 +1,6 @@
-"""http_fetch 示例工具——沙盒侧 HTTP 抓取（P4 平台工具的落地范式）。
+"""http_fetch 示例工具——沙盒侧 HTTP 抓取（平台工具的落地范式）。
 
-本模块是「执行器无关工具须隔离运行」的范例实现，P4 平台工具按同一
+本模块是「执行器无关工具须隔离运行」的范例实现，平台工具按同一
 形态接入（工厂函数 + 参数 Model Class + 受控失败 + 线程池下沉阻塞 I/O）。
 
 安全面（逐条红线——与部署面 compose 加固共同构成沙盒边界）：
@@ -14,7 +14,10 @@
        终态 URL 复检（belt-and-suspenders）；
     3. **协议面**：仅 http/https；正文按字节截断 8192（8KB），解码
        ``errors="replace"``（字符集取响应头，回退 utf-8——解码恒不抛）；
-    4. **受控失败**：全部失败路径归一 :class:`SandboxToolError`（受控
+    4. **不走系统代理**：opener 显式 ``ProxyHandler({})`` 禁用环境代理
+       （部署机 ``http_proxy`` 等残留不得改道出站——与 bili_tools 同
+       锁定决策：允许清单校验的是目标主机，出站路径须点对点直连）；
+    5. **受控失败**：全部失败路径归一 :class:`SandboxToolError`（受控
        中文文案——不携带 token / 内部路径；执行器对运行时**恒不抛
        未受控异常**）。
 
@@ -220,6 +223,9 @@ def default_fetch(url: str, timeout_seconds: int, allowlist: list[str]) -> dict[
 
     全部失败路径归一 :class:`SandboxToolError`（受控文案）；成功返回
     结果 dict（正文按字节截断 8KB + 字符集解码 ``errors="replace"``）。
+    出站不走系统代理：opener 携带 ``ProxyHandler({})`` 显式禁用环境
+    代理（``build_opener`` 缺省会拾取 ``http_proxy`` 等 env——与
+    bili_tools 同锁定决策，允许清单的信任模型按点对点直连解释）。
 
     Args:
         url: 目标 URL（首跳校验 + 重定向逐跳校验 + 终态复检）。
@@ -237,7 +243,9 @@ def default_fetch(url: str, timeout_seconds: int, allowlist: list[str]) -> dict[
     try:
         validate_fetch_url(url, allowlist)
         request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT}, method="GET")
-        opener = urllib.request.build_opener(_AllowlistRedirectHandler(allowlist))
+        opener = urllib.request.build_opener(
+            _AllowlistRedirectHandler(allowlist), urllib.request.ProxyHandler({})
+        )
         with opener.open(request, timeout=timeout_seconds) as response:
             final_url = response.geturl()
             validate_fetch_url(final_url, allowlist)
@@ -287,7 +295,7 @@ def build_http_fetch_tool(
     allowlist_provider: Callable[[], list[str]] | None = None,
     fetch_fn: FetchFn | None = None,
 ) -> tuple[SandboxToolSpec, SandboxToolExecutor]:
-    """构建 http_fetch 工具（依赖构造注入——P4 平台工具的接入范式）。
+    """构建 http_fetch 工具（依赖构造注入——平台工具的接入范式）。
 
     Args:
         allowlist_provider: 允许清单读取注入（None = 环境变量

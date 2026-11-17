@@ -90,7 +90,13 @@ class QqMessageDedupWindow:
 
         Args:
             cap: 窗口容量（默认 1024；须 ≥ 1）。
+
+        Raises:
+            ValueError: ``cap < 1``（零容量会令新登记的 ID 即刻淘汰——
+                去重静默失效；入口拒绝）。
         """
+        if cap < 1:
+            raise ValueError("cap 须 ≥ 1")
         self.cap = cap
         self._seen: set[int] = set()
         self._order: deque[int] = deque()

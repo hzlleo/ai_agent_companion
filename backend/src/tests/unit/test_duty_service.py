@@ -407,6 +407,17 @@ async def test_round_no_active_persona_error_without_side_effects() -> None:
     assert memory.appended == []
     assert adapter.sent == []
     assert gateway.calls == []
+    # 注入时钟同轴：零副作用早退的 finished == started（不混真实时钟读数）。
+    assert report.started_ts_ms == NOW
+    assert report.finished_ts_ms == NOW
+    assert report.finished_ts_ms >= report.started_ts_ms
+    # 注入未来时钟：早退路径 finished 仍在注入轴上（真实时钟读数会更小——
+    # 混轴即红的回归锚）。
+    future_now = 9_000_000_000_000
+    future_report = await service.run_duty_round(_Session(), now_ms=future_now)
+    assert future_report.started_ts_ms == future_now
+    assert future_report.finished_ts_ms == future_now
+    assert future_report.finished_ts_ms >= future_report.started_ts_ms
 
 
 async def test_round_unknown_tool_recorded_as_failed_step() -> None:

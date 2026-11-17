@@ -6,7 +6,9 @@
 
     - **backend 剖面**：``src/packages/harness/<子包>/`` 包级一组 +
       app 层按 ``main.py`` / ``api/`` / ``middleware/`` 分组；
-    - 后续 docker 沙盒树落地时再登记对应剖面（当前仓库仅 backend 树）。
+    - **tool-sandbox 剖面**：``docker/tool-sandbox-agent`` 树——树根
+      ``server.py`` 单文件一组 + ``src/tool_sandbox/<module>.py`` 逐模块
+      一组（与 backend 逐模块同口径的机器门禁）。
 
 聚合口径：组内 ``num_statements`` / ``covered_lines`` **求和**后计算百分比
 （不是对单文件百分比求均值——避免零覆盖小文件被高覆盖大文件平均掉）。
@@ -21,7 +23,7 @@
 
 Args（CLI）:
     coverage_json: coverage.json 路径（相对 CWD 或绝对路径）。
-    --profile: ``auto``（按文件路径自动识别）/ ``backend``。
+    --profile: ``auto``（按文件路径自动识别）/ ``backend`` / ``tool-sandbox``。
     --threshold: 门禁阈值百分比，默认 80。
     --enforce: 强制模式（缺省为 report 模式）。
 
@@ -41,6 +43,10 @@ from pathlib import Path, PurePosixPath
 #: coverage.json 内文件键为 POSIX 风格相对路径；据此归一。
 _HARNESS_PREFIX = "src/packages/harness/"
 _APP_PREFIX = "src/app/"
+
+#: 沙盒树包前缀（pixi 项目根 = docker/tool-sandbox-agent；coverage.json
+#: 以该根为 CWD 生成——键形如 ``src/tool_sandbox/<module>.py``）。
+_SANDBOX_PKG_PREFIX = "src/tool_sandbox/"
 
 #: 不参与分组计数的路径片段。
 _SKIP_SEGMENTS = frozenset({"tests", "__pycache__"})
@@ -86,9 +92,32 @@ def _classify_backend(rel_path: PurePosixPath) -> str | None:
     return None
 
 
-#: 剖面 → 分组函数（当前仅 backend；docker 沙盒树落地时再登记）。
+def _classify_tool_sandbox(rel_path: PurePosixPath) -> str | None:
+    """tool-sandbox 剖面分组规则：server.py 单文件一组 + 包内逐模块一组。
+
+    Args:
+        rel_path: 相对沙盒树 pixi 项目根的路径。
+
+    Returns:
+        组名（如 ``server.py`` / ``tool_sandbox/bili_tools.py``）；不属于
+        任何组返回 None。
+    """
+    posix = rel_path.as_posix()
+    if posix == "server.py":
+        return "server.py"
+    if posix.startswith(_SANDBOX_PKG_PREFIX):
+        rest = rel_path.parts[2:]  # src/tool_sandbox 之后
+        if rest:
+            # 逐模块分组（镜像 backend 对 harness 根级单文件的 <file>.py 组名
+            # 约定；沙盒包为扁平模块——无子包层级）。
+            return f"tool_sandbox/{rest[0]}"
+    return None
+
+
+#: 剖面 → 分组函数（backend / tool-sandbox 两树）。
 _PROFILES: dict[str, Callable[[PurePosixPath], str | None]] = {
     "backend": _classify_backend,
+    "tool-sandbox": _classify_tool_sandbox,
 }
 
 
@@ -99,7 +128,7 @@ def detect_profile(file_keys: list[str]) -> str:
         file_keys: coverage.json ``files`` 的键列表。
 
     Returns:
-        ``"backend"``（当前唯一剖面）。
+        ``"backend"`` 或 ``"tool-sandbox"``。
 
     Raises:
         SystemExit: 无法识别（退出码 2）。
@@ -107,9 +136,12 @@ def detect_profile(file_keys: list[str]) -> str:
     for key in file_keys:
         if key.startswith(_APP_PREFIX) or key.startswith(_HARNESS_PREFIX):
             return "backend"
+    for key in file_keys:
+        if key.startswith(_SANDBOX_PKG_PREFIX) or key == "server.py":
+            return "tool-sandbox"
     print(
         "[check_coverage_per_module] 无法从 coverage.json 识别剖面"
-        "（无 backend 路径），请检查 --cov 范围",
+        "（无 backend / tool-sandbox 路径），请检查 --cov 范围",
         file=sys.stderr,
     )
     raise SystemExit(2)
@@ -159,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("coverage_json", type=Path, help="coverage.json 路径")
     parser.add_argument(
         "--profile",
-        choices=("auto", "backend"),
+        choices=("auto", "backend", "tool-sandbox"),
         default="auto",
         help="分组剖面（默认 auto 自动识别）",
     )
