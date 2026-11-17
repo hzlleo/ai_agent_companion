@@ -1,15 +1,15 @@
-"""chat 域控制台 REPL——用户可见对话入口（与当前激活人格流式对话）。
+"""chat 域控制台 REPL——用户可见对话入口（与当前主人格流式对话）。
 
 启动序列（isolated-safe——全部组件可注入，测试零真实网络 / 零真实配置）::
 
     settings → setup_logging_from_settings → load_all_config
         → PoolManager start → init_database
         → LlmGateway（usage_recorder=wire_default_usage_recorder()）
-        → 经 PersonaService 读取当前激活人格
+        → 经 PersonaService 读取当前主人格
 
-    - 无激活人格：打印中文指引（如何经 /api/v1/personas 创建并激活），
+    - 无主人格：打印中文指引（如何经 /api/v1/personas 创建并设为主人格），
       LIFO 收尾后以退出码 1 结束；
-    - 有激活人格：打印横幅 + 开场白，进入 REPL 循环。
+    - 有主人格：打印横幅 + 开场白，进入 REPL 循环。
 
 REPL 命令面：``/quit`` 退出（码 0）/ ``/clear`` 清空会话历史 / ``/history``
 查看回合 / ``/new`` 新建持久化会话 / ``/sessions`` 列出最近会话 /
@@ -23,7 +23,7 @@ REPL 命令面：``/quit`` 退出（码 0）/ ``/clear`` 清空会话历史 / ``
       时，每条人格回复在文本流写完后追加语音合成 + 播放；旗标缺省 =
       零语音对象构造、零合成调用；
     - **人格绑定**：合成经 :class:`~packages.harness.voice.voice_service.
-      VoiceService` 以当前激活人格绑定（``persona.voice_profile`` 存在时
+      VoiceService` 以当前主人格绑定（``persona.voice_profile`` 存在时
       其 speaker / speed 覆盖 settings 缺省）；
     - **best-effort 播放**：本地播放器运行时发现（``ffplay`` →
       ``aplay``），阻塞播放经 ``run_blocking_ops`` 下沉线程池（不占事件
@@ -68,7 +68,7 @@ from packages.harness.chat.service import ChatService
 from packages.harness.config.loader import load_all_config, setup_logging_from_settings
 from packages.harness.config.models import DatabaseConfig, Settings
 from packages.harness.config.models import settings as global_settings
-from packages.harness.core.errors import BusinessException
+from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.thread_pool import run_blocking_ops
 from packages.harness.core.time_utils import from_ms
 from packages.harness.database.engine import close_database, init_database
@@ -207,7 +207,7 @@ async def _speak_reply(
 
     Args:
         voice_service: 语音服务（人格绑定合成）。
-        persona: 当前激活人格（voice_profile 绑定消费面）。
+        persona: 当前主人格（voice_profile 绑定消费面）。
         reply_text: 人格完整回复文本（流式增量聚合）。
         output_fn: 输出回调（合成失败提示上屏）。
         play_audio: 播放回调（默认 ffplay/aplay 发现；测试注入 fake）。
@@ -306,7 +306,7 @@ async def run_chat_cli(
             run_blocking_ops 下沉；测试注入记录器 fake）。
 
     Returns:
-        进程退出码（0 = 正常退出；1 = 无激活人格）。
+        进程退出码（0 = 正常退出；1 = 无主人格）。
     """
     resolved_settings = settings if settings is not None else global_settings
     resolved_persona_service = persona_service if persona_service is not None else PersonaService()
@@ -347,16 +347,21 @@ async def run_chat_cli(
             session_service=resolved_session_service,
         )
 
-        record: PersonaRecordDTO | None
-        async with session_scope() as db_session:
-            record = await resolved_persona_service.get_active_persona(db_session)
-        if record is None:
+        record: PersonaRecordDTO
+        try:
+            async with session_scope() as db_session:
+                record = await resolved_persona_service.get_primary_persona(db_session)
+        except BusinessException as exc:
+            # 无主人格为已知确定态（NOT_FOUND——服务层清晰中文错误）；
+            # 其余业务异常原样上抛（与无主人格引导不同的故障面）。
+            if exc.code != ErrorCode.NOT_FOUND:
+                raise
             output_fn(
-                "未找到激活人格：当前没有任何处于激活状态的人格，无法开始对话。\n"
+                "未找到主人格：当前没有主人格，无法开始对话。\n"
                 "请先经人格管理 API（/api/v1/personas）完成三步：\n"
-                "  1. POST /api/v1/personas                 创建人格（注册名 + chara card）；\n"
-                "  2. PUT  /api/v1/personas/{id}            启用人格（status=active）；\n"
-                "  3. POST /api/v1/personas/{id}/activate   激活人格（单激活切换）。\n"
+                "  1. POST /api/v1/personas                    创建人格（注册名 + chara card）；\n"
+                "  2. PUT  /api/v1/personas/{id}               启用人格（status=active）；\n"
+                "  3. POST /api/v1/personas/{id}/set-primary   设为主人格（事务性切换）。\n"
                 "完成后重新运行 pixi run chat 即可开始对话。\n"
             )
             return 1
@@ -483,11 +488,11 @@ def main() -> None:
     """CLI 入口（``pixi run chat``；``--help`` 原生退出 0——不启动任何组件）。"""
     parser = argparse.ArgumentParser(
         prog="pixi run chat",
-        description="ai_agent_companion 控制台聊天——与当前激活人格流式对话",
+        description="ai_agent_companion 控制台聊天——与当前主人格流式对话",
         epilog=(
             "会话命令：/quit 退出 | /clear 清空历史 | /history 查看历史 | /new 新会话"
             " | /sessions 会话列表 | /resume 恢复 | /help 帮助\n"
-            "前置条件：已激活至少一个人格（经 /api/v1/personas 管理面）"
+            "前置条件：已设至少一个人格为主人格（经 /api/v1/personas 管理面）"
         ),
     )
     parser.add_argument(

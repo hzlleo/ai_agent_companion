@@ -20,11 +20,11 @@ import { useToast } from '@/components/ui/useToast'
 import { flattenCursorPages, isAllSelected } from '@/api/pagination'
 import { toApiError } from '@/api/client'
 import {
-  useActivatePersona,
   useBatchDeletePersonas,
-  useDeactivatePersona,
   useDeletePersona,
+  useDisablePersona,
   usePersonasList,
+  useSetPrimaryPersona,
 } from '@/hooks/usePersonasApi'
 import { formatEpochMs } from '@/lib/datetime'
 import type {
@@ -38,10 +38,10 @@ import { BatchDeleteResultDialog } from '@/components/BatchDeleteResultDialog'
 /** 状态过滤态（空串 = 全部）。 */
 type StatusFilter = '' | PersonaStatus
 
-/** 待确认操作（激活 / 停用 / 删除 / 批量删除）。 */
+/** 待确认操作（设为主人格 / 停用 / 删除 / 批量删除）。 */
 type ConfirmAction =
-  | { kind: 'activate'; persona: PersonaRecord }
-  | { kind: 'deactivate'; persona: PersonaRecord }
+  | { kind: 'set-primary'; persona: PersonaRecord }
+  | { kind: 'disable'; persona: PersonaRecord }
   | { kind: 'delete'; persona: PersonaRecord }
   | { kind: 'batch-delete'; ids: number[] }
   | null
@@ -56,10 +56,10 @@ function statusBadge(status: PersonaStatus): { label: string; variant: 'success'
 /**
  * 人格管理列表页。
  *
- * 数据面：游标分页（load more）+ status 过滤；操作面：激活/停用
- * （确认后事务性切换）、复制（对话框，可选深拷贝状态）、删除
- * （激活守卫 409 经 toast 呈现后端提示）、批量删除（部分成功结果
- * 对话框逐项呈现）。
+ * 数据面：游标分页（load more）+ status 过滤；操作面：设为主人格/
+ * 停用（确认后事务性切换——停用当前主人格被后端 409 拒绝并经 toast
+ * 呈现指引）、复制（对话框，可选深拷贝状态）、删除（主人格守卫 409
+ * 经 toast 呈现后端提示）、批量删除（部分成功结果对话框逐项呈现）。
  */
 export default function PersonaListPage() {
   const toast = useToast()
@@ -75,8 +75,8 @@ export default function PersonaListPage() {
     status: statusFilter === '' ? undefined : statusFilter,
     limit: 20,
   })
-  const activateMutation = useActivatePersona()
-  const deactivateMutation = useDeactivatePersona()
+  const setPrimaryMutation = useSetPrimaryPersona()
+  const disableMutation = useDisablePersona()
   const deleteMutation = useDeletePersona()
   const batchDeleteMutation = useBatchDeletePersonas()
 
@@ -110,10 +110,10 @@ export default function PersonaListPage() {
       return
     }
     switch (confirmAction.kind) {
-      case 'activate': {
-        activateMutation.mutate(confirmAction.persona.id, {
+      case 'set-primary': {
+        setPrimaryMutation.mutate(confirmAction.persona.id, {
           onSuccess: () => {
-            toast.success(`人格「${confirmAction.persona.name}」已激活（单激活切换）`)
+            toast.success(`人格「${confirmAction.persona.name}」已设为主人格（事务性切换）`)
             setConfirmAction(null)
           },
           onError: (error) => {
@@ -123,13 +123,14 @@ export default function PersonaListPage() {
         })
         break
       }
-      case 'deactivate': {
-        deactivateMutation.mutate(confirmAction.persona.id, {
+      case 'disable': {
+        disableMutation.mutate(confirmAction.persona.id, {
           onSuccess: () => {
-            toast.success(`人格「${confirmAction.persona.name}」激活位已停用`)
+            toast.success(`人格「${confirmAction.persona.name}」已停用`)
             setConfirmAction(null)
           },
           onError: (error) => {
+            // 主人格停用守卫（409）等后端语义直接透出 message。
             toast.error(toApiError(error).message)
             setConfirmAction(null)
           },
@@ -176,8 +177,8 @@ export default function PersonaListPage() {
 
   /** 确认对话框 loading 态（按操作种类取对应 mutation）。 */
   const confirmLoading =
-    (confirmAction?.kind === 'activate' && activateMutation.isPending) ||
-    (confirmAction?.kind === 'deactivate' && deactivateMutation.isPending) ||
+    (confirmAction?.kind === 'set-primary' && setPrimaryMutation.isPending) ||
+    (confirmAction?.kind === 'disable' && disableMutation.isPending) ||
     (confirmAction?.kind === 'delete' && deleteMutation.isPending) ||
     (confirmAction?.kind === 'batch-delete' && batchDeleteMutation.isPending)
 
@@ -187,26 +188,26 @@ export default function PersonaListPage() {
       return null
     }
     switch (confirmAction.kind) {
-      case 'activate':
+      case 'set-primary':
         return {
-          title: '激活人格',
+          title: '设为主人格',
           description: (
             <span>
-              确认激活人格「{confirmAction.persona.name}」？激活为事务性单激活切换——原激活人格（如有）将被自动停用。
+              确认将人格「{confirmAction.persona.name}」设为主人格？设主为事务性切换——原主人格（如有）将被自动解除。
             </span>
           ),
-          confirmText: '激活',
+          confirmText: '设为主人格',
           destructive: false,
         }
-      case 'deactivate':
+      case 'disable':
         return {
-          title: '停用激活',
+          title: '停用人格',
           description: (
             <span>
-              确认停用人格「{confirmAction.persona.name}」的激活位？停用后系统允许零激活状态。
+              确认停用人格「{confirmAction.persona.name}」？停用后该人格退出可寻址集；当前主人格将被后端拒绝停用（需先另设主人格）。
             </span>
           ),
-          confirmText: '停用激活',
+          confirmText: '停用',
           destructive: false,
         }
       case 'delete':
@@ -214,7 +215,7 @@ export default function PersonaListPage() {
           title: '删除人格',
           description: (
             <span>
-              确认删除人格「{confirmAction.persona.name}」？该操作不可恢复；当前激活人格将被后端拒绝删除（需先停用）。
+              确认删除人格「{confirmAction.persona.name}」？该操作不可恢复；当前主人格将被后端拒绝删除（需先另设主人格）。
             </span>
           ),
           confirmText: '删除',
@@ -225,7 +226,7 @@ export default function PersonaListPage() {
           title: '批量删除人格',
           description: (
             <span>
-              确认删除选中的 {confirmAction.ids.length} 个人格？逐项独立执行：激活人格与缺失项将记为失败，不阻塞其余项。
+              确认删除选中的 {confirmAction.ids.length} 个人格？逐项独立执行：主人格与缺失项将记为失败，不阻塞其余项。
             </span>
           ),
           confirmText: '批量删除',
@@ -319,7 +320,7 @@ export default function PersonaListPage() {
                 <TableHead>展示名</TableHead>
                 <TableHead>卡片称呼</TableHead>
                 <TableHead className="w-20">状态</TableHead>
-                <TableHead className="w-24">激活位</TableHead>
+                <TableHead className="w-24">主人格</TableHead>
                 <TableHead className="w-44">更新时间</TableHead>
                 <TableHead className="w-72">操作</TableHead>
               </TableRow>
@@ -345,8 +346,8 @@ export default function PersonaListPage() {
                       <Badge variant={status.variant}>{status.label}</Badge>
                     </TableCell>
                     <TableCell>
-                      {persona.is_active ? (
-                        <Badge variant="info">当前激活</Badge>
+                      {persona.is_primary ? (
+                        <Badge variant="info">主人格</Badge>
                       ) : (
                         <span className="text-[var(--color-text-muted)]">—</span>
                       )}
@@ -365,23 +366,24 @@ export default function PersonaListPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          disabled={persona.status !== 'active' || persona.is_active}
+                          disabled={persona.status !== 'active' || persona.is_primary}
                           title={
                             persona.status !== 'active'
-                              ? '停用状态的人格不可激活，请先编辑状态为启用'
-                              : persona.is_active
-                                ? '已是当前激活人格'
+                              ? '停用状态的人格不可设为主人格，请先编辑状态为启用'
+                              : persona.is_primary
+                                ? '已是当前主人格'
                                 : undefined
                           }
-                          onClick={() => setConfirmAction({ kind: 'activate', persona })}
+                          onClick={() => setConfirmAction({ kind: 'set-primary', persona })}
                         >
-                          激活
+                          设为主人格
                         </Button>
                         <Button
                           variant="outline"
                           size="sm"
-                          disabled={!persona.is_active}
-                          onClick={() => setConfirmAction({ kind: 'deactivate', persona })}
+                          disabled={persona.status !== 'active'}
+                          title={persona.is_primary ? '主人格不可停用，需先另设主人格' : undefined}
+                          onClick={() => setConfirmAction({ kind: 'disable', persona })}
                         >
                           停用
                         </Button>

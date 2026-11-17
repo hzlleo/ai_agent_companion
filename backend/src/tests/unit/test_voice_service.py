@@ -185,7 +185,7 @@ def _persona(profile: VoiceProfileModel | None = None) -> PersonaRecordDTO:
         name="feiyu",
         display_name="大肥鱼",
         status=PersonaStatus.ACTIVE,
-        is_active=True,
+        is_primary=True,
         card=CharaCardModel(name="大肥鱼", first_mes="你回来啦！"),
         voice_profile=profile,
         created_at=1,

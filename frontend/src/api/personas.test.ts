@@ -1,17 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import {
-  activatePersona,
   batchDeletePersonas,
   copyPersona,
   createPersona,
-  deactivatePersona,
   deletePersona,
+  disablePersona,
   getPersona,
   getPersonaCard,
   getPersonaStates,
+  getPrimaryPersona,
   listPersonas,
   replacePersonaCard,
+  setPrimaryPersona,
   updatePersona,
   upsertPersonaState,
 } from '@/api/personas'
@@ -134,7 +135,7 @@ describe('personas 端点', () => {
           succeeded: 1,
           failed: 2,
           items: [
-            { id: 1, success: false, code: 'CONFLICT', message: '当前激活人格禁止删除，请先停用' },
+            { id: 1, success: false, code: 'CONFLICT', message: '不能删除当前主人格，请先将另一个人格设为主人格（set-primary）再删除' },
             { id: 2, success: true, code: null, message: '已删除' },
             { id: 3, success: false, code: 'NOT_FOUND', message: '人格不存在' },
           ],
@@ -154,7 +155,7 @@ describe('personas 端点', () => {
       id: 1,
       success: false,
       code: 'CONFLICT',
-      message: '当前激活人格禁止删除，请先停用',
+      message: '不能删除当前主人格，请先将另一个人格设为主人格（set-primary）再删除',
     })
   })
 
@@ -211,8 +212,8 @@ describe('personas 端点', () => {
     expect(capturedRequest.url.pathname).toBe('/api/v1/personas/7')
   })
 
-  it('deletePersona：激活守卫 → 409 + 后端提示', async () => {
-    await expectApiError(deletePersona(1), '当前激活人格禁止删除，请先停用', 'CONFLICT')
+  it('deletePersona：主人格守卫 → 409 + 后端提示', async () => {
+    await expectApiError(deletePersona(1), '不能删除当前主人格，请先将另一个人格设为主人格（set-primary）再删除', 'CONFLICT')
   })
 
   it('copyPersona：POST /personas/{id}/copy + new_name/include_states', async () => {
@@ -237,34 +238,61 @@ describe('personas 端点', () => {
     )
   })
 
-  it('activatePersona：POST /personas/{id}/activate', async () => {
-    const { captured } = capture(`${BACKEND_ORIGIN}/personas/:personaId/activate`, 'post', ({ url }) => {
+  it('getPrimaryPersona：GET /personas/primary', async () => {
+    const { captured } = capture(`${BACKEND_ORIGIN}/personas/primary`, 'get', () =>
+      HttpResponse.json(okResult(mockPersona({ id: 1, is_primary: true }))),
+    )
+    const record = await getPrimaryPersona()
+    const capturedRequest = captured()
+    if (capturedRequest === null) throw new Error('请求未被捕获')
+    expect(capturedRequest.method).toBe('GET')
+    expect(capturedRequest.url.pathname).toBe('/api/v1/personas/primary')
+    expect(record.id).toBe(1)
+    expect(record.is_primary).toBe(true)
+  })
+
+  it('getPrimaryPersona：无主人格 → 404', async () => {
+    server.use(
+      http.get(`${BACKEND_ORIGIN}/personas/primary`, () =>
+        HttpResponse.json(errorResult('当前没有主人格，请先创建并启用一个人格，再将其设为主人格', 'NOT_FOUND'), { status: 404 }),
+      ),
+    )
+    await expectApiError(getPrimaryPersona(), '当前没有主人格，请先创建并启用一个人格，再将其设为主人格', 'NOT_FOUND')
+  })
+
+  it('setPrimaryPersona：POST /personas/{id}/set-primary', async () => {
+    const { captured } = capture(`${BACKEND_ORIGIN}/personas/:personaId/set-primary`, 'post', ({ url }) => {
       const id = Number(url.pathname.split('/')[4])
-      return HttpResponse.json(okResult(mockPersona({ id, is_active: true })))
+      return HttpResponse.json(okResult(mockPersona({ id, is_primary: true })))
     })
-    const record = await activatePersona(3)
+    const record = await setPrimaryPersona(3)
     const capturedRequest = captured()
     if (capturedRequest === null) throw new Error('请求未被捕获')
     expect(capturedRequest.method).toBe('POST')
-    expect(capturedRequest.url.pathname).toBe('/api/v1/personas/3/activate')
-    expect(record.is_active).toBe(true)
+    expect(capturedRequest.url.pathname).toBe('/api/v1/personas/3/set-primary')
+    expect(record.is_primary).toBe(true)
   })
 
-  it('activatePersona：停用状态 → 409', async () => {
-    await expectApiError(activatePersona(3), '停用状态的人格不可激活', 'CONFLICT')
+  it('setPrimaryPersona：停用状态 → 409', async () => {
+    await expectApiError(setPrimaryPersona(3), '停用状态的人格不可设为主人格，请先启用（status=active）', 'CONFLICT')
   })
 
-  it('deactivatePersona：POST /personas/{id}/deactivate', async () => {
-    const { captured } = capture(`${BACKEND_ORIGIN}/personas/:personaId/deactivate`, 'post', ({ url }) => {
+  it('disablePersona：POST /personas/{id}/disable', async () => {
+    const { captured } = capture(`${BACKEND_ORIGIN}/personas/:personaId/disable`, 'post', ({ url }) => {
       const id = Number(url.pathname.split('/')[4])
-      return HttpResponse.json(okResult(mockPersona({ id, is_active: false })))
+      return HttpResponse.json(okResult(mockPersona({ id, is_primary: false, status: 'disabled' })))
     })
-    const record = await deactivatePersona(1)
+    const record = await disablePersona(2)
     const capturedRequest = captured()
     if (capturedRequest === null) throw new Error('请求未被捕获')
     expect(capturedRequest.method).toBe('POST')
-    expect(capturedRequest.url.pathname).toBe('/api/v1/personas/1/deactivate')
-    expect(record.is_active).toBe(false)
+    expect(capturedRequest.url.pathname).toBe('/api/v1/personas/2/disable')
+    expect(record.is_primary).toBe(false)
+    expect(record.status).toBe('disabled')
+  })
+
+  it('disablePersona：当前主人格 → 409 守卫', async () => {
+    await expectApiError(disablePersona(1), '不能停用当前主人格，请先将另一个人格设为主人格（set-primary）再停用', 'CONFLICT')
   })
 
   it('getPersonaCard：GET /personas/{id}/card', async () => {

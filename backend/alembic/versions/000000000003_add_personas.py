@@ -116,7 +116,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """降级：删除 ff_persona_states + ff_personas 表（含索引 / 约束）。"""
+    """降级：删除 ff_persona_states + ff_personas 表（含索引 / 约束）。
+
+    MySQL 系引擎（含 SeekDB）要求外键列必须保有索引——先删外键约束
+    再删其索引，否则报「索引被外键占用」（错误 5320）。
+    """
+    with op.batch_alter_table("ff_persona_states") as batch:
+        batch.drop_constraint("fk_ff_persona_states_persona_id", type_="foreignkey")
     op.drop_index(op.f("ix_ff_persona_states_persona_id"), table_name="ff_persona_states")
     op.drop_table("ff_persona_states")
     op.drop_table("ff_personas")

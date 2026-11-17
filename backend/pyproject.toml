@@ -105,12 +105,39 @@ asyncio_mode = "auto"
 #   - function 级 async fixture 回退语义与 unset 时代一致。
 asyncio_default_test_loop_scope = "function"
 asyncio_default_fixture_loop_scope = "function"
+# testpaths 与 backend/pixi.toml tasks 保持一致：
+#   - src/tests                    — 单元（unit/）+ 集成（integration/）测试
+#   - src/packages/harness        — harness 域包内嵌测试（当前无；域包自带测试时自动并入收集）
+# 覆盖率参数（--cov / --cov-fail-under）由 pixi 各测试任务按 scope 分别指定，
+# 不放在 addopts 中全局生效（逐模块门禁由 coverage-gates 承担）。
 testpaths = [
     "src/tests",
     "src/packages/harness",
 ]
 # pythonpath 仅含 backend/src——harness 命名空间包在 PYTHONPATH 范围内。
 pythonpath = ["src"]
+# markers：SeekDB 真引擎强制套件的选择 marker（-m seekdb 选 / -m "not
+# seekdb" 排除；套件主入口是显式路径定向运行——CI 专用步骤 / pixi
+# tests-seekdb 任务）。
+markers = [
+    "seekdb: SeekDB 真引擎强制套件（src/tests/integration_seekdb/——显式测试服务 env，缺 SEEKDB_TEST_URL 即 pytest.fail 不跳过）",
+]
+# norecursedirs：默认值须全量保留（ini 覆盖不合并），追加
+# integration_seekdb——tests-all / coverage-gates 等对 src/tests/ 的
+# 全量扫集不递归进该目录（无容器本地快速回路保持可跑）；显式路径
+# 参数（pytest src/tests/integration_seekdb）不受 norecursedirs 影响，
+# 套件仍可定向收集运行。
+norecursedirs = [
+    ".*",
+    "build",
+    "dist",
+    "CVS",
+    "_darcs",
+    "{arch}",
+    "*.egg",
+    "venv",
+    "integration_seekdb",
+]
 
 # ---------------------------------------------------------------------------
 # Mypy: 静态类型检查

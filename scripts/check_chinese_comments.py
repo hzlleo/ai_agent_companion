@@ -52,6 +52,10 @@ _TREE_ROOTS: dict[str, list[str]] = {
         "docker/tool-sandbox-agent/src",
         "docker/tool-sandbox-agent/server.py",
     ],
+    "browser-sidecar": [
+        "docker/browser-sidecar/src",
+        "docker/browser-sidecar/server.py",
+    ],
     "scripts": ["scripts"],
 }
 

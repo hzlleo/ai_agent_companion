@@ -150,7 +150,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """降级：删除记忆四表（含索引 / 外键——逆依赖序）。"""
+    """降级：删除记忆四表（含索引 / 外键——逆依赖序）。
+
+    MySQL 系引擎（含 SeekDB）要求外键列必须保有索引——先删外键约束
+    再删其索引，否则报「索引被外键占用」（错误 5320）。
+    """
+    with op.batch_alter_table("ff_chat_messages") as batch:
+        batch.drop_constraint("fk_ff_chat_messages_session_id", type_="foreignkey")
     op.drop_index(op.f("ix_ff_chat_messages_session_id"), table_name="ff_chat_messages")
     op.drop_table("ff_chat_messages")
     op.drop_index("ix_ff_chat_sessions_last_active_at", table_name="ff_chat_sessions")

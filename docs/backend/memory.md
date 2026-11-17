@@ -218,7 +218,7 @@ chat 回合（reply / stream_reply）
 - `tests/unit/test_memories_api.py`——ASGITransport 全端点 + 处理器直调契约面；
 - 检索层五件：`test_memory_retrieval_sql.py`（构建器精确字符串断言 + hybrid 执行面形态异常含多列 fail loud）/ `test_memory_seekdb_store.py`（假 aiomysql 池）/ `test_memory_sqlite_store.py`（共享引擎回退往返）/ `test_memory_indexer.py`（索引管道 + 服务联动）/ `test_memory_search_api.py`（POST /search 全模式）+ `test_pools_seekdb.py`（池生命周期）；
 - 梦境三件：`test_dreaming_prompts.py`（byte-lock + 渲染契约）/ `test_dreaming.py`（纯函数数学 + 门矩阵 + fail-closed 全链 + 孤儿 running 收敛 / 已晋升回溯窗 / 事件上限截断 / 合并中断决策补齐）/ `test_dream_api.py`（trigger + runs 端点）；
-- 集成冒烟：`tests/integration/test_seekdb_smoke.py`（env 门控默认跳过——见「冒烟测试」）；
+- SeekDB 真引擎强制套件：`src/tests/integration_seekdb/`（迁移链 round-trip / 并发不变式 / 混合检索往返——缺 env 即 fail，不跳过；见 docs/test-strategy/README.md「SeekDB 真引擎强制套件」）；
 - 共享 SQLite fixture（StaticPool 单连接）+ PersonaMixin contextvars 隔离驱动；零真实网络 / 零真实配置；
 - 门禁：`harness/memory` ≥80%、`app/api` ≥80%（`pixi run coverage-gates`）；运行：`cd backend && pixi run tests-unit`。
 
@@ -351,22 +351,21 @@ SELECT DBMS_HYBRID_SEARCH.SEARCH('ff_memory_index', :dsl);
 SeekDB（v1.4.0 钉死）官方仅文档化 PyMySQL / mysqlclient；本工程选 **aiomysql**（原生 async，符合 I/O 全 async 约束；MySQL 线协议标准栈，大概率可用但无官方背书）。缓释措施：
 
 - 类型面：aiomysql 0.3.2 无 `py.typed`（mypy 严格模式拒绝直连 import）——现行方案为 **`backend/pyproject.toml` 的 `[tool.mypy]` overrides 为 aiomysql 单模块开启 `ignore_missing_imports`**（配置级豁免，代码零 `type: ignore`）+ `pools/seekdb_compat.py` 顶层静态 `import aiomysql`（**无运行期动态加载**）+ 驱动对象经 `SeekDbPoolProtocol` / `SeekDbConnectionProtocol` / `SeekDbCursorProtocol` Protocol 类型面收口（真实池 / 连接 / 游标为鸭子类型，Protocol 即调用方依赖的全部表面）；
-- 真实验证：`tests/integration/test_seekdb_smoke.py`（env 门控，默认跳过——见下节）；
+- 真实验证：`src/tests/integration_seekdb/`（真引擎强制套件——缺 env 即 fail 不跳过，见 docs/test-strategy/README.md）；
 - 不兼容回退路径：PyMySQL + `run_blocking_ops` 下沉（同步驱动 + 线程池——保持 async 边界）。
 
-## 冒烟测试（真实 SeekDB 实例）
+## 真引擎验证（SeekDB 强制套件）
+
+原 env 门控默认跳过的冒烟（`tests/integration/test_seekdb_smoke.py`）已由
+`src/tests/integration_seekdb/` 强制套件取代：缺 `SEEKDB_TEST_URL` 即
+`pytest.fail`（不静默跳过），覆盖迁移链 round-trip（含 MySQL 错误 5320
+降级序回归）、并发不变式（唯一键守卫 + 行锁 1205）与混合检索往返。
+
+运行方式（容器启动命令与 CI 接线见 docs/test-strategy/README.md
+「SeekDB 真引擎强制套件」一节——单一事实源）：
 
 ```bash
-# 1. 启动本地 SeekDB（server 模式——MySQL 线协议 2881 端口）
-docker run -d --name seekdb-smoke -p 2881:2881 oceanbase/seekdb:v1.4.0
-#    （镜像与标签以 https://github.com/oceanbase/seekdb/releases 为准）
-
-# 2. 导出门控变量并定向运行
-SEEKDB_SMOKE_URL="127.0.0.1:2881" \
-SEEKDB_SMOKE_USER=root \
-SEEKDB_SMOKE_PASSWORD=root \
-SEEKDB_SMOKE_DATABASE=test \
-pixi run pytest src/tests/integration/test_seekdb_smoke.py -v --asyncio-mode=auto
+cd backend && pixi run tests-seekdb   # 测试 env 由 pixi 任务注入
 ```
 
 链路：ensure_schema → 批量 upsert → keyword / hybrid 检索回读 → 同键覆盖幂等 → 人格隔离谓词 → delete 清理。

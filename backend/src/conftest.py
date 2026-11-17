@@ -52,6 +52,11 @@ from pathlib import Path
 os.environ["SERVER_HOST"] = "127.0.0.1"
 os.environ["SERVER_PORT"] = "8000"
 os.environ["SERVER_WORKERS"] = "1"
+# 管理面 owner token（admin_token_env 默认指向的变量）——硬置空 = 测试
+# 默认鉴权关闭（既有路由测试全量不受影响，S3 硬覆盖——开发者 shell
+# 导出的真实 ADMIN_AUTH_TOKEN 不得泄入测试；鉴权矩阵测试按需
+# monkeypatch 本变量）
+os.environ["ADMIN_AUTH_TOKEN"] = ""
 
 # --- 数据库（DATABASE_ 前缀 → DatabaseConfig；MySQL 8 权威 / 测试 sqlite） ---
 os.environ["DATABASE_TYPE"] = "sqlite"
@@ -108,8 +113,17 @@ os.environ["SEEKDB_POOL_MIN"] = "1"
 os.environ["SEEKDB_POOL_MAX"] = "2"
 # 密码本值（password_env 指向的变量 + 默认变量名——测试专用值，
 # 不可触达真实实例；单测经假池消费，永不真实连接）
-os.environ["SEEKDB_TEST_PASSWORD"] = "test-only-seekdb-password"
 os.environ["SEEKDB_PASSWORD"] = "test-only-seekdb-password"
+# SEEKDB_TEST_PASSWORD 例外（S4 真引擎套件）：该变量名同时是 SeekDB 真引擎
+# 强制套件（src/tests/integration_seekdb/）的显式测试服务 env 面（runner
+# 注入：CI service container env / 本地 pixi tests-seekdb 任务 env）。runner
+# 已显式提供 SEEKDB_TEST_URL（套件门控变量）时保留注入值（空密码 = 本地
+# 容器 root 空密码形态，合法）；未提供时维持下方硬覆盖哨兵值。套件本身
+# 只读 SEEKDB_TEST_*（显式配置-only，见其 conftest docstring）——本例外
+# 不影响单测：单测恒 SEEKDB_ENABLED=false 零真实连接，且消费该变量的
+# 单测均经 monkeypatch 注入自己的值。
+if "SEEKDB_TEST_URL" not in os.environ:
+    os.environ["SEEKDB_TEST_PASSWORD"] = "test-only-seekdb-password"
 
 # --- Telegram 通道（TELEGRAM_ 前缀 → TelegramSettings；默认关闭 → 测试零
 #     真实连接；S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入
@@ -173,6 +187,19 @@ os.environ["TOOLS_SANDBOX_REQUEST_TIMEOUT_SECONDS"] = "15"
 os.environ["SANDBOX_TEST_TOKEN"] = "test-only-sandbox-token"
 os.environ["SANDBOX_TOKEN"] = "test-only-sandbox-token"
 
+# --- 浏览器 sidecar（TOOLS_BROWSER_SIDECAR_ 前缀 → ToolsBrowserSidecarSettings；
+#     默认关闭 → 测试零 sidecar 探测 / 零真实连接；S3 硬覆盖模式——开发者
+#     shell 导出的同名真实配置不得泄入测试。token 经
+#     BROWSER_SIDECAR_TEST_TOKEN 间接——测试专用值，不可触达真实 sidecar；
+#     单测经 MockTransport / fake 消费，永不真实连接） ---
+os.environ["TOOLS_BROWSER_SIDECAR_ENABLED"] = "false"
+os.environ["TOOLS_BROWSER_SIDECAR_BASE_URL"] = "http://127.0.0.1:8766"
+os.environ["TOOLS_BROWSER_SIDECAR_TOKEN_ENV"] = "BROWSER_SIDECAR_TEST_TOKEN"
+os.environ["TOOLS_BROWSER_SIDECAR_REQUEST_TIMEOUT_SECONDS"] = "30"
+# token 本值（token_env 指向的变量 + 默认变量名——测试专用值）
+os.environ["BROWSER_SIDECAR_TEST_TOKEN"] = "test-only-browser-sidecar-token"
+os.environ["BROWSER_SIDECAR_TOKEN"] = "test-only-browser-sidecar-token"
+
 # --- 语音域（VOICE_TTS_ / VOICE_ASR_ 前缀 → TtsSettings / AsrSettings；
 #     默认关闭 → 测试零真实连接（voice 服务为部署机外部本地进程）；
 #     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试；
@@ -191,6 +218,41 @@ os.environ["VOICE_ASR_LANGUAGE"] = ""
 # 上传上限（与生产默认同值——字节精确边界测试经 app.state.settings
 # 注入小上限隔离驱动，不依赖本全局值）
 os.environ["VOICE_ASR_MAX_UPLOAD_BYTES"] = "26214400"
+
+# --- 联网搜索（SEARCH_ 前缀 → WebSearchSettings；默认关闭 → 测试零真实
+#     连接（搜索 provider 为外部 API）；S3 硬覆盖模式——开发者 shell
+#     导出的同名真实配置不得泄入测试。api_key_env 间接键（示例条目默认
+#     指向的 SEARCH_BOCHA_API_KEY / SEARCH_ZHIPU_API_KEY）同节硬覆盖为
+#     测试专用值——单测经 MockTransport 消费，永不触达真实端点；示例
+#     模板（.env.example）侧该类含 api_key 字样键按敏感键守卫留空） ---
+os.environ["SEARCH_ENABLED"] = "false"
+os.environ["SEARCH_TOOL_ENABLED"] = "false"
+os.environ["SEARCH_DAILY_BUDGET_PER_PERSONA"] = "50"
+os.environ["SEARCH_DAILY_BUDGET_GLOBAL"] = "200"
+os.environ["SEARCH_COOLDOWN_SECONDS"] = "60"
+# api_key_env 间接键本值（测试专用值，不可触达真实搜索账号）
+os.environ["SEARCH_BOCHA_API_KEY"] = "test-only-bocha-api-key"
+os.environ["SEARCH_ZHIPU_API_KEY"] = "test-only-zhipu-api-key"
+
+# --- 拟人节律层（RHYTHM_ 前缀 → RhythmSettings；默认关闭 → 测试零节律
+#     副作用；S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入
+#     测试。naive 本地墙钟约定（scheduler daily_at 同先例）；作息值与
+#     生产默认同值——核心函数测试自注时刻，不依赖本全局值） ---
+os.environ["RHYTHM_ENABLED"] = "false"
+os.environ["RHYTHM_BEDTIME"] = "23:30"
+os.environ["RHYTHM_WAKE_TIME"] = "08:00"
+os.environ["RHYTHM_TIMEZONE_NOTE"] = "naive-local"
+os.environ["RHYTHM_REPLY_DELAY_MIN_MS"] = "1500"
+os.environ["RHYTHM_REPLY_DELAY_MAX_MS"] = "45000"
+os.environ["RHYTHM_TYPING_SPEED_MS_PER_CHAR"] = "45"
+os.environ["RHYTHM_TYPING_BASE_MS"] = "800"
+os.environ["RHYTHM_BURST_PROBABILITY"] = "0.12"
+
+# --- 意图快径（INTENT_ 前缀 → IntentSettings；默认开启（纯本地零成本——
+#     与 search 等外部成本面开关相反）；S3 硬覆盖模式。快径仅在通道路径
+#     注入（CLI / duty 不注入）——既有测试面构造 ChatService 时不带快径
+#     面，行为零变化；快径链路测试自注入 fake rng / sleep 面） ---
+os.environ["INTENT_ENABLED"] = "true"
 
 # --- 运行环境标识（Settings.env → ENV） ---
 os.environ["ENV"] = "test"

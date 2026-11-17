@@ -452,9 +452,9 @@ def build_dream_trigger_job(
     store: MemoryStore | None = None,
     now_ms: Callable[[], int] | None = None,
 ) -> JobFactory:
-    """构建梦境触发作业工厂（激活人格解析 → 绑定 → run_dream）。
+    """构建梦境触发作业工厂（主人格解析 → 绑定 → run_dream）。
 
-    链路：注入会话 → ``get_active_persona``（无激活 → 日志跳过，正常
+    链路：注入会话 → ``get_primary_persona``（无主人格 → 日志跳过，正常
     返回）→ ``bind_persona_context`` → ``DreamService.run_dream``
     （dream 角色复用既有链路——fail-closed 返回终态记录）。异常面由
     调度器 per-job 隔离兜底（run_dream 自身已 fail-closed；此处残余
@@ -463,7 +463,7 @@ def build_dream_trigger_job(
     Args:
         dream_service: 梦境整理服务（dreaming chunk 复用——as-is）。
         gateway: LLM 网关（dream 角色路由）。
-        persona_service: 人格注册表服务（激活人格解析）。
+        persona_service: 人格注册表服务（主人格解析）。
         session_factory: 数据库会话工厂（每轮作业开新会话——app 装配
             注入 ``session_scope``）。
         store: 记忆检索存储（None = 主题相关度降级 boost=0）。
@@ -474,11 +474,16 @@ def build_dream_trigger_job(
     """
 
     async def _dream_job() -> None:
-        """单轮梦境作业（无激活人格为正常跳过——日志面）。"""
+        """单轮梦境作业（无主人格为正常跳过——日志面）。"""
         async with session_factory() as session:
-            record = await persona_service.get_active_persona(session)
-            if record is None:
-                logger.info("梦境调度跳过：无激活人格")
+            try:
+                record = await persona_service.get_primary_persona(session)
+            except BusinessException as exc:
+                # 无主人格为已知确定态（NOT_FOUND）→ 日志跳过正常返回；
+                # 其余业务异常交调度器 per-job 隔离兜底（与原语义一致）。
+                if exc.code != ErrorCode.NOT_FOUND:
+                    raise
+                logger.info("梦境调度跳过：无主人格")
                 return
             async with bind_persona_context(record.id):
                 run = await dream_service.run_dream(

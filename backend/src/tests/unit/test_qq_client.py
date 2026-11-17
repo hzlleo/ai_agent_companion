@@ -22,7 +22,10 @@ import httpx
 import pytest
 
 from packages.harness.channels.qq.qq_client import NapCatOneBotClient
-from packages.harness.channels.qq.qq_models import OB11_SUCCESS_STATUSES
+from packages.harness.channels.qq.qq_models import (
+    OB11_SUCCESS_STATUSES,
+    Ob11MessageSegmentModel,
+)
 from packages.harness.core.errors import BusinessException, ErrorCode
 
 #: conftest 硬覆盖的测试专用 access token 变量（access_token_env 缺省指向形态）。
@@ -302,4 +305,75 @@ class TestSendValidation:
         assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
         with pytest.raises(BusinessException) as exc_info:
             await client.send_group_msg(67890, "")
+        assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
+
+
+class TestSegmentSendsV2:
+    async def test_send_private_msg_segments_envelope(self) -> None:
+        """v2 私聊段数组发送：单一对象包裹 + params.message 段数组形态。"""
+        bodies: list[dict[str, Any]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            bodies.append(json.loads(request.content.decode("utf-8")))
+            return _ok({"message_id": -100200300})
+
+        client = _client(handler)
+        response = await client.send_private_msg_segments(
+            10086,
+            [
+                Ob11MessageSegmentModel(type="text", data={"text": "看看"}),
+                Ob11MessageSegmentModel(type="image", data={"file": "base64://aGVsbG8="}),
+            ],
+        )
+        assert bodies == [
+            {
+                "action": "send_private_msg",
+                "params": {
+                    "user_id": 10086,
+                    "message": [
+                        {"type": "text", "data": {"text": "看看"}},
+                        {"type": "image", "data": {"file": "base64://aGVsbG8="}},
+                    ],
+                },
+            }
+        ]
+        assert response.is_success is True
+
+    async def test_send_group_msg_segments_envelope(self) -> None:
+        """v2 群聊段数组发送：group_id + 段数组形态（同单一对象包裹）。"""
+        bodies: list[dict[str, Any]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            bodies.append(json.loads(request.content.decode("utf-8")))
+            return _ok({"message_id": -400500600})
+
+        client = _client(handler)
+        await client.send_group_msg_segments(
+            67890,
+            [
+                Ob11MessageSegmentModel(type="text", data={"text": "群里看"}),
+                Ob11MessageSegmentModel(type="record", data={"file": "https://x/1.silk"}),
+            ],
+        )
+        assert bodies == [
+            {
+                "action": "send_group_msg",
+                "params": {
+                    "group_id": 67890,
+                    "message": [
+                        {"type": "text", "data": {"text": "群里看"}},
+                        {"type": "record", "data": {"file": "https://x/1.silk"}},
+                    ],
+                },
+            }
+        ]
+
+    async def test_empty_segments_rejected(self) -> None:
+        """空段列表：VALIDATION_ERROR（空消息平台必拒——入口先拒）。"""
+        client = _client(lambda request: _ok({}))
+        with pytest.raises(BusinessException) as exc_info:
+            await client.send_private_msg_segments(10086, [])
+        assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
+        with pytest.raises(BusinessException) as exc_info:
+            await client.send_group_msg_segments(67890, [])
         assert exc_info.value.code == ErrorCode.VALIDATION_ERROR

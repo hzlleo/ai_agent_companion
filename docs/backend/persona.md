@@ -1,6 +1,6 @@
 # persona — 多人格注册表
 
-`backend/src/packages/harness/persona/` 承载多人格注册表：chara card v2 人格卡片（L 层正典）+ M/S 心理状态层 + 事务性单激活切换。表名 `ff_personas` / `ff_persona_states`（本工程 `ff_` 前缀约定）。首个 app 层交付面（`app/api/personas.py` 管理 API + `app/middleware/error_handler.py` 共享异常处理器）随本域落地。
+`backend/src/packages/harness/persona/` 承载多人格注册表：chara card v2 人格卡片（L 层正典）+ M/S 心理状态层 + 事务性主人格切换（多激活可寻址模型——多人格同时可用，主人格唯一）。表名 `ff_personas` / `ff_persona_states`（本工程 `ff_` 前缀约定）。首个 app 层交付面（`app/api/personas.py` 管理 API + `app/middleware/error_handler.py` 共享异常处理器）随本域落地。
 
 ## 模块一览
 
@@ -10,7 +10,7 @@
 | `chara_card.py` | chara card v2 规格模型（卡片 + 世界书，Unit 文件） | `CharaCardModel` / `CharaBookModel` / `CharaBookEntryModel` / `CharaBookPosition` |
 | `orm.py` | 注册表 ORM（`ff_personas` + `ff_persona_states`） | `PersonaRow` / `PersonaStateRow` |
 | `dtos.py` | 创建 / 更新 / 复制 / 记录 / 卡片 / 状态 / 查询 / 批量 DTO（Unit 文件） | `PersonaCreateDTO` / `PersonaUpdateDTO` / `PersonaCopyDTO` / `PersonaRecordDTO` / `PersonaCardDTO` / `PersonaStateUpsertDTO` / `PersonaStateDTO` / `PersonaQueryDTO` / `PersonaBatchDelete*` |
-| `service.py` | 注册 CRUD / 事务性单激活切换 / 状态层读写 / 批量删除 + `bind_persona_context` 运行期绑定 | `PersonaService` / `bind_persona_context` |
+| `service.py` | 注册 CRUD / 事务性主人格切换 / 可寻址集 / 状态层读写 / 批量删除 + `bind_persona_context` 运行期绑定 | `PersonaService` / `bind_persona_context` |
 
 依赖方向：persona → core（dtos 分页 / errors / context）+ database（Base Mixins / get_async_db）；app 层（api/personas + middleware/error_handler）→ persona + core + database。**两张表均非 PersonaMixin**（见下）。
 
@@ -24,24 +24,27 @@
 
 L 层不入状态表的理由：身份正典与可变状态的生命周期不同（卡片随人格管理面演进；M/S 随对话演化），且卡片需要作为整体文档校验与传输（DTO 边界一次成型）。
 
-## 关键设计决策
+## 关键设计决策（多激活可寻址模型）
 
 1. **注册表是全局管理面数据（非 PersonaMixin）**：admin 需在无人格上下文下跨人格列出 / 切换 / 复制 / 删除人格；PersonaMixin 的请求上下文自动过滤（缺上下文即 fail loud）与该语义直接冲突（人格行自身的 persona_id 无从定义）。记忆表才是 PersonaMixin 消费面（per-persona 逻辑隔离）。
-2. **status（可用性）与 is_active（单激活位）正交**：`status=active/disabled` 是管理面可用性开关；`is_active` 是「当前唯一激活人格」绑定位——全表至多一行 `True`。激活要求 `status=active`；status 切 disabled 时自动清激活位（停用即下线，杜绝矛盾态）。
-3. **事务性单激活切换**：`activate` 在单事务内「全表清激活位 → 激活目标」——激活 B 必然去激活 A；任一步失败整体回滚。`deactivate` 允许归零（系统态），幂等。
-4. **删除守卫（本工程锁定语义）**：删除**当前激活人格被禁止**（`CONFLICT`，调用方须先 `deactivate` 显式两步）；删除非激活人格时同事务清理其 M/S 状态行（SQLite 测试方言默认不启用 FK 强制，服务层显式删除保证跨方言一致；DB 级 `ON DELETE CASCADE` 仅作直删 SQL 兜底）。
-5. **无乐观锁版本列**：本工程 ORM 无版本计数约定（database/base.py 仅 BigIntIdMixin / TimestampMixin / PersonaMixin，usage 域表亦无）——遵循既有约定不引入 `version` 列；注册表写路径低频（管理面操作），冲突面由 name 唯一约束 + 单事务切换兜底。
-6. **运行期绑定 `bind_persona_context(persona_id)`**：注册表主键为 BigInt，而上下文轴 `persona_id_var` / PersonaMixin 均为字符串——绑定 helper 接受 `int | str` 并经 `str()` 归一（chat 会话等运行期入口消费，见 `core.context.bind_context`）。
+2. **status（可用性）与主人格标记正交**：`status=active/disabled` 是管理面可用性开关——**enabled（status=active）人格构成可寻址集**，可同时被多个上下文寻址绑定（通道会话 / 心流 / 多会话）；`is_primary_marker` 是「主人格」标记位（主人格行恒 `'primary'`、其余行 NULL）——**全表至多一个主人格由 DB 唯一键 `uq_ff_personas_primary (is_primary_marker)` 强制**（MySQL / SQLite 唯一键均忽略 NULL——与策展记忆单 active 守卫同模式）。设为主人格要求 `status=active`。
+3. **事务性主人格切换 + 并发收敛**：`set_primary` 在单事务内「全表清主人格标记 → 目标取标记」——设 B 为主人格必然解除 A；任一步失败整体回滚。并发 set_primary 撞唯一键时回滚后重试一次（重读当前主人格走解除-再占位分支），再冲突映射 `INTERNAL_ERROR`。`disable` 是纯生命周期操作（status 切 disabled；幂等）。
+4. **主人格须恒在位（两步守卫——本工程锁定语义）**：删除 / 停用（`disable` 与 `update(status=disabled)`）**当前主人格均被禁止**（`CONFLICT`，调用方须先 `set_primary` 另设主人格——显式两步，杜绝「删除即静默掉线为零主人格」的隐式状态跳变）。删除非主人格时同事务清理其 M/S 状态行（SQLite 测试方言默认不启用 FK 强制，服务层显式删除保证跨方言一致；DB 级 `ON DELETE CASCADE` 仅作直删 SQL 兜底）。
+5. **主人格读取 fail loud**：`get_primary_persona` 无主人格（全新库 / 从未设置）抛 `NOT_FOUND`（清晰中文错误 + fix 指引）——消费面（chat 会话 / 值班 / 梦境 / 记忆面缺省目标）原将「无激活人格」翻译为各自错误，统一由服务层承担；无人格可正常工作的消费面（语音 / 图像理解未绑定形态）自行捕获归零。可寻址集经 `list_addressable()` 读取（enabled 人格，id 升序）。
+6. **无乐观锁版本列**：本工程 ORM 无版本计数约定（database/base.py 仅 BigIntIdMixin / TimestampMixin / PersonaMixin，usage 域表亦无）——遵循既有约定不引入 `version` 列；注册表写路径低频（管理面操作），冲突面由 name 唯一约束 + 主人格标记唯一键 + 单事务切换兜底。
+7. **运行期绑定 `bind_persona_context(persona_id)`**：注册表主键为 BigInt，而上下文轴 `persona_id_var` / PersonaMixin 均为字符串——绑定 helper 接受 `int | str` 并经 `str()` 归一（chat 会话等运行期入口消费，见 `core.context.bind_context`）。
+
+> **前向注（R2d）**：当前「按上下文寻址」的消费面已具备数据模型基础（可寻址集 + 会话级 persona 绑定——通道会话按 `persona_id` 保持在位、resumed 会话保留其记录人格）；R2d 将在此之上交付 per-context 绑定（心流 / 群聊 / 多会话显式选择人格，主人格仅作缺省解析目标）。
 
 ## 链路顺序
 
-**创建 → 激活 → 会话绑定**：
+**创建 → 设主 → 会话绑定**：
 
 ```
 管理面 POST /api/v1/personas（PersonaCreateDTO：name + card）
-    ↓ 唯一名校验（CONFLICT fail loud）→ PersonaRow（status 缺省 disabled，is_active=False）
-    ↓ 管理面 PUT /{id}（status=active 启用）
-    ↓ 管理面 POST /{id}/activate（单事务：全表清位 → 激活目标）
+    ↓ 唯一名校验（CONFLICT fail loud）→ PersonaRow（status 缺省 disabled，非主人格）
+    ↓ 管理面 PUT /{id}（status=active 启用——进入可寻址集）
+    ↓ 管理面 POST /{id}/set-primary（单事务：全表清标记 → 目标占位；DB 唯一键兜底）
     ↓ 运行期（chat 会话）async with bind_persona_context(persona.id):
     ↓     PersonaMixin 表自动按 str(persona.id) 隔离；llm 网关用量记账携带 persona_id
 ```
@@ -51,7 +54,7 @@ L 层不入状态表的理由：身份正典与可变状态的生命周期不同
 ```
 POST /{id}/copy（PersonaCopyDTO：new_name + include_states）
     ↓ 源行读取（NOT_FOUND fail loud）→ 新名唯一校验（CONFLICT）
-    ↓ 新行：卡片深拷贝 + status=disabled + is_active=False（启用与激活均为显式后续动作）
+    ↓ 新行：卡片深拷贝 + status=disabled + 非主人格（启用与设主均为显式后续动作）
     ↓ include_states=True 时：逐层深拷贝 M/S 状态行（源状态保留——拷贝非移动）
     ↓ 单事务提交（新行 + 状态行原子落库）
 ```
@@ -73,8 +76,8 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | `id` | BIGINT | PK 自增（SQLite 渲染 INTEGER） | 主键 |
 | `name` | VARCHAR(128) | 非空；**全局唯一**（`uq_ff_personas_name`） | 注册名（标识与引用键） |
 | `display_name` | VARCHAR(128) | 非空 | 展示名（缺省回落 card.name） |
-| `status` | VARCHAR(16) | 非空 | 可用性状态（active / disabled） |
-| `is_active` | BOOLEAN | 非空 | 单激活绑定位（全表至多一行 True） |
+| `status` | VARCHAR(16) | 非空 | 可用性状态（active / disabled；enabled 人格构成可寻址集） |
+| `is_primary_marker` | VARCHAR(16) | 可空；**唯一键 `uq_ff_personas_primary`**（NULL 共存——两方言唯一键均忽略 NULL） | 主人格标记（主人格行恒 `'primary'`、其余行 NULL——DB 强制全表至多一个主人格） |
 | `chara_card` | JSON | 非空 | 人格卡片（chara card v2 文档，L 层正典） |
 | `voice_profile` | JSON | 可空 | 人格语音绑定（`VoiceProfileModel` 序列化形态——speaker / instruct_text / speed；NULL = 未绑定，合成回落 `Settings.voice.tts` 缺省） |
 | `created_at` / `updated_at` | BIGINT | 非空 | epoch 毫秒（TimestampMixin） |
@@ -89,11 +92,11 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | `state` | JSON | 非空 | 状态 JSON 文档（整体替换式更新） |
 | `created_at` / `updated_at` | BIGINT | 非空 | epoch 毫秒（TimestampMixin） |
 
-迁移链：`backend/alembic/versions/000000000003_add_personas.py`（Revision 000000000003，Revises 000000000002——两表 + 索引 + 唯一约束）→ `000000000006_add_persona_voice_profile.py`（Revision 000000000006，Revises 000000000005——`ff_personas` 增 `voice_profile` JSON 可空列，纯增列、既有行落 NULL；升级 / 降级均经 SQLite 冒烟验证）。
+迁移链：`backend/alembic/versions/000000000003_add_personas.py`（Revision 000000000003，Revises 000000000002——两表 + 索引 + 唯一约束）→ `000000000006_add_persona_voice_profile.py`（Revision 000000000006，Revises 000000000005——`ff_personas` 增 `voice_profile` JSON 可空列，纯增列、既有行落 NULL）→ `000000000008_persona_primary_marker.py`（Revision 000000000008，Revises 000000000007——多激活可寻址模型重构：增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active=1` 行回填 `'primary'`（旧单激活不变式保证至多一行），删 `is_active` 列；降级逆向重建；升级 / 降级 / 再升级均经 SQLite 冒烟验证）。
 
 ## 值域
 
-- `PersonaStatus`：`active`（可用——允许激活）/ `disabled`（停用——激活守卫拒绝，停用即下线）；
+- `PersonaStatus`：`active`（可用——进入可寻址集，允许被设为主人格）/ `disabled`（停用——退出可寻址集，设主守卫拒绝；停用当前主人格被守卫拒绝）；
 - `PersonaStateLayer`：`M`（中期心情 / 关系）/ `S`（短期会话状态）——`L` 不入状态表（见三层模型）；
 - `CharaBookPosition`：`before_char` / `after_char`（v2 字符串形态）。
 
@@ -196,16 +199,17 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 
 ```python
 service = PersonaService()                                        # 无状态；Session 逐调用注入
-record = await service.create(session, dto)                       # 创建（唯一名校验；不激活；voice_profile 可选绑定）
+record = await service.create(session, dto)                       # 创建（唯一名校验；非主人格；voice_profile 可选绑定）
 record = await service.get(session, persona_id)                   # 读取（NOT_FOUND fail loud）
 page = await service.query(session, PersonaQueryDTO(...))         # 游标分页（id 降序 + status 过滤）
 record = await service.update(session, persona_id, dto)           # 部分更新（重命名 / 状态 / 卡片补丁 / 语音绑定整体替换）
-record = await service.copy(session, persona_id, dto)             # 复制（可选深拷贝 M/S；恒 disabled；语音绑定随行复制）
-await service.delete(session, persona_id)                         # 删除（激活守卫：CONFLICT）
+record = await service.copy(session, persona_id, dto)             # 复制（可选深拷贝 M/S；恒 disabled + 非主人格；语音绑定随行复制）
+await service.delete(session, persona_id)                         # 删除（主人格守卫：CONFLICT——先另设主人格）
 result = await service.batch_delete(session, ids)                 # 批量删除（部分成功形态）
-record = await service.activate(session, persona_id)              # 激活（事务性单激活切换）
-record = await service.deactivate(session, persona_id)            # 停用激活（允许零激活；幂等）
-active = await service.get_active_persona(session)                # 当前唯一激活人格（None = 系统态）
+record = await service.set_primary(session, persona_id)           # 设为主人格（事务性切换；DB 唯一键 + 冲突重试）
+record = await service.disable(session, persona_id)               # 停用（生命周期；主人格守卫拒绝；幂等）
+primary = await service.get_primary_persona(session)              # 当前主人格（无主人格 NOT_FOUND fail loud）
+addressable = await service.list_addressable(session)             # 可寻址集（enabled 人格，id 升序）
 card = await service.get_card(session, persona_id)                # 卡片读取
 card = await service.replace_card(session, persona_id, card)      # 卡片整体替换（PUT 语义）
 state = await service.upsert_state(session, persona_id, layer, dto)  # M/S 状态 upsert
@@ -231,10 +235,11 @@ async with bind_persona_context(persona.id):                      # 运行期任
 | POST | `/api/v1/personas/batch-delete` | 批量删除（部分成功：`{total, succeeded, failed, items}`） |
 | GET | `/api/v1/personas/{id}` | 读取（含 `voice_profile` 绑定态） |
 | PUT | `/api/v1/personas/{id}` | 部分更新（重命名 / 展示名 / 状态 / 卡片补丁 / 语音绑定——`voice_profile` **出现即整体替换**，显式 `null` 清除绑定，无字段级合并） |
-| DELETE | `/api/v1/personas/{id}` | 删除（激活守卫 409） |
+| DELETE | `/api/v1/personas/{id}` | 删除（主人格守卫 409） |
 | POST | `/api/v1/personas/{id}/copy` | 复制（`new_name` + `include_states`；语音绑定随行复制） |
-| POST | `/api/v1/personas/{id}/activate` | 激活（事务性单激活切换） |
-| POST | `/api/v1/personas/{id}/deactivate` | 停用激活（允许零激活） |
+| POST | `/api/v1/personas/{id}/set-primary` | 设为主人格（事务性切换；停用人格 409） |
+| POST | `/api/v1/personas/{id}/disable` | 停用（生命周期；主人格守卫 409） |
+| GET | `/api/v1/personas/primary` | 当前主人格（无主人格 404——清晰中文错误） |
 | GET | `/api/v1/personas/{id}/card` | 卡片读取 |
 | PUT | `/api/v1/personas/{id}/card` | 卡片整体替换（body 为完整卡片） |
 | GET | `/api/v1/personas/{id}/states` | 已写状态层列表 |
@@ -244,7 +249,7 @@ async with bind_persona_context(persona.id):                      # 运行期任
 
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元）/ `test_persona_service.py`（服务面：激活事务性 / 复制含状态 / 唯一名冲突 / 删除守卫 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；
+- 测试位置：`src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；
 - 全部 `async def test_`；引擎经共享会话级 SQLite fixture（StaticPool 单连接 + 每测试自动清表）；HTTP 面零真实网络（ASGITransport 本地装配 app）；
 - 覆盖率（scoped 实测）：harness/persona **100%**、app/api **100%**、app/middleware **100%**；
 - 运行：`cd backend && pixi run tests-unit`。

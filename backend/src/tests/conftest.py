@@ -35,6 +35,7 @@ from packages.harness.config import loader as config_loader
 from packages.harness.config.multimodal_fallback_loader import (
     reset_multimodal_fallback_runtime_state,
 )
+from packages.harness.config.search_registry import reset_search_runtime_state
 from packages.harness.core.background_tasks import background_task_manager
 from packages.harness.core.cache import MemoryTTLCache, reset_default_cache
 from packages.harness.core.logging_models import LoggingConfig
@@ -115,7 +116,7 @@ async def _reset_shared_thread_pool() -> AsyncIterator[None]:
 @pytest.fixture(autouse=True)
 async def _reset_config_runtime_state() -> AsyncIterator[None]:
     """自动 fixture：每测试后复位 config 运行时状态（llm 段 / 工具清单 /
-    模型解析器索引 / 多模态回退链 / 重载回调）。
+    模型解析器索引 / 多模态回退链 / 重载回调 / 搜索段运行时）。
 
     Yields:
         无载荷（仅承担 teardown）。
@@ -123,6 +124,7 @@ async def _reset_config_runtime_state() -> AsyncIterator[None]:
     yield
     config_loader.reset_config_runtime_state()
     reset_multimodal_fallback_runtime_state()
+    reset_search_runtime_state()
 
 
 @pytest.fixture(autouse=True)

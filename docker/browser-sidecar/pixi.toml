@@ -1,0 +1,106 @@
+# ai_agent_companion — 浏览器自动化 sidecar 独立 Pixi 项目
+#
+# 职责：管理 sidecar Python 3.12 运行时 + dev 工具 + 本树全部 tasks。
+# 本文件与 pyproject.toml 同目录（docker/browser-sidecar/），
+# editable = { path = "." } 解析到本目录。
+# 依赖声明（运行时 + dev extras）在 pyproject.toml，pixi 通过 editable install 读取；
+# pixi 仅管理 Python 解释器 + 系统工具（约束：Python 包依赖单一数据源 = pyproject）。
+#
+# 本树为独立部署单元（docker 镜像经 mcr playwright/python 基底 + pip install
+# 构建，不经 pixi——见本目录 Dockerfile）；pixi 面向本树开发 / 测试 / 静态检查。
+# 运行时依赖面：fastapi / uvicorn / pydantic / playwright（浏览器驱动——
+# 与 tool-sandbox 树的差异点：JS 渲染需要真实浏览器运行时）。
+#
+# 环境：
+#   default = [dev]   本地开发（runtime + dev 工具：pytest/ruff/mypy）
+#
+# 用法：
+#   cd docker/browser-sidecar && pixi install    # 安装 default 环境
+#   cd docker/browser-sidecar && pixi run tests-unit   # 单元测试（覆盖率 ≥80 enforce；hermetic——零真实浏览器）
+#   cd docker/browser-sidecar && pixi run coverage-gates   # 按模块覆盖率门禁（≥80 enforce）
+#   cd docker/browser-sidecar && pixi run lint    # ruff 静态检查
+#   cd docker/browser-sidecar && pixi run typecheck    # mypy 类型检查
+#
+# 任务名契约：tests-unit / lint / typecheck / coverage-gates 为跨树契约名
+# （与 backend / tool-sandbox 子项目同名同义）——严禁更名。
+#
+# 鉴权 / 域名允许清单等运行时环境变量见本目录 README.md。
+
+[workspace]
+name = "browser-sidecar"
+version = "0.1.0"
+description = "浏览器自动化 sidecar——JS 渲染回退执行面（独立 pixi 项目，与后端零代码共享）"
+channels = [
+    "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/",
+    "conda-forge",
+]
+platforms = ["linux-64"]
+
+# ─── 运行时依赖（仅解释器 + pip 系统工具；Python 包依赖在 pyproject）───
+[dependencies]
+python = { version = ">=3.12,<3.13", channel = "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/" }
+pip = { version = ">=26.0,<27", channel = "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/" }
+
+# ─── PyPI 镜像配置（与 backend / tool-sandbox 子项目同镜像面）───
+[pypi-options]
+index-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+extra-index-urls = [
+    "https://mirrors.aliyun.com/pypi/simple",
+    "https://mirrors.ustc.edu.cn/pypi/simple",
+    "https://pypi.org/simple",
+]
+
+# ─── 本地 editable 包（运行时依赖由 pyproject.toml [project.dependencies] 声明）───
+[pypi-dependencies]
+browser-sidecar = { path = ".", editable = true }
+
+# ─── 激活环境变量（pixi 项目根 = 本目录，所以 PYTHONPATH = $PIXI_PROJECT_ROOT/src；
+#     树根 server.py 经 pytest pythonpath（"."）入导入面）───
+[activation.env]
+PYTHONIOENCODING = "utf-8"
+PYTHONNOUSERSITE = "1"
+UV_DEFAULT_INDEX = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+UV_EXTRA_INDEX = "https://mirrors.aliyun.com/pypi/simple https://mirrors.ustc.edu.cn/pypi/simple https://pypi.org/simple"
+PYTHONPATH = "$PIXI_PROJECT_ROOT/src"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tasks — 本树全部 tasks（runtime + dev 共享）
+# ═══════════════════════════════════════════════════════════════════════════════
+[tasks]
+# 单元测试：src/tests/unit/ 下的纯单元测试（hermetic——零真实浏览器 / 零网络：
+# playwright 运行时经注入的 fake face 驱动；playwright 适配层经手写 fake
+# playwright 对象驱动；server 经手写 ASGI 调用）。真实浏览器行为在部署机
+# 验证（见 README.md「部署验证」）。覆盖率阈值 80（--cov-fail-under，镜像
+# 后端 / tool-sandbox 80% 门禁数值）；逐模块 ≥80 由 coverage-gates 任务
+# 机器门禁（不再依赖人工读数）。
+tests-unit = { cmd = "pytest src/tests/unit/ -v --asyncio-mode=auto --cov=browser_sidecar --cov=server --cov-report=term-missing --cov-fail-under=80", description = "运行单元测试（src/tests/unit/；asyncio auto + 覆盖率 ≥80 enforce；hermetic 零真实浏览器）" }
+# 按模块覆盖率门禁（每模块 ≥80，与 backend / tool-sandbox 同口径的机器门禁）：
+# 单 session 测试 + 覆盖率采集 → coverage.json → 根 scripts/check_coverage_per_module.py
+# browser-sidecar 剖面逐组强制 ≥80%（server.py 单文件一组 + browser_sidecar 逐
+# 模块一组；任一组缺口即退出 1）。coverage.json / 根脚本均用绝对形态路径
+# （$PIXI_PROJECT_ROOT 锚定——cd-safe）；根脚本经本树 pixi python 执行
+# （工程门禁面，非运行时依赖）。
+coverage-gates = { cmd = "pytest $PIXI_PROJECT_ROOT/src/tests/unit/ --asyncio-mode=auto --cov=browser_sidecar --cov=server --cov-report=json:$PIXI_PROJECT_ROOT/coverage.json -q && python $PIXI_PROJECT_ROOT/../../scripts/check_coverage_per_module.py $PIXI_PROJECT_ROOT/coverage.json --enforce --profile browser-sidecar", description = "全量单元测试 + 按模块覆盖率门禁（enforce 模式，阈值 80，显式 browser-sidecar 剖面防 auto-detect 漂移）" }
+# 静态检查：ruff（树根 server.py + src/ 全量——含测试）
+lint = { cmd = "ruff check server.py src/", description = "ruff 静态检查（server.py + src/）" }
+# 格式化
+format = { cmd = "ruff format server.py src/", description = "ruff 格式化" }
+# 类型检查：mypy（生产面：server.py + src/browser_sidecar；测试不入严格门——镜像后端约定）
+typecheck = { cmd = "mypy server.py src/", description = "mypy 静态类型检查（严格模式）" }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Feature: dev — 开发/测试工具（在 runtime 基础上叠加）
+# ═══════════════════════════════════════════════════════════════════════════════
+[feature.dev.pypi-dependencies]
+# dev 工具由 pyproject.toml [project.optional-dependencies.dev] 声明，
+# 通过 editable install extras=["dev"] 自动读取。
+browser-sidecar = { path = ".", editable = true, extras = ["dev"] }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Environments — 组合 features 用于不同场景
+# ═══════════════════════════════════════════════════════════════════════════════
+[environments]
+# 本地开发：runtime + dev 工具（pytest/ruff/mypy）。
+# 镜像构建不经 pixi（mcr playwright/python 基底 + pip install——见 Dockerfile），
+# 无 prod 环境。
+default = ["dev"]

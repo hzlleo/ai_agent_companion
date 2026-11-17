@@ -8,6 +8,7 @@ import {
   request,
   toApiError,
 } from '@/api/client'
+import { onAuthRequired } from '@/api/auth'
 import { BACKEND_ORIGIN, errorResult, okResult, server } from '@/test/server'
 import type { ResultDTO } from '@/types/common'
 
@@ -162,5 +163,63 @@ describe('toApiError 归一', () => {
       statusText: '',
     }
     expect(toApiError(axiosError).message).toBe(expected)
+  })
+})
+
+describe('管理面鉴权拦截器', () => {
+  it('已保存 token → 请求携带 Authorization Bearer 头', async () => {
+    localStorage.clear()
+    localStorage.setItem('aac_admin_token', 'stored-token')
+    server.use(
+      http.get(TEST_URL, ({ request }) =>
+        HttpResponse.json(okResult({ auth: request.headers.get('Authorization') })),
+      ),
+    )
+    const data = await request<{ auth: string | null }>({ method: 'GET', url: '/__test' })
+    expect(data.auth).toBe('Bearer stored-token')
+    localStorage.clear()
+  })
+
+  it('无 token → 不携带 Authorization 头（后端鉴权关闭形态照常工作）', async () => {
+    localStorage.clear()
+    server.use(
+      http.get(TEST_URL, ({ request }) =>
+        HttpResponse.json(okResult({ auth: request.headers.get('Authorization') })),
+      ),
+    )
+    const data = await request<{ auth: string | null }>({ method: 'GET', url: '/__test' })
+    expect(data.auth).toBeNull()
+  })
+
+  it('HTTP 401 → 广播鉴权需求事件（错误仍原样抛给调用方）', async () => {
+    localStorage.clear()
+    const fired: number[] = []
+    const off = onAuthRequired(() => fired.push(1))
+    server.use(
+      http.get(TEST_URL, () =>
+        HttpResponse.json(errorResult('管理面鉴权失败：Authorization Bearer token 缺失或不匹配', 'UNAUTHORIZED'), {
+          status: 401,
+        }),
+      ),
+    )
+    const error = await request<unknown>({ method: 'GET', url: '/__test' }).catch((e: unknown) => e)
+    off()
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).status).toBe(401)
+    expect((error as ApiError).code).toBe('UNAUTHORIZED')
+    expect(fired.length).toBe(1)
+  })
+
+  it('HTTP 401 以外错误 → 不广播鉴权需求事件', async () => {
+    const fired: number[] = []
+    const off = onAuthRequired(() => fired.push(1))
+    server.use(
+      http.get(TEST_URL, () =>
+        HttpResponse.json(errorResult('人格不存在', 'NOT_FOUND'), { status: 404 }),
+      ),
+    )
+    await request<unknown>({ method: 'GET', url: '/__test' }).catch(() => {})
+    off()
+    expect(fired).toEqual([])
   })
 })

@@ -1,10 +1,10 @@
-"""沙盒 wire 契约漂移门禁（backend ↔ docker/tool-sandbox-agent）。
+"""沙盒 / 浏览器 sidecar wire 契约漂移门禁（backend ↔ docker 两树）。
 
 两树零代码共享，wire 契约（Model Class 定义块 + 工具名常量行 + 部署
 契约常量行）以文本镜像方式耦合——本脚本对两侧定义做文本比对：任一侧
 漂移即红（红灯输出首个差异的 unified diff 上下文）。
 
-比对项（8 模型块 + 8 常量行，共 16 项）：
+比对项（18 模型块 + 18 常量行，共 36 项）：
 
     - ``InvokeRequestModel`` / ``InvokeResponseModel`` /
       ``HealthResponseModel``（backend ``harness/tools/sandbox_models.py``
@@ -18,7 +18,19 @@
     - ``SANDBOX_INVOKE_PATH`` / ``SANDBOX_HEALTH_PATH`` /
       ``SANDBOX_TOKEN_ENV_DEFAULT`` 部署契约常量行（backend
       ``harness/tools/sandbox.py`` ↔ 沙盒树 ``server.py``——端点路径与
-      token 环境变量缺省名构成两树共享的部署契约面）。
+      token 环境变量缺省名构成两树共享的部署契约面）；
+    - 浏览器 sidecar wire 三模型 ``InvokeRequestModel`` /
+      ``InvokeResponseModel`` / ``HealthResponseModel``（backend
+      ``harness/tools/browser_models.py`` ↔ sidecar 树
+      ``browser_sidecar/wire_models.py``——REST 同构镜像，独立比对项）；
+    - 浏览器七工具参数模型 ``NavigateArgsModel`` / ``ReadTextArgsModel`` /
+      ``ScreenshotArgsModel`` / ``ClickArgsModel`` / ``FillArgsModel`` /
+      ``ListTabsArgsModel`` / ``CloseTabArgsModel``（backend
+      ``browser_models.py`` ↔ sidecar 树 ``browser_sidecar/browser.py``）；
+    - 七个 ``*_TOOL_NAME`` 浏览器工具名常量行（同上文件）；
+    - ``BROWSER_SIDECAR_INVOKE_PATH`` / ``BROWSER_SIDECAR_HEALTH_PATH`` /
+      ``BROWSER_SIDECAR_TOKEN_ENV_DEFAULT`` 部署契约常量行（backend
+      ``harness/tools/browser.py`` ↔ sidecar 树 ``server.py``）。
 
 块提取口径：从定义行（``class <名>(`` 顶层起点 / 常量赋值行）到下一个
 顶层定义行或文件尾，去除块尾空行——其余文本（含 docstring 与注释）
@@ -43,7 +55,7 @@ from pathlib import Path
 #: 仓库根（脚本位于 <root>/scripts/）。
 REPO_ROOT: Path = Path(__file__).resolve().parent.parent
 
-#: backend 侧契约文件。
+#: backend 侧沙盒契约文件。
 _BACKEND_MODELS: Path = REPO_ROOT / "backend/src/packages/harness/tools/sandbox_models.py"
 
 #: 沙盒树侧 wire 契约文件。
@@ -55,11 +67,26 @@ _SANDBOX_FETCH: Path = REPO_ROOT / "docker/tool-sandbox-agent/src/tool_sandbox/h
 #: 沙盒树侧 B站工具定义文件。
 _SANDBOX_BILI: Path = REPO_ROOT / "docker/tool-sandbox-agent/src/tool_sandbox/bili_tools.py"
 
-#: backend 侧部署契约常量文件（端点路径 / token 环境变量缺省名）。
+#: backend 侧沙盒部署契约常量文件（端点路径 / token 环境变量缺省名）。
 _BACKEND_CLIENT: Path = REPO_ROOT / "backend/src/packages/harness/tools/sandbox.py"
 
 #: 沙盒树侧部署契约常量文件（路由定义 / token env 同名镜像）。
 _SANDBOX_SERVER: Path = REPO_ROOT / "docker/tool-sandbox-agent/server.py"
+
+#: backend 侧浏览器 sidecar 契约文件。
+_BROWSER_MODELS: Path = REPO_ROOT / "backend/src/packages/harness/tools/browser_models.py"
+
+#: sidecar 树侧 wire 契约文件。
+_BROWSER_WIRE: Path = REPO_ROOT / "docker/browser-sidecar/src/browser_sidecar/wire_models.py"
+
+#: sidecar 树侧浏览器工具定义文件。
+_BROWSER_TOOLS: Path = REPO_ROOT / "docker/browser-sidecar/src/browser_sidecar/browser.py"
+
+#: backend 侧浏览器部署契约常量文件。
+_BROWSER_CLIENT: Path = REPO_ROOT / "backend/src/packages/harness/tools/browser.py"
+
+#: sidecar 树侧部署契约常量文件（路由定义 / token env 同名镜像）。
+_BROWSER_SERVER: Path = REPO_ROOT / "docker/browser-sidecar/server.py"
 
 #: 顶层定义行模式（class 定义 / 常量赋值 / 函数定义——块边界）。
 _TOP_LEVEL_DEF: re.Pattern[str] = re.compile(r"^(class\s+\w+|[A-Z][A-Z0-9_]+\s*[:=]|def\s+\w+)")
@@ -143,6 +170,11 @@ def main() -> int:
         _SANDBOX_BILI,
         _BACKEND_CLIENT,
         _SANDBOX_SERVER,
+        _BROWSER_MODELS,
+        _BROWSER_WIRE,
+        _BROWSER_TOOLS,
+        _BROWSER_CLIENT,
+        _BROWSER_SERVER,
     ]
     missing = [str(p.relative_to(REPO_ROOT)) for p in paths if not p.is_file()]
     if missing:
@@ -155,6 +187,11 @@ def main() -> int:
     bili_text = _SANDBOX_BILI.read_text(encoding="utf-8")
     client_text = _BACKEND_CLIENT.read_text(encoding="utf-8")
     server_text = _SANDBOX_SERVER.read_text(encoding="utf-8")
+    browser_models_text = _BROWSER_MODELS.read_text(encoding="utf-8")
+    browser_wire_text = _BROWSER_WIRE.read_text(encoding="utf-8")
+    browser_tools_text = _BROWSER_TOOLS.read_text(encoding="utf-8")
+    browser_client_text = _BROWSER_CLIENT.read_text(encoding="utf-8")
+    browser_server_text = _BROWSER_SERVER.read_text(encoding="utf-8")
 
     items: list[tuple[str, str, str]] = [
         (
@@ -216,6 +253,58 @@ def main() -> int:
             "SANDBOX_TOKEN_ENV_DEFAULT",
         )
     )
+    items.extend(
+        (
+            name,
+            _extract_class_block(browser_models_text, name),
+            _extract_class_block(browser_wire_text, name),
+        )
+        for name in ("InvokeRequestModel", "InvokeResponseModel", "HealthResponseModel")
+    )
+    items.extend(
+        (
+            name,
+            _extract_class_block(browser_models_text, name),
+            _extract_class_block(browser_tools_text, name),
+        )
+        for name in (
+            "NavigateArgsModel",
+            "ReadTextArgsModel",
+            "ScreenshotArgsModel",
+            "ClickArgsModel",
+            "FillArgsModel",
+            "ListTabsArgsModel",
+            "CloseTabArgsModel",
+        )
+    )
+    items.extend(
+        (
+            constant,
+            _extract_constant_line(browser_models_text, constant),
+            _extract_constant_line(browser_tools_text, constant),
+        )
+        for constant in (
+            "NAVIGATE_TOOL_NAME",
+            "READ_TEXT_TOOL_NAME",
+            "SCREENSHOT_TOOL_NAME",
+            "CLICK_TOOL_NAME",
+            "FILL_TOOL_NAME",
+            "LIST_TABS_TOOL_NAME",
+            "CLOSE_TAB_TOOL_NAME",
+        )
+    )
+    items.extend(
+        (
+            constant,
+            _extract_constant_line(browser_client_text, constant),
+            _extract_constant_line(browser_server_text, constant),
+        )
+        for constant in (
+            "BROWSER_SIDECAR_INVOKE_PATH",
+            "BROWSER_SIDECAR_HEALTH_PATH",
+            "BROWSER_SIDECAR_TOKEN_ENV_DEFAULT",
+        )
+    )
 
     drifted = False
     try:
@@ -234,7 +323,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    print(f"[check_sandbox_dtos_drift] 全部 {len(items)} 项契约一致（backend ↔ 沙盒树）")
+    print(f"[check_sandbox_dtos_drift] 全部 {len(items)} 项契约一致（backend ↔ 沙盒 / 浏览器 sidecar 树）")
     return 0
 
 

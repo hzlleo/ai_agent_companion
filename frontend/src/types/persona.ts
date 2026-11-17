@@ -10,7 +10,7 @@
 // 值域
 // ---------------------------------------------------------------------------
 
-/** 人格可用性状态（与单激活位正交）。 */
+/** 人格可用性状态（enabled 人格构成可寻址集；与主人格标记正交）。 */
 export type PersonaStatus = 'active' | 'disabled'
 
 /** 状态层（M=中期心情/关系；S=短期会话状态）。 */
@@ -112,10 +112,10 @@ export interface PersonaRecord {
   name: string
   /** 展示名。 */
   display_name: string
-  /** 可用性状态。 */
+  /** 可用性状态（enabled 人格构成可寻址集）。 */
   status: PersonaStatus
-  /** 单激活绑定位（至多一个为 true）。 */
-  is_active: boolean
+  /** 是否为主人格（全表至多一个 true——DB 唯一键强制）。 */
+  is_primary: boolean
   /** 人格卡片。 */
   card: CharaCard
   /** 语音绑定（null = 未绑定——合成回落 settings 缺省发音人）。 */
@@ -190,7 +190,7 @@ export interface CharaCardPatch {
   character_book?: CharaBook | null
 }
 
-/** 部分更新人格请求（不含 is_active——激活位经 activate/deactivate）。 */
+/** 部分更新人格请求（不含主人格标记——主人格经 set-primary 操作面）。 */
 export interface PersonaUpdateRequest {
   /** 新注册名（重命名）。 */
   name?: string

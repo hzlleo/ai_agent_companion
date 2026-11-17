@@ -3086,7 +3086,7 @@
       "type": "object"
     },
     "PersonaBatchDeleteRequest": {
-      "description": "批量删除人格请求（部分成功形态——逐 id 独立事务）。\n\nAttributes:\n    ids: 待删除人格主键列表（1 - 100 个；含当前激活人格的 id 会导致\n        该项失败——激活人格删除守卫见服务层）。",
+      "description": "批量删除人格请求（部分成功形态——逐 id 独立事务）。\n\nAttributes:\n    ids: 待删除人格主键列表（1 - 100 个；含当前主人格的 id 会导致\n        该项失败——主人格删除守卫见服务层）。",
       "properties": {
         "ids": {
           "description": "待删除人格主键列表（1-100 个）",
@@ -3653,7 +3653,7 @@
           "type": "object"
         },
         "PersonaStatus": {
-          "description": "人格管理面状态值域（可用性开关，与单激活位正交）。\n\n- ``active``：可用——允许被激活（activate）为当前人格；\n- ``disabled``：停用——管理面下线，激活守卫拒绝（CONFLICT）；\n  停用切换时若该人格正持有激活位则自动清位（见 service 层约定）。",
+          "description": "人格管理面状态值域（可用性开关，与主人格标记正交）。\n\n- ``active``：可用——进入可寻址集（允许被通道 / 心流 / 多会话按\n  上下文绑定），且允许被设为主人格（set-primary）；\n- ``disabled``：停用——管理面下线（退出可寻址集），设为主人格\n  守卫拒绝（CONFLICT）；停用当前主人格被守卫拒绝（先另设主人格）。",
           "enum": [
             "active",
             "disabled"
@@ -3757,7 +3757,7 @@
     "PersonaQueryDTO": {
       "$defs": {
         "PersonaStatus": {
-          "description": "人格管理面状态值域（可用性开关，与单激活位正交）。\n\n- ``active``：可用——允许被激活（activate）为当前人格；\n- ``disabled``：停用——管理面下线，激活守卫拒绝（CONFLICT）；\n  停用切换时若该人格正持有激活位则自动清位（见 service 层约定）。",
+          "description": "人格管理面状态值域（可用性开关，与主人格标记正交）。\n\n- ``active``：可用——进入可寻址集（允许被通道 / 心流 / 多会话按\n  上下文绑定），且允许被设为主人格（set-primary）；\n- ``disabled``：停用——管理面下线（退出可寻址集），设为主人格\n  守卫拒绝（CONFLICT）；停用当前主人格被守卫拒绝（先另设主人格）。",
           "enum": [
             "active",
             "disabled"
@@ -4009,7 +4009,7 @@
           "type": "object"
         },
         "PersonaStatus": {
-          "description": "人格管理面状态值域（可用性开关，与单激活位正交）。\n\n- ``active``：可用——允许被激活（activate）为当前人格；\n- ``disabled``：停用——管理面下线，激活守卫拒绝（CONFLICT）；\n  停用切换时若该人格正持有激活位则自动清位（见 service 层约定）。",
+          "description": "人格管理面状态值域（可用性开关，与主人格标记正交）。\n\n- ``active``：可用——进入可寻址集（允许被通道 / 心流 / 多会话按\n  上下文绑定），且允许被设为主人格（set-primary）；\n- ``disabled``：停用——管理面下线（退出可寻址集），设为主人格\n  守卫拒绝（CONFLICT）；停用当前主人格被守卫拒绝（先另设主人格）。",
           "enum": [
             "active",
             "disabled"
@@ -4057,7 +4057,7 @@
           "type": "object"
         }
       },
-      "description": "人格记录读取 DTO（ORM 行归一）。\n\nAttributes:\n    id: 人格主键（BigInt）。\n    name: 注册名（全局唯一）。\n    display_name: 展示名。\n    status: 可用性状态。\n    is_active: 单激活绑定位。\n    card: 人格卡片（chara card v2 文档）。\n    voice_profile: 人格语音绑定（None = 未绑定）。\n    created_at: 创建时间（epoch 毫秒）。\n    updated_at: 更新时间（epoch 毫秒）。",
+      "description": "人格记录读取 DTO（ORM 行归一）。\n\nAttributes:\n    id: 人格主键（BigInt）。\n    name: 注册名（全局唯一）。\n    display_name: 展示名。\n    status: 可用性状态（enabled 人格构成可寻址集）。\n    is_primary: 是否为主人格（全表至多一个 True——DB 唯一键强制）。\n    card: 人格卡片（chara card v2 文档）。\n    voice_profile: 人格语音绑定（None = 未绑定）。\n    created_at: 创建时间（epoch 毫秒）。\n    updated_at: 更新时间（epoch 毫秒）。",
       "properties": {
         "card": {
           "$ref": "#/$defs/CharaCardModel",
@@ -4078,9 +4078,9 @@
           "title": "Id",
           "type": "integer"
         },
-        "is_active": {
-          "description": "单激活绑定位",
-          "title": "Is Active",
+        "is_primary": {
+          "description": "是否为主人格（至多一个 True）",
+          "title": "Is Primary",
           "type": "boolean"
         },
         "name": {
@@ -4115,7 +4115,7 @@
         "name",
         "display_name",
         "status",
-        "is_active",
+        "is_primary",
         "card",
         "created_at",
         "updated_at"
@@ -4447,7 +4447,7 @@
           "type": "object"
         },
         "PersonaStatus": {
-          "description": "人格管理面状态值域（可用性开关，与单激活位正交）。\n\n- ``active``：可用——允许被激活（activate）为当前人格；\n- ``disabled``：停用——管理面下线，激活守卫拒绝（CONFLICT）；\n  停用切换时若该人格正持有激活位则自动清位（见 service 层约定）。",
+          "description": "人格管理面状态值域（可用性开关，与主人格标记正交）。\n\n- ``active``：可用——进入可寻址集（允许被通道 / 心流 / 多会话按\n  上下文绑定），且允许被设为主人格（set-primary）；\n- ``disabled``：停用——管理面下线（退出可寻址集），设为主人格\n  守卫拒绝（CONFLICT）；停用当前主人格被守卫拒绝（先另设主人格）。",
           "enum": [
             "active",
             "disabled"
@@ -4495,7 +4495,7 @@
           "type": "object"
         }
       },
-      "description": "人格更新 DTO（部分更新面——仅出现的字段生效）。\n\n**不含 ``is_active``**：单激活位是事务性切换不变式，仅经\n``activate`` / ``deactivate`` 操作面管理（绕过会破坏「至多一个激活」\n保证）。status 切到 disabled 时若该人格持有激活位，服务层自动清位\n（停用即下线）。\n\nAttributes:\n    name: 新注册名（重命名；全局唯一校验）。\n    display_name: 新展示名。\n    status: 新可用性状态。\n    card: 卡片补丁（仅出现字段覆写；不提供则卡片原样）。\n    voice_profile: 人格语音绑定（**出现即整体替换**——显式 null 清除\n        绑定；不提供则原样保留；与卡片补丁的 exclude_unset 语义不同：\n        语音绑定是单对象面，无字段级合并）。",
+      "description": "人格更新 DTO（部分更新面——仅出现的字段生效）。\n\n**不含主人格标记**：主人格是事务性切换不变式（DB 唯一键强制至多\n一个），仅经 ``set-primary`` 操作面管理（绕过会破坏「至多一个主人格」\n保证）。status 切到 disabled 时若该人格是当前主人格，服务层守卫\n拒绝（先另设主人格再停用——两步显式）。\n\nAttributes:\n    name: 新注册名（重命名；全局唯一校验）。\n    display_name: 新展示名。\n    status: 新可用性状态（切 disabled 时主人格守卫拒绝）。\n    card: 卡片补丁（仅出现字段覆写；不提供则卡片原样）。\n    voice_profile: 人格语音绑定（**出现即整体替换**——显式 null 清除\n        绑定；不提供则原样保留；与卡片补丁的 exclude_unset 语义不同：\n        语音绑定是单对象面，无字段级合并）。",
       "properties": {
         "card": {
           "anyOf": [
@@ -4840,7 +4840,7 @@
           "type": "string"
         },
         "UsagePurpose": {
-          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排。",
+          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排；\n- ``search``：联网搜索（web_search 能力面——Bocha / Zhipu\n  provider 链路；预算按调用计数，token 恒 0/0）。",
           "enum": [
             "chat",
             "duty",
@@ -4849,7 +4849,8 @@
             "embed",
             "tts",
             "asr",
-            "tool"
+            "tool",
+            "search"
           ],
           "title": "UsagePurpose",
           "type": "string"
@@ -4978,7 +4979,7 @@
     "UsageFilterFields": {
       "$defs": {
         "UsagePurpose": {
-          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排。",
+          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排；\n- ``search``：联网搜索（web_search 能力面——Bocha / Zhipu\n  provider 链路；预算按调用计数，token 恒 0/0）。",
           "enum": [
             "chat",
             "duty",
@@ -4987,7 +4988,8 @@
             "embed",
             "tts",
             "asr",
-            "tool"
+            "tool",
+            "search"
           ],
           "title": "UsagePurpose",
           "type": "string"
@@ -5087,7 +5089,7 @@
     "UsageQueryDTO": {
       "$defs": {
         "UsagePurpose": {
-          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排。",
+          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排；\n- ``search``：联网搜索（web_search 能力面——Bocha / Zhipu\n  provider 链路；预算按调用计数，token 恒 0/0）。",
           "enum": [
             "chat",
             "duty",
@@ -5096,7 +5098,8 @@
             "embed",
             "tts",
             "asr",
-            "tool"
+            "tool",
+            "search"
           ],
           "title": "UsagePurpose",
           "type": "string"
@@ -5217,7 +5220,7 @@
     "UsageRecordDTO": {
       "$defs": {
         "UsagePurpose": {
-          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排。",
+          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排；\n- ``search``：联网搜索（web_search 能力面——Bocha / Zhipu\n  provider 链路；预算按调用计数，token 恒 0/0）。",
           "enum": [
             "chat",
             "duty",
@@ -5226,7 +5229,8 @@
             "embed",
             "tts",
             "asr",
-            "tool"
+            "tool",
+            "search"
           ],
           "title": "UsagePurpose",
           "type": "string"

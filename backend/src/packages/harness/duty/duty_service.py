@@ -4,7 +4,7 @@
 docs/backend/duty.md）::
 
     run_duty_round(session, cfg=?, now_ms=?)
-        ↓ ① 激活人格解析（get_active_persona——无激活 → error 报告返回，
+        ↓ ① 主人格解析（get_primary_persona——无主人格 → error 报告返回，
         ↓     不落库不投递，恒不抛）
         ↓ ② bind_persona_context(record.id)（PersonaMixin 作用域 + 工具
         ↓     persona contextvar + 网关用量归属三合一）
@@ -34,7 +34,7 @@ fail-closed 语义（锁定决策，逐条）：
       观测）；
     - **空最终报告 = failed**：轮次完成但模型未产出可用报告 → 落
       failed 事件（业务失败，非异常）；
-    - **无激活人格 = error 且零副作用**：无 PersonaMixin 作用域可落库
+    - **无主人格 = error 且零副作用**：无 PersonaMixin 作用域可落库
       ——返回 error 报告（不落库 / 不投递），日志可观测。
 
 人格声线：任务书模板经人格展示名替换（与 chat 域 prompt 组装同语义——
@@ -50,6 +50,7 @@ from packages.harness.channels.channel_models import ChannelType, OutboundMessag
 from packages.harness.channels.channel_service import ChannelAdapterProtocol, ChannelRouter
 from packages.harness.config.model_entry import ModelRole
 from packages.harness.core import time_utils
+from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.duty.duty_models import (
     DutyOwnerDelivery,
     DutyReportModel,
@@ -132,7 +133,7 @@ class DutyService:
             gateway: LLM 网关（duty 角色路由——工具循环 + 收尾共用）。
             registry: 工具注册表（list_specs 进请求 / execute 隔离执行）。
             memory_service: 记忆域服务（值班报告事件落库；None = 新实例）。
-            persona_service: 人格注册表服务（激活人格解析；None = 新实例）。
+            persona_service: 人格注册表服务（主人格解析；None = 新实例）。
             channel_router: 通道路由器（None = 无通道——报告仅落记忆）。
             owner_chat_id: 属主会话 ID（None = 未配置——报告仅落记忆）。
             report_to_owner: 属主投递开关（False = 关闭——报告仅落记忆）。
@@ -165,7 +166,7 @@ class DutyService:
         Args:
             session: 注入的异步 Session（人格解析 + 报告落库共用）。
             now_ms: 注入时钟（epoch 毫秒；None = 当前真实时间）。轮次起止
-                时间戳同轴：入口一次采值——无激活人格的零副作用早退路径
+                时间戳同轴：入口一次采值——无主人格的零副作用早退路径
                 ``finished_ts_ms == started_ts_ms``（同一注入轴读数，
                 不混真实时钟）。
             cfg: 运行参数（None = DutyRunConfigModel 全默认——装配面
@@ -176,15 +177,20 @@ class DutyService:
         """
         resolved_cfg = cfg if cfg is not None else DutyRunConfigModel()
         started_ms = now_ms if now_ms is not None else time_utils.now_ms()
-        persona_record = await self._persona.get_active_persona(session)
-        if persona_record is None:
-            logger.warning("值班轮跳过：无激活人格（error 报告返回，零副作用）")
+        try:
+            persona_record = await self._persona.get_primary_persona(session)
+        except BusinessException as exc:
+            # 无主人格为已知确定态（NOT_FOUND——服务层清晰中文错误）→
+            # error 报告返回（零副作用）；其余业务异常原样上抛。
+            if exc.code != ErrorCode.NOT_FOUND:
+                raise
+            logger.warning("值班轮跳过：无主人格（error 报告返回，零副作用）")
             return DutyReportModel(
                 persona="",
                 started_ts_ms=started_ms,
                 finished_ts_ms=started_ms,
                 status=DutyStatus.ERROR,
-                error="无激活人格——本轮值班未执行",
+                error="无主人格——本轮值班未执行",
                 final_report="",
             )
         async with bind_persona_context(persona_record.id):

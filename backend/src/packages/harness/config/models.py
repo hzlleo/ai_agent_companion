@@ -31,12 +31,25 @@
       env_prefix=``SCHEDULER_``）
     - ``ToolsSandboxSettings`` —— 工具沙盒分节（``Settings.tools_sandbox``；
       env_prefix=``TOOLS_SANDBOX_``——tools 域）
+    - ``ToolsBrowserSidecarSettings`` —— 浏览器 sidecar 分节
+      （``Settings.tools_browser_sidecar``；env_prefix=
+      ``TOOLS_BROWSER_SIDECAR_``——tools 域）
     - ``TtsSettings`` / ``AsrSettings`` / ``VoiceSettings`` —— 语音域分节
       （``Settings.voice``；子模型 env_prefix=``VOICE_TTS_`` /
       ``VOICE_ASR_``——voice 域）
+    - ``WebSearchSettings`` —— 联网搜索运营分节（``Settings.search``；
+      env_prefix=``SEARCH_``——search 域开关 / 预算 / 冷却）
+    - ``RhythmSettings``    —— 拟人节律分节（``Settings.rhythm``；
+      env_prefix=``RHYTHM_``——rhythm 域；物理定义在
+      harness/rhythm/rhythm_models（config → rhythm 单向聚合）
+    - ``IntentSettings``    —— 意图快径分节（``Settings.intent``；
+      env_prefix=``INTENT_``——intent 域；物理定义在
+      harness/intent/intent_models（config → intent 单向聚合）
     - ``Settings``           —— 聚合器（全局单例 ``settings``）
     - ``LlmConfig``          —— config.yaml 的 ``llm`` 段（模型注册表 / 角色绑定 /
       多模态回退链）
+    - ``SearchProviderEntry`` / ``SearchConfig`` —— config.yaml 的
+      ``search`` 段（搜索 provider 注册表 + web_search 子块）
     - ``MultimodalFallbackConfig`` —— look_at 角色非多模态时的回退链配置
     - ``JsonSchema`` / ``ExtensionTool`` / ``ExtensionsConfig`` —— extensions_config.json
       的运行时表示
@@ -55,6 +68,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from packages.harness.config.model_entry import LlmModelEntry, ModelRole
 from packages.harness.core.logging_models import LoggingConfig
+from packages.harness.intent.intent_models import IntentSettings
+from packages.harness.rhythm.rhythm_models import RhythmSettings
 
 __all__ = [
     "ServerConfig",
@@ -70,12 +85,18 @@ __all__ = [
     "DreamScheduleSettings",
     "SchedulerSettings",
     "ToolsSandboxSettings",
+    "ToolsBrowserSidecarSettings",
     "TtsSettings",
     "AsrSettings",
     "VoiceSettings",
+    "WebSearchSettings",
     "Settings",
     "settings",
     "LlmConfig",
+    "SearchProviderEntry",
+    "SearchConfig",
+    "SEARCH_PROVIDER_KINDS",
+    "default_search_model_for_kind",
     "MultimodalFallbackConfig",
     "JsonSchema",
     "ExtensionTool",
@@ -107,6 +128,15 @@ def _validate_daily_at_shape(value: str) -> str:
 class ServerConfig(BaseSettings):
     """Web 服务配置（env_prefix=``SERVER_``）。
 
+    管理面 owner-token 鉴权（R2 审计放行条件——新端点不得扩张无鉴权
+    面）：``admin_token_env`` 经环境变量间接（与 telegram ``bot_token_env``
+    / 沙盒 ``token_env`` 同模式——**token 本值永不落 yaml / 配置树**），
+    本配置只持有变量名；实际 token 由 ``app/middleware/admin_auth``
+    鉴权依赖按请求从该变量读取。变量非空 = 管理路由要求
+    ``Authorization: Bearer <token>``；为空 = 鉴权关闭（开发 / 内网形
+    态——公网暴露必须配置；R3 将补齐强制启用，见 docs/backend/README.md
+    认证一节）。
+
     Attributes:
         host: 服务监听地址（默认仅绑定回环——本机开发安全默认；容器部署
             由编排层显式设置 ``SERVER_HOST=0.0.0.0`` 对外暴露）。
@@ -117,6 +147,8 @@ class ServerConfig(BaseSettings):
             = CORS 关闭（不挂 CORSMiddleware——同源部署形态）。env 覆写
             形态为 JSON 数组字符串（pydantic-settings 复杂类型 JSON 解析）：
             ``SERVER_CORS_ORIGINS='["http://localhost:5173"]'``。
+        admin_token_env: 管理面 owner-token 鉴权的环境变量名（实际 token
+            从该变量读取；变量为空 = 鉴权关闭——见类 docstring 取舍）。
     """
 
     host: str = Field(default="127.0.0.1", description="服务监听地址")
@@ -128,6 +160,11 @@ class ServerConfig(BaseSettings):
             "http://127.0.0.1:5173",
         ],
         description="CORS 允许来源（默认 Vite dev server；空列表 = 关闭 CORS）",
+    )
+    admin_token_env: str = Field(
+        default="ADMIN_AUTH_TOKEN",
+        min_length=1,
+        description="管理面 owner-token 鉴权环境变量名（空 = 鉴权关闭；公网暴露必须配置）",
     )
 
     model_config = SettingsConfigDict(
@@ -553,6 +590,50 @@ class ToolsSandboxSettings(BaseSettings):
     )
 
 
+class ToolsBrowserSidecarSettings(BaseSettings):
+    """浏览器自动化 sidecar 配置（env_prefix=``TOOLS_BROWSER_SIDECAR_``——
+    tools 域浏览器运行时）。
+
+    锁定决策：``enabled=False``（默认）——浏览器 sidecar 是**可选运行时**
+    （JS 渲染回退面）：全工程无 sidecar 照常运行（duty / chat 工具面回落
+    到既有工具集）；``enabled=True`` 时 app lifespan 在搜索装配后经
+    ``/health`` 探测（bounded 超时）——探测失败 / token 未配置 → 跳过
+    浏览器工具注册并告警（warn-and-continue，与工具沙盒同降级语义，
+    见 docs/backend/tools-browser.md）。
+
+    鉴权 token 经环境变量间接（与沙盒 ``SANDBOX_TOKEN`` / llm 条目
+    ``api_key_env`` 同模式——**密钥永不落 yaml / 配置树**）：本配置只
+    持有变量名 ``token_env``，实际 token 由 tools 域 sidecar 客户端在
+    构造期从该变量读取。
+
+    Attributes:
+        enabled: 是否启用浏览器 sidecar（False = 不探测 / 不注册浏览器
+            工具）。
+        base_url: sidecar 服务基础 URL（compose 形态 127.0.0.1:8766）。
+        token_env: 鉴权 token 环境变量名（实际 token 从该变量读取）。
+        request_timeout_seconds: 单次请求超时秒数（invoke / 健康探测
+            共用——浏览器操作长于纯 HTTP 工具，缺省 30s）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用浏览器 sidecar")
+    base_url: str = Field(
+        default="http://127.0.0.1:8766", min_length=1, description="sidecar 服务基础 URL"
+    )
+    token_env: str = Field(
+        default="BROWSER_SIDECAR_TOKEN", min_length=1, description="鉴权 token 环境变量名"
+    )
+    request_timeout_seconds: float = Field(
+        default=30.0, gt=0, description="单次请求超时（invoke / 健康探测共用）"
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="TOOLS_BROWSER_SIDECAR_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class TelegramSettings(BaseSettings):
     """Telegram 通道配置（env_prefix=``TELEGRAM_``——channels 域）。
 
@@ -833,6 +914,54 @@ class VoiceSettings(BaseModel):
     asr: AsrSettings = Field(default_factory=AsrSettings, description="ASR 转写配置")
 
 
+class WebSearchSettings(BaseSettings):
+    """联网搜索运营配置（env_prefix=``SEARCH_``——search 域）。
+
+    锁定决策（D5=A + P6=B）：``enabled=False``（默认）——联网搜索是
+    **可选能力面**（外部搜索 provider 经 HTTP 契约消费），缺省零配置
+    开发可用、测试 hermetic；``enabled=True`` 且 config.yaml ``search``
+    段无 provider 条目时启动期 fail fast（中文错误）。
+
+    本类同时是 config.yaml ``search.web_search`` 子块的类型（分层加载链
+    单类双源——yaml 子块键优先于 SEARCH_* env，与「代码默认 < .env <
+    env < config.yaml」的文档化优先级一致：yaml 提供的键覆盖 env，
+    未提供的键回落 env / 代码默认）。provider CRUD 持久化 ``search``
+    段时会把当前生效值（env 已合并）一并落盘——yaml 是最高层，写入
+    即固化（运维在 env 调值后再做 CRUD 会把 env 值固化进 yaml，
+    .bak 备份与审计面可回溯）。
+
+    Attributes:
+        enabled: 是否启用联网搜索能力（False = 工具面 / 服务面不装配）。
+        tool_enabled: 是否注册 ``web_search`` LLM 工具（duty 工具循环 +
+            chat 工具循环共用；**工具仅在 enabled 与本开关同时为真时
+            注册**——两级开关：能力总闸 + 工具面曝光闸）。
+        daily_budget_per_persona: 单人格每日搜索调用数预算（按 usage
+            行计数——含失败尝试行，防 provider 故障重试风暴绕过预算）。
+        daily_budget_global: 全局每日搜索调用数预算（全部人格合计）。
+        cooldown_seconds: provider 失败降级冷却秒数（冷却窗口内跳过
+            该 provider 直落下一级；全部降级 → 清晰业务异常）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用联网搜索能力")
+    tool_enabled: bool = Field(
+        default=False, description="是否注册 web_search 工具（需 enabled 同时为真）"
+    )
+    daily_budget_per_persona: int = Field(
+        default=50, ge=1, description="单人格每日搜索调用数预算"
+    )
+    daily_budget_global: int = Field(default=200, ge=1, description="全局每日搜索调用数预算")
+    cooldown_seconds: int = Field(
+        default=60, ge=1, description="provider 失败降级冷却秒数"
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="SEARCH_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class Settings(BaseSettings):
     """全局配置聚合器——所有 env 面子配置的聚合入口。
 
@@ -860,8 +989,20 @@ class Settings(BaseSettings):
         scheduler: 中央调度器配置（tick 间隔）。
         tools_sandbox: 工具沙盒配置（默认关闭；沙盒为可选
             运行时，duty 工具面在沙盒不可达时回落到内置工具）。
+        tools_browser_sidecar: 浏览器 sidecar 配置（默认关闭；sidecar
+            为可选运行时——JS 渲染回退面，duty / chat 工具面在 sidecar
+            不可达时回落到既有工具集）。
         voice: 语音域配置（TTS / ASR 默认关闭；外部本地
             模型服务经 HTTP 契约消费，部署接线属部署侧事务）。
+        search: 联网搜索运营配置（开关 / 工具面 / 预算 / 冷却——
+            SEARCH_ env 面；provider 注册表经 config.yaml ``search``
+            段承载，见 :class:`SearchConfig`）。
+        rhythm: 拟人节律配置（默认关闭——RHYTHM_ env 面；物理定义在
+            :class:`packages.harness.rhythm.rhythm_models.RhythmSettings`，
+            此处聚合引用——models 与 logic 分离约定不变）。
+        intent: 意图快径配置（默认开启——INTENT_ env 面；物理定义在
+            :class:`packages.harness.intent.intent_models.IntentSettings`，
+            此处聚合引用）。
         env: 运行环境标识（local / dev / prod）。
     """
 
@@ -876,7 +1017,11 @@ class Settings(BaseSettings):
     dream_schedule: DreamScheduleSettings = DreamScheduleSettings()
     scheduler: SchedulerSettings = SchedulerSettings()
     tools_sandbox: ToolsSandboxSettings = ToolsSandboxSettings()
+    tools_browser_sidecar: ToolsBrowserSidecarSettings = ToolsBrowserSidecarSettings()
     voice: VoiceSettings = VoiceSettings()
+    search: WebSearchSettings = WebSearchSettings()
+    rhythm: RhythmSettings = RhythmSettings()
+    intent: IntentSettings = IntentSettings()
     env: str = Field(default="local", description="运行环境标识（local / dev / prod）")
 
     model_config = SettingsConfigDict(
@@ -1040,6 +1185,149 @@ class LlmConfig(BaseModel):
             空角色绑定映射（文档性展示用）。
         """
         return {}
+
+
+# ---------------------------------------------------------------------------
+# 联网搜索配置节（config.yaml ``search`` 段——provider 注册表 + web_search
+# 子块；管理面见 harness/config/search_registry.py）
+# ---------------------------------------------------------------------------
+
+#: 搜索 provider kind 值域（bocha 主 / zhipu 兜底——D5=A 两 provider 决策）。
+SEARCH_PROVIDER_KINDS: tuple[str, str] = ("bocha", "zhipu")
+
+#: 各 kind 的缺省 API Key 环境变量名（api_key_env 间接——密钥本值永不落
+#: yaml / 配置树；示例与测试面统一指向这两个变量）。
+_DEFAULT_API_KEY_ENV_FOR_KIND: dict[str, str] = {
+    "bocha": "SEARCH_BOCHA_API_KEY",
+    "zhipu": "SEARCH_ZHIPU_API_KEY",
+}
+
+#: 各 kind 的缺省 base_url（官方端点——条目可覆写）。
+_DEFAULT_BASE_URL_FOR_KIND: dict[str, str] = {
+    "bocha": "https://api.bochaai.com",
+    "zhipu": "https://open.bigmodel.cn",
+}
+
+
+def default_search_model_for_kind(kind: str) -> str:
+    """按 kind 返回 provider 专属 model 字段缺省值。
+
+    语义（provider 差异）：bocha 的 web-search 端点无模型选择参数——
+    ``model`` 为观测标识（恒 ``web-search``）；zhipu 的
+    ``/api/paas/v4/web_search`` 端点以 ``search_engine`` 字段选择引擎
+    （``model`` 缺省 ``search_std``——P6=B 兜底档；可配 ``search_pro`` 等）。
+
+    Args:
+        kind: provider kind（bocha / zhipu）。
+
+    Returns:
+        该 kind 的 model 字段缺省值。
+
+    Raises:
+        ValueError: 未知 kind。
+    """
+    if kind == "bocha":
+        return "web-search"
+    if kind == "zhipu":
+        return "search_std"
+    raise ValueError(f"未知搜索 provider kind: {kind!r}（合法值: {list(SEARCH_PROVIDER_KINDS)}）")
+
+
+class SearchProviderEntry(BaseModel):
+    """搜索 provider 条目（config.yaml ``search.providers`` 列表项）。
+
+    密钥不变式（与 llm 条目 ``api_key_env`` 同模式）：条目只携带
+    环境变量名，密钥本值经 ``os.environ`` 在调用链解析点读取——
+    **永不落 yaml / 配置树 / 响应面**。
+
+    Attributes:
+        name: 条目唯一标识（failover 链内引用；usage 行 model_entry 列）。
+        kind: provider 类型（``bocha`` 博查 Web Search API / ``zhipu``
+            智谱 Web Search API）。
+        base_url: provider API 基础 URL（空 = 按 kind 缺省官方端点）。
+        api_key_env: API Key 环境变量名（空 = 按 kind 缺省变量名；
+            指向的变量为空时调用链 fail loud）。
+        model: provider 专属模型 / 引擎标识（空 = 按 kind 缺省——bocha
+            观测标识 ``web-search`` / zhipu 引擎码缺省 ``search_std``）。
+        max_results: 单次搜索返回条数上限（1-20；请求级可覆盖）。
+        timeout_seconds: 单次请求超时秒数（httpx.Timeout 全阶段）。
+    """
+
+    name: str = Field(min_length=1, max_length=64, description="条目唯一标识")
+    kind: Literal["bocha", "zhipu"] = Field(description="provider 类型（bocha/zhipu）")
+    base_url: str = Field(
+        default="", min_length=0, max_length=512, description="API 基础 URL（空=按 kind 缺省）"
+    )
+    api_key_env: str = Field(
+        default="",
+        min_length=0,
+        max_length=128,
+        description="API Key 环境变量名（空=按 kind 缺省；密钥本值永不落 yaml）",
+    )
+    model: str = Field(
+        default="", min_length=0, max_length=128, description="provider 专属模型/引擎标识（空=按 kind 缺省）"
+    )
+    max_results: int = Field(
+        default=8, ge=1, le=20, description="单次搜索返回条数上限（1-20）"
+    )
+    timeout_seconds: float = Field(default=15.0, gt=0, le=120, description="单次请求超时（秒）")
+
+    @model_validator(mode="after")
+    def _fill_kind_defaults(self) -> SearchProviderEntry:
+        """按 kind 物化缺省值（base_url / api_key_env / model 三个空值缝）。
+
+        Returns:
+            缺省物化后的实例（显式提供的值原样保留）。
+        """
+        if not self.base_url:
+            self.base_url = _DEFAULT_BASE_URL_FOR_KIND[self.kind]
+        if not self.api_key_env:
+            self.api_key_env = _DEFAULT_API_KEY_ENV_FOR_KIND[self.kind]
+        if not self.model:
+            self.model = default_search_model_for_kind(self.kind)
+        return self
+
+
+class SearchConfig(BaseModel):
+    """config.yaml ``search`` 段——搜索 provider 注册表 + web_search 子块。
+
+    config.yaml 示例::
+
+        search:
+          providers:
+            - name: "bocha-main"
+              kind: "bocha"
+              api_key_env: "SEARCH_BOCHA_API_KEY"
+              max_results: 8
+              timeout_seconds: 15
+            - name: "zhipu-fallback"
+              kind: "zhipu"
+              model: "search_std"
+              api_key_env: "SEARCH_ZHIPU_API_KEY"
+          web_search:
+            enabled: true
+            tool_enabled: true
+            daily_budget_per_persona: 50
+            daily_budget_global: 200
+            cooldown_seconds: 60
+
+    failover 语义：``providers`` 列表序即尝试序（前者为主、后者兜底）；
+    条目失败后进入降级冷却（``web_search.cooldown_seconds``），冷却窗口
+    内跳过直落下一级；全部降级 → 清晰业务异常。
+
+    Attributes:
+        providers: provider 条目列表（列表序 = failover 尝试序；条目名
+            节内唯一——管理面 CRUD 校验）。
+        web_search: 运营子块（开关 / 工具面 / 预算 / 冷却——
+            :class:`WebSearchSettings`；yaml 键优先于 SEARCH_* env）。
+    """
+
+    providers: list[SearchProviderEntry] = Field(
+        default_factory=list, description="provider 条目列表（列表序=failover 尝试序）"
+    )
+    web_search: WebSearchSettings = Field(
+        default_factory=WebSearchSettings, description="运营子块（开关/预算/冷却）"
+    )
 
 
 class JsonSchema(BaseModel):

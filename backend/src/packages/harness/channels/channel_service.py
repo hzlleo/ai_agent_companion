@@ -12,9 +12,11 @@
         ↓ ⑤ ChatService.reply（组装 → 网关 → 用量记账自动发生）
         ↓ ⑥ 适配器发送（OutboundMessageModel → 平台 wire）
 
-人格语义（锁定决策）：**单一激活人格应答全部通道消息**。会话懒建经
-``ChatService.create_session(db_session=...)`` 内部解析当前激活人格（注册
-表事务性单激活不变式的消费面）；按聊天绑定人格属后续多通道扩展交付面。
+人格语义（多激活可寻址模型）：**主人格应答缺省通道会话**。会话懒建经
+``ChatService.create_session(db_session=...)`` 内部解析当前主人格（注册
+表事务性切换不变式的消费面）；已建会话按 ``persona_id`` 保持在位
+（会话级寻址——通道消息不因主人格切换而换人格）；按聊天绑定人格 /
+多人格路由属后续多通道扩展交付面。
 
 持久化语义：注入 ``session_factory``（app lifespan 装配）时会话创建经
 数据库会话落 ``ff_chat_sessions``（标题 = 会话身份键），其后
@@ -24,7 +26,7 @@ ChatService 将抛 ``INTERNAL_ERROR`` → 走兜底回发；仅测试 / 诊断�
 
 错误隔离（铁律）：**单条消息的任何失败（LLM / 网关 / 持久化）不得击穿
 runner**——``handle_inbound`` 恒不抛异常：逐消息捕获，经适配器回发短中文
-兜底消息，错误细节只进日志。无激活人格（``NOT_FOUND``）为已知确定态，
+兜底消息，错误细节只进日志。无主人格（``NOT_FOUND``）为已知确定态，
 回发该业务异常的用户面消息（可操作指引）；其余异常一律回发通用兜底。
 
 并发语义（per-chat 串行化）：QQ 推送式入站（webhook 每 POST 一协程）
@@ -271,7 +273,7 @@ class ChannelRouter:
             该聊天的 :class:`ChatSessionStateModel`（首次消息时创建）。
 
         Raises:
-            Exception: 会话创建链路失败（无激活人格 / 持久化未装配等——
+            Exception: 会话创建链路失败（无主人格 / 持久化未装配等——
                 由 ``handle_inbound`` 统一兜底隔离）。
         """
         key = self.session_key(context)
@@ -285,7 +287,7 @@ class ChannelRouter:
             state = await service.create_session(title=key)
         else:
             # 持久化形态：经注入会话落 ff_chat_sessions（标题 = 身份键；
-            # 激活人格由 ChatService.create_session 内部解析）
+            # 主人格由 ChatService.create_session 内部解析）
             async with self._session_factory() as db_session:
                 state = await service.create_session(db_session=db_session, title=key)
         self._sessions[key] = state
@@ -330,7 +332,7 @@ class ChannelRouter:
             exc: 消息处理链路异常。
 
         Returns:
-            ``NOT_FOUND``（无激活人格——已知确定态）回发业务异常的用户面
+            ``NOT_FOUND``（无主人格——已知确定态）回发业务异常的用户面
             消息（含可操作指引）；其余一律通用短句兜底。
         """
         if isinstance(exc, BusinessException) and exc.code == ErrorCode.NOT_FOUND:

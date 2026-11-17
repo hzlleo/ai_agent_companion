@@ -1,16 +1,17 @@
 /**
- * personas 端点层：后端 13 个路由的typed 封装。
+ * personas 端点层：后端 14 个路由的 typed 封装（多激活可寻址模型）。
  *
  * 路由面（全部经 ResultDTO 解包，失败抛 ApiError）：
  *   - GET    /personas                        游标分页列表（status 过滤）
  *   - POST   /personas                        创建
  *   - POST   /personas/batch-delete           批量删除（部分成功形态）
+ *   - GET    /personas/primary                读取当前主人格（无主人格 404）
  *   - GET    /personas/{id}                   读取
  *   - PUT    /personas/{id}                   部分更新
- *   - DELETE /personas/{id}                   删除（激活守卫）
+ *   - DELETE /personas/{id}                   删除（主人格守卫）
  *   - POST   /personas/{id}/copy              复制（可选深拷贝 M/S 状态）
- *   - POST   /personas/{id}/activate          激活（事务性单激活切换）
- *   - POST   /personas/{id}/deactivate        停用激活
+ *   - POST   /personas/{id}/set-primary       设为主人格（事务性切换）
+ *   - POST   /personas/{id}/disable           停用（生命周期；主人格守卫拒绝）
  *   - GET    /personas/{id}/card              读取卡片
  *   - PUT    /personas/{id}/card              整体替换卡片
  *   - GET    /personas/{id}/states            读取已写状态层
@@ -80,7 +81,7 @@ export async function updatePersona(
   })
 }
 
-/** DELETE /personas/{id} —— 删除人格（当前激活人格 409 拒绝）。 */
+/** DELETE /personas/{id} —— 删除人格（当前主人格 409 拒绝）。 */
 export async function deletePersona(personaId: number): Promise<void> {
   await request<null>({
     method: 'DELETE',
@@ -100,19 +101,27 @@ export async function copyPersona(
   })
 }
 
-/** POST /personas/{id}/activate —— 激活人格（事务性单激活切换）。 */
-export async function activatePersona(personaId: number): Promise<PersonaRecord> {
+/** GET /personas/primary —— 读取当前主人格（无主人格 404 fail loud）。 */
+export async function getPrimaryPersona(): Promise<PersonaRecord> {
   return request<PersonaRecord>({
-    method: 'POST',
-    url: `/personas/${personaId}/activate`,
+    method: 'GET',
+    url: '/personas/primary',
   })
 }
 
-/** POST /personas/{id}/deactivate —— 停用激活（允许零激活）。 */
-export async function deactivatePersona(personaId: number): Promise<PersonaRecord> {
+/** POST /personas/{id}/set-primary —— 设为主人格（事务性切换）。 */
+export async function setPrimaryPersona(personaId: number): Promise<PersonaRecord> {
   return request<PersonaRecord>({
     method: 'POST',
-    url: `/personas/${personaId}/deactivate`,
+    url: `/personas/${personaId}/set-primary`,
+  })
+}
+
+/** POST /personas/{id}/disable —— 停用人格（主人格 409 拒绝）。 */
+export async function disablePersona(personaId: number): Promise<PersonaRecord> {
+  return request<PersonaRecord>({
+    method: 'POST',
+    url: `/personas/${personaId}/disable`,
   })
 }
 

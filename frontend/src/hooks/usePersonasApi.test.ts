@@ -3,11 +3,12 @@ import { http, HttpResponse } from 'msw'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import {
   findStateByLayer,
-  useActivatePersona,
   useBatchDeletePersonas,
   useCreatePersona,
   useDeletePersona,
   usePersonasList,
+  usePrimaryPersona,
+  useSetPrimaryPersona,
   useUpsertPersonaState,
 } from '@/hooks/usePersonasApi'
 import { BACKEND_ORIGIN, errorResult, mockCard, mockPersona, okResult, server } from '@/test/server'
@@ -79,17 +80,24 @@ describe('personas mutations', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['personas'] })
   })
 
-  it('useActivatePersona：409 错误可达 onError', async () => {
+  it('useSetPrimaryPersona：409 错误可达 onError', async () => {
     server.use(
-      http.post(`${BACKEND_ORIGIN}/personas/:personaId/activate`, () =>
-        HttpResponse.json(errorResult('停用状态的人格不可激活', 'CONFLICT'), { status: 409 }),
+      http.post(`${BACKEND_ORIGIN}/personas/:personaId/set-primary`, () =>
+        HttpResponse.json(errorResult('停用状态的人格不可设为主人格，请先启用（status=active）', 'CONFLICT'), { status: 409 }),
       ),
     )
-    const { result } = renderHookWithQueryClient(() => useActivatePersona())
+    const { result } = renderHookWithQueryClient(() => useSetPrimaryPersona())
     act(() => {
       result.current.mutate(2)
       })
     await waitFor(() => expect(result.current.isError).toBe(true))
+  })
+
+  it('usePrimaryPersona：返回当前主人格', async () => {
+    const { result } = renderHookWithQueryClient(() => usePrimaryPersona())
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.id).toBe(1)
+    expect(result.current.data?.is_primary).toBe(true)
   })
 
   it('useDeletePersona：成功后失效缓存', async () => {

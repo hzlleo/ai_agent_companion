@@ -76,13 +76,13 @@ def _fake_service_factory(fake: FakeLookAtService) -> Callable[..., FakeLookAtSe
     return _factory
 
 
-async def _seed_persona(session: AsyncSession, name: str, *, activate: bool = False) -> int:
-    """铺底人格（经服务创建；可选激活）。
+async def _seed_persona(session: AsyncSession, name: str, *, set_primary: bool = False) -> int:
+    """铺底人格（经服务创建；可选设为主人格）。
 
     Args:
         session: 注入的异步 Session。
         name: 注册名。
-        activate: 是否激活（单激活位）。
+        set_primary: 是否设为主人格（主人格标记位）。
 
     Returns:
         新人格主键。
@@ -92,11 +92,11 @@ async def _seed_persona(session: AsyncSession, name: str, *, activate: bool = Fa
         "name": name,
         "card": {"name": "大肥鱼", "first_mes": "你回来啦！"},
     }
-    if activate:
+    if set_primary:
         payload["status"] = "active"
     created = await service.create(session, PersonaCreateDTO.model_validate(payload))
-    if activate:
-        await service.activate(session, created.id)
+    if set_primary:
+        await service.set_primary(session, created.id)
     return created.id
 
 
@@ -289,7 +289,7 @@ class TestLookAtEndpoint:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """人格绑定：当前激活人格的 ID 作为 persona_id 传入（用量归属）。"""
-        persona_id = await _seed_persona(db_session, "look-at-active", activate=True)
+        persona_id = await _seed_persona(db_session, "look-at-active", set_primary=True)
         fake = FakeLookAtService()
         monkeypatch.setattr(look_at_api, "LookAtService", _fake_service_factory(fake))
         response = await client.post(

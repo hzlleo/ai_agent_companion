@@ -1,38 +1,22 @@
-"""SeekDB 真实实例冒烟集成测试（默认跳过——env 门控）。
+"""混合检索全链路 round-trip（SeekDBStore 生产路径——真引擎端到端契约）。
 
-前置：启动本地 SeekDB（server 模式——MySQL 线协议 2881 端口）::
-
-    docker run -d --name seekdb-smoke -p 2881:2881 \\
-      oceanbase/seekdb:1.4.0-100000172026082615
-
-（镜像标签以 SeekDB releases / Docker Hub 页为准——本工程钉死 v1.4.0
-发行镜像 ``1.4.0-100000172026082615``；容器默认 **root 空密码**。）
-
-随后导出门控变量并定向运行::
-
-    SEEKDB_SMOKE_URL="127.0.0.1:2881" \\
-    SEEKDB_SMOKE_USER=root \\
-    SEEKDB_SMOKE_PASSWORD="" \\
-    SEEKDB_SMOKE_DATABASE=test \\
-    pixi run pytest src/tests/integration/test_seekdb_smoke.py -v --asyncio-mode=auto
+自原 ``src/tests/integration/test_seekdb_smoke.py``（env 门控冒烟）整体
+迁入——skipif 语义废弃，验证面升级为强制（缺 ``SEEKDB_TEST_URL`` 即
+``pytest.fail``，见套件 conftest）。
 
 链路（SeekDBStore 全语义真实验证——单测假池面无法覆盖的端到端契约）：
 
     ensure_schema（DDL 建表——VECTOR / ik 全文 / hnsw / HEAP）→
-    upsert（ON DUPLICATE KEY 批量——运行期语法验证：若 SeekDB 拒绝
-    ON DUPLICATE KEY，此处即失败，回退路径为 DELETE+INSERT，见
-    memory.store.build_upsert_sql 文档）→ keyword 检索回读 →
-    hybrid 检索回读（Form B——DBMS_HYBRID_SEARCH.SEARCH 官方融合
-    排序，_score 越大越相关）→ 同键覆盖幂等 → delete 清理。
+    upsert（ON DUPLICATE KEY 批量——运行期语法验证）→ keyword 检索
+    回读 → hybrid 检索回读（Form B——DBMS_HYBRID_SEARCH.SEARCH 官方
+    融合排序，``_score`` 越大越相关）→ 同键覆盖幂等 → 人格隔离谓词 →
+    delete 清理。
 
-注：aiomysql 驱动为工程选型（原生 async；SeekDB 官方未文档化——风险
-与回退路径文档化于 docs/backend/memory.md 检索层一节）；本冒烟即
-    该选型的真实验证面。
+aiomysql 驱动选型的真实验证面（官方仅文档化 PyMySQL / mysqlclient——
+风险与回退文档化于 docs/backend/memory.md 检索层）。
 """
 
 from __future__ import annotations
-
-import os
 
 import pytest
 
@@ -43,36 +27,31 @@ from packages.harness.memory.retrieval_models import (
     SeekDBStoreConfig,
 )
 from packages.harness.memory.seekdb_store import SeekDBStore
+from tests.integration_seekdb.support import SeekDbTestTarget
 
-#: 冒烟门控：未设置 SEEKDB_SMOKE_URL 时全套跳过（默认 hermetic）。
-_SMOKE_URL = os.environ.get("SEEKDB_SMOKE_URL", "")
-
-pytestmark = pytest.mark.skipif(
-    not _SMOKE_URL,
-    reason="需真实 SeekDB 实例（设置 SEEKDB_SMOKE_URL=host:port 启用——见模块 docstring docker 一行命令）",
-)
+#: 套件选择 marker（pyproject markers 注册；显式路径定向运行为主入口）。
+pytestmark = [pytest.mark.seekdb]
 
 
-def _smoke_config() -> SeekDBStoreConfig:
-    """从 SEEKDB_SMOKE_* env 门控变量构造存储配置。
+async def test_hybrid_search_round_trip(seekdb_scratch: SeekDbTestTarget) -> None:
+    """全链路：建表 → 批量 upsert → keyword / hybrid 检索 → 覆盖 → 隔离 → 删除。
 
-    Returns:
-        指向真实实例的 :class:`SeekDBStoreConfig`。
+    Args:
+        seekdb_scratch: scratch 库目标（空库起步——ff_memory_index 由
+            ensure_schema 建表，不经 alembic 链）。
     """
-    host, _, port_text = _SMOKE_URL.partition(":")
-    return SeekDBStoreConfig(
-        host=host,
-        port=int(port_text) if port_text else 2881,
-        user=os.environ.get("SEEKDB_SMOKE_USER", "root"),
-        password_env="SEEKDB_SMOKE_PASSWORD",
-        database=os.environ.get("SEEKDB_SMOKE_DATABASE", "test"),
-        vector_dim=4,
+    # 存储配置自显式测试服务目标构造（密码经 SEEKDB_TEST_PASSWORD env
+    # 间接——与生产 password_env 模式同构；vector_dim=4 为测试向量形态）。
+    store = SeekDBStore(
+        SeekDBStoreConfig(
+            host=seekdb_scratch.host,
+            port=seekdb_scratch.port,
+            user=seekdb_scratch.user,
+            password_env="SEEKDB_TEST_PASSWORD",
+            database=seekdb_scratch.database,
+            vector_dim=4,
+        )
     )
-
-
-async def test_seekdb_smoke_round_trip() -> None:
-    """全链路冒烟：建表 → 批量 upsert → keyword / hybrid 检索 → 覆盖 → 删除。"""
-    store = SeekDBStore(_smoke_config())
     try:
         await store.ensure_schema()
 
@@ -103,7 +82,7 @@ async def test_seekdb_smoke_round_trip() -> None:
         vectors = [[0.1, 0.2, 0.3, 0.4], [0.4, 0.3, 0.2, 0.1]]
         await store.upsert(entries, vectors)
 
-        # keyword 检索回读（MATCH 相关度——「小鱼干」两行命中）
+        # keyword 检索回读（MATCH 相关度——「小鱼干」两行命中）。
         keyword = await store.search(
             MemorySearchQueryDTO(persona_id=900001, query="小鱼干", mode=MemorySearchMode.KEYWORD),
             None,
@@ -111,7 +90,7 @@ async def test_seekdb_smoke_round_trip() -> None:
         assert {result.ref_id for result in keyword} == {1, 2}
         assert all(result.score > 0 for result in keyword)
 
-        # hybrid 检索回读（Form B——DBMS_HYBRID_SEARCH.SEARCH 融合排序）
+        # hybrid 检索回读（Form B——DBMS_HYBRID_SEARCH.SEARCH 融合排序）。
         hybrid = await store.search(
             MemorySearchQueryDTO(
                 persona_id=900001, query="小鱼干", mode=MemorySearchMode.HYBRID, limit=5
@@ -124,7 +103,7 @@ async def test_seekdb_smoke_round_trip() -> None:
         scores = [result.score for result in hybrid]
         assert scores == sorted(scores, reverse=True)  # 引擎融合分降序保持
 
-        # 同键覆盖幂等（ON DUPLICATE KEY UPDATE 运行期验证）
+        # 同键覆盖幂等（ON DUPLICATE KEY UPDATE 运行期验证）。
         updated = entries[0].model_copy(update={"content": "主人今天吃了很多虾干"})
         await store.upsert([updated], [[0.1, 0.2, 0.3, 0.4]])
         only = await store.search(
@@ -133,14 +112,14 @@ async def test_seekdb_smoke_round_trip() -> None:
         )
         assert [result.ref_id for result in only] == [1]
 
-        # 人格隔离谓词（他人格零命中）
+        # 人格隔离谓词（他人格零命中）。
         isolated = await store.search(
             MemorySearchQueryDTO(persona_id=999999, query="小鱼干", mode=MemorySearchMode.KEYWORD),
             None,
         )
         assert isolated == []
 
-        # delete 清理
+        # delete 清理。
         await store.delete(entries[0].ref_type, entries[0].ref_id, 900001)
         await store.delete(entries[1].ref_type, entries[1].ref_id, 900001)
         final = await store.search(

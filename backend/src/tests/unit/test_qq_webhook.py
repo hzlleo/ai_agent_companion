@@ -10,7 +10,10 @@
     - notice / request / meta_event 确认并忽略；非 private/group 消息类型
       忽略；
     - 隔离铁律：非法载荷 / 缺关键字段 / 路由器抛错 / 空文本——恒不抛
-      （HTTP 层确认语义）。
+      （HTTP 层确认语义）；
+    - 协议 v2 附件提取：image / record 段 → 附件（url 源 / base64://
+      剥前缀 / file:// path 源）；无引用媒体段跳过；CQ 码字符串形态
+      维持占位符降级（提取边界）；非媒体段不产附件。
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from typing import Any
 import pytest
 
 from packages.harness.channels.channel_models import (
+    ChannelAttachmentKind,
     ChannelDeliveryResultModel,
     ChannelType,
     InboundMessageModel,
@@ -28,6 +32,7 @@ from packages.harness.channels.channel_models import (
 from packages.harness.channels.qq.qq_models import Ob11MessageSegmentModel
 from packages.harness.channels.qq.qq_webhook import (
     QqMessageDedupWindow,
+    extract_message_attachments,
     flatten_message_text,
     process_webhook_event,
     reset_qq_webhook_state,
@@ -329,3 +334,101 @@ class TestIgnoreAndIsolation:
         )
         await process_webhook_event(_message_event(), router)
         assert len(router.handled) == 1  # 已记录后抛——确认语义不受影响
+
+
+class TestAttachmentExtractionV2:
+    async def test_image_segment_with_url_routed_as_attachment(self) -> None:
+        """image 段（data.url）：url 源附件 + 占位符文本并存整链路由。"""
+        router = FakeRouter()
+        await process_webhook_event(
+            _message_event(
+                message=[
+                    {"type": "text", "data": {"text": "看看"}},
+                    {"type": "image", "data": {"url": "https://gchat.qpic.cn/1.jpg"}},
+                ]
+            ),
+            router,
+        )
+        message = router.handled[0]
+        assert message.text == "看看[图片]"
+        assert len(message.attachments) == 1
+        attachment = message.attachments[0]
+        assert attachment.kind is ChannelAttachmentKind.IMAGE
+        assert attachment.url == "https://gchat.qpic.cn/1.jpg"
+
+    async def test_record_segment_base64_file_strips_scheme(self) -> None:
+        """record 段（data.file=base64://）：audio 类 + base64 源（剥前缀）。"""
+        router = FakeRouter()
+        await process_webhook_event(
+            _message_event(
+                message=[
+                    {"type": "record", "data": {"file": "base64://aGVsbG8="}},
+                ]
+            ),
+            router,
+        )
+        message = router.handled[0]
+        assert message.text == "[语音]"
+        attachment = message.attachments[0]
+        assert attachment.kind is ChannelAttachmentKind.AUDIO
+        assert attachment.base64 == "aGVsbG8="
+
+    async def test_image_segment_file_scheme_maps_path_source(self) -> None:
+        """image 段（data.file=file://…，无 url）：path 源原样承载。"""
+        attachments = extract_message_attachments(
+            [Ob11MessageSegmentModel(type="image", data={"file": "file:///napcat/cache/x.jpg"})]
+        )
+        assert len(attachments) == 1
+        assert attachments[0].kind is ChannelAttachmentKind.IMAGE
+        assert attachments[0].path == "file:///napcat/cache/x.jpg"
+
+    async def test_image_segment_base64_payload_strips_prefix(self) -> None:
+        """image 段（data.file=base64://…）：base64 源（载荷剥方案前缀）。"""
+        attachments = extract_message_attachments(
+            [Ob11MessageSegmentModel(type="image", data={"file": "base64://aGVsbG8="})]
+        )
+        assert len(attachments) == 1
+        assert attachments[0].kind is ChannelAttachmentKind.IMAGE
+        assert attachments[0].base64 == "aGVsbG8="
+
+    async def test_media_segment_without_reference_skipped(self) -> None:
+        """媒体段无可用引用（url / file 皆缺）：跳过不产附件。"""
+        attachments = extract_message_attachments([Ob11MessageSegmentModel(type="image", data={})])
+        assert attachments == []
+
+    async def test_non_media_segments_produce_no_attachments(self) -> None:
+        """非媒体段（face / at / video）：不产附件（占位符降级仅文本面）。"""
+        attachments = extract_message_attachments(
+            [
+                Ob11MessageSegmentModel(type="face", data={"id": "4"}),
+                Ob11MessageSegmentModel(type="at", data={"qq": "123"}),
+                Ob11MessageSegmentModel(type="video", data={}),
+            ]
+        )
+        assert attachments == []
+
+    async def test_cq_string_form_extracts_no_attachments(self) -> None:
+        """CQ 码字符串形态：附件提取不生效（文档化边界——维持占位符降级）。"""
+        router = FakeRouter()
+        await process_webhook_event(
+            _message_event(message="看看[CQ:image,file=x.jpg,url=https://x/1.jpg]"),
+            router,
+        )
+        message = router.handled[0]
+        assert message.text == "看看[图片]"
+        assert message.attachments == []
+        assert extract_message_attachments("看看[CQ:image,file=x.jpg]") == []
+
+    async def test_multiple_media_segments_keep_order(self) -> None:
+        """多媒体段：段序保持（image 先 record 后 → 附件序一致）。"""
+        attachments = extract_message_attachments(
+            [
+                Ob11MessageSegmentModel(type="text", data={"text": "两件"}),
+                Ob11MessageSegmentModel(type="image", data={"url": "https://x/1.jpg"}),
+                Ob11MessageSegmentModel(type="record", data={"url": "https://x/1.silk"}),
+            ]
+        )
+        assert [attachment.kind for attachment in attachments] == [
+            ChannelAttachmentKind.IMAGE,
+            ChannelAttachmentKind.AUDIO,
+        ]

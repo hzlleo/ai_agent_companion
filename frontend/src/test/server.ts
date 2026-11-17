@@ -60,7 +60,7 @@ export function mockPersona(overrides: Partial<PersonaRecord> = {}): PersonaReco
     name: 'companion-1',
     display_name: '小助手',
     status: 'active',
-    is_active: true,
+    is_primary: true,
     card: { ...mockCard },
     voice_profile: null,
     created_at: 1731000000000,
@@ -88,9 +88,9 @@ export const personaHandlers = [  // 游标分页列表：首页 2 条 + next_cu
     const cursor = url.searchParams.get('cursor')
     const status = url.searchParams.get('status')
     const all = [
-      mockPersona({ id: 2, name: 'companion-2', is_active: false }),
-      mockPersona({ id: 1, name: 'companion-1', is_active: true }),
-      mockPersona({ id: 3, name: 'old-friend', status: 'disabled', is_active: false }),
+      mockPersona({ id: 2, name: 'companion-2', is_primary: false }),
+      mockPersona({ id: 1, name: 'companion-1', is_primary: true }),
+      mockPersona({ id: 3, name: 'old-friend', status: 'disabled', is_primary: false }),
     ]
     const filtered = status === null ? all : all.filter((p) => p.status === status)
     if (cursor === null) {
@@ -107,7 +107,7 @@ export const personaHandlers = [  // 游标分页列表：首页 2 条 + next_cu
     }
     return HttpResponse.json(
       okResult({
-        items: [filtered[2] ?? mockPersona({ id: 3, name: 'old-friend', status: 'disabled', is_active: false })],
+        items: [filtered[2] ?? mockPersona({ id: 3, name: 'old-friend', status: 'disabled', is_primary: false })],
         total: -1,
         page: 1,
         page_size: 20,
@@ -126,7 +126,7 @@ export const personaHandlers = [  // 游标分页列表：首页 2 条 + next_cu
     const body = (await request.json()) as { ids: number[] }
     const items = body.ids.map((id) =>
       id === 1
-        ? { id, success: false, code: 'CONFLICT', message: '当前激活人格禁止删除，请先停用' }
+        ? { id, success: false, code: 'CONFLICT', message: '不能删除当前主人格，请先将另一个人格设为主人格（set-primary）再删除' }
         : { id, success: true, code: null, message: '已删除' },
     )
     const succeeded = items.filter((item) => item.success).length
@@ -142,6 +142,10 @@ export const personaHandlers = [  // 游标分页列表：首页 2 条 + next_cu
       ),
     )
   }),
+  // 当前主人格读取（id=1 在位）。
+  http.get(`${BACKEND_ORIGIN}/personas/primary`, () =>
+    HttpResponse.json(okResult(mockPersona({ id: 1, is_primary: true }))),
+  ),
   // 读取。
   http.get(`${BACKEND_ORIGIN}/personas/:personaId`, ({ params }) => {
     const id = Number(params.personaId)
@@ -155,13 +159,14 @@ export const personaHandlers = [  // 游标分页列表：首页 2 条 + next_cu
     const body = (await request.json()) as { name?: string }
     return HttpResponse.json(okResult(mockPersona({ name: body.name ?? 'companion-1' }), '人格已更新'))
   }),
-  // 删除：id=1 为激活人格 → 409 激活守卫。
+  // 删除：id=1 为当前主人格 → 409 主人格守卫。
   http.delete(`${BACKEND_ORIGIN}/personas/:personaId`, ({ params }) => {
     const id = Number(params.personaId)
     if (id === 1) {
-      return HttpResponse.json(errorResult('当前激活人格禁止删除，请先停用', 'CONFLICT'), {
-        status: 409,
-      })
+      return HttpResponse.json(
+        errorResult('不能删除当前主人格，请先将另一个人格设为主人格（set-primary）再删除', 'CONFLICT'),
+        { status: 409 },
+      )
     }
     if (id === 404) {
       return HttpResponse.json(errorResult('人格不存在', 'NOT_FOUND'), { status: 404 })
@@ -175,21 +180,27 @@ export const personaHandlers = [  // 游标分页列表：首页 2 条 + next_cu
       return HttpResponse.json(errorResult('注册名已被占用', 'CONFLICT'), { status: 409 })
     }
     return HttpResponse.json(
-      okResult(mockPersona({ id: 10, name: body.new_name, is_active: false, status: 'disabled' }), '人格已复制'),
+      okResult(mockPersona({ id: 10, name: body.new_name, is_primary: false, status: 'disabled' }), '人格已复制'),
     )
   }),
-  // 激活：id=3（old-friend，停用状态）→ 409。
-  http.post(`${BACKEND_ORIGIN}/personas/:personaId/activate`, ({ params }) => {
+  // 设为主人格：id=3（old-friend，停用状态）→ 409。
+  http.post(`${BACKEND_ORIGIN}/personas/:personaId/set-primary`, ({ params }) => {
     const id = Number(params.personaId)
     if (id === 3) {
-      return HttpResponse.json(errorResult('停用状态的人格不可激活', 'CONFLICT'), { status: 409 })
+      return HttpResponse.json(errorResult('停用状态的人格不可设为主人格，请先启用（status=active）', 'CONFLICT'), { status: 409 })
     }
-    return HttpResponse.json(okResult(mockPersona({ id, is_active: true }), '人格已激活（单激活切换）'))
+    return HttpResponse.json(okResult(mockPersona({ id, is_primary: true }), '人格已设为主人格（事务性切换）'))
   }),
-  // 停用激活。
-  http.post(`${BACKEND_ORIGIN}/personas/:personaId/deactivate`, ({ params }) => {
+  // 停用：id=1（当前主人格）→ 409 主人格守卫。
+  http.post(`${BACKEND_ORIGIN}/personas/:personaId/disable`, ({ params }) => {
     const id = Number(params.personaId)
-    return HttpResponse.json(okResult(mockPersona({ id, is_active: false }), '人格激活位已停用'))
+    if (id === 1) {
+      return HttpResponse.json(
+        errorResult('不能停用当前主人格，请先将另一个人格设为主人格（set-primary）再停用', 'CONFLICT'),
+        { status: 409 },
+      )
+    }
+    return HttpResponse.json(okResult(mockPersona({ id, is_primary: false, status: 'disabled' }), '人格已停用'))
   }),
   // 卡片读取。
   http.get(`${BACKEND_ORIGIN}/personas/:personaId/card`, ({ params }) => {

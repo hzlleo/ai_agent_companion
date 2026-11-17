@@ -1,31 +1,42 @@
 """persona 域服务——人格注册表全生命周期管理（管理面真源）。
 
-操作面：
+操作面（多激活可寻址模型——多人格同时可用，主人格唯一）：
 
     - 创建 / 更新 / 复制 / 删除（注册名唯一校验；复制可选深拷贝 M/S
-      状态；删除有激活守卫）；
-    - **事务性单激活切换**：``activate`` 在单事务内「全表清激活位 →
-      激活目标」——激活 B 必然去激活 A（至多一个激活人格的不变式由
-      事务原子性保证）；
+      状态；删除有主人格守卫）；
+    - **事务性主人格切换**：``set_primary`` 在单事务内「全表清主人格
+      标记 → 目标取标记」——设 B 为主人格必然解除 A（至多一个主人格
+      的不变式由 DB 唯一键 ``uq_ff_personas_primary`` 强制 + 并发冲突
+      重试收敛——与策展记忆单 active 同模式）；
+    - **可寻址集**：``list_addressable`` 返回全部 enabled 人格（status=
+      active——通道 / 心流 / 多会话按上下文寻址的消费面）；
     - 状态层读写（M/S upsert / 读取）；
     - 游标分页列表（status 过滤）；
     - 批量删除（部分成功形态——逐 id 独立事务，单项失败不阻塞其余）。
 
-删除守卫（本工程锁定语义——**禁止删除当前激活人格**）：
+主人格读取（``get_primary_persona``）：无主人格（全新库 / 从未设置）
+**fail loud**——清晰中文错误指引先 set-primary（消费面原将「无激活」
+翻译为错误，此语义由服务层统一承担）。
 
-    删除 ``is_active=True`` 的人格直接 ``CONFLICT`` 拒绝；调用方须先
-    ``deactivate``（显式两步——避免「删除即静默掉线为零激活」的隐式
-    状态跳变）。删除非激活人格时**同事务**清理其 M/S 状态行（SQLite
-    测试方言默认不启用 FK 强制，服务层显式删除保证跨方言一致；DB 级
-    ON DELETE CASCADE 仅作直删 SQL 的兜底）。
+守卫（本工程锁定语义——两步显式，杜绝隐式状态跳变）：
+
+    - **删除守卫**：删除当前主人格直接 ``CONFLICT`` 拒绝；调用方须先
+      将另一个人格设为主人格（``set_primary``）再删除（避免「删除即
+      静默掉线为零主人格」的隐式跳变）。删除非主人格时**同事务**清理
+      其 M/S 状态行（SQLite 测试方言默认不启用 FK 强制，服务层显式
+      删除保证跨方言一致；DB 级 ON DELETE CASCADE 仅作直删 SQL 的
+      兜底）。
+    - **停用守卫**：停用（``disable`` / ``update(status=disabled)``）
+      当前主人格同样 ``CONFLICT`` 拒绝——先另设主人格再停用（主人格
+      须恒在位；与删除守卫同一两步模式）。
 
 状态机约定：
 
-    - ``status``（可用性）与 ``is_active``（单激活位）正交；激活要求
-      ``status=active``（停用人格不可激活）；
-    - ``status`` 切到 ``disabled`` 时若持有激活位则**自动清位**（停用
-      即下线——杜绝「停用但仍激活」的矛盾态）；
-    - 复制产物恒 ``disabled + is_active=False``（启用与激活均为显式
+    - ``status``（可用性）与 ``is_primary_marker``（主人格标记）正交；
+      设为主人格要求 ``status=active``（停用人格不可设为主人格）；
+    - ``disable`` 是纯生命周期操作（status 切 disabled；主人格守卫
+      拒绝——见上）；已停用人格重复停用为幂等 no-op；
+    - 复制产物恒 ``disabled + 非主人格``（启用与设为主人格均为显式
       后续动作）。
 
 Session 契约：方法接收调用方注入的 :class:`AsyncSession`（app 层经
@@ -64,7 +75,7 @@ from packages.harness.persona.dtos import (
     PersonaUpdateDTO,
 )
 from packages.harness.persona.models import PersonaStateLayer, PersonaStatus
-from packages.harness.persona.orm import PersonaRow, PersonaStateRow
+from packages.harness.persona.orm import PERSONA_PRIMARY_MARKER, PersonaRow, PersonaStateRow
 
 __all__ = ["PersonaService", "bind_persona_context"]
 
@@ -97,7 +108,7 @@ async def _rollback_quietly(session: AsyncSession) -> None:
     """尽力回滚（批量路径逐项失败时清理会话待处理态——不向调用方注入新异常）。
 
     Args:
-        session: 待回滚的 :class:`AsyncSession`。
+        session: 待回滚的异步 Session。
     """
     try:
         await session.rollback()
@@ -209,7 +220,7 @@ class PersonaService:
     # ------------------------------------------------------------------
 
     async def create(self, session: AsyncSession, dto: PersonaCreateDTO) -> PersonaRecordDTO:
-        """创建人格（注册名唯一校验；单激活位恒 False）。
+        """创建人格（注册名唯一校验；产物恒非主人格）。
 
         Args:
             session: 注入的异步 Session。
@@ -229,7 +240,7 @@ class PersonaService:
             name=dto.name,
             display_name=dto.display_name or dto.card.name,
             status=dto.status.value,
-            is_active=False,
+            is_primary_marker=None,
             chara_card=dto.card.model_dump(),
             voice_profile=dto.voice_profile.model_dump() if dto.voice_profile is not None else None,
         )
@@ -299,22 +310,24 @@ class PersonaService:
     ) -> PersonaRecordDTO:
         """部分更新人格（重命名 / 展示名 / 状态 / 卡片补丁——仅出现字段生效）。
 
-        重命名走唯一校验（排除自身）；status 切到 disabled 时若持有激活
-        位自动清位（停用即下线）；卡片补丁合并语义见 :meth:`_merge_card`。
+        重命名走唯一校验（排除自身）；status 切到 disabled 时若该人格是
+        当前主人格则**守卫拒绝**（先另设主人格再停用——主人格须恒在位）；
+        卡片补丁合并语义见 :meth:`_merge_card`。
 
         Args:
             session: 注入的异步 Session。
             persona_id: 人格主键。
-            dto: 更新 DTO（不含 is_active——单激活位仅经 activate /
-                deactivate 事务性操作）。
+            dto: 更新 DTO（不含主人格标记——主人格仅经 set_primary
+                事务性操作）。
 
         Returns:
             更新后的记录 DTO。
 
         Raises:
             BusinessException: 人格不存在（``NOT_FOUND``）；注册名被占用
-                （``CONFLICT``——含并发重命名撞唯一约束形态）；卡片合并
-                校验失败（``VALIDATION_ERROR``）。
+                （``CONFLICT``——含并发重命名撞唯一约束形态）；停用当前
+                主人格（``CONFLICT``——两步守卫）；卡片合并校验失败
+                （``VALIDATION_ERROR``）。
         """
         row = await self._require_row(session, persona_id)
         if dto.name is not None and dto.name != row.name:
@@ -323,11 +336,18 @@ class PersonaService:
         if dto.display_name is not None:
             row.display_name = dto.display_name
         if dto.status is not None and dto.status.value != row.status:
+            if dto.status == PersonaStatus.DISABLED and row.is_primary:
+                # 停用守卫：主人格停用须先另设主人格（两步显式——与
+                # disable 操作面同一守卫语义）。
+                raise BusinessException(
+                    code=ErrorCode.CONFLICT,
+                    message="不能停用当前主人格，请先将另一个人格设为主人格再停用",
+                    details={
+                        "persona_id": persona_id,
+                        "fix": "先调用 set-primary（POST /api/v1/personas/{id}/set-primary）",
+                    },
+                )
             row.status = dto.status.value
-            if dto.status == PersonaStatus.DISABLED and row.is_active:
-                # 停用即下线：清激活位（杜绝「停用但仍激活」矛盾态）
-                row.is_active = False
-                logger.info("停用人格并自动清激活位: id={}", persona_id)
         if dto.card is not None:
             row.chara_card = self._merge_card(row.chara_card, dto.card)
         if "voice_profile" in dto.model_fields_set:
@@ -351,7 +371,7 @@ class PersonaService:
     async def copy(
         self, session: AsyncSession, persona_id: int, dto: PersonaCopyDTO
     ) -> PersonaRecordDTO:
-        """复制人格（新注册名；可选深拷贝 M/S 状态；产物恒 disabled + 不激活）。
+        """复制人格（新注册名；可选深拷贝 M/S 状态；产物恒 disabled + 非主人格）。
 
         Args:
             session: 注入的异步 Session。
@@ -371,7 +391,7 @@ class PersonaService:
             name=dto.new_name,
             display_name=dto.display_name or source.display_name,
             status=PersonaStatus.DISABLED.value,
-            is_active=False,
+            is_primary_marker=None,
             chara_card=CharaCardModel.model_validate(source.chara_card).model_dump(),
             voice_profile=dict(source.voice_profile) if source.voice_profile is not None else None,
         )
@@ -406,9 +426,9 @@ class PersonaService:
         return PersonaRecordDTO.model_validate(new_row)
 
     async def delete(self, session: AsyncSession, persona_id: int) -> None:
-        """删除人格（**激活守卫：当前激活人格禁止删除**——先 deactivate）。
+        """删除人格（**主人格守卫：当前主人格禁止删除**——先另设主人格）。
 
-        非激活人格删除时同事务清理其 M/S 状态行（跨方言一致——SQLite
+        非主人格删除时同事务清理其 M/S 状态行（跨方言一致——SQLite
         测试方言默认不启用 FK 强制，DB 级 CASCADE 仅作直删 SQL 兜底）。
 
         Args:
@@ -416,17 +436,17 @@ class PersonaService:
             persona_id: 人格主键。
 
         Raises:
-            BusinessException: 人格不存在（``NOT_FOUND``）；当前激活人格
+            BusinessException: 人格不存在（``NOT_FOUND``）；当前主人格
                 禁止删除（``CONFLICT``，details 携带指引）。
         """
         row = await self._require_row(session, persona_id)
-        if row.is_active:
+        if row.is_primary:
             raise BusinessException(
                 code=ErrorCode.CONFLICT,
-                message="不能删除当前激活人格，请先停用激活（deactivate）再删除",
+                message="不能删除当前主人格，请先将另一个人格设为主人格（set-primary）再删除",
                 details={
                     "persona_id": persona_id,
-                    "fix": "先调用 deactivate（POST /api/v1/personas/{id}/deactivate）",
+                    "fix": "先调用 set-primary（POST /api/v1/personas/{id}/set-primary）",
                 },
             )
         await session.execute(
@@ -494,47 +514,98 @@ class PersonaService:
         )
 
     # ------------------------------------------------------------------
-    # 单激活切换（事务性）
+    # 主人格切换（事务性）+ 可寻址集
     # ------------------------------------------------------------------
 
-    async def activate(self, session: AsyncSession, persona_id: int) -> PersonaRecordDTO:
-        """激活人格（**事务性单激活切换**——激活 B 必然去激活 A）。
+    async def set_primary(self, session: AsyncSession, persona_id: int) -> PersonaRecordDTO:
+        """设为主人格（**事务性切换**——设 B 为主必然解除 A）。
 
-        单事务内「全表清激活位 → 激活目标」：任一步失败整体回滚，至多
-        一个激活人格的不变式由事务原子性保证。目标须 ``status=active``
-        （停用人格激活被拒）；重复激活当前激活人格为幂等 no-op。
+        单事务内「全表清主人格标记 → 目标取标记」：任一步失败整体回滚。
+        **至多一个主人格的不变式由 DB 唯一键 ``uq_ff_personas_primary``
+        强制**（标记列唯一、NULL 共存——与策展记忆单 active 同模式）；
+        并发 set_primary 撞唯一键时回滚后重试一次（重读当前主人格走
+        解除-再占位分支），再冲突则映射 ``INTERNAL_ERROR``。目标须
+        ``status=active``（停用人格不可设为主人格）；重复设置当前主人格
+        为幂等 no-op。
 
         Args:
             session: 注入的异步 Session。
             persona_id: 人格主键。
 
         Returns:
-            激活后的记录 DTO。
+            设为主人格后的记录 DTO。
 
         Raises:
             BusinessException: 人格不存在（``NOT_FOUND``）；停用人格不可
-                激活（``CONFLICT``）。
+                设为主人格（``CONFLICT``）；重试后仍并发冲突
+                （``INTERNAL_ERROR``）。
+        """
+        try:
+            return await self._set_primary_once(session, persona_id)
+        except IntegrityError:
+            # 并发切换抢先占了主人格标记——回滚后重读状态重试（策展
+            # upsert 同模式的单次重试收敛）。
+            await _rollback_quietly(session)
+            logger.info("主人格并发切换冲突，回滚后重试: persona_id={}", persona_id)
+        try:
+            return await self._set_primary_once(session, persona_id)
+        except IntegrityError as exc:
+            await _rollback_quietly(session)
+            raise BusinessException(
+                code=ErrorCode.INTERNAL_ERROR,
+                message="主人格并发切换冲突（重试后仍冲突）",
+                details={"persona_id": persona_id},
+            ) from exc
+
+    async def _set_primary_once(
+        self, session: AsyncSession, persona_id: int
+    ) -> PersonaRecordDTO:
+        """单次主人格切换尝试（无重试——由 :meth:`set_primary` 编排并发收敛）。
+
+        语句序（确定性——腾位后占位）：守卫校验（存在 + status=active +
+        幂等短路）→ 全表清主人格标记（腾出唯一键位）→ 目标行取标记
+        （占位）→ 单事务提交。任一 flush 点至多一行持有 ``'primary'``。
+
+        Args:
+            session: 注入的异步 Session。
+            persona_id: 人格主键。
+
+        Returns:
+            设为主人格后的记录 DTO。
+
+        Raises:
+            BusinessException: 人格不存在（``NOT_FOUND``）；停用人格不可
+                设为主人格（``CONFLICT``）。
+            IntegrityError: 并发切换撞 ``uq_ff_personas_primary``（由上层
+                重试收敛）。
         """
         row = await self._require_row(session, persona_id)
         if row.status != PersonaStatus.ACTIVE.value:
             raise BusinessException(
                 code=ErrorCode.CONFLICT,
-                message="停用状态的人格不可激活，请先启用（status=active）",
+                message="停用状态的人格不可设为主人格，请先启用（status=active）",
                 details={"persona_id": persona_id, "status": row.status},
             )
-        # 单事务切换：全表清位 + 激活目标（commit 原子提交）
+        if row.is_primary_marker == PERSONA_PRIMARY_MARKER:
+            # 幂等：重复设置当前主人格为 no-op（不动 DB 状态）。
+            return PersonaRecordDTO.model_validate(row)
+        # 单事务切换：全表清标记 + 目标占位（commit 原子提交）。
         await session.execute(
-            update(PersonaRow).where(PersonaRow.is_active.is_(True)).values(is_active=False)
+            update(PersonaRow)
+            .where(PersonaRow.is_primary_marker.is_not(None))
+            .values(is_primary_marker=None)
         )
-        row.is_active = True
+        row.is_primary_marker = PERSONA_PRIMARY_MARKER
         await self._commit(session)
-        logger.info("人格已激活（单激活切换）: id={}", persona_id)
+        logger.info("人格已设为主人格（事务性切换）: id={}", persona_id)
         return PersonaRecordDTO.model_validate(row)
 
-    async def deactivate(self, session: AsyncSession, persona_id: int) -> PersonaRecordDTO:
-        """停用激活（清目标激活位；幂等——未激活人格停用为 no-op）。
+    async def disable(self, session: AsyncSession, persona_id: int) -> PersonaRecordDTO:
+        """停用人格（纯生命周期操作——status 切 disabled）。
 
-        停用后允许零激活人格（系统态）；重新激活经 :meth:`activate`。
+        **主人格守卫**：停用当前主人格直接 ``CONFLICT`` 拒绝（先经
+        :meth:`set_primary` 将另一个人格设为主人格——两步显式，与删除
+        守卫同模式；主人格须恒在位）。已停用人格重复停用为幂等 no-op。
 
         Args:
             session: 注入的异步 Session。
@@ -544,35 +615,89 @@ class PersonaService:
             停用后的记录 DTO。
 
         Raises:
-            BusinessException: 人格不存在（``NOT_FOUND``）。
+            BusinessException: 人格不存在（``NOT_FOUND``）；停用当前主人格
+                （``CONFLICT``，details 携带指引）。
         """
         row = await self._require_row(session, persona_id)
-        row.is_active = False
+        if row.is_primary:
+            raise BusinessException(
+                code=ErrorCode.CONFLICT,
+                message="不能停用当前主人格，请先将另一个人格设为主人格（set-primary）再停用",
+                details={
+                    "persona_id": persona_id,
+                    "fix": "先调用 set-primary（POST /api/v1/personas/{id}/set-primary）",
+                },
+            )
+        if row.status == PersonaStatus.DISABLED.value:
+            # 幂等：已停用人格重复停用为 no-op（不动 DB 状态）。
+            return PersonaRecordDTO.model_validate(row)
+        row.status = PersonaStatus.DISABLED.value
         await self._commit(session)
-        logger.info("人格激活位已停用: id={}", persona_id)
+        logger.info("人格已停用（生命周期下线）: id={}", persona_id)
         return PersonaRecordDTO.model_validate(row)
 
-    async def get_active_persona(self, session: AsyncSession) -> PersonaRecordDTO | None:
-        """读取当前唯一激活人格（无激活人格返回 None——系统态）。
+    async def get_primary_persona(self, session: AsyncSession) -> PersonaRecordDTO:
+        """读取当前主人格（无主人格 fail loud——清晰中文错误指引）。
+
+        消费面（chat 会话 / 值班 / 梦境 / 记忆面缺省目标）原将「无激活
+        人格」翻译为各自错误——统一由本方法承担语义 parity：无主人格
+        （全新库 / 从未设置）抛 ``NOT_FOUND``（清晰中文消息 + fix 指引）；
+        无人格可正常工作的消费面（语音 / 图像理解的未绑定形态）自行
+        捕获本错误归零。
 
         Args:
             session: 注入的异步 Session。
 
         Returns:
-            激活人格记录 DTO；零激活时为 None。
+            当前主人格记录 DTO。
+
+        Raises:
+            BusinessException: 当前无主人格（``NOT_FOUND``——fail loud）。
         """
         row = (
             (
                 await session.execute(
-                    select(PersonaRow).where(PersonaRow.is_active.is_(True)).limit(1)
+                    select(PersonaRow)
+                    .where(PersonaRow.is_primary_marker == PERSONA_PRIMARY_MARKER)
+                    .limit(1)
                 )
             )
             .scalars()
             .first()
         )
         if row is None:
-            return None
+            raise BusinessException(
+                code=ErrorCode.NOT_FOUND,
+                message="当前没有主人格，请先创建并启用一个人格，再将其设为主人格",
+                details={"fix": "POST /api/v1/personas/{id}/set-primary（设为主人格）"},
+            )
         return PersonaRecordDTO.model_validate(row)
+
+    async def list_addressable(self, session: AsyncSession) -> list[PersonaRecordDTO]:
+        """读取可寻址人格集（全部 enabled 人格——status=active）。
+
+        多激活可寻址模型的核心读取面：enabled 人格可同时被通道 / 心流 /
+        多会话按上下文寻址绑定（主人格仅是缺省解析目标，非唯一可用者）。
+        排序 id 升序（注册序——稳定确定性）。
+
+        Args:
+            session: 注入的异步 Session。
+
+        Returns:
+            可寻址人格记录列表（空列表 = 无 enabled 人格）。
+        """
+        rows = list(
+            (
+                await session.execute(
+                    select(PersonaRow)
+                    .where(PersonaRow.status == PersonaStatus.ACTIVE.value)
+                    .order_by(PersonaRow.id.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [PersonaRecordDTO.model_validate(row) for row in rows]
 
     # ------------------------------------------------------------------
     # 卡片面

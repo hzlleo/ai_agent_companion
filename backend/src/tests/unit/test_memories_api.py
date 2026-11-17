@@ -4,8 +4,8 @@
 全局 app 导入、无真实服务器）；DB 经共享会话级 SQLite fixture 外部安装
 到 engine holder。覆盖面：episodes（注入 / 列表过滤 / 读取 / 删除 /
 批量部分成功）/ curated（upsert supersede / history / untrusted 拒绝）/
-sessions（列表 / 详情 / 删除）/ 人格解析（缺省激活人格 / 显式
-persona_id / 无激活 404）/ 跨人格隔离 404；另设处理器直调契约面
+sessions（列表 / 详情 / 删除）/ 人格解析（缺省主人格 / 显式
+persona_id / 无主人格 404）/ 跨人格隔离 404；另设处理器直调契约面
 （handler 函数作为普通 async 可调用直接调用——逐端点锁定 ResultDTO
 包装契约）。
 """
@@ -48,13 +48,14 @@ from packages.harness.memory.dtos import (
 from packages.harness.memory.models import CuratedStatus
 from packages.harness.memory.service import ChatSessionService
 from packages.harness.persona.dtos import PersonaCreateDTO
+from packages.harness.persona.orm import PersonaRow
 from packages.harness.persona.service import PersonaService, bind_persona_context
 
 
 async def _create_persona(
     db_session: AsyncSession, name: str, *, active: bool = False
 ) -> int:
-    """经真实 PersonaService 创建人格（可选激活）。"""
+    """经真实 PersonaService 创建人格（可选启用人格）。"""
     service = PersonaService()
     created = await service.create(
         db_session,
@@ -97,10 +98,10 @@ async def client(memories_app: FastAPI) -> AsyncIterator[AsyncClient]:
 
 
 @pytest.fixture
-async def active_persona_id(client: AsyncClient, db_session: AsyncSession) -> AsyncIterator[int]:
-    """铺底一个激活人格（经 personas API 语义面；返回主键）。"""
-    persona_id = await _create_persona(db_session, "mem-active", active=True)
-    await PersonaService().activate(db_session, persona_id)
+async def primary_persona_id(client: AsyncClient, db_session: AsyncSession) -> AsyncIterator[int]:
+    """铺底一个主人格（经 personas API 语义面；返回主键）。"""
+    persona_id = await _create_persona(db_session, "mem-primary", active=True)
+    await PersonaService().set_primary(db_session, persona_id)
     yield persona_id
 
 
@@ -143,11 +144,11 @@ async def _create_episode(
 
 
 async def test_episode_inject_and_get(
-    client: AsyncClient, active_persona_id: int
+    client: AsyncClient, primary_persona_id: int
 ) -> None:
     """注入（provenance 缺省 owner）→ 读取：ResultDTO 形态 + 载荷判别回读。"""
     created = await _create_episode(client)
-    assert created["persona_id"] == str(active_persona_id)
+    assert created["persona_id"] == str(primary_persona_id)
     assert created["provenance"] == "owner"
     assert created["kind"] == "chat"
     assert created["content"]["user_content"] == "今天吃了小鱼干"
@@ -160,7 +161,7 @@ async def test_episode_inject_and_get(
 
 
 async def test_episode_list_filters_and_cursor(
-    client: AsyncClient, active_persona_id: int
+    client: AsyncClient, primary_persona_id: int
 ) -> None:
     """列表过滤面：kind / provenance / 时间范围 + 游标接续。"""
     await _create_episode(client, ts_ms=100)
@@ -196,7 +197,7 @@ async def test_episode_list_filters_and_cursor(
 
 
 async def test_episode_delete_and_batch_partial(
-    client: AsyncClient, active_persona_id: int
+    client: AsyncClient, primary_persona_id: int
 ) -> None:
     """删除 + 批量部分成功（缺失项 NOT_FAILED 形态）。"""
     keep = await _create_episode(client)
@@ -233,7 +234,7 @@ async def test_episode_delete_and_batch_partial(
     assert any("重复" in error["msg"] for error in duplicated_body["data"]["errors"])
 
 
-async def test_episode_bad_payload_400(client: AsyncClient, active_persona_id: int) -> None:
+async def test_episode_bad_payload_400(client: AsyncClient, primary_persona_id: int) -> None:
     """载荷与 kind 不匹配 / 非法 kind：请求校验失败 400（VALIDATION_ERROR）。"""
     response = await client.post(
         "/api/v1/memories/episodes",
@@ -254,7 +255,7 @@ async def test_episode_bad_payload_400(client: AsyncClient, active_persona_id: i
 
 
 async def test_curated_upsert_supersede_and_history(
-    client: AsyncClient, active_persona_id: int
+    client: AsyncClient, primary_persona_id: int
 ) -> None:
     """upsert supersede：二次 upsert 单 active + 历史链端点（版本升序）。"""
     first = await client.post(
@@ -295,7 +296,7 @@ async def test_curated_upsert_supersede_and_history(
 
 
 async def test_curated_untrusted_rejected(
-    client: AsyncClient, active_persona_id: int
+    client: AsyncClient, primary_persona_id: int
 ) -> None:
     """untrusted upsert：VALIDATION_ERROR（策展层准入不变式）。"""
     response = await client.post(
@@ -313,11 +314,11 @@ async def test_curated_untrusted_rejected(
 
 
 async def test_sessions_endpoints(
-    client: AsyncClient, active_persona_id: int, db_session: AsyncSession
+    client: AsyncClient, primary_persona_id: int, db_session: AsyncSession
 ) -> None:
     """会话列表 / 详情 / 删除（消息同事务清理）。"""
     session_service = ChatSessionService()
-    async with bind_persona_context(active_persona_id):
+    async with bind_persona_context(primary_persona_id):
         summary = await session_service.create_session(db_session, title="API 会话")
         await session_service.append_message(
             db_session,
@@ -349,14 +350,14 @@ async def test_sessions_endpoints(
 
 
 async def test_persona_resolution_and_isolation(
-    client: AsyncClient, active_persona_id: int, db_session: AsyncSession
+    client: AsyncClient, primary_persona_id: int, db_session: AsyncSession
 ) -> None:
-    """缺省激活人格 + 显式 persona_id + 跨人格隔离（404）+ 无激活 404。"""
+    """缺省主人格 + 显式 persona_id + 跨人格隔离（404）+ 无主人格 404。"""
     other_id = await _create_persona(db_session, "mem-other")
 
-    # 缺省：激活人格作用域
+    # 缺省：主人格作用域
     mine = await _create_episode(client)
-    assert mine["persona_id"] == str(active_persona_id)
+    assert mine["persona_id"] == str(primary_persona_id)
 
     # 显式 persona_id：他人格作用域注入
     theirs = await client.post(
@@ -379,14 +380,18 @@ async def test_persona_resolution_and_isolation(
     )
     assert bogus.status_code == 404
 
-    # 无激活人格 + 未显式指定：404 fail loud
-    await PersonaService().deactivate(db_session, active_persona_id)
-    no_active = await client.get("/api/v1/memories/episodes")
-    assert no_active.status_code == 404
-    assert no_active.json()["code"] == "NOT_FOUND"
+    # 无主人格 + 未显式指定：404 fail loud（直清标记模拟无主人格形态——
+    # 服务面无「解除主人格」操作，主人格须恒在位）
+    row = await db_session.get(PersonaRow, primary_persona_id)
+    assert row is not None
+    row.is_primary_marker = None
+    await db_session.commit()
+    no_primary = await client.get("/api/v1/memories/episodes")
+    assert no_primary.status_code == 404
+    assert no_primary.json()["code"] == "NOT_FOUND"
 
 
-async def test_invalid_query_params_400(client: AsyncClient, active_persona_id: int) -> None:
+async def test_invalid_query_params_400(client: AsyncClient, primary_persona_id: int) -> None:
     """非法查询参数（limit 越界 / kind 非法值）→ 400。"""
     response = await client.get("/api/v1/memories/episodes", params={"limit": 0})
     assert response.status_code == 400
@@ -401,7 +406,7 @@ async def test_invalid_query_params_400(client: AsyncClient, active_persona_id: 
 
 
 async def test_direct_handlers_contract(
-    db_session: AsyncSession, active_persona_id: int
+    db_session: AsyncSession, primary_persona_id: int
 ) -> None:
     """直调面：episodes / curated / sessions 全端点 ResultDTO 契约。"""
     created = await create_episode(
@@ -410,7 +415,7 @@ async def test_direct_handlers_contract(
     assert created.success is True
     assert created.message == "情景事件已记录"
     assert created.data is not None
-    assert created.data.persona_id == str(active_persona_id)
+    assert created.data.persona_id == str(primary_persona_id)
 
     listed = await list_episodes(
         kind=None, provenance=None, start_ms=None, end_ms=None,
@@ -446,7 +451,7 @@ async def test_direct_handlers_contract(
     assert len(history.data) == 1
 
     session_service = ChatSessionService()
-    async with bind_persona_context(active_persona_id):
+    async with bind_persona_context(primary_persona_id):
         summary = await session_service.create_session(db_session, title="直调会话")
     sessions = await list_sessions(cursor=None, limit=20, persona_id=None, db=db_session)
     assert sessions.success is True

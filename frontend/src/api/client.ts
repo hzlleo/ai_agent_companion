@@ -6,10 +6,15 @@
  *   ``http://127.0.0.1:8000``），实际请求打向 ``${base}/api/v1``；
  * - 全部响应为 ``ResultDTO`` 封装——成功时解包 ``data`` 返回，失败
  *   （HTTP 4xx/5xx 或 ``success=false``）统一抛 ``ApiError``（携带
- *   后端错误码与面向用户的中文提示），调用方直接 toast 即可。
+ *   后端错误码与面向用户的中文提示），调用方直接 toast 即可；
+ * - 管理面鉴权（owner-token）：请求拦截器从 token 存取模块
+ *   （``@/api/auth``）读取已保存 token 并以 ``Authorization: Bearer``
+ *   头携带；任意请求收到 HTTP 401 时广播鉴权需求事件（App 壳据此
+ *   挂载令牌门——事件驱动，见 App.tsx）。
  */
 
 import { AxiosError, create, type AxiosRequestConfig } from 'axios'
+import { getAdminToken, notifyAuthRequired } from '@/api/auth'
 import type { ResultDTO } from '@/types/common'
 
 /** 后端 API 基础地址（不含 /api/v1 前缀）。 */
@@ -25,6 +30,16 @@ export const api = create({
   headers: {
     'Content-Type': 'application/json',
   },
+})
+
+// 管理面鉴权：有已保存 token 时逐请求携带 Bearer 头（无 token 不带头
+// ——后端鉴权关闭形态照常工作）。
+api.interceptors.request.use((config) => {
+  const token = getAdminToken()
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
 })
 
 /** ApiError 构造选项。 */
@@ -131,6 +146,12 @@ export async function request<T>(config: AxiosRequestConfig): Promise<T> {
     }
     return payload.data as T
   } catch (error) {
-    throw toApiError(error)
+    const apiError = toApiError(error)
+    // 401 广播：后端 owner-token 校验失败（缺失 / 不匹配）时通知 App 壳
+    // 挂载令牌门（首个 401 即承接）；错误仍原样抛给调用方（错误面照常）。
+    if (apiError.status === 401) {
+      notifyAuthRequired()
+    }
+    throw apiError
   }
 }

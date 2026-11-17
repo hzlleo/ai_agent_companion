@@ -24,9 +24,13 @@ from packages.harness.config.models import (
     SeekDBSettings,
     ServerConfig,
     Settings,
+    ToolsBrowserSidecarSettings,
     ToolsSandboxSettings,
     VoiceSettings,
+    WebSearchSettings,
 )
+from packages.harness.intent.intent_models import IntentSettings
+from packages.harness.rhythm.rhythm_models import RhythmSettings
 
 __all__ = ["build_isolated_settings"]
 
@@ -44,7 +48,11 @@ def build_isolated_settings(
     dream_schedule: DreamScheduleSettings | None = None,
     scheduler: SchedulerSettings | None = None,
     tools_sandbox: ToolsSandboxSettings | None = None,
+    tools_browser_sidecar: ToolsBrowserSidecarSettings | None = None,
     voice: VoiceSettings | None = None,
+    search: WebSearchSettings | None = None,
+    rhythm: RhythmSettings | None = None,
+    intent: IntentSettings | None = None,
 ) -> Settings:
     """构造隔离 Settings 实例（测试 / 工具专用）。
 
@@ -67,8 +75,16 @@ def build_isolated_settings(
         scheduler: 中央调度器配置（None = 代码默认——tick 1.0s）。
         tools_sandbox: 工具沙盒配置（None = 代码默认——关闭形态；
             沙盒 lifespan 测试注入 enabled=True 形态）。
+        tools_browser_sidecar: 浏览器 sidecar 配置（None = 代码默认——
+            关闭形态；sidecar lifespan 测试注入 enabled=True 形态）。
         voice: 语音域配置（None = 代码默认——TTS / ASR 关闭形态；
             voice 测试注入 enabled=True 形态）。
+        search: 联网搜索运营配置（None = 代码默认——关闭形态；
+            search lifespan 测试注入 enabled=True 形态）。
+        rhythm: 拟人节律配置（None = 代码默认——关闭形态；rhythm /
+            通道装配测试注入 enabled=True 形态）。
+        intent: 意图快径配置（None = 代码默认——开启形态；关闭面
+            测试注入 enabled=False 形态）。
 
     Returns:
         隔离 :class:`Settings` 实例（与全局单例无关联）。
@@ -85,5 +101,11 @@ def build_isolated_settings(
         dream_schedule=dream_schedule if dream_schedule is not None else DreamScheduleSettings(),
         scheduler=scheduler if scheduler is not None else SchedulerSettings(),
         tools_sandbox=tools_sandbox if tools_sandbox is not None else ToolsSandboxSettings(),
+        tools_browser_sidecar=(
+            tools_browser_sidecar if tools_browser_sidecar is not None else ToolsBrowserSidecarSettings()
+        ),
         voice=voice if voice is not None else VoiceSettings(),
+        search=search if search is not None else WebSearchSettings(),
+        rhythm=rhythm if rhythm is not None else RhythmSettings(),
+        intent=intent if intent is not None else IntentSettings(),
     )

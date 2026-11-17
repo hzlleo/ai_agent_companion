@@ -1,5 +1,5 @@
 /**
- * personas React Query hooks：13 个端点的数据面封装。
+ * personas React Query hooks：14 个端点的数据面封装（多激活可寻址模型）。
  *
  * 约定（本工程）：
  * - 列表经 useInfiniteQuery 消费游标分页（pageParam = next_cursor）；
@@ -10,17 +10,18 @@
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  activatePersona,
   batchDeletePersonas,
   copyPersona,
   createPersona,
-  deactivatePersona,
   deletePersona,
+  disablePersona,
   getPersona,
   getPersonaCard,
   getPersonaStates,
+  getPrimaryPersona,
   listPersonas,
   replacePersonaCard,
+  setPrimaryPersona,
   updatePersona,
   upsertPersonaState,
 } from '@/api/personas'
@@ -93,7 +94,7 @@ export function useUpdatePersona() {
   })
 }
 
-/** 删除人格（激活守卫 409 由页面 toast 呈现）。 */
+/** 删除人格（主人格守卫 409 由页面 toast 呈现）。 */
 export function useDeletePersona() {
   const invalidate = useInvalidatePersonas()
   return useMutation({
@@ -112,21 +113,29 @@ export function useCopyPersona() {
   })
 }
 
-/** 激活人格（事务性单激活切换）。 */
-export function useActivatePersona() {
+/** 设为主人格（事务性切换——设 B 为主必然解除 A）。 */
+export function useSetPrimaryPersona() {
   const invalidate = useInvalidatePersonas()
   return useMutation({
-    mutationFn: (id: number) => activatePersona(id),
+    mutationFn: (id: number) => setPrimaryPersona(id),
     onSuccess: invalidate,
   })
 }
 
-/** 停用激活（允许零激活）。 */
-export function useDeactivatePersona() {
+/** 停用人格（生命周期操作——主人格 409 由页面 toast 呈现）。 */
+export function useDisablePersona() {
   const invalidate = useInvalidatePersonas()
   return useMutation({
-    mutationFn: (id: number) => deactivatePersona(id),
+    mutationFn: (id: number) => disablePersona(id),
     onSuccess: invalidate,
+  })
+}
+
+/** 当前主人格（无主人格 404——消费面按需捕获）。 */
+export function usePrimaryPersona() {
+  return useQuery({
+    queryKey: [...PERSONAS_QUERY_KEY, 'primary'],
+    queryFn: () => getPrimaryPersona(),
   })
 }
 

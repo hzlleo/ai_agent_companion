@@ -1,15 +1,19 @@
 # config — 配置域
 
-`backend/src/packages/harness/config/` 承载全工程配置：env 面 Settings（server / database / log / pools / llm 等十五分节）、config.yaml 结构化面（模型注册表 / 角色绑定 / 多模态回退链）、extensions_config.json 工具清单、运行时加载器（含热重载地基）、模型解析器、wire 构建器与交互式配置向导。
+`backend/src/packages/harness/config/` 承载全工程配置：env 面 Settings（server / database / log / pools / llm 等十六分节）、config.yaml 结构化面（模型注册表 / 角色绑定 / 多模态回退链 / 搜索 provider 注册表）、extensions_config.json 工具清单、运行时加载器（含热重载地基）、配置节管理基座（原子持久化 / 热重建 / 回滚共享机械）、模型解析器、wire 构建器与交互式配置向导。
 
 ## 模块一览
 
 | 模块 | 职责 | 关键导出 |
 |---|---|---|
-| `models.py` | 配置树 Model Classes（env 面五分节 + Settings 聚合器 + LlmConfig / MultimodalFallbackConfig / ExtensionsConfig） | `Settings` / `settings` / `LlmConfig` |
+| `models.py` | 配置树 Model Classes（env 面五分节 + Settings 聚合器 + LlmConfig / MultimodalFallbackConfig / SearchConfig / ExtensionsConfig） | `Settings` / `settings` / `LlmConfig` / `SearchConfig` |
 | `settings.py` | 全局单例访问面 + 隔离构造助手 | `settings` / `build_isolated_settings` |
 | `loader.py` | config.yaml + extensions_config.json 运行时加载（分层加载 + 重载回调） | `load_all_config` / `register_reload_callback` |
-| `model_entry.py` | 模型注册表条目 + 角色枚举 + 密钥解析 | `LlmModelEntry` / `ModelRole` / `parse_model_entry` |
+| `section_admin.py` | 配置节管理基座（写锁串行化 / 原子持久化 + 备份轮换 / 热重建 + 失败回滚——节无关共享机械） | `ConfigSectionAdmin` / `DEFAULT_BACKUP_KEEP` |
+| `registry_admin.py` | LLM 注册表管理服务（基座的 llm 段子类：条目 CRUD + 角色绑定守卫 + 脱敏读取） | `RegistryAdminService` / `render_config_yaml_text` |
+| `registry_admin_dtos.py` | 注册表管理传输契约（创建 / 更新 / 脱敏 / 状态 / 角色绑定行 DTO） | `ModelEntryCreateDTO` / `RegistryStateDTO` |
+| `search_registry.py` | 搜索 provider 注册表管理服务（基座的 search 段子类：provider CRUD + 唯一 provider 守卫 + 脱敏 + 运行时真源三件套） | `SearchRegistryAdminService` / `runtime_search_config` / `load_search_config` |
+| `model_entry.py` | 模型注册表条目 + 角色枚举 + 密钥解析 | `LlmModelEntry` / `ModelRole` / `parse_model_entry` / `resolve_api_key` |
 | `model_resolver.py` | 角色 → 条目解析器（热重建安全） | `ModelResolver` / `get_model_resolver` |
 | `llm_wire.py` | 条目 → 网关 wire 配置（密钥解析收口） | `build_llm_wire_config` |
 | `multimodal_fallback_loader.py` | look_at 非多模态时的回退链裁决 | `resolve_multimodal_chain` |
@@ -50,6 +54,7 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 | ToolsSandboxSettings | `TOOLS_SANDBOX_` | `ENABLED`(false) · `BASE_URL`(http://127.0.0.1:8765) · `TOKEN_ENV`(SANDBOX_TOKEN) · `REQUEST_TIMEOUT_SECONDS`(15.0) |
 | VoiceSettings.tts（TtsSettings） | `VOICE_TTS_` | `ENABLED`(false) · `BASE_URL`(http://127.0.0.1:9880) · `MODEL_ENTRY`(cosyvoice3) · `REQUEST_TIMEOUT_SECONDS`(30.0) · `DEFAULT_SPEAKER`(中文女) · `DEFAULT_SPEED`(1.0) |
 | VoiceSettings.asr（AsrSettings） | `VOICE_ASR_` | `ENABLED`(false) · `BASE_URL`(http://127.0.0.1:8082) · `MODEL_ENTRY`(qwen3-asr-0.6b) · `REQUEST_TIMEOUT_SECONDS`(60.0) · `LANGUAGE`(null) · `MAX_UPLOAD_BYTES`(26214400) |
+| WebSearchSettings（`Settings.search`） | `SEARCH_` | `ENABLED`(false) · `TOOL_ENABLED`(false) · `DAILY_BUDGET_PER_PERSONA`(50) · `DAILY_BUDGET_GLOBAL`(200) · `COOLDOWN_SECONDS`(60) |
 | Settings | （无前缀） | `ENV`(local) |
 
 分节与 `.env.example` 逐分节对齐（生成器 `scripts/generate_examples_env.py` 的 `_ENV_SECTIONS` 登记表为序——键面以 `.env.example` 为真源，本表为语义说明；敏感字段在 example 中恒留空）。各分节语义详见所属域文档（channels / duty / tools-sandbox / voice）。
@@ -140,6 +145,117 @@ look_at 角色绑定的条目 multimodal=true？
                         multimodal 条目)
 ```
 
+## 配置节管理基座（section_admin.py — ConfigSectionAdmin）
+
+config.yaml 结构化配置节**写路径的共享抽象基建**：从 LLM 注册表管理面抽取的节无关机械，全部配置节管理面（现有消费者：`llm` 段注册表（registry_admin）、`search` 段搜索 provider 注册表（search_registry））复用同一实现，不再各自复制。
+
+### 基座提供的机械
+
+| 机械 | 语义 |
+|---|---|
+| 写串行化 | `asyncio.Lock` 串行化全部突变——单事件循环内「校验→持久化→重建」为原子窗口，杜绝并发写相互覆盖丢失条目 |
+| 原子持久化 | 写前整文件备份 `.bak-<epoch-ms>` → 临时文件写入 + flush + fsync → `os.replace` 原子换名 → 备份轮换（保留最新 `backup_keep` 份）；任一步失败清理临时文件，原文件不变（崩溃窗口内 config.yaml 恒为完整旧版或完整新版） |
+| 重建 + 回滚编排 | 持久化成功后经重建钩子重读磁盘（证明落盘可加载并整体换血运行时）；重建失败 → 经设置钩子把写前快照恢复到运行时（仅回滚内存——磁盘保留新内容与 `.bak` 写前备份供人工恢复） |
+| 阻塞 I/O 下沉 | 文件读写 / 备份 / 换名全部经 `run_blocking_ops`（core 共享线程池） |
+
+### 缝契约（子类实现；`SectionConfigT` 绑定 BaseModel——零裸 dict 公共面）
+
+| 缝 | 语义 | LLM 子类实现（RegistryAdminService） |
+|---|---|---|
+| `_section_key` | 持有的 config.yaml 顶层键 | `"llm"` |
+| `_current_section` | 读内存运行时当前节（get——快照 / 读改写基底） | `loader.runtime_llm_config` |
+| `_apply_section_to_runtime` | 节整体应用到运行时（set——回滚恢复路径） | `loader.apply_llm_config_to_runtime` |
+| `_render_section` | 节 Model Class → yaml 段 dict（无损回读序列化） | `_llm_section`（registry_admin） |
+| `_validate_section` | 节级校验钩子（持久化前最后闸门，零 I/O 副作用） | 空体（域决策：条目级校验在突变方法锁窗口内先行；重名 / 悬挂绑定在解析器层告警容错） |
+| `_rebuild_from_disk` | 热重建钩子（重读磁盘整体换血运行时） | `loader.load_config_yaml(path=...)` |
+| `_resolve_yaml_path` | 默认持久化目标解析 | `loader.get_loaded_config_yaml_path()` |
+| `_backup_suffix`（可覆写默认） | 备份文件名后缀（默认 `.bak`；覆写须保持「字典序 == epoch-ms 时间序」轮换契约） | 默认 `.bak` |
+
+### 接入形态（两种——按突变语义选择）
+
+- **简单节（整体替换语义）**：直接调 `await admin.mutate_section(new_section, yaml_path=None)`——锁内「校验→快照→持久化→热重建」；调用方给出最终节内容。
+- **读改写节（条目 CRUD）**：子类自持突变方法（参照 `RegistryAdminService.create_entry`）：`async with self._write_lock` 窗口内「读当前节 → 操作特定校验（唯一 409 / 存在 404 / 守卫 409）→ 构造新节」后调用继承的 `_persist_and_rebuild` 尾段——**构造发生在锁内**，杜绝并发读改写丢失条目。
+
+### 链路顺序（写路径单一真相）
+
+```
+校验（节级钩子 _validate_section；条目级校验在子类突变方法锁窗口内先行）
+    ↓ 快照当前节（model_copy(deep=True)——回滚源）
+    ↓ 原子持久化（写前备份 .bak-<epoch-ms> → 临时文件 + fsync
+    │             → os.replace 原子换名 → 备份轮换保留 backup_keep 份）
+    ↓ 热重建（_rebuild_from_disk 重读磁盘——证明落盘内容可加载，
+    │         并整体换血运行时）
+    ↓ 重建失败 → _apply_section_to_runtime(写前快照) 回滚内存
+                + BusinessException(CONFIG_INVALID 422)
+                （磁盘保留新内容与 .bak 写前备份——下次成功写自愈覆盖）
+```
+
+### 未来配置节接入
+
+新配置节管理面 = 定义节 Model Class（列表节 + 绑定式语义）→ 子类化 `ConfigSectionAdmin[节类型]` 实现七个缝 → 条目 CRUD 突变方法走读改写形态（锁内校验 + 构造）。机械（锁 / 备份 / 轮换 / 重建编排 / 回滚）零复制——与 LLM 注册表行为同源。
+
+### 搜索 provider 注册表子类（search_registry.py — R2a-4 已接入）
+
+基座的第二个消费者，缝实现：
+
+| 缝 | 搜索子类实现（SearchRegistryAdminService） |
+|---|---|
+| `_section_key` | `"search"` |
+| `_current_section` | 本模块 `runtime_search_config`（运行时真源——loader 语义镜像，**消费方经模块属性访问**，加载 / CRUD 换血后自动生效） |
+| `_apply_section_to_runtime` | `apply_search_config_to_runtime`（回滚路径） |
+| `_render_section` | `_search_section`（providers + web_search 全量——子块按当前生效值落盘） |
+| `_validate_section` | 条目名唯一（节级兜底——跨操作不变式） |
+| `_rebuild_from_disk` | `_rebuild_runtime_from_yaml`（重读磁盘 search 段整体换血） |
+| `_resolve_yaml_path` | 搜索域加载路径（`load_search_config` 记录）回落 loader 路径——同一 config.yaml |
+
+条目级守卫（锁窗口内先行）：唯一名 409 / 存在性 404 / **唯一 provider 守卫**
+（`web_search.enabled=true` 时删除最后一个条目 → 409 + 两步指引——保住
+「启用即至少一个条目」的启动校验不变式；能力关闭时允许清空）。脱敏读取：
+条目只回 `api_key_env` 变量名 + failover 链位次（`chain_position`）。
+
+### WebSearchSettings（搜索运营 env 面——单类双源）
+
+`WebSearchSettings`（env_prefix=`SEARCH_`）承载联网搜索运营开关 / 预算 / 冷却，
+**同时是 config.yaml `search.web_search` 子块的类型**（分层合并遵循本文件顶部
+优先级链——yaml 子块键覆盖 env，未提供的键回落 env / 代码默认；provider CRUD
+持久化时把当前生效值整体落盘——yaml 最高层，写入即固化）。要点：
+
+- `ENABLED=false`（默认）——零配置开发可用、测试 hermetic；`ENABLED=true` 且
+  `search` 段无 provider 条目时启动期 fail fast；
+- `TOOL_ENABLED` 与 `ENABLED` 为**两级开关**——`web_search` 工具仅在两者同真
+  时注册（能力总闸 + 工具面曝光闸）；
+- 密钥间接键（`SEARCH_BOCHA_API_KEY` / `SEARCH_ZHIPU_API_KEY`——provider 条目
+  `api_key_env` 默认指向的变量）不在 Settings env 面内（yaml 注册表间接引用），
+  按敏感键守卫在 `.env.example` 留空。
+
+全部字段语义 / 预算口径 / failover 链详见 [search.md](search.md)。
+
+## config.yaml — search 段（搜索 provider 注册表）
+
+```yaml
+search:
+  providers:            # 列表序 = failover 尝试序（前者为主、后者兜底）
+    - name: "bocha-main"
+      kind: "bocha"     # bocha | zhipu
+      api_key_env: "SEARCH_BOCHA_API_KEY"   # 密钥本值永不落 yaml
+      max_results: 8
+      timeout_seconds: 15
+    - name: "zhipu-fallback"
+      kind: "zhipu"
+      model: "search_std"                    # zhipu 引擎码（缺省 search_std）
+      api_key_env: "SEARCH_ZHIPU_API_KEY"
+  web_search:           # 运营子块（WebSearchSettings——yaml 键优先于 SEARCH_* env）
+    enabled: true
+    tool_enabled: true
+    daily_budget_per_persona: 50
+    daily_budget_global: 200
+    cooldown_seconds: 60
+```
+
+`search` 段由 `search_registry.load_search_config` 自行解析（loader 仅解析
+`llm` 段——其「未知顶层键」告警对本段无害，键值原样保留）；条目字段表 /
+wire 契约 / 管理面详见 [search.md](search.md)。
+
 ## llm_wire — 网关下发契约（llm 网关消费）
 
 `build_llm_wire_config(entry, fallback_api_key=None)` 构建 `LlmClientConfigModel`（provider / base_url / api_key / model / concurrency / multimodal）。密钥解析收口于此：条目 `api_key_env` → 环境变量明文；声明了变量但未设置且给兜底 → 兜底明文；免鉴权条目（`api_key_env=""`）恒空串（不注入兜底）。`api_key` 字段 repr 隐藏（不落日志）。
@@ -196,7 +312,8 @@ cd backend && pixi run gen-examples
 
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_config_*.py`（settings / loader / model_entry / model_resolver / llm_wire / multimodal_fallback / wizard / examples_generation，8 份）；
+- 测试位置：`src/tests/unit/test_config_*.py`（settings / loader / section_admin / model_entry / model_resolver / llm_wire / multimodal_fallback / wizard / examples_generation，9 份）；LLM 注册表管理面的端到端契约在 `src/tests/unit/test_models_api.py`（见 [llm.md](llm.md) 注册表管理一节）；
+- `test_config_section_admin.py` 锁基座缝契约（玩具节替身）：持久化 round-trip（未知顶层键保留 + 备份字节一致）/ 校验钩子零 I/O 副作用 / 原子写失败不留临时文件 / 重建失败内存回滚 / 备份轮换上限 / 写锁读改写串行化 / 不可解析既有文件拒绝覆写；
 - 全部 `async def test_`；零真实配置（loader 测试经 `tmp_path` config_dir 注入；Settings 经 `build_isolated_settings` 显式值构造；向导经注入式应答）；
-- 覆盖率（`pixi run tests-unit` 实测）：harness/config 组 **98.1%**；
+- 覆盖率（`pixi run coverage-gates` 实测）：harness/config 组 **96.4%**（section_admin 基座 + registry_admin 子类计入本组）；
 - 运行：`cd backend && pixi run tests-unit` / `pixi run gen-examples` / `pixi run setup --help`。

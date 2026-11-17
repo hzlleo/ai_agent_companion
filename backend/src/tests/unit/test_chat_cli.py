@@ -3,7 +3,7 @@
 测试策略：真实启动序列（隔离 settings + tmp SQLite + 真实 PoolManager /
 PersonaService）+ 假网关与序列假输入 / 记录假输出（never real stdin）。
 覆盖面：横幅 + 开场白 / 流式回复直写 / /history / /clear / /help /
-/quit 与 EOF / 无激活人格指引路径（退出码 1）/ 网关业务异常不崩 REPL /
+/quit 与 EOF / 无主人格指引路径（退出码 1）/ 网关业务异常不崩 REPL /
 main 入口（argparse + SystemExit 透传）。
 """
 
@@ -100,13 +100,13 @@ class RecordingOutput:
 
 
 async def _seed_active_persona(db_path: Path) -> int:
-    """在 tmp SQLite 文件中预置一个激活人格（CLI 启动前铺底）。
+    """在 tmp SQLite 文件中预置一个主人格（CLI 启动前铺底）。
 
     Args:
         db_path: SQLite 库文件路径。
 
     Returns:
-        已激活人格的主键。
+        已设为主人格的人格主键。
     """
     engine: AsyncEngine = create_async_engine(
         f"sqlite+aiosqlite:///{db_path}",
@@ -134,7 +134,7 @@ async def _seed_active_persona(db_path: Path) -> int:
                 }
             ),
         )
-        await service.activate(session, created.id)
+        await service.set_primary(session, created.id)
         persona_id = created.id
     await engine.dispose()
     return persona_id
@@ -223,8 +223,8 @@ async def test_cli_empty_line_skipped(tmp_path: Path) -> None:
     assert "已连接人格" in recorder.text
 
 
-async def test_cli_no_active_persona_hint_path() -> None:
-    """无激活人格：中文指引（创建 / 启用 / 激活三步）+ 退出码 1 + LIFO 收尾。"""
+async def test_cli_no_primary_persona_hint_path() -> None:
+    """无主人格：中文指引（创建 / 启用 / 设主三步）+ 退出码 1 + LIFO 收尾。"""
     gateway = FakeGateway()
     recorder = RecordingOutput()
 
@@ -236,9 +236,9 @@ async def test_cli_no_active_persona_hint_path() -> None:
     )
 
     assert exit_code == 1
-    assert "未找到激活人格" in recorder.text
+    assert "未找到主人格" in recorder.text
     assert "/api/v1/personas" in recorder.text
-    assert "activate" in recorder.text
+    assert "set-primary" in recorder.text
     assert gateway.calls == []
     manager = get_pool_manager()
     assert manager is None or not manager.started
@@ -291,13 +291,13 @@ async def test_cli_seed_persona_rows_visible(tmp_path: Path) -> None:
         count = (await conn.execute(text("SELECT COUNT(*) FROM ff_personas"))).scalar_one()
         active = (
             await conn.execute(
-                text("SELECT is_active FROM ff_personas WHERE id = :pid"),
+                text("SELECT is_primary_marker FROM ff_personas WHERE id = :pid"),
                 {"pid": persona_id},
             )
         ).scalar_one()
     await engine.dispose()
     assert count == 1
-    assert active == 1
+    assert active == "primary"
 
 
 async def test_cli_main_entry_exit_code_passthrough(

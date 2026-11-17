@@ -22,6 +22,30 @@ Tailwind CSS 4 + React Query 5 + React Router 7。
   只见 api_key_env 环境变量名）+ 角色绑定汇总 + 创建 / 编辑（roles 清空解绑）/
   删除（绑定守卫 409 → 两步指引）。
 
+## 认证（管理面 owner-token）
+
+后端可启用 owner-token 鉴权（R2 起——运维在部署侧设置 `ADMIN_AUTH_TOKEN`
+环境变量，非空 = 启用；变量名可经 `SERVER_ADMIN_TOKEN_ENV` 调整，完整契约
+见 `docs/backend/README.md` 认证一节）。前端形态：
+
+- **token 携带**：`src/api/auth.ts` 存取 localStorage（键 `aac_admin_token`
+  ——本值只存浏览器本地，不入 URL / 日志）；`src/api/client.ts` 请求拦截器
+  逐请求以 `Authorization: Bearer <token>` 头携带（无 token 不带头——后端
+  鉴权关闭形态照常工作）；
+- **401 令牌门（事件驱动）**：服务端是否要求 token 无法在挂载期得知
+  （`/api/v1/health` 是零依赖存活面，不携带鉴权状态）——首个请求收到
+  HTTP 401 时 client 广播鉴权需求事件，`App.tsx` 据此以
+  `AdminTokenScreen`（中文令牌输入页）替换整个应用壳；
+- **保存即整页重载（锁定决策）**：门内「保存并进入」写入 localStorage 后
+  `window.location.reload()`——token 经请求拦截器逐请求读取，重载是最小
+  可靠路径（免手工重放在途查询 / 刷新 React Query 缓存），门自身无路由态；
+- **注销**：侧栏底部「注销」清除 localStorage token 并经同一事件面回到
+  令牌门（与 401 门共用承接路径）。
+
+测试口径：msw 默认 handlers 保持无鉴权形态（不校验 Authorization 头）；
+鉴权相关用例（401 → 门、token 头携带、保存 / 注销）在各自测试内经
+`server.use` 覆写与 localStorage 直写驱动。
+
 ## 目录结构
 
 ```
@@ -34,7 +58,8 @@ frontend/
 ├── tsconfig.json          # TypeScript strict（noUncheckedIndexedAccess 等）
 └── src/
     ├── api/               # 类型化 API 客户端
-    │   ├── client.ts      #   axios 实例 + ResultDTO 解包 + ApiError 归一
+    │   ├── client.ts      #   axios 实例 + ResultDTO 解包 + ApiError 归一 + owner-token Bearer 携带 / 401 广播
+    │   ├── auth.ts        #   owner token 存取（localStorage）+ 鉴权需求事件（401 → 令牌门）
     │   ├── personas.ts    #   personas 13 端点 typed 封装
     │   ├── memories.ts    #   memories 16 端点 typed 封装
     │   ├── usage.ts       #   usage 3 端点 typed 封装
