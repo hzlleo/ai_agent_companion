@@ -18,6 +18,33 @@
            退出（在途长轮询最多再等一个窗口；app 停机路径 bounded wait
            超时后 cancel 兜底）。
 
+入站 v2 映射（协议 v2——wire 就绪，消费者 R2d/R2e 到场）：
+
+    - 文本与媒体互斥（Bot API 语义）：媒体消息以 **caption 兜底为文本**
+      （用户随媒体说的话）；纯媒体无 caption 维持 v1 跳过语义（不进
+      路由器——offset 照常推进）；纯文本消息 v1 形态零变更；
+    - 媒体字段（photo / voice / audio / document / sticker）提取为
+      ``ChannelMessageAttachment``——**下载免取**（download-free v2）：
+      附件以 ``path="tg-file://{file_id}"`` 伪方案承载平台文件引用
+      （真实媒体拉取需 getFile + 文件 URL 二段流程——deferred 到 R2d
+      贴纸 / 语音工作）；caption 挂首附件（供未来消费者渲染附件 +
+      说明）；photo 取最大尺寸（宽 × 高）；voice / audio / document
+      的 MIME 进 ``media_type``（photo / sticker 无 MIME 线索 → None）；
+    - 提取顺序 photo → voice → audio → document → sticker（真实 Bot API
+      消息至多携带一种媒体——固定顺序仅为确定性兜底）。
+
+出站 v2 投递（先文本后附件——逐附件聚合，不抛）：
+
+    - 文本段：v1 调用形态零变更（``silent=True`` 时增传
+      ``disable_notification``——False 缺省不传参，v1 调用形状保持）；
+    - 附件逐个投递（kind → Bot API 方法映射见 ``_tg_media_method_for``）：
+      url 源 → JSON 引用形态；base64 源 → 解码字节 multipart 上传；
+      path 源仅接受 ``tg-file://`` 伪方案（file_id 重发——剥离方案
+      前缀透传）；**单附件失败不上抛**（``AttachmentDeliveryResult``
+      ok=False + error 承载——文本与其余附件照常投递）；
+    - 附件投递不携带引用回复与 caption 于 sticker（sendSticker 无
+      caption 参数——平台差异文档化于 channel_models）。
+
 offset 持久化（文档化决策）：``state_dir/telegram_offset.json`` 单键
 ``{"offset": N}`` 文件；写经「临时文件 + fsync + ``os.replace`` 原子换名」
 （registry_admin 同模式——崩溃窗口内至多旧值或新值，无半写态）。与
@@ -30,31 +57,50 @@ registry_admin 的差异：**不做 .bak 备份轮换**——offset 是单键可
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
 from packages.harness.channels.channel_models import (
+    AttachmentDeliveryResult,
+    ChannelAttachmentKind,
     ChannelDeliveryResultModel,
+    ChannelMessageAttachment,
     ChannelType,
     InboundMessageModel,
     OutboundMessageModel,
 )
 from packages.harness.channels.channel_service import ChannelRouter
 from packages.harness.channels.telegram.tg_client import TelegramClient
-from packages.harness.channels.telegram.tg_models import TgUpdateModel
+from packages.harness.channels.telegram.tg_models import TgMessageModel, TgUpdateModel
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.thread_pool import run_blocking_ops
 from packages.harness.core.time_utils import now_ms
 
-__all__ = ["TelegramChannelRunner", "TG_OFFSET_STATE_FILENAME"]
+__all__ = [
+    "TelegramChannelRunner",
+    "TG_OFFSET_STATE_FILENAME",
+    "TG_FILE_PSEUDO_SCHEME",
+    "extract_tg_attachments",
+    "map_tg_message_to_inbound",
+]
 
 #: offset 状态文件名（落在 ``state_dir`` 下）。
 TG_OFFSET_STATE_FILENAME: str = "telegram_offset.json"
+
+#: 入站附件平台文件引用伪方案前缀（``tg-file://{file_id}``——下载免取
+#: v2 契约：真实媒体拉取 deferred 到 R2d；出站方向仅接受同形态作为
+#: file_id 重发凭据）。
+TG_FILE_PSEUDO_SCHEME: str = "tg-file://"
+
+#: multipart 上传缺省 MIME（附件未携带 media_type 线索时）。
+_UPLOAD_DEFAULT_CONTENT_TYPE: str = "application/octet-stream"
 
 #: 去重窗口容量（update_id 已见集合上限——超出按 FIFO 淘汰；offset 游标
 #: 已在服务端去重，本集合只兜底「确认前重投」窗口）。
@@ -62,6 +108,134 @@ _SEEN_UPDATE_CAP: int = 1024
 
 #: 可注入休眠契约（测试注入 fake 记录退避节奏）。
 SleepFn = Callable[[float], Awaitable[None]]
+
+
+def _tg_media_method_for(attachment: ChannelMessageAttachment) -> tuple[str, str]:
+    """解析附件 kind → Bot API 媒体发送方法 / 参数名二元组。
+
+    映射表（docs/backend/channels.md「协议 v2」同源）：image →
+    sendPhoto/photo；audio → media_type 含 ogg/opus 走 sendVoice/voice
+    （语音消息形态），否则 sendAudio/audio（音乐文件形态）；file →
+    sendDocument/document；sticker → sendSticker/sticker。
+
+    Args:
+        attachment: 出站附件。
+
+    Returns:
+        ``(api_method, media_field)`` 二元组（如 ``("sendPhoto", "photo")``）。
+    """
+    if attachment.kind is ChannelAttachmentKind.IMAGE:
+        return ("sendPhoto", "photo")
+    if attachment.kind is ChannelAttachmentKind.AUDIO:
+        media_type = (attachment.media_type or "").lower()
+        if "ogg" in media_type or "opus" in media_type:
+            return ("sendVoice", "voice")
+        return ("sendAudio", "audio")
+    if attachment.kind is ChannelAttachmentKind.FILE:
+        return ("sendDocument", "document")
+    return ("sendSticker", "sticker")
+
+
+def _upload_filename_for(attachment: ChannelMessageAttachment) -> str:
+    """合成 multipart 上传文件名（kind + media_type 子类型派生）。
+
+    Args:
+        attachment: 出站附件（base64 源——上传形态）。
+
+    Returns:
+        文件名（如 ``image.jpeg`` / ``audio.ogg``；无 MIME 线索时
+        ``<kind>.bin``——Bot API 仅 sendDocument 呈现文件名，其余方法
+        忽略）。
+    """
+    subtype = (attachment.media_type or "").partition("/")[2]
+    return f"{attachment.kind.value}.{subtype if subtype else 'bin'}"
+
+
+def extract_tg_attachments(message: TgMessageModel) -> list[ChannelMessageAttachment]:
+    """提取 Telegram 媒体字段为通道中立附件（下载免取——伪方案引用）。
+
+    Args:
+        message: Bot API message wire 对象。
+
+    Returns:
+        附件列表（无媒体字段时为空——纯文本消息形态）；每附件
+        ``path="tg-file://{file_id}"``，caption 挂首附件（存在时）。
+    """
+    specs: list[tuple[ChannelAttachmentKind, str, str | None]] = []
+    if message.photo:
+        best = max(message.photo, key=lambda size: size.width * size.height)
+        specs.append((ChannelAttachmentKind.IMAGE, best.file_id, None))
+    if message.voice is not None:
+        specs.append((ChannelAttachmentKind.AUDIO, message.voice.file_id, message.voice.mime_type))
+    if message.audio is not None:
+        specs.append((ChannelAttachmentKind.AUDIO, message.audio.file_id, message.audio.mime_type))
+    if message.document is not None:
+        specs.append(
+            (ChannelAttachmentKind.FILE, message.document.file_id, message.document.mime_type)
+        )
+    if message.sticker is not None:
+        specs.append((ChannelAttachmentKind.STICKER, message.sticker.file_id, None))
+    attachments: list[ChannelMessageAttachment] = []
+    for position, (kind, file_id, media_type) in enumerate(specs):
+        attachments.append(
+            ChannelMessageAttachment(
+                kind=kind,
+                media_type=media_type,
+                path=f"{TG_FILE_PSEUDO_SCHEME}{file_id}",
+                caption=message.caption if position == 0 else None,
+            )
+        )
+    return attachments
+
+
+def _decode_attachment_base64(value: str) -> bytes:
+    """解码附件 base64 载荷为原始字节（严格校验——非法载荷拒绝）。
+
+    Args:
+        value: base64 编码字符串（``ChannelMessageAttachment.base64`` 源）。
+
+    Returns:
+        解码后的原始媒体字节。
+
+    Raises:
+        BusinessException: 载荷非合法 base64（``VALIDATION_ERROR``——
+            逐附件结果承载，不上抛到消息面）。
+    """
+    try:
+        return base64.b64decode(value, validate=True)
+    except ValueError as exc:
+        raise BusinessException(
+            code=ErrorCode.VALIDATION_ERROR,
+            message="附件 base64 载荷不可解码（合法 base64 形态 required）",
+        ) from exc
+
+
+def map_tg_message_to_inbound(message: TgMessageModel) -> InboundMessageModel | None:
+    """映射 Bot API message 为通道中立入站消息（不可路由形态返回 None）。
+
+    路由门槛（v2——v1 语义保持）：文本或 caption 至少其一（纯媒体无
+    caption 维持 v1 跳过——不进路由器；文本消息 v1 形态零变更）；
+    媒体消息以 caption 兜底为文本。
+
+    Args:
+        message: Bot API message wire 对象。
+
+    Returns:
+        入站消息（媒体附件已提取）；不可路由（无文本且无 caption）返回
+        None（调用方跳过路由、offset 照常推进）。
+    """
+    text = message.text or message.caption
+    if not text:
+        return None
+    return InboundMessageModel(
+        channel=ChannelType.TELEGRAM,
+        chat_id=str(message.chat.id),
+        message_id=str(message.message_id),
+        sender_id=str(message.from_user.id) if message.from_user else "0",
+        text=text,
+        ts_ms=message.date * 1000,
+        attachments=extract_tg_attachments(message),
+    )
 
 
 class TelegramChannelRunner:
@@ -166,25 +340,122 @@ class TelegramChannelRunner:
     async def send_message(self, message: OutboundMessageModel) -> ChannelDeliveryResultModel:
         """发送出站消息（通道中立 → Bot API；超长分段由 client 承担）。
 
+        v2 投递顺序（先文本后附件）：文本段 v1 调用形态零变更
+        （``silent=True`` 时增传 ``disable_notification``——False 缺省
+        不传参，v1 fake 契约形状保持）；附件逐个投递并聚合逐附件结果
+        （单附件失败不上抛——见模块 docstring「出站 v2 投递」）。
+
         Args:
-            message: 出站消息（通道中立形态）。
+            message: 出站消息（通道中立形态；v2 附件 / silent 字段缺省
+                时行为与 v1 完全一致）。
 
         Returns:
-            投递结果（分段发送时 message_ids 多条）。
+            投递结果（文本分段 + 成功附件的平台消息 ID 一并计入；
+            ``attachment_results`` 按附件序对齐——部分成功可见）。
 
         Raises:
-            BusinessException: 平台调用失败（``CHANNEL_API_ERROR`` /
-                ``CHANNEL_TOKEN_MISSING``——路由器负责兜底隔离）。
+            BusinessException: **文本段**平台调用失败
+                （``CHANNEL_API_ERROR`` / ``CHANNEL_TOKEN_MISSING``
+                ——路由器负责兜底隔离；附件失败不上抛，走逐附件结果）。
         """
+        text_kwargs: dict[str, Any] = {}
+        if message.silent:
+            text_kwargs["disable_notification"] = True
         results = await self._client.send_message(
             chat_id=message.chat_id,
             text=message.text,
             reply_to_message_id=message.reply_to_message_id,
+            **text_kwargs,
         )
+        message_ids = [str(result.message_id) for result in results]
+        attachment_results: list[AttachmentDeliveryResult] = []
+        for index, attachment in enumerate(message.attachments):
+            outcome = await self._deliver_attachment(
+                message.chat_id, attachment, index, silent=message.silent
+            )
+            attachment_results.append(outcome)
+            if outcome.ok and outcome.provider_message_id is not None:
+                message_ids.append(outcome.provider_message_id)
         return ChannelDeliveryResultModel(
             channel=ChannelType.TELEGRAM,
             chat_id=message.chat_id,
-            message_ids=[str(result.message_id) for result in results],
+            message_ids=message_ids,
+            attachment_results=attachment_results,
+        )
+
+    async def _deliver_attachment(
+        self,
+        chat_id: str,
+        attachment: ChannelMessageAttachment,
+        index: int,
+        *,
+        silent: bool,
+    ) -> AttachmentDeliveryResult:
+        """投递单个出站附件（源形态解析 → 平台调用；失败不上抛）。
+
+        Args:
+            chat_id: 目标会话 ID。
+            attachment: 出站附件（url / base64 / tg-file:// path 三源）。
+            index: 附件序（``OutboundMessageModel.attachments`` 下标——
+                结果对齐用）。
+            silent: 免通知投递（透传平台 disable_notification）。
+
+        Returns:
+            该附件投递结局（失败时 ``ok=False`` + ``error`` 承载原因——
+            文本与其余附件照常投递，不上抛）。
+        """
+        api_method, media_field = _tg_media_method_for(attachment)
+        caption = None if attachment.kind is ChannelAttachmentKind.STICKER else attachment.caption
+        path_value = attachment.path
+        try:
+            if attachment.url is not None:
+                result = await self._client.send_media_ref(
+                    chat_id=chat_id,
+                    api_method=api_method,
+                    media_field=media_field,
+                    media_ref=attachment.url,
+                    caption=caption,
+                    disable_notification=silent,
+                )
+            elif attachment.base64 is not None:
+                result = await self._client.send_media_upload(
+                    chat_id=chat_id,
+                    api_method=api_method,
+                    media_field=media_field,
+                    content=_decode_attachment_base64(attachment.base64),
+                    filename=_upload_filename_for(attachment),
+                    content_type=attachment.media_type or _UPLOAD_DEFAULT_CONTENT_TYPE,
+                    caption=caption,
+                    disable_notification=silent,
+                )
+            elif path_value is not None and path_value.startswith(TG_FILE_PSEUDO_SCHEME):
+                result = await self._client.send_media_ref(
+                    chat_id=chat_id,
+                    api_method=api_method,
+                    media_field=media_field,
+                    media_ref=path_value[len(TG_FILE_PSEUDO_SCHEME) :],
+                    caption=caption,
+                    disable_notification=silent,
+                )
+            else:
+                raise BusinessException(
+                    code=ErrorCode.VALIDATION_ERROR,
+                    message=(
+                        "出站附件 path 仅支持 tg-file:// 伪方案（file_id 重发）形态: "
+                        f"{path_value!r}"
+                    ),
+                    details={"chat_id": chat_id, "path": path_value},
+                )
+        except BusinessException as exc:
+            logger.warning(
+                "Telegram 附件投递失败（逐附件结果承载）: chat_id={}, kind={}, error={}",
+                chat_id,
+                attachment.kind.value,
+                exc.message,
+            )
+            return AttachmentDeliveryResult(index=index, ok=False, error=exc.message)
+        return AttachmentDeliveryResult(
+            index=index, ok=True, provider_message_id=str(result.message_id)
         )
 
     # ------------------------------------------------------------------
@@ -204,9 +475,7 @@ class TelegramChannelRunner:
             if exc.code == ErrorCode.CHANNEL_TOKEN_MISSING:
                 logger.error("Telegram 通道启动校验失败（token 无效）: {}", exc.message)
                 raise
-            logger.warning(
-                "Telegram getMe 启动校验暂不可达（进入退避重试循环）: {}", exc.message
-            )
+            logger.warning("Telegram getMe 启动校验暂不可达（进入退避重试循环）: {}", exc.message)
             return
         logger.info(
             "Telegram 通道启动校验通过: bot_id={}, bot_username={}",
@@ -217,9 +486,9 @@ class TelegramChannelRunner:
     async def _process_updates(self, updates: Sequence[TgUpdateModel]) -> None:
         """处理一批更新（去重 + 映射 + 路由 + offset 推进持久化）。
 
-        非消息更新（edited_message / callback_query 等）与无文本消息
-        （图片 / 贴纸等）跳过不路由，但 **offset 照常推进**（确认语义
-        ——否则服务端会无限重投）。
+        非消息更新（edited_message / callback_query 等）与不可路由消息
+        （纯媒体无 caption——v1 纯文本过滤语义的 v2 延伸）跳过不路由，
+        但 **offset 照常推进**（确认语义——否则服务端会无限重投）。
 
         Args:
             updates: 本批更新（可能为空——长轮询窗口自然耗尽形态）。
@@ -231,19 +500,11 @@ class TelegramChannelRunner:
                 logger.debug("Telegram update 重复投递（去重跳过）: {}", update.update_id)
                 continue
             message = update.message
-            if message is None or not message.text:
-                logger.debug("Telegram 非文本更新（跳过路由）: {}", update.update_id)
+            inbound = None if message is None else map_tg_message_to_inbound(message)
+            if inbound is None:
+                logger.debug("Telegram 不可路由更新（跳过路由）: {}", update.update_id)
                 continue
-            await self._router.handle_inbound(
-                InboundMessageModel(
-                    channel=ChannelType.TELEGRAM,
-                    chat_id=str(message.chat.id),
-                    message_id=str(message.message_id),
-                    sender_id=str(message.from_user.id) if message.from_user else "0",
-                    text=message.text,
-                    ts_ms=message.date * 1000,
-                )
-            )
+            await self._router.handle_inbound(inbound)
         new_offset = max(update.update_id for update in updates) + 1
         if self._offset is None or new_offset > self._offset:
             self._offset = new_offset

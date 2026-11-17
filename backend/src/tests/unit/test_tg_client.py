@@ -67,9 +67,7 @@ def _update(update_id: int, *, text: str | None = "你好", chat_id: int = 10086
     return {"update_id": update_id, "message": message}
 
 
-def _client(
-    handler: Any, *, poll_timeout_seconds: int = 25
-) -> TelegramClient:
+def _client(handler: Any, *, poll_timeout_seconds: int = 25) -> TelegramClient:
     """构造测试客户端（MockTransport + 测试 token env）。
 
     Args:
@@ -97,9 +95,7 @@ class TestConstruction:
         assert _TEST_TOKEN_ENV in exc_info.value.message
         assert "TELEGRAM_ENABLED" in exc_info.value.message
 
-    async def test_token_whitespace_only_fails_fast(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_token_whitespace_only_fails_fast(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """构造期 token 纯空白：等同缺失（strip 归一后判空）。"""
         monkeypatch.setenv(_TEST_TOKEN_ENV, "   ")
         with pytest.raises(BusinessException) as exc_info:
@@ -237,12 +233,8 @@ class TestSendMessage:
             return _ok({"message_id": 900, "chat": {"id": 10086, "type": "private"}})
 
         client = _client(handler)
-        results = await client.send_message(
-            chat_id="10086", text="你好", reply_to_message_id="42"
-        )
-        assert bodies == [
-            {"chat_id": "10086", "text": "你好", "reply_to_message_id": 42}
-        ]
+        results = await client.send_message(chat_id="10086", text="你好", reply_to_message_id="42")
+        assert bodies == [{"chat_id": "10086", "text": "你好", "reply_to_message_id": 42}]
         assert len(results) == 1
         assert results[0].message_id == 900
         assert results[0].chat.id == 10086
@@ -299,9 +291,7 @@ class TestSendMessage:
             return _ok({"message_id": len(bodies), "chat": {"id": 1, "type": "private"}})
 
         client = _client(handler)
-        await client.send_message(
-            chat_id=1, text="a" * 5000, reply_to_message_id="42"
-        )
+        await client.send_message(chat_id=1, text="a" * 5000, reply_to_message_id="42")
         assert len(bodies) == 2
         assert bodies[0]["reply_to_message_id"] == 42
         assert "reply_to_message_id" not in bodies[1]
@@ -377,3 +367,174 @@ class TestSplitFunction:
         assert all(len(part) > 0 for part in parts)
         assert len(parts[0]) == TG_MESSAGE_MAX_CHARS
         assert "".join(parts) == text
+
+
+class TestSendMessageV2:
+    async def test_disable_notification_true_in_body(self) -> None:
+        """silent=True：各段请求体携带 disable_notification: true。"""
+        bodies: list[dict[str, Any]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            bodies.append(json.loads(request.content.decode("utf-8")))
+            return _ok({"message_id": 1, "chat": {"id": 1, "type": "private"}})
+
+        client = _client(handler)
+        await client.send_message(chat_id=1, text="hi", disable_notification=True)
+        assert bodies == [{"chat_id": 1, "text": "hi", "disable_notification": True}]
+
+    async def test_disable_notification_false_omitted(self) -> None:
+        """disable_notification=None / False：请求体省略该字段（v1 wire 形态保持）。"""
+        bodies: list[dict[str, Any]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            bodies.append(json.loads(request.content.decode("utf-8")))
+            return _ok({"message_id": 1, "chat": {"id": 1, "type": "private"}})
+
+        client = _client(handler)
+        await client.send_message(chat_id=1, text="hi", disable_notification=False)
+        await client.send_message(chat_id=1, text="hi", disable_notification=None)
+        assert bodies == [
+            {"chat_id": 1, "text": "hi"},
+            {"chat_id": 1, "text": "hi"},
+        ]
+
+
+class TestMediaSendV2:
+    async def test_send_media_ref_json_shape(self) -> None:
+        """媒体引用形态：方法 URL + JSON 体（chat_id / photo=URL / caption）。"""
+        captured: dict[str, Any] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            captured["body"] = json.loads(request.content.decode("utf-8"))
+            return _ok({"message_id": 901, "chat": {"id": 10086, "type": "private"}})
+
+        client = _client(handler)
+        result = await client.send_media_ref(
+            chat_id="10086",
+            api_method="sendPhoto",
+            media_field="photo",
+            media_ref="https://example.com/cat.jpg",
+            caption="看这只猫",
+            disable_notification=True,
+        )
+        assert captured["url"].endswith("/sendPhoto")
+        assert captured["body"] == {
+            "chat_id": "10086",
+            "photo": "https://example.com/cat.jpg",
+            "caption": "看这只猫",
+            "disable_notification": True,
+        }
+        assert result.message_id == 901
+
+    async def test_send_media_ref_omits_optional_fields(self) -> None:
+        """媒体引用形态：caption / disable_notification 缺省省略（最小 wire）。"""
+        captured: dict[str, Any] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.content.decode("utf-8"))
+            return _ok({"message_id": 1, "chat": {"id": 1, "type": "private"}})
+
+        client = _client(handler)
+        await client.send_media_ref(
+            chat_id=1, api_method="sendSticker", media_field="sticker", media_ref="CAACAgIAAx0"
+        )
+        assert captured["body"] == {"chat_id": 1, "sticker": "CAACAgIAAx0"}
+
+    async def test_send_media_ref_empty_ref_rejected(self) -> None:
+        """空媒体引用：VALIDATION_ERROR（调用方 bug 面）。"""
+        client = _client(lambda request: _ok(None))
+        with pytest.raises(BusinessException) as exc_info:
+            await client.send_media_ref(
+                chat_id=1, api_method="sendPhoto", media_field="photo", media_ref="  "
+            )
+        assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
+
+    async def test_send_media_upload_multipart_shape(self) -> None:
+        """媒体上传形态：multipart 表单（文件字段名 / 文件名 / MIME /
+        chat_id / caption / disable_notification）。"""
+        captured: dict[str, Any] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["content_type"] = request.headers.get("content-type", "")
+            captured["body"] = request.content
+            return _ok({"message_id": 902, "chat": {"id": 10086, "type": "private"}})
+
+        client = _client(handler)
+        result = await client.send_media_upload(
+            chat_id="10086",
+            api_method="sendPhoto",
+            media_field="photo",
+            content=b"\xff\xd8fake-jpeg-bytes",
+            filename="image.jpeg",
+            content_type="image/jpeg",
+            caption="随手拍",
+            disable_notification=True,
+        )
+        assert captured["content_type"].startswith("multipart/form-data")
+        body = captured["body"]
+        assert b'name="photo"' in body
+        assert b'filename="image.jpeg"' in body
+        assert b"\xff\xd8fake-jpeg-bytes" in body
+        assert b'name="chat_id"' in body
+        assert b"10086" in body
+        assert b'name="caption"' in body
+        assert "随手拍".encode() in body
+        assert b'name="disable_notification"' in body
+        assert result.message_id == 902
+
+    async def test_send_media_upload_empty_content_rejected(self) -> None:
+        """空上传内容：VALIDATION_ERROR（调用方 bug 面）。"""
+        client = _client(lambda request: _ok(None))
+        with pytest.raises(BusinessException) as exc_info:
+            await client.send_media_upload(
+                chat_id=1,
+                api_method="sendPhoto",
+                media_field="photo",
+                content=b"",
+                filename="image.jpeg",
+            )
+        assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
+
+    async def test_send_media_upload_empty_filename_rejected(self) -> None:
+        """空上传文件名：VALIDATION_ERROR（调用方 bug 面）。"""
+        client = _client(lambda request: _ok(None))
+        with pytest.raises(BusinessException) as exc_info:
+            await client.send_media_upload(
+                chat_id=1,
+                api_method="sendDocument",
+                media_field="document",
+                content=b"pdf-bytes",
+                filename="  ",
+            )
+        assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
+
+    async def test_media_failure_maps_api_error_with_method(self) -> None:
+        """媒体发送非 200：CHANNEL_API_ERROR（details 携带媒体方法名）。"""
+        client = _client(lambda request: httpx.Response(502, text="bad gateway"))
+        with pytest.raises(BusinessException) as exc_info:
+            await client.send_media_ref(
+                chat_id=1, api_method="sendVoice", media_field="voice", media_ref="https://x/v.ogg"
+            )
+        assert exc_info.value.code == ErrorCode.CHANNEL_API_ERROR
+        assert exc_info.value.details is not None
+        assert exc_info.value.details["method"] == "sendVoice"
+
+    async def test_media_transport_error_maps_api_error(self) -> None:
+        """媒体发送传输异常：CHANNEL_API_ERROR（统一传输错误面）。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("connection refused")
+
+        client = _client(handler)
+        with pytest.raises(BusinessException) as exc_info:
+            await client.send_media_upload(
+                chat_id=1,
+                api_method="sendPhoto",
+                media_field="photo",
+                content=b"jpg",
+                filename="image.jpeg",
+            )
+        assert exc_info.value.code == ErrorCode.CHANNEL_API_ERROR
+        assert exc_info.value.details is not None
+        assert exc_info.value.details["method"] == "sendPhoto"

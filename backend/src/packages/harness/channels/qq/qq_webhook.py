@@ -14,8 +14,14 @@
            NapCat 重启 / 网络重试会重投事件）
         ④ 消息展平（段数组 / CQ 码字符串双形态 → 纯文本；非文本段
            占位符化，见 ``_SEGMENT_PLACEHOLDERS``）
-        ⑤ InboundMessageModel 构造（chat_id grammar：``private:<user_id>``
-           / ``group:<group_id>``；epoch 秒 ×1000 归一）
+        ⑤ v2 附件提取（``extract_message_attachments``——仅段数组形态；
+           image / record 段 → ``ChannelMessageAttachment``，NapCat
+           提供的引用形态承载：``data.url`` → url 源、``data.file`` 的
+           ``base64://`` 前缀 → base64 源、其余（``file://`` URL / 平台
+           引用）→ path 源；CQ 码字符串形态维持占位符降级——附件提取
+           边界文档化于 docs/backend/channels.md「协议 v2」）
+        ⑥ InboundMessageModel 构造（chat_id grammar：``private:<user_id>``
+           / ``group:<group_id>``；epoch 秒 ×1000 归一；attachments 搭载）
         ↓ ChannelRouter.handle_inbound（恒不抛——单消息错误隔离铁律）
 
 隔离铁律：**本处理器恒不抛异常**——任何单事件失败（载荷非法 / 字段
@@ -36,7 +42,12 @@ from typing import Any, Final
 from loguru import logger
 from pydantic import ValidationError
 
-from packages.harness.channels.channel_models import ChannelType, InboundMessageModel
+from packages.harness.channels.channel_models import (
+    ChannelAttachmentKind,
+    ChannelMessageAttachment,
+    ChannelType,
+    InboundMessageModel,
+)
 from packages.harness.channels.channel_service import ChannelRouter
 from packages.harness.channels.qq.qq_models import Ob11EventModel, Ob11MessageSegmentModel
 from packages.harness.core.time_utils import now_ms
@@ -44,6 +55,7 @@ from packages.harness.core.time_utils import now_ms
 __all__ = [
     "QqMessageDedupWindow",
     "flatten_message_text",
+    "extract_message_attachments",
     "process_webhook_event",
     "reset_qq_webhook_state",
 ]
@@ -179,6 +191,65 @@ def flatten_message_text(message: list[Ob11MessageSegmentModel] | str) -> str:
     return "".join(parts)
 
 
+def _attachment_from_segment(segment: Ob11MessageSegmentModel) -> ChannelMessageAttachment | None:
+    """单一媒体段 → 通道中立附件（无可用引用形态返回 None）。
+
+    引用形态优先序（NapCat 提供形态——docs/backend/channels.md「协议
+    v2」同源）：``data.url``（可下载 URL）→ url 源；``data.file`` 为
+    ``base64://`` 前缀 → base64 源（载荷剥前缀）；其余 ``data.file``
+    （``file://`` URL / 平台文件引用）→ path 源原样承载；两者皆缺 →
+    None（无可用引用——该段不产附件）。
+
+    Args:
+        segment: 媒体段（image / record；其余类型返回 None）。
+
+    Returns:
+        附件（image 段 → image 类、record 段 → audio 类）；无可用引用
+        或非媒体段返回 None。
+    """
+    if segment.type == "image":
+        kind = ChannelAttachmentKind.IMAGE
+    elif segment.type == "record":
+        kind = ChannelAttachmentKind.AUDIO
+    else:
+        return None
+    url = segment.data.get("url")
+    file_value = segment.data.get("file")
+    if isinstance(url, str) and url:
+        return ChannelMessageAttachment(kind=kind, url=url)
+    if isinstance(file_value, str) and file_value:
+        if file_value.startswith("base64://"):
+            return ChannelMessageAttachment(kind=kind, base64=file_value[len("base64://") :])
+        return ChannelMessageAttachment(kind=kind, path=file_value)
+    return None
+
+
+def extract_message_attachments(
+    message: list[Ob11MessageSegmentModel] | str,
+) -> list[ChannelMessageAttachment]:
+    """提取段数组消息的媒体附件（v2——CQ 码字符串形态维持占位符降级）。
+
+    边界（文档化决策）：仅**段数组形态**提取（NapCat HTTP POST 上报
+    缺省 message_format=array；CQ 码字符串形态的参数解析转义复杂度
+    不抵增益——维持 v1 占位符降级，附件提取不生效）；无可用引用的
+    媒体段（url / file 键皆缺）跳过。
+
+    Args:
+        message: OneBot v11 消息内容（段数组或 CQ 码字符串）。
+
+    Returns:
+        附件列表（段序保持；CQ 字符串 / 无媒体段 / 无引用形态为空）。
+    """
+    if isinstance(message, str):
+        return []
+    attachments: list[ChannelMessageAttachment] = []
+    for segment in message:
+        attachment = _attachment_from_segment(segment)
+        if attachment is not None:
+            attachments.append(attachment)
+    return attachments
+
+
 async def process_webhook_event(payload: dict[str, Any], router: ChannelRouter) -> None:
     """处理单条 webhook 事件（解析 → 过滤 → 去重 → 展平 → 路由；恒不抛）。
 
@@ -226,6 +297,7 @@ async def process_webhook_event(payload: dict[str, Any], router: ChannelRouter) 
         chat_id = f"private:{event.user_id}"
     sender_id = str(event.user_id) if event.user_id >= 1 else "0"
     ts_ms = event.time * 1000 if event.time > 0 else now_ms()
+    attachments = extract_message_attachments(event.message)
     try:
         await router.handle_inbound(
             InboundMessageModel(
@@ -235,6 +307,7 @@ async def process_webhook_event(payload: dict[str, Any], router: ChannelRouter) 
                 sender_id=sender_id,
                 text=text,
                 ts_ms=ts_ms,
+                attachments=attachments,
             )
         )
     except Exception:

@@ -7,7 +7,11 @@
     - 投递映射（ok 响应 message_id 归一字符串；wire 未回传 message_id
       → 空 message_ids）；
     - grammar 非法（未知前缀 / 非数字 / 非正整数）→ VALIDATION_ERROR；
-    - 客户端失败上抛（适配器协议契约——路由器兜底隔离）。
+    - 客户端失败上抛（适配器协议契约——路由器兜底隔离）；
+    - 协议 v2：附件段数组发射（文本段先 + 媒体段后 / base64 包装 /
+      url 直传）；file 类附件逐附件失败承载（OneBot v11 无文件段——
+      文档化边界）；silent 优雅忽略（no-op）；逐附件结果聚合（共享
+      平台消息 ID + 附件序对齐）；段发送失败上抛（v1 语义）。
 """
 
 from __future__ import annotations
@@ -16,9 +20,16 @@ from typing import Any
 
 import pytest
 
-from packages.harness.channels.channel_models import OutboundMessageModel
+from packages.harness.channels.channel_models import (
+    ChannelAttachmentKind,
+    ChannelMessageAttachment,
+    OutboundMessageModel,
+)
 from packages.harness.channels.qq.qq_adapter import NapCatQQAdapter
-from packages.harness.channels.qq.qq_models import Ob11ApiResponseModel
+from packages.harness.channels.qq.qq_models import (
+    QQ_FILE_ATTACHMENT_UNSUPPORTED_MESSAGE,
+    Ob11ApiResponseModel,
+)
 from packages.harness.core.errors import BusinessException, ErrorCode
 
 
@@ -39,6 +50,8 @@ class FakeNapCatClient:
         """
         self.private_calls: list[dict[str, Any]] = []
         self.group_calls: list[dict[str, Any]] = []
+        self.private_segment_calls: list[dict[str, Any]] = []
+        self.group_segment_calls: list[dict[str, Any]] = []
         self._response = response or Ob11ApiResponseModel(
             status="ok", retcode=0, data={"message_id": -100200300}
         )
@@ -54,6 +67,24 @@ class FakeNapCatClient:
     async def send_group_msg(self, group_id: int, text: str) -> Ob11ApiResponseModel:
         """fake 群聊发送（记录调用；可编程抛错）。"""
         self.group_calls.append({"group_id": group_id, "text": text})
+        if self._send_error is not None:
+            raise self._send_error
+        return self._response
+
+    async def send_private_msg_segments(self, user_id: int, segments: Any) -> Ob11ApiResponseModel:
+        """fake v2 私聊段数组发送（记录段 wire 形态；可编程抛错）。"""
+        self.private_segment_calls.append(
+            {"user_id": user_id, "segments": [segment.model_dump() for segment in segments]}
+        )
+        if self._send_error is not None:
+            raise self._send_error
+        return self._response
+
+    async def send_group_msg_segments(self, group_id: int, segments: Any) -> Ob11ApiResponseModel:
+        """fake v2 群聊段数组发送（记录段 wire 形态；可编程抛错）。"""
+        self.group_segment_calls.append(
+            {"group_id": group_id, "segments": [segment.model_dump() for segment in segments]}
+        )
         if self._send_error is not None:
             raise self._send_error
         return self._response
@@ -162,3 +193,178 @@ class TestFailurePropagation:
         with pytest.raises(BusinessException) as exc_info:
             await adapter.send_message(_outbound("private:10086"))
         assert exc_info.value.code == ErrorCode.CHANNEL_API_ERROR
+
+
+class TestAttachmentSegmentsV2:
+    async def test_image_attachment_emits_segment_array(self) -> None:
+        """image + url 附件：段数组形态（文本段先 + image 段后，file=url 直传）。"""
+        client = FakeNapCatClient()
+        adapter = NapCatQQAdapter(client=client)
+        result = await adapter.send_message(
+            OutboundMessageModel(
+                chat_id="private:10086",
+                text="看看",
+                attachments=[
+                    ChannelMessageAttachment(
+                        kind=ChannelAttachmentKind.IMAGE,
+                        media_type="image/jpeg",
+                        url="https://example.com/cat.jpg",
+                    )
+                ],
+            )
+        )
+        assert client.private_calls == []
+        assert len(client.private_segment_calls) == 1
+        call = client.private_segment_calls[0]
+        assert call["user_id"] == 10086
+        assert call["segments"] == [
+            {"type": "text", "data": {"text": "看看"}},
+            {"type": "image", "data": {"file": "https://example.com/cat.jpg"}},
+        ]
+        assert result.message_ids == ["-100200300"]
+        assert [outcome.model_dump() for outcome in result.attachment_results] == [
+            {
+                "index": 0,
+                "ok": True,
+                "error": None,
+                "provider_message_id": "-100200300",
+            }
+        ]
+
+    async def test_base64_attachment_wraps_scheme(self) -> None:
+        """base64 附件：段数据 file 包装 ``base64://<载荷>`` 形态。"""
+        client = FakeNapCatClient()
+        adapter = NapCatQQAdapter(client=client)
+        await adapter.send_message(
+            OutboundMessageModel(
+                chat_id="group:67890",
+                text="群里看",
+                attachments=[
+                    ChannelMessageAttachment(kind=ChannelAttachmentKind.AUDIO, base64="aGVsbG8=")
+                ],
+            )
+        )
+        assert len(client.group_segment_calls) == 1
+        segments = client.group_segment_calls[0]["segments"]
+        assert segments[0] == {"type": "text", "data": {"text": "群里看"}}
+        assert segments[1] == {"type": "record", "data": {"file": "base64://aGVsbG8="}}
+
+    async def test_sticker_maps_to_image_segment(self) -> None:
+        """sticker 附件：QQ 无独立贴纸段——按 image 段发送（文档化映射）。"""
+        client = FakeNapCatClient()
+        adapter = NapCatQQAdapter(client=client)
+        await adapter.send_message(
+            OutboundMessageModel(
+                chat_id="private:10086",
+                text="表情",
+                attachments=[
+                    ChannelMessageAttachment(
+                        kind=ChannelAttachmentKind.STICKER, path="file:///stickers/x.webp"
+                    )
+                ],
+            )
+        )
+        segments = client.private_segment_calls[0]["segments"]
+        assert segments[1] == {
+            "type": "image",
+            "data": {"file": "file:///stickers/x.webp"},
+        }
+
+    async def test_file_attachment_surfaces_unsupported_result(self) -> None:
+        """file 附件：OneBot v11 无文件段——ok=False 文档化失败，文本与其余
+        附件照常投递（部分成功聚合面）。"""
+        client = FakeNapCatClient()
+        adapter = NapCatQQAdapter(client=client)
+        result = await adapter.send_message(
+            OutboundMessageModel(
+                chat_id="private:10086",
+                text="两附件",
+                attachments=[
+                    ChannelMessageAttachment(
+                        kind=ChannelAttachmentKind.IMAGE, url="https://x/1.jpg"
+                    ),
+                    ChannelMessageAttachment(
+                        kind=ChannelAttachmentKind.FILE,
+                        media_type="application/pdf",
+                        base64="aGVsbG8=",
+                    ),
+                ],
+            )
+        )
+        segments = client.private_segment_calls[0]["segments"]
+        assert [segment["type"] for segment in segments] == ["text", "image"]
+        assert [outcome.ok for outcome in result.attachment_results] == [True, False]
+        assert result.attachment_results[1].error == QQ_FILE_ATTACHMENT_UNSUPPORTED_MESSAGE
+        assert result.attachment_results[0].provider_message_id == "-100200300"
+        assert result.message_ids == ["-100200300"]
+
+    async def test_all_attachments_unsupported_still_delivers_text(self) -> None:
+        """全部附件不支持：文本段独立成段数组仍投递（文本可达性优先）。"""
+        client = FakeNapCatClient()
+        adapter = NapCatQQAdapter(client=client)
+        result = await adapter.send_message(
+            OutboundMessageModel(
+                chat_id="group:67890",
+                text="只有文件",
+                attachments=[
+                    ChannelMessageAttachment(kind=ChannelAttachmentKind.FILE, base64="aGVsbG8=")
+                ],
+            )
+        )
+        segments = client.group_segment_calls[0]["segments"]
+        assert segments == [{"type": "text", "data": {"text": "只有文件"}}]
+        assert result.message_ids == ["-100200300"]
+        assert result.attachment_results[0].ok is False
+
+    async def test_silent_is_graceful_noop(self) -> None:
+        """silent=True：QQ 无通知概念——优雅忽略（正常投递，不抛不改形）。"""
+        client = FakeNapCatClient()
+        adapter = NapCatQQAdapter(client=client)
+        result = await adapter.send_message(
+            OutboundMessageModel(chat_id="private:10086", text="悄悄说", silent=True)
+        )
+        assert client.private_calls == [{"user_id": 10086, "text": "悄悄说"}]
+        assert client.private_segment_calls == []
+        assert result.message_ids == ["-100200300"]
+        assert result.attachment_results == []
+
+    async def test_segment_send_failure_propagates(self) -> None:
+        """段数组发送失败：整条上抛（v1 语义——单消息内无部分失败面）。"""
+        client = FakeNapCatClient(
+            send_error=BusinessException(
+                code=ErrorCode.CHANNEL_API_ERROR, message="段发送失败（测试注入）"
+            )
+        )
+        adapter = NapCatQQAdapter(client=client)
+        with pytest.raises(BusinessException) as exc_info:
+            await adapter.send_message(
+                OutboundMessageModel(
+                    chat_id="private:10086",
+                    text="必失败",
+                    attachments=[
+                        ChannelMessageAttachment(
+                            kind=ChannelAttachmentKind.IMAGE, url="https://x/1.jpg"
+                        )
+                    ],
+                )
+            )
+        assert exc_info.value.code == ErrorCode.CHANNEL_API_ERROR
+
+    async def test_no_message_id_yields_none_provider_id(self) -> None:
+        """wire 未回传 message_id：附件送达成功但凭据 None（无引用凭据形态）。"""
+        client = FakeNapCatClient(response=Ob11ApiResponseModel(status="ok", retcode=0, data=None))
+        adapter = NapCatQQAdapter(client=client)
+        result = await adapter.send_message(
+            OutboundMessageModel(
+                chat_id="private:10086",
+                text="看",
+                attachments=[
+                    ChannelMessageAttachment(
+                        kind=ChannelAttachmentKind.IMAGE, url="https://x/1.jpg"
+                    )
+                ],
+            )
+        )
+        assert result.message_ids == []
+        assert result.attachment_results[0].ok is True
+        assert result.attachment_results[0].provider_message_id is None

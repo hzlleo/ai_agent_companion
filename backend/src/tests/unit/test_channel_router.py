@@ -22,7 +22,9 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from packages.harness.channels.channel_models import (
+    ChannelAttachmentKind,
     ChannelDeliveryResultModel,
+    ChannelMessageAttachment,
     ChannelType,
     InboundMessageModel,
     OutboundMessageModel,
@@ -40,7 +42,9 @@ from packages.harness.persona.chara_card import CharaCardModel
 _PERSONA_ID = 7
 
 
-def _inbound(chat_id: str = "10086", text: str = "你好", message_id: str = "42") -> InboundMessageModel:
+def _inbound(
+    chat_id: str = "10086", text: str = "你好", message_id: str = "42"
+) -> InboundMessageModel:
     """构造入站消息（测试直供形态）。
 
     Args:
@@ -84,9 +88,7 @@ class FakeChatService:
         """fake 会话创建（记录调用形状；可编程抛错）。"""
         if self.create_error is not None:
             raise self.create_error
-        self.create_calls.append(
-            {"persona": persona, "db_session": db_session, "title": title}
-        )
+        self.create_calls.append({"persona": persona, "db_session": db_session, "title": title})
         return ChatSessionStateModel(
             persona_id=_PERSONA_ID,
             persona_name="小鱼",
@@ -478,3 +480,35 @@ class TestPerChatSerialization:
         assert service.create_calls == 2
         assert router.session_count == 2
         assert len(adapter.sent) == 2
+
+
+class TestV2PassThrough:
+    async def test_inbound_attachments_pass_through_unmodified(self) -> None:
+        """v2 附件透传：入站消息（附件 + synthetic 标记）经路由器全程不被
+        消耗 / 剥离（回复循环纯文本——附件供未来消费者（R2d/R2e）从
+        InboundMessageModel 读取；零路由器改动证明面）。"""
+        service = FakeChatService()
+        adapter = FakeAdapter()
+        router = _router(service)
+        router.register_adapter(ChannelType.TELEGRAM, adapter)
+        attachment = ChannelMessageAttachment(
+            kind=ChannelAttachmentKind.IMAGE, path="tg-file://AgAC"
+        )
+        inbound = InboundMessageModel(
+            channel=ChannelType.TELEGRAM,
+            chat_id="10086",
+            message_id="42",
+            sender_id="7",
+            text="看看这张",
+            attachments=[attachment],
+            synthetic=True,
+        )
+
+        result = await router.handle_inbound(inbound)
+
+        assert service.reply_calls[0]["text"] == "看看这张"
+        assert inbound.attachments == [attachment]
+        assert inbound.synthetic is True
+        assert adapter.sent[0].text == "echo:看看这张"
+        assert adapter.sent[0].attachments == []
+        assert result.attachment_results == []

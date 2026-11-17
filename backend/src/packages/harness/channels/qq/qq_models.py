@@ -23,7 +23,18 @@ wire 归一约定：
       携带 ``{"message_id": N}``——归一为通道中立
       :class:`~packages.harness.channels.channel_models.ChannelDeliveryResultModel`
       的 ``message_ids``（wire 未回传 message_id 时为空列表——送达成功
-      但无引用凭据）。
+      但无引用凭据）；v2 增 ``attachment_results`` 透传位（适配器逐
+      附件聚合结果经此进投递结果——缺省 None = v1 纯文本形态）。
+
+v2 附件段发射（``attachment_to_ob11_segment``——出站方向）：
+
+    - image / sticker → **image 段**（QQ 无独立贴纸段——贴纸即图片
+      形态）；audio → **record 段**（语音）；file → **不支持**（OneBot
+      v11 标准段类型无文件消息段——返回 None，调用方按逐附件失败面
+      承载）；caption 无段级承载概念——优雅丢弃（文档化边界）；
+    - 段数据 ``file`` 键承载媒体引用：url 源直传（NapCat 侧拉取）；
+      base64 源包装 ``base64://<载荷>``；path 源原样透传（``file://``
+      URL / NapCat 主机本地路径——按 NapCat 提供形态）。
 """
 
 from __future__ import annotations
@@ -33,7 +44,10 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from packages.harness.channels.channel_models import (
+    AttachmentDeliveryResult,
+    ChannelAttachmentKind,
     ChannelDeliveryResultModel,
+    ChannelMessageAttachment,
     ChannelType,
 )
 
@@ -44,11 +58,19 @@ __all__ = [
     "Ob11ApiResponseModel",
     "Ob11LoginInfoModel",
     "OB11_SUCCESS_STATUSES",
+    "attachment_to_ob11_segment",
+    "QQ_FILE_ATTACHMENT_UNSUPPORTED_MESSAGE",
 ]
 
 #: 动作响应的成功 status 值域（``ok`` = 同步完成；``async`` = 已受理
 #: 异步执行——两者均视为投递成功）。
 OB11_SUCCESS_STATUSES: frozenset[str] = frozenset({"ok", "async"})
+
+#: file 类附件在 QQ 通道的逐附件失败文案（OneBot v11 标准段类型无文件
+#: 消息段——文档化边界，见模块 docstring「v2 附件段发射」）。
+QQ_FILE_ATTACHMENT_UNSUPPORTED_MESSAGE: str = (
+    "QQ OneBot v11 无文件消息段：file 类附件不支持（文本与其余附件照常投递）"
+)
 
 
 class Ob11MessageSegmentModel(BaseModel):
@@ -65,6 +87,36 @@ class Ob11MessageSegmentModel(BaseModel):
 
     type: str = Field(default="", description="段类型（text / image / face 等）")
     data: dict[str, Any] = Field(default_factory=dict, description="段数据（按类型取键）")
+
+
+def attachment_to_ob11_segment(
+    attachment: ChannelMessageAttachment,
+) -> Ob11MessageSegmentModel | None:
+    """v2 附件 → OneBot v11 消息段（不支持的 kind 返回 None）。
+
+    映射（docs/backend/channels.md「协议 v2」同源）：image / sticker →
+    image 段（QQ 无独立贴纸段——贴纸即图片形态）；audio → record 段
+    （语音）；file → None（OneBot v11 标准段类型无文件消息段——调用方
+    按逐附件失败面承载，文案见
+    :data:`QQ_FILE_ATTACHMENT_UNSUPPORTED_MESSAGE`）。caption 无段级
+    承载概念——优雅丢弃（出站文本本身即伴随文本）。
+
+    Args:
+        attachment: 出站附件（url / base64 / path 三源恰其一）。
+
+    Returns:
+        对应消息段；不支持映射（file 类）返回 None。
+    """
+    if attachment.kind is ChannelAttachmentKind.FILE:
+        return None
+    segment_type = "record" if attachment.kind is ChannelAttachmentKind.AUDIO else "image"
+    if attachment.url is not None:
+        file_ref = attachment.url
+    elif attachment.base64 is not None:
+        file_ref = f"base64://{attachment.base64}"
+    else:
+        file_ref = attachment.path if attachment.path is not None else ""
+    return Ob11MessageSegmentModel(type=segment_type, data={"file": file_ref})
 
 
 class Ob11EventModel(BaseModel):
@@ -149,12 +201,21 @@ class Ob11ApiResponseModel(BaseModel):
         """
         return self.retcode == 0 and self.status in OB11_SUCCESS_STATUSES
 
-    def to_delivery_result(self, chat_id: str) -> ChannelDeliveryResultModel:
+    def to_delivery_result(
+        self,
+        chat_id: str,
+        *,
+        attachment_results: list[AttachmentDeliveryResult] | None = None,
+    ) -> ChannelDeliveryResultModel:
         """映射通道中立投递结果（send_* 动作响应 → DeliveryResult）。
 
         Args:
             chat_id: 目标会话 ID（``private:<user_id>`` / ``group:<group_id>``
                 形态——发送面保留原 grammar 串）。
+            attachment_results: v2 逐附件投递结果（适配器聚合面——整条
+                段数组消息一次动作投递，段内附件无独立失败面，适配器
+                按附件序构造全部成功 / 未投递条目；None = v1 纯文本
+                形态——空列表）。
 
         Returns:
             投递结果（``data.message_id`` 归一字符串形态；wire 未回传
@@ -170,6 +231,7 @@ class Ob11ApiResponseModel(BaseModel):
             channel=ChannelType.QQ,
             chat_id=chat_id,
             message_ids=message_ids,
+            attachment_results=attachment_results if attachment_results is not None else [],
         )
 
 

@@ -8,9 +8,15 @@
 
     - ``get_me()``        —— 启动校验（token 有效性探测）；
     - ``get_updates()``   —— 长轮询拉取（``timeout`` 参数 + offset 游标；
-                             请求超时 = 轮询超时 + 传输裕量）；
+                              请求超时 = 轮询超时 + 传输裕量）；
     - ``send_message()``  —— 发送消息（4096 上限分段：换行边界优先，
-                             无换行硬切；引用回复只挂在首段）。
+                              无换行硬切；引用回复只挂在首段；v2 增
+                              ``disable_notification`` 免通知参数）；
+    - ``send_media_ref()``    —— v2 媒体发送（JSON 形态：file_id /
+                                 HTTP URL 直传平台——sendPhoto 等方法）；
+    - ``send_media_upload()`` —— v2 媒体发送（multipart 上传形态：
+                                 base64 解码字节经 httpx ``files=``
+                                 上传为 InputFile）。
 
 4096 分段规则（Bot API 单消息文本上限 4096 字符）：
 
@@ -20,6 +26,20 @@
     3. 窗口内无换行（或仅在首位）→ 硬切 4096；
     4. ``reply_to_message_id`` 只挂首段（后续段是续文——逐段引用会
        在客户端渲染成多条引用噪声）。
+
+v2 媒体发送约定（附件不流式——通道面契约，见 channel_models）：
+
+    - 方法 / 参数名由调用方（runner 适配层）按附件 kind 解析（image →
+      sendPhoto/photo、audio → sendVoice/voice 或 sendAudio/audio、
+      file → sendDocument/document、sticker → sendSticker/sticker）；
+    - ``send_media_ref``：媒体引用（file_id 或 http(s) URL）进 JSON
+      请求体——Bot API 双形态原生支持；
+    - ``send_media_upload``：原始字节经 multipart 表单上传（文件字段名
+      = 平台参数名；``data`` 字段全字符串形态）；
+    - ``disable_notification=True`` 时两种形态均携带免通知参数（False /
+      None 省略——v1 wire 形态保持）；
+    - 附件发送**不携带引用回复**（``reply_to_message_id`` 只属于文本
+      消息——v2 契约，见 channel_models）。
 
 错误码映射表（channels 域段，见 core errors 注册表）：
 
@@ -33,7 +53,8 @@
     401/403 → TOKEN_MISSING）
     httpx 传输异常（连接 / 超时）  CHANNEL_API_ERROR          由 runner 退避
     响应 JSON 非法 / result 缺失   CHANNEL_API_ERROR          否
-    空文本 / 非数字引用 ID         VALIDATION_ERROR           否（调用方 bug）
+    空文本 / 非数字引用 ID /
+    空媒体引用 / 空上传内容        VALIDATION_ERROR           否（调用方 bug）
     ============================  ========================  ==========
 """
 
@@ -221,6 +242,7 @@ class TelegramClient:
         chat_id: int | str,
         text: str,
         reply_to_message_id: int | str | None = None,
+        disable_notification: bool | None = None,
     ) -> list[TgSendMessageResult]:
         """sendMessage——发送消息（4096 上限分段；返回全部段的送达结果）。
 
@@ -231,6 +253,9 @@ class TelegramClient:
                 docstring）。
             reply_to_message_id: 引用回复的目标消息 ID（None = 不引用；
                 仅挂首段）。
+            disable_notification: 免通知投递（v2——True 时各段请求体携带
+                ``disable_notification: true``；None / False 省略该字段
+                ——v1 wire 形态保持）。
 
         Returns:
             各段送达结果（单段发送时单元素列表）。
@@ -258,16 +283,119 @@ class TelegramClient:
                 ) from exc
         parts = split_tg_message_text(text)
         if len(parts) > 1:
-            logger.info(
-                "Telegram 长消息分段发送: chat_id={}, parts={}", chat_id, len(parts)
-            )
+            logger.info("Telegram 长消息分段发送: chat_id={}, parts={}", chat_id, len(parts))
         results: list[TgSendMessageResult] = []
         for index, part in enumerate(parts):
             body: dict[str, Any] = {"chat_id": chat_id, "text": part}
             if index == 0 and reply_to is not None:
                 body["reply_to_message_id"] = reply_to
+            if disable_notification is True:
+                body["disable_notification"] = True
             results.append(await self._send_single(body))
         return results
+
+    async def send_media_ref(
+        self,
+        *,
+        chat_id: int | str,
+        api_method: str,
+        media_field: str,
+        media_ref: str,
+        caption: str | None = None,
+        disable_notification: bool | None = None,
+    ) -> TgSendMessageResult:
+        """v2 媒体发送——JSON 引用形态（file_id / HTTP URL 直传平台）。
+
+        Args:
+            chat_id: 目标会话 ID（数值或字符串——通道层字符串 ID 透传）。
+            api_method: Bot API 方法名（``sendPhoto`` / ``sendVoice`` /
+                ``sendAudio`` / ``sendDocument`` / ``sendSticker``——由
+                runner 适配层按附件 kind 解析）。
+            media_field: 媒体参数名（``photo`` / ``voice`` / ``audio`` /
+                ``document`` / ``sticker``——与方法配套）。
+            media_ref: 媒体引用（平台 file_id 或 http(s) URL——Bot API
+                媒体参数双形态；``tg-file://`` 伪方案由调用方先行剥离）。
+            caption: 附件说明（None = 无；``sendSticker`` 无 caption 参数
+                ——调用方按平台差异先行丢弃，本方法不感知）。
+            disable_notification: 免通知投递（True 时请求体携带
+                ``disable_notification: true``；None / False 省略）。
+
+        Returns:
+            该媒体消息送达结果。
+
+        Raises:
+            BusinessException: 空媒体引用（``VALIDATION_ERROR``——调用方
+                bug 面）；token 无效（``CHANNEL_TOKEN_MISSING``）；传输 /
+                状态 / 解析失败（``CHANNEL_API_ERROR``）。
+        """
+        if not media_ref.strip():
+            raise BusinessException(
+                code=ErrorCode.VALIDATION_ERROR,
+                message=f"Telegram 媒体引用不能为空（{media_field}）",
+                details={"chat_id": str(chat_id), "api_method": api_method},
+            )
+        body: dict[str, Any] = {"chat_id": chat_id, media_field: media_ref}
+        if caption:
+            body["caption"] = caption
+        if disable_notification is True:
+            body["disable_notification"] = True
+        return await self._post_send_method(api_method, json_body=body)
+
+    async def send_media_upload(
+        self,
+        *,
+        chat_id: int | str,
+        api_method: str,
+        media_field: str,
+        content: bytes,
+        filename: str,
+        content_type: str = "application/octet-stream",
+        caption: str | None = None,
+        disable_notification: bool | None = None,
+    ) -> TgSendMessageResult:
+        """v2 媒体发送——multipart 上传形态（原始字节 → InputFile）。
+
+        Args:
+            chat_id: 目标会话 ID（数值或字符串——multipart 表单内字符串
+                化承载）。
+            api_method: Bot API 方法名（同 ``send_media_ref``）。
+            media_field: 媒体参数名 / multipart 文件字段名（同
+                ``send_media_ref``）。
+            content: 媒体原始字节（调用方解码 base64 载荷所得）。
+            filename: 上传文件名（调用方按 kind / media_type 合成）。
+            content_type: MIME 类型（缺省 ``application/octet-stream``）。
+            caption: 附件说明（None = 无；表单字段形态承载）。
+            disable_notification: 免通知投递（True 时表单携带
+                ``disable_notification=true`` 字符串形态；None / False
+                省略）。
+
+        Returns:
+            该媒体消息送达结果。
+
+        Raises:
+            BusinessException: 空字节 / 空文件名（``VALIDATION_ERROR``
+                ——调用方 bug 面）；token 无效（``CHANNEL_TOKEN_MISSING``）；
+                传输 / 状态 / 解析失败（``CHANNEL_API_ERROR``）。
+        """
+        if not content:
+            raise BusinessException(
+                code=ErrorCode.VALIDATION_ERROR,
+                message=f"Telegram 媒体上传内容不能为空（{media_field}）",
+                details={"chat_id": str(chat_id), "api_method": api_method},
+            )
+        if not filename.strip():
+            raise BusinessException(
+                code=ErrorCode.VALIDATION_ERROR,
+                message="Telegram 媒体上传文件名不能为空",
+                details={"chat_id": str(chat_id), "api_method": api_method},
+            )
+        form_data: dict[str, str] = {"chat_id": str(chat_id)}
+        if caption:
+            form_data["caption"] = caption
+        if disable_notification is True:
+            form_data["disable_notification"] = "true"
+        files = {media_field: (filename, content, content_type)}
+        return await self._post_send_method(api_method, form_data=form_data, form_files=files)
 
     # ------------------------------------------------------------------
     # 内部——请求与错误映射
@@ -306,24 +434,16 @@ class TelegramClient:
                 ``CHANNEL_API_ERROR``）。
         """
         try:
-            return await self._http.get(
-                self._method_url(method), params=params, timeout=timeout
-            )
+            return await self._http.get(self._method_url(method), params=params, timeout=timeout)
         except httpx.HTTPError as exc:
-            raise BusinessException(
-                code=ErrorCode.CHANNEL_API_ERROR,
-                details={
-                    "reason": "Telegram Bot API 传输失败",
-                    "method": method,
-                    "error": str(exc),
-                },
-            ) from exc
+            raise self._transport_error(method, exc) from exc
 
     async def _send_single(self, body: dict[str, Any]) -> TgSendMessageResult:
         """发送单段消息（POST sendMessage → 校验 → 归一结果）。
 
         Args:
-            body: 请求体（chat_id / text / 可选 reply_to_message_id）。
+            body: 请求体（chat_id / text / 可选 reply_to_message_id /
+                可选 disable_notification）。
 
         Returns:
             该段送达结果。
@@ -332,24 +452,73 @@ class TelegramClient:
             BusinessException: token 无效（``CHANNEL_TOKEN_MISSING``）；
                 传输 / 状态 / 解析失败（``CHANNEL_API_ERROR``）。
         """
+        return await self._post_send_method("sendMessage", json_body=body)
+
+    async def _post_send_method(
+        self,
+        api_method: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        form_data: dict[str, str] | None = None,
+        form_files: dict[str, tuple[str, bytes, str]] | None = None,
+    ) -> TgSendMessageResult:
+        """发送面统一 POST（JSON / multipart 双形态 → 校验 → 归一结果）。
+
+        v2 收敛点：sendMessage 单段与 sendPhoto / sendVoice 等媒体方法
+        共用（传输异常 / 状态检查 / 响应包裹校验 / result 提取同链路；
+        仅请求体形态不同）。
+
+        Args:
+            api_method: Bot API 方法名。
+            json_body: JSON 请求体（与 form_data / form_files 互斥——
+                JSON 形态时携带）。
+            form_data: multipart 表单字段（multipart 形态时携带）。
+            form_files: multipart 文件字段（multipart 形态时携带）。
+
+        Returns:
+            该消息送达结果。
+
+        Raises:
+            BusinessException: 传输异常（``CHANNEL_API_ERROR``）；token
+                无效（``CHANNEL_TOKEN_MISSING``）；状态 / 解析失败
+                （``CHANNEL_API_ERROR``）；ok=True 但 result 缺失
+                （``CHANNEL_API_ERROR``）。
+        """
         try:
-            response = await self._http.post(self._method_url("sendMessage"), json=body)
+            response = await self._http.post(
+                self._method_url(api_method),
+                json=json_body,
+                data=form_data,
+                files=form_files,
+            )
         except httpx.HTTPError as exc:
-            raise BusinessException(
-                code=ErrorCode.CHANNEL_API_ERROR,
-                details={
-                    "reason": "Telegram Bot API 传输失败",
-                    "method": "sendMessage",
-                    "error": str(exc),
-                },
-            ) from exc
-        wrapper = self._validate_wrapper(
-            TgResponseModel[TgSendMessageResult], response, "sendMessage"
-        )
+            raise self._transport_error(api_method, exc) from exc
+        wrapper = self._validate_wrapper(TgResponseModel[TgSendMessageResult], response, api_method)
         result = wrapper.result
         if result is None:
-            raise self._api_error("sendMessage", response, reason="ok=True 但 result 缺失")
+            raise self._api_error(api_method, response, reason="ok=True 但 result 缺失")
         return result
+
+    @staticmethod
+    def _transport_error(method: str, exc: httpx.HTTPError) -> BusinessException:
+        """构造传输异常业务异常（GET / POST 发送面共用）。
+
+        Args:
+            method: Bot API 方法名（错误 details 携带）。
+            exc: httpx 传输异常（连接 / 超时）。
+
+        Returns:
+            待抛出的 ``CHANNEL_API_ERROR`` 业务异常（调用方
+            ``raise ... from exc`` 保因果链）。
+        """
+        return BusinessException(
+            code=ErrorCode.CHANNEL_API_ERROR,
+            details={
+                "reason": "Telegram Bot API 传输失败",
+                "method": method,
+                "error": str(exc),
+            },
+        )
 
     def _validate_wrapper(
         self,

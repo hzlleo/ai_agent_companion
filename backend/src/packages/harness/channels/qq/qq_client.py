@@ -11,15 +11,23 @@
 方法面（OneBot v11 动作子集）：
 
     - ``get_login_info()``  —— 启动校验（登录账号探测——app lifespan
-                                QQ 装配期消费）；
-    - ``send_private_msg()`` —— 私聊发送（``private:<user_id>`` 目标面）；
-    - ``send_group_msg()``   —— 群聊发送（``group:<group_id>`` 目标面）。
+                                 QQ 装配期消费）；
+    - ``send_private_msg()`` —— 私聊发送（``private:<user_id>`` 目标面；
+                                 纯文本字符串形态——v1 路径）；
+    - ``send_group_msg()``   —— 群聊发送（``group:<group_id>`` 目标面；
+                                 纯文本字符串形态——v1 路径）；
+    - ``send_private_msg_segments()`` —— v2 私聊段数组发送（文本 +
+                                 媒体段同消息投递——先文本后附件序）；
+    - ``send_group_msg_segments()``   —— v2 群聊段数组发送（同上）。
 
-出站消息体：``params.message`` 直接传**纯文本字符串**（OneBot v11 的
-message 字段合法形态之一；通道中立出站文本无需段数组组装——引用回复
-不透传，见 ``qq_adapter`` 模块 docstring）。**不做超长分段**：QQ 客户端
-对长文本自行折行渲染，平台未文档化单消息硬上限（与 Telegram Bot API
-4096 上限的差异点——tg 分段规则不适用）。
+出站消息体：v1 路径 ``params.message`` 直接传**纯文本字符串**（OneBot
+v11 的 message 字段合法形态之一；通道中立出站文本无需段数组组装——引用
+回复不透传，见 ``qq_adapter`` 模块 docstring）。v2 路径（附件在场时）
+``params.message`` 传**段数组**（``[{"type": "text", ...}, {"type":
+"image", ...}]``——文本段先、媒体段后；OneBot v11 message 字段另一合法
+形态，段发射见 ``qq_models.attachment_to_ob11_segment``）。**不做超长
+分段**：QQ 客户端对长文本自行折行渲染，平台未文档化单消息硬上限（与
+Telegram Bot API 4096 上限的差异点——tg 分段规则不适用）。
 
 access token 间接（与 llm ``api_key_env`` / telegram ``bot_token_env``
 同模式——密钥永不落配置树）：构造期从 ``access_token_env`` 指定的环境
@@ -45,6 +53,7 @@ access token 间接（与 llm ``api_key_env`` / telegram ``bot_token_env``
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from typing import Any, Final
 
 import httpx
@@ -55,6 +64,7 @@ from packages.harness.channels.qq.qq_models import (
     Ob11ApiRequestModel,
     Ob11ApiResponseModel,
     Ob11LoginInfoModel,
+    Ob11MessageSegmentModel,
 )
 from packages.harness.core.errors import BusinessException, ErrorCode
 
@@ -189,6 +199,60 @@ class NapCatOneBotClient:
             "send_group_msg", params={"group_id": group_id, "message": text}
         )
 
+    async def send_private_msg_segments(
+        self, user_id: int, segments: Sequence[Ob11MessageSegmentModel]
+    ) -> Ob11ApiResponseModel:
+        """send_private_msg——v2 私聊段数组发送（文本 + 媒体段同消息）。
+
+        Args:
+            user_id: 目标用户 QQ 号（正整数）。
+            segments: 消息段列表（**非空**——文本段先、媒体段后；段发射
+                见 ``qq_models.attachment_to_ob11_segment``，组装由适配器
+                承担）。
+
+        Returns:
+            动作响应包裹（整条段数组消息一次动作投递——段内附件无独立
+            失败面，逐附件结果由适配器聚合构造）。
+
+        Raises:
+            BusinessException: 空段列表（``VALIDATION_ERROR``——调用方
+                bug 面）；token 无效（``CHANNEL_TOKEN_MISSING``）；传输 /
+                状态 / 解析 / retcode 失败（``CHANNEL_API_ERROR``）。
+        """
+        self._require_segments(target_id=user_id, segments=segments)
+        return await self._call_action(
+            "send_private_msg",
+            params={"user_id": user_id, "message": [segment.model_dump() for segment in segments]},
+        )
+
+    async def send_group_msg_segments(
+        self, group_id: int, segments: Sequence[Ob11MessageSegmentModel]
+    ) -> Ob11ApiResponseModel:
+        """send_group_msg——v2 群聊段数组发送（文本 + 媒体段同消息）。
+
+        Args:
+            group_id: 目标群号（正整数）。
+            segments: 消息段列表（**非空**——文本段先、媒体段后；同
+                ``send_private_msg_segments``）。
+
+        Returns:
+            动作响应包裹（整条段数组消息一次动作投递——逐附件结果由
+            适配器聚合构造）。
+
+        Raises:
+            BusinessException: 空段列表（``VALIDATION_ERROR``——调用方
+                bug 面）；token 无效（``CHANNEL_TOKEN_MISSING``）；传输 /
+                状态 / 解析 / retcode 失败（``CHANNEL_API_ERROR``）。
+        """
+        self._require_segments(target_id=group_id, segments=segments)
+        return await self._call_action(
+            "send_group_msg",
+            params={
+                "group_id": group_id,
+                "message": [segment.model_dump() for segment in segments],
+            },
+        )
+
     # ------------------------------------------------------------------
     # 内部——请求与错误映射
     # ------------------------------------------------------------------
@@ -209,6 +273,25 @@ class NapCatOneBotClient:
                 code=ErrorCode.VALIDATION_ERROR,
                 message="QQ 消息文本不能为空",
                 details={"target_id": user_id},
+            )
+
+    @staticmethod
+    def _require_segments(*, target_id: int, segments: Sequence[Ob11MessageSegmentModel]) -> None:
+        """发送面段列表校验（空列表拒绝——调用方 bug 面）。
+
+        Args:
+            target_id: 目标 ID（错误 details 携带——观测面）。
+            segments: 消息段列表。
+
+        Raises:
+            BusinessException: 空段列表（``VALIDATION_ERROR``——空消息
+                平台必拒，入口先拒保调用方 bug 早暴露）。
+        """
+        if not segments:
+            raise BusinessException(
+                code=ErrorCode.VALIDATION_ERROR,
+                message="QQ 消息段列表不能为空",
+                details={"target_id": target_id},
             )
 
     async def _call_action(

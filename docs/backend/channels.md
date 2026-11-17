@@ -1,20 +1,20 @@
 # channels — 平台通道层（Telegram 首个适配器；QQ / NapCat OneBot v11）
 
-`backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram——手写 Bot API 客户端 + 长轮询 runner；QQ——NapCat OneBot v11 客户端 + webhook 推送入站）。通道抽象保持类型可扩展（`ChannelType` StrEnum——B站等后续通道在此追加成员与同级子模型）。
+`backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram——手写 Bot API 客户端 + 长轮询 runner；QQ——NapCat OneBot v11 客户端 + webhook 推送入站）。通道抽象保持类型可扩展（`ChannelType` StrEnum——B站等后续通道在此追加成员与同级子模型）。消息协议已升级 **v2**（附件 / 静默 / 合成事件——见「协议 v2」一节；v1 纯文本形态缺省保持，additive 向后兼容）。
 
 ## 模块一览
 
 | 模块 | 职责 | 关键导出 |
 |---|---|---|
-| `channel_models.py` | 通道中立 Model Classes（Unit 文件）：通道类型值域（telegram / qq）/ 入站 / 出站 / 上下文 / 投递结果 | `ChannelType` / `InboundMessageModel` / `OutboundMessageModel` / `ChannelContextModel` / `ChannelDeliveryResultModel` |
+| `channel_models.py` | 通道中立 Model Classes（Unit 文件）：通道类型值域 / 附件（v2）/ 入站 / 出站 / 上下文 / 投递结果（含逐附件结果 v2） | `ChannelType` / `ChannelAttachmentKind` / `ChannelMessageAttachment` / `InboundMessageModel` / `OutboundMessageModel` / `ChannelContextModel` / `AttachmentDeliveryResult` / `ChannelDeliveryResultModel` / `ATTACHMENT_BASE64_SIZE_GUIDE_BYTES` |
 | `channel_service.py` | 通道路由器（每聊天会话 + 人格绑定 + 单消息错误隔离）+ 适配器发送面协议 | `ChannelRouter` / `ChannelAdapterProtocol` / `CHANNEL_FALLBACK_REPLY_TEXT` |
-| `telegram/tg_models.py` | Bot API wire 模型子集（Unit 文件）：update / message / 响应包裹（泛型） | `TgUpdateModel` / `TgMessageModel` / `TgResponseModel[T]` / `TgSendMessageResult` / `TgBotInfoModel` |
-| `telegram/tg_client.py` | 手写 Bot API 客户端（共享 httpx client 注入；4096 分段） | `TelegramClient` / `split_tg_message_text` |
-| `telegram/tg_runner.py` | 长轮询 runner（offset 持久化 + 去重 + 退避 + 优雅停机 + 发送面适配） | `TelegramChannelRunner` |
-| `qq/qq_models.py` | OneBot v11 wire 模型子集（Unit 文件）：事件（段数组 / CQ 码字符串双形态 message）/ 段 / 动作请求包裹 / 动作响应包裹（投递映射） | `Ob11EventModel` / `Ob11MessageSegmentModel` / `Ob11ApiRequestModel` / `Ob11ApiResponseModel` / `Ob11LoginInfoModel` |
-| `qq/qq_client.py` | 手写 NapCat OneBot v11 HTTP API 客户端（共享 httpx client 注入；单一动作对象包裹） | `NapCatOneBotClient` |
-| `qq/qq_adapter.py` | QQ 适配器发送面（chat_id grammar 解析 → NapCat 动作 → 投递映射；无 runner） | `NapCatQQAdapter` |
-| `qq/qq_webhook.py` | webhook 事件处理器（容错解析 / 大类过滤 / message_id 去重 / 消息展平；恒不抛） | `process_webhook_event` / `flatten_message_text` / `QqMessageDedupWindow` / `reset_qq_webhook_state` |
+| `telegram/tg_models.py` | Bot API wire 模型子集（Unit 文件）：update / message（含 v2 媒体字段 + caption）/ 媒体对象 / 响应包裹（泛型） | `TgUpdateModel` / `TgMessageModel` / `TgPhotoSizeModel` / `TgVoiceModel` / `TgAudioModel` / `TgDocumentModel` / `TgStickerModel` / `TgResponseModel[T]` / `TgSendMessageResult` / `TgBotInfoModel` |
+| `telegram/tg_client.py` | 手写 Bot API 客户端（共享 httpx client 注入；4096 分段；v2 免通知 + 媒体发送双形态） | `TelegramClient` / `split_tg_message_text` |
+| `telegram/tg_runner.py` | 长轮询 runner（offset 持久化 + 去重 + 退避 + 优雅停机 + 发送面适配 + v2 入站映射 / 出站附件投递） | `TelegramChannelRunner` / `TG_FILE_PSEUDO_SCHEME` / `extract_tg_attachments` / `map_tg_message_to_inbound` |
+| `qq/qq_models.py` | OneBot v11 wire 模型子集（Unit 文件）：事件（段数组 / CQ 码字符串双形态 message）/ 段 / 动作请求包裹 / 动作响应包裹（投递映射）/ v2 附件段发射 | `Ob11EventModel` / `Ob11MessageSegmentModel` / `Ob11ApiRequestModel` / `Ob11ApiResponseModel` / `Ob11LoginInfoModel` / `attachment_to_ob11_segment` |
+| `qq/qq_client.py` | 手写 NapCat OneBot v11 HTTP API 客户端（共享 httpx client 注入；单一动作对象包裹；v2 段数组发送） | `NapCatOneBotClient` |
+| `qq/qq_adapter.py` | QQ 适配器发送面（chat_id grammar 解析 → NapCat 动作 → 投递映射；无 runner；v2 附件段数组出站） | `NapCatQQAdapter` |
+| `qq/qq_webhook.py` | webhook 事件处理器（容错解析 / 大类过滤 / message_id 去重 / 消息展平 / v2 附件提取；恒不抛） | `process_webhook_event` / `flatten_message_text` / `extract_message_attachments` / `QqMessageDedupWindow` / `reset_qq_webhook_state` |
 
 依赖方向：channels → chat（ChatService）+ persona（bind_persona_context）+ config（Settings.channels）+ core（errors / time_utils）；HTTP 出站一律经 pools 共享 `httpx.AsyncClient`（硬规则：无私建连接）。锁定设计决策：**不引入 aiogram / python-telegram-bot / 任何 OneBot SDK**——按平台协议手写（与 llm 域「不引入 openai SDK」同约定）。
 
@@ -84,6 +84,119 @@ TELEGRAM_ENABLED=false 且 QQ_ENABLED=false（缺省）：no-op——零通道�
 | 未注册适配器（`CHANNEL_DISABLED`） | 静默空结果（无适配器可回发） | 只进日志 |
 
 runner 循环层另有兜底：getUpdates 失败按指数退避重试（见下）——两层隔离保证长轮询任务不死亡（`asyncio.CancelledError` 原样上抛——停机 cancel 路径不被吞）。
+
+## 协议 v2（附件 / 静默 / 合成事件——additive，v1 形态缺省保持）
+
+v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语音附件、贴纸 / Canvas 媒体与合成 ID 等后续 R2d/R2e 特性）：`InboundMessageModel` / `OutboundMessageModel` / `ChannelDeliveryResultModel` 各增 v2 字段（全部带缺省值——**缺省即 v1 纯文本形态**，既有消费者零改动；本 chunk 内全部内部消费者已迁移到 v2 模型面）。新增 `ChannelMessageAttachment`（附件模型）与 `AttachmentDeliveryResult`（逐附件投递结果）。
+
+### 模型表（v2 字段 + JSON 示例）
+
+**ChannelMessageAttachment**（入站 / 出站共用——从不持有原始字节）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `kind` | StrEnum `image\|audio\|file\|sticker` | 附件类型 |
+| `media_type` | `str \| None` | MIME 线索（如 `audio/ogg`；平台无线索时 None） |
+| `url` | `str \| None` | 媒体 URL 源（平台可拉取） |
+| `base64` | `str \| None` | base64 编码载荷源（容量指引 ≤10MB——`ATTACHMENT_BASE64_SIZE_GUIDE_BYTES`，非硬校验） |
+| `path` | `str \| None` | 平台引用 / 本地路径源（入站 `tg-file://` 伪方案 / NapCat `file://`；出站仅 `tg-file://` file_id 重发） |
+| `caption` | `str \| None` | 附件说明（平台支持时随附件投递） |
+
+**校验（`model_validator`）**：`url` / `base64` / `path` **恰其一**（零源 / 双源拒绝；空串等同未提供）。
+
+```json
+{
+  "kind": "audio",
+  "media_type": "audio/ogg",
+  "base64": "aGVsbG8=",
+  "caption": "今日心情"
+}
+```
+
+**InboundMessageModel v2 字段**（`attachments: list = []` / `synthetic: bool = False` / `silent: bool = False`）：
+
+```json
+{
+  "channel": "telegram",
+  "chat_id": "10086",
+  "message_id": "42",
+  "sender_id": "7",
+  "text": "看看这只猫",
+  "ts_ms": 1731000000000,
+  "attachments": [
+    {"kind": "image", "media_type": null, "path": "tg-file://AgACAgIAAx0", "caption": "看看这只猫"}
+  ],
+  "synthetic": false,
+  "silent": false
+}
+```
+
+`synthetic=True` = 机器生成事件上浮（heartflow / mood——R2e 消费面），非人类消息；入站 `silent` 为平台上报的无通知上下文标记位（预留）。
+
+**OutboundMessageModel v2 字段**（`attachments: list = []` / `silent: bool = False`）：
+
+```json
+{
+  "chat_id": "10086",
+  "text": "语音来了",
+  "reply_to_message_id": "42",
+  "attachments": [
+    {"kind": "audio", "media_type": "audio/ogg", "base64": "aGVsbG8=", "caption": null}
+  ],
+  "silent": true
+}
+```
+
+`silent=True` 请求免通知投递（Telegram `disable_notification`；QQ 无通知概念——优雅忽略 no-op）；引用回复只挂文本消息（附件投递不携带引用）。
+
+**ChannelDeliveryResultModel v2 字段**（`attachment_results: list[AttachmentDeliveryResult] = []`——`{index, ok, error, provider_message_id}`）：
+
+```json
+{
+  "channel": "telegram",
+  "chat_id": "10086",
+  "message_ids": ["900", "901"],
+  "attachment_results": [
+    {"index": 0, "ok": true, "error": null, "provider_message_id": "901"},
+    {"index": 1, "ok": false, "error": "平台拒绝该图片", "provider_message_id": null}
+  ]
+}
+```
+
+`message_ids` v2 语义：文本分段 + 送达成功附件的平台消息一并计入。**部分成功语义**：单附件失败不上抛（`ok=False` + `error` 承载，文本与其余附件照常投递）；**文本段失败仍按 v1 上抛**（路由器兜底隔离）。
+
+### 每适配器映射表（出站附件 kind → 平台发送面）
+
+| kind | Telegram | QQ（OneBot v11） |
+|---|---|---|
+| `image` | `sendPhoto`（photo） | `image` 段 |
+| `audio`（media_type 含 ogg/opus） | `sendVoice`（voice） | `record` 段 |
+| `audio`（其余 / 无线索） | `sendAudio`（audio） | `record` 段 |
+| `file` | `sendDocument`（document） | **不支持**（OneBot v11 无文件消息段——`ok=False` 逐附件结果承载，文本与其余附件照常投递） |
+| `sticker` | `sendSticker`（sticker；**无 caption 参数——caption 丢弃**） | `image` 段（QQ 无独立贴纸段——贴纸即图片形态） |
+
+出站媒体源形态：`url` → Telegram JSON 引用 / QQ 段 `file` 直传；`base64` → Telegram multipart 上传（httpx `files=`）/ QQ 段 `file="base64://<载荷>"` 包装；`path` → **仅接受 `tg-file://` 伪方案**（file_id 重发——适配器剥前缀透传），其余 path 形态 `VALIDATION_ERROR` 逐附件结果承载。QQ 侧 caption 无段级承载概念——丢弃（出站文本即伴随文本）。
+
+投递顺序（两通道一致）：**先文本后附件**。Telegram 文本与每个附件各自独立平台消息（逐附件独立成败）；QQ 段数组**同消息**投递（`params.message = [text 段, 媒体段...]`——段内附件无独立失败面，动作失败整条上抛走 v1 语义）。
+
+### `tg-file://` 伪方案契约（入站方向——下载免取 v2）
+
+Telegram 真实媒体拉取需 **getFile + 文件 URL** 二段 Bot API 流程；v2 入站**不做下载**——附件以 `path="tg-file://{file_id}"` 伪方案承载平台文件引用，真实媒体 fetch deferred 到 R2d 贴纸 / 语音工作。photo 取最大尺寸（宽 × 高）的 `file_id`；voice / audio / document 的 `mime_type` 进 `media_type`（photo / sticker 无 MIME 线索 → None）；caption 挂首附件（`message.caption` 同时兜底为入站 `text`——媒体消息用户的伴随话语）；提取顺序 photo → voice → audio → document → sticker（真实 Bot API 消息至多一种媒体——固定顺序为确定性兜底）。
+
+Telegram 入站路由门槛（v2）：文本与媒体互斥（Bot API 语义）——媒体消息以 **caption 兜底为文本**（有 caption 即路由）；**纯媒体无 caption 维持 v1 跳过语义**（不进路由器，offset 照常推进）；纯文本消息 v1 形态零变更。
+
+### QQ 入站附件提取（段数组形态）
+
+NapCat 段数组消息的 image / record 段提取为附件（引用形态优先序）：`data.url`（可下载 URL）→ `url` 源；`data.file` 为 `base64://` 前缀 → `base64` 源（载荷剥前缀）；其余 `data.file`（`file://` URL / 平台引用）→ `path` 源原样承载。**边界**：仅段数组形态提取（NapCat HTTP POST 上报缺省 `message_format=array`）；CQ 码字符串形态维持占位符降级（参数解析转义复杂度不抵增益——文档化决策）；无可用引用（url / file 皆缺）的媒体段跳过。
+
+### 流式降级（锁定契约）
+
+**v2 附件不参与流式**——流式回复恒为纯文本（网关工具面已强制文本流；通道面从未流式附件，v2 将其显式化为契约）：附件到达适配器后整投递，由适配器聚合逐附件结果。
+
+### 消费者边界（诚实边界）
+
+v2 只交付 **wire**（模型 + 适配器 + 测试）：入站附件由 `InboundMessageModel` 承载供**未来消费者**（R2d 贴纸 / 语音、R2e heartflow-silent / 合成事件）读取——当前 `ChatService.reply` 回复循环仍为纯文本（回合内容不落附件、`ff_chat_messages` 零 schema 变更——附件不持久化）；`ChannelRouter.handle_inbound` 零改动（附件随入站模型透传，路由器不消耗）；duty 属主投递维持纯文本（无附件）；出站附件的构造方（TTS 语音 bytes → base64、贴纸引用等）属 R2d/R2e 交付面。
+
 
 ## offset 持久化（重启不重消费）
 
@@ -316,15 +429,15 @@ settings = build_isolated_settings(
 
 | 测试文件 | 覆盖 |
 |---|---|
-| `tests/unit/test_channels_models.py` | 值域（telegram + qq）/ 校验 / 默认值 / 身份键 |
+| `tests/unit/test_channels_models.py` | 值域（telegram + qq）/ 校验 / 默认值 / 身份键；v2：附件恰一源矩阵 / kind 值域 / 容量指引常量 / 入站出站投递 v2 字段缺省与可设 / 逐附件结果形态 |
 | `tests/unit/test_channels_settings.py` | telegram env 面对齐 / 默认值 / 边界校验 / 隔离构造 / 嵌套覆写 |
 | `tests/unit/test_qq_settings.py` | QQ env 面对齐 / 默认值 / 边界校验 / 隔离构造 / `CHANNELS__QQ__*` 嵌套覆写 |
-| `tests/unit/test_tg_client.py` | MockTransport：请求形状（timeout / offset / 超时裕量）/ 4096 分段 / 错误映射表 / token fail fast |
-| `tests/unit/test_qq_client.py` | MockTransport：动作包裹形状 / Bearer 头有无 / 超时注入 / status=async 成功 / 错误映射表 / 空文本拒绝 |
-| `tests/unit/test_tg_runner.py` | fake client + fake router + 注入休眠：offset 往返 / 去重 / 退避 / 优雅停机 / 启动校验 / 发送面 |
-| `tests/unit/test_qq_adapter.py` | fake 客户端：chat_id grammar 双形态 / 投递映射（ok / 无 message_id）/ grammar 校验 / 失败上抛 |
-| `tests/unit/test_qq_webhook.py` | fake 路由器：私聊 / 群聊路由形状 / 展平双形态 + 占位符表 / 去重 + FIFO 淘汰 / 忽略矩阵 / 隔离铁律 |
-| `tests/unit/test_channel_router.py` | fake ChatService：会话复用 / 持久化调用形状 / 人格绑定 / 错误隔离矩阵 |
+| `tests/unit/test_tg_client.py` | MockTransport：请求形状（timeout / offset / 超时裕量）/ 4096 分段 / 错误映射表 / token fail fast；v2：silent → disable_notification / 媒体 JSON 引用与 multipart 上传形状 / 空媒体面校验 / 媒体错误映射 |
+| `tests/unit/test_qq_client.py` | MockTransport：动作包裹形状 / Bearer 头有无 / 超时注入 / status=async 成功 / 错误映射表 / 空文本拒绝；v2：段数组动作包裹形状 / 空段列表拒绝 |
+| `tests/unit/test_tg_runner.py` | fake client + fake router + 注入休眠：offset 往返 / 去重 / 退避 / 优雅停机 / 启动校验 / 发送面；v2：媒体消息 caption 兜底 + 伪方案附件提取 / 纯媒体跳过 / silent 透传 / 附件 kind 分流（base64 上传 / url JSON / file_id 重发 / sticker caption 丢弃）/ 部分失败聚合 / 文本失败上抛（v1 语义） |
+| `tests/unit/test_qq_adapter.py` | fake 客户端：chat_id grammar 双形态 / 投递映射（ok / 无 message_id）/ grammar 校验 / 失败上抛；v2：段数组发射（文本先 + 媒体后）/ base64 包装 / sticker→image 映射 / file 类逐附件失败承载 / silent no-op / 段发送失败上抛 |
+| `tests/unit/test_qq_webhook.py` | fake 路由器：私聊 / 群聊路由形状 / 展平双形态 + 占位符表 / 去重 + FIFO 淘汰 / 忽略矩阵 / 隔离铁律；v2：image / record 段附件提取（url / base64:// 剥前缀 / file:// path 源）/ 无引用跳过 / CQ 字符串形态提取不生效（边界） |
+| `tests/unit/test_channel_router.py` | fake ChatService：会话复用 / 持久化调用形状 / 人格绑定 / 错误隔离矩阵 / per-chat 并发串行化；v2：入站附件 + synthetic 透传（回复循环纯文本——零路由器改动证明） |
 | `tests/unit/test_channels_qq_api.py` | ASGITransport：恒 200 确认形状 / 鉴权矩阵（401 / 关闭）/ 体校验 400 / 路由器未装配确认丢弃 |
 | `tests/unit/test_app_channels_lifespan.py` | telegram enabled / disabled 装配 / 停机 LIFO 顺序 / token 缺失 fail fast / 任务终态收割 / cancel 兜底 |
 | `tests/unit/test_app_qq_channels_lifespan.py` | QQ enabled / disabled 装配 / warn-and-continue / 双通道共用路由器 / 共享池注入 / 装配顺序契约 |
