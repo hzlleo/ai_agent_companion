@@ -68,6 +68,10 @@
 | `version` | Integer | 链内版本号（首版 1，supersede 递增） |
 | `active_marker` | String(16)，可空 | 单 active 守卫标记（active 行 `'active'` / superseded 行 NULL）——唯一键 `uq_ff_curated_active (persona_id, kind, topic, active_marker)` 的非 NULL 侧（两方言唯一键均忽略 NULL，多代 superseded 行共存；迁移 0007） |
 
+长期指令（R2b D7-14）不新建表：以 `kind=user_note` + `topic='directive:<slug>'` 行承载
+（supersede / 历史链 / 唯一键全部复用本表；服务层只做命名空间收窄——详见
+[persona.md](persona.md#长期指令r2b-d7-14usermd-式常备指令)）。
+
 ### ff_chat_sessions / ff_chat_messages（工作层）
 
 `ff_chat_sessions`：`persona_id`（PersonaMixin）/ `title` / `message_count`（下一消息 seq）/ `last_active_at`（索引）。

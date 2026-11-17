@@ -13,6 +13,7 @@ import { http, HttpResponse } from 'msw'
 import { API_BASE_URL, API_PREFIX } from '@/api/client'
 import type { ResultDTO } from '@/types/common'
 import type {
+  DirectiveRecord,
   PersonaRecord,
   PersonaState,
   TraitComponent,
@@ -31,6 +32,7 @@ import type {
 } from '@/types/memory'
 import type { UsageAggregate, UsageRecord, UsageSummary } from '@/types/usage'
 import type { ModelEntryMasked, RegistryState, RoleBinding } from '@/types/model-registry'
+import type { ReminderRecord } from '@/types/reminders'
 
 /** 后端 URL 前缀（handlers 统一经此拼接，与 api client 同源）。 */
 export const BACKEND_ORIGIN = `${API_BASE_URL}${API_PREFIX}`
@@ -1220,5 +1222,198 @@ export const modelHandlers = [
   }),
 ]
 
+// ---------------------------------------------------------------------------
+// reminders 域（持久化提醒——P10=B）
+// ---------------------------------------------------------------------------
+
+/** 测试用提醒记录（wire 形态）。 */
+export function mockReminder(overrides: Partial<ReminderRecord> = {}): ReminderRecord {
+  return {
+    id: 1,
+    persona_id: '1',
+    title: '起来喝水',
+    due_at_ms: 1731000600000,
+    status: 'pending',
+    delivery_attempts: 0,
+    last_error: null,
+    delivered_at_ms: null,
+    source: 'manual',
+    meta: null,
+    created_at: 1731000000000,
+    updated_at: 1731000000000,
+    ...overrides,
+  }
+}
+
+/** reminders 域默认 handlers（成功形态 + 状态守卫 / 部分成功面）。 */
+export const reminderHandlers = [
+  // 列表：3 行（status 过滤 + 游标两页）。
+  http.get(`${BACKEND_ORIGIN}/reminders`, ({ request }) => {
+    const url = new URL(request.url)
+    const cursor = url.searchParams.get('cursor')
+    const status = url.searchParams.get('status')
+    const all = [
+      mockReminder({ id: 3, title: '交水电费', due_at_ms: 1731001200000 }),
+      mockReminder({
+        id: 2,
+        title: '早点睡',
+        due_at_ms: 1731000900000,
+        status: 'delivered',
+        delivered_at_ms: 1731000900000,
+      }),
+      mockReminder({ id: 1, title: '已取消的提醒', status: 'cancelled' }),
+    ]
+    const filtered = all.filter((row) => status === null || row.status === status)
+    if (cursor === null) {
+      return HttpResponse.json(
+        okResult({
+          items: filtered.slice(0, 2),
+          total: -1,
+          page: 1,
+          page_size: 20,
+          next_cursor: 'reminders-page-2',
+          has_more: true,
+        }),
+      )
+    }
+    return HttpResponse.json(
+      okResult({
+        items: filtered.slice(2),
+        total: -1,
+        page: 1,
+        page_size: 20,
+        next_cursor: null,
+        has_more: false,
+      }),
+    )
+  }),
+  // 创建：回显 pending 记录。
+  http.post(`${BACKEND_ORIGIN}/reminders`, async ({ request }) => {
+    const body = (await request.json()) as { title: string; due_at_ms: number }
+    return HttpResponse.json(
+      okResult(
+        mockReminder({ id: 9, title: body.title, due_at_ms: body.due_at_ms }),
+        '提醒已创建',
+      ),
+    )
+  }),
+  // 批量取消（部分成功形态：id=1 记 NOT_FOUND 失败——人格作用域外语义）。
+  http.post(`${BACKEND_ORIGIN}/reminders/batch-cancel`, async ({ request }) => {
+    const body = (await request.json()) as { ids: number[] }
+    const items = body.ids.map((id) =>
+      id === 1
+        ? { id, success: false, code: 'NOT_FOUND', message: '提醒不存在（或不属于当前人格）' }
+        : { id, success: true, code: null, message: '已取消' },
+    )
+    const succeeded = items.filter((item) => item.success).length
+    return HttpResponse.json(
+      okResult(
+        { total: items.length, succeeded, failed: items.length - succeeded, items },
+        '批量取消已完成',
+      ),
+    )
+  }),
+  // 读取：id=404 → 404。
+  http.get(`${BACKEND_ORIGIN}/reminders/:reminderId`, ({ params }) => {
+    const id = Number(params.reminderId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('提醒不存在（或不属于当前人格）', 'NOT_FOUND'), {
+        status: 404,
+      })
+    }
+    return HttpResponse.json(okResult(mockReminder({ id })))
+  }),
+  // 取消：id=2（已投递）→ 422 状态守卫；其余 → cancelled。
+  http.post(`${BACKEND_ORIGIN}/reminders/:reminderId/cancel`, ({ params }) => {
+    const id = Number(params.reminderId)
+    if (id === 2) {
+      return HttpResponse.json(
+        errorResult('仅待投递提醒可以取消', 'VALIDATION_ERROR', { id, status: 'delivered' }),
+        { status: 422 },
+      )
+    }
+    if (id === 404) {
+      return HttpResponse.json(errorResult('提醒不存在（或不属于当前人格）', 'NOT_FOUND'), {
+        status: 404,
+      })
+    }
+    return HttpResponse.json(okResult(mockReminder({ id, status: 'cancelled' }), '提醒已取消'))
+  }),
+]
+
+// ---------------------------------------------------------------------------
+// directives 域（长期指令——USER.md 式常备指令）
+// ---------------------------------------------------------------------------
+
+/** 测试用长期指令记录（wire 形态）。 */
+export function mockDirective(overrides: Partial<DirectiveRecord> = {}): DirectiveRecord {
+  return {
+    id: 1,
+    topic: 'directive:7f1a2b3c4d5e',
+    content: '以后都用简体中文',
+    version: 1,
+    created_at: 1731000000000,
+    updated_at: 1731000000000,
+    ...overrides,
+  }
+}
+
+/** directives 域默认 handlers（成功形态 + 404 面）。 */
+export const directiveHandlers = [
+  // 列表：两条现行指令（新写入在前）。
+  http.get(`${BACKEND_ORIGIN}/directives`, () => {
+    return HttpResponse.json(
+      okResult([
+        mockDirective({ id: 2, topic: 'directive:aa11bb22cc33', content: '不要超过十二点睡' }),
+        mockDirective(),
+      ]),
+    )
+  }),
+  // 创建：回显新记录。
+  http.post(`${BACKEND_ORIGIN}/directives`, async ({ request }) => {
+    const body = (await request.json()) as { content: string; topic?: string }
+    return HttpResponse.json(
+      okResult(
+        mockDirective({
+          id: 9,
+          content: body.content,
+          topic: body.topic ?? 'directive:9f8e7d6c5b4a',
+        }),
+        '长期指令已保存',
+      ),
+    )
+  }),
+  // 更新：id=404 → 404；其余 → version+1。
+  http.put(`${BACKEND_ORIGIN}/directives/:directiveId`, async ({ request, params }) => {
+    const id = Number(params.directiveId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('长期指令不存在（非本域策展行）', 'NOT_FOUND'), {
+        status: 404,
+      })
+    }
+    const body = (await request.json()) as { content: string }
+    return HttpResponse.json(
+      okResult(mockDirective({ id: id + 100, content: body.content, version: 2 }), '长期指令已更新'),
+    )
+  }),
+  // 删除：id=404 → 404；其余成功。
+  http.delete(`${BACKEND_ORIGIN}/directives/:directiveId`, ({ params }) => {
+    const id = Number(params.directiveId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('长期指令不存在（非本域策展行）', 'NOT_FOUND'), {
+        status: 404,
+      })
+    }
+    return HttpResponse.json(okResult(null, '长期指令已删除'))
+  }),
+]
+
 /** 共享 msw 服务器（setup.ts 管理生命周期）。 */
-export const server = setupServer(...personaHandlers, ...memoryHandlers, ...usageHandlers, ...modelHandlers)
+export const server = setupServer(
+  ...personaHandlers,
+  ...memoryHandlers,
+  ...usageHandlers,
+  ...modelHandlers,
+  ...reminderHandlers,
+  ...directiveHandlers,
+)

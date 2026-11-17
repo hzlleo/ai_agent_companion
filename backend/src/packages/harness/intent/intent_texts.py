@@ -23,6 +23,8 @@ __all__ = [
     "GREETING_LATE_NIGHT_TEXT",
     "IDENTITY_TEXT",
     "HELP_TEXT",
+    "DIRECTIVE_ACK_TEXT",
+    "DIRECTIVE_CONFIRMED_TEXT",
 ]
 
 #: TIME_QUERY 回复模板（{time} = 本地 HH:MM；{persona_name} = 称呼）。
@@ -42,6 +44,13 @@ GREETING_LATE_NIGHT_TEXT: str = "这么晚还没睡呀？{persona_name}陪着你
 
 #: IDENTITY 回复模板（{persona_name} = 称呼）。
 IDENTITY_TEXT: str = "我是{persona_name}呀，你的专属小伙伴，一直在这里陪你～"
+
+#: DIRECTIVE 命中但未落库（副作用失败 / 未接线）的附和文案——不承诺
+#: 「记住」（避免下一轮组装读不到指令时的自相矛盾）。
+DIRECTIVE_ACK_TEXT: str = "嗯嗯，我明白啦～"
+
+#: DIRECTIVE 落库成功后的确认文案（{directive} = 归一后的指令正文）。
+DIRECTIVE_CONFIRMED_TEXT: str = "好，我记住啦：{directive}"
 
 #: HELP 回复模板（静态能力清单——与既有能力面对齐：陪伴对话 / 记忆 /
 #: 时间问答；值班巡检与联网搜索为可选装配能力）。

@@ -8,11 +8,13 @@
         ↓ ③ prompts.render_persona_system_prompt(card)     人格正典（覆写感知）
         ↓ ④ 非中性情绪摘要块（render_emotion_state_block——R2b 轻情绪引擎；
              无状态 / 全中性跳过）
-        ↓ ⑤ prompts.render_output_protocol()               输出格式协议（心声 /
+        ↓ ⑤ 长期指令块（render_directives_block——R2b D7-14；现行指令
+             注入，20 条 / 2000 字符帽截断；无指令跳过）
+        ↓ ⑥ prompts.render_output_protocol()               输出格式协议（心声 /
              情绪标签指令——R2b）
-        ↓ ⑥ 世界书 after_char 条目块                       检索增强（后段）
-        ↓ ⑦ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合）
-        ↓ ⑧ prompts.render_post_history_message(card)      历史后再注入（末块）
+        ↓ ⑦ 世界书 after_char 条目块                       检索增强（后段）
+        ↓ ⑧ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合）
+        ↓ ⑨ prompts.render_post_history_message(card)      历史后再注入（末块）
 
 世界书筛选语义（chara card v2 规格 + R2b 高级触发——算法链全文见
 ``world_book`` 模块文档，此处为消费面摘要）：
@@ -74,6 +76,16 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
     - 不合规模型（无标签 / 标签残缺）优雅降级：原文可见、零状态变化
       ——协议面永不因模型输出抛异常。
 
+长期指令注入（R2b D7-14——构造注入 ``directive_service`` 后）：
+
+    - compose 链在心情块之后、输出格式协议之前注入【长期指令】块
+      （``render_directives_block``——现行指令按写入倒序，20 条 / 2000
+      字符双帽截断 + 截断说明行）；
+    - 注入面与情绪引擎同轴：仅在持久化会话绑定且已落库时读取（
+      ``session_scope`` 独立短事务 + 人格上下文绑定）——纯内存形态零
+      附加 I/O，既有测试面零变更；读取失败不阻断回复（日志 + 空块，
+      文档化：常备指令是增强面而非回复前提）。
+
 意图快径前钩（R2a-6——构造注入 ``intent_shortcut`` 后，``reply`` 前端
 先试快径；缺省 ``intent_shortcut=None`` 保持既有零快径形态）：
 
@@ -131,6 +143,7 @@ from packages.harness.chat.output_protocol import (
 from packages.harness.chat.prompts import (
     WORLD_BOOK_SECTION_SEPARATOR,
     render_charter,
+    render_directives_block,
     render_emotion_state_block,
     render_first_greeting,
     render_output_protocol,
@@ -160,6 +173,7 @@ from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
     CharaBookPosition,
 )
+from packages.harness.persona.directives import DirectivesService
 from packages.harness.persona.dtos import PersonaRecordDTO
 from packages.harness.persona.service import PersonaService, bind_persona_context
 from packages.harness.tools.tool_models import (
@@ -248,20 +262,24 @@ def compose_messages(
     *,
     rng: random.Random | None = None,
     emotion_summary: str | None = None,
+    directives: Sequence[str] | None = None,
 ) -> MessageCompositionResult:
     """组装完整请求消息序列（纯函数——无 I/O / 无网关调用 / 无会话回写）。
 
     消息序列结构::
 
         [system]  章程 + 世界书 before 段 + 人格正典 + 心情状态块 +
-                  输出格式协议块 + 世界书 after 段
+                  长期指令块 + 输出格式协议块 + 世界书 after 段
         [user/assistant ...]  全部历史回合（含刚追加的用户回合）
         [system]  历史后再注入（卡片声明 post_history_instructions 时；
                   位于**最后一条历史回合之后**——deep anti-drift 位置）
 
     心情状态块仅在 ``emotion_summary`` 非空时注入（非中性情绪——由
-    ChatService 经 emotion 域读取 M 态产出）；输出格式协议块恒注入
-    （心声 / 情绪标签指令——解析面见 ``chat/output_protocol``）。
+    ChatService 经 emotion 域读取 M 态产出）；长期指令块仅在
+    ``directives`` 有有效条目时注入（现行指令——由 ChatService 经
+    DirectivesService 读取；20 条 / 2000 字符帽由
+    ``render_directives_block`` 施加）；输出格式协议块恒注入（心声 /
+    情绪标签指令——解析面见 ``chat/output_protocol``）。
 
     世界书选择经 ``world_book.select_world_book_entries``（算法链与
     渲染序裁定见该模块文档）；推进后的回合状态（冷却时钟 + 注入
@@ -274,6 +292,8 @@ def compose_messages(
             ``trigger_probability < 1.0`` 时消耗——缺省卡片零随机性）。
         emotion_summary: 非中性情绪摘要行（None / 空白 = 不注入心情块；
             M 态读取与衰减在调用方——本函数保持纯函数无 I/O）。
+        directives: 现行长期指令正文列表（None / 空 = 不注入长期指令块；
+            读取在调用方——本函数保持纯函数无 I/O）。
 
     Returns:
         组装结果（消息序列 + 观测元数据 + 推进后的世界书回合状态）。
@@ -297,6 +317,9 @@ def compose_messages(
     emotion_block = render_emotion_state_block(emotion_summary)
     if emotion_block:
         system_parts.append(emotion_block)
+    directives_block = render_directives_block(directives or [])
+    if directives_block:
+        system_parts.append(directives_block)
     system_parts.append(render_output_protocol())
     after_block = render_world_book_block(after_entries)
     if after_block:
@@ -401,6 +424,7 @@ class ChatService:
         tool_executor: ToolExecutorFace | None = None,
         intent_shortcut: IntentShortcutFace | None = None,
         emotion_service: EmotionService | None = None,
+        directive_service: DirectivesService | None = None,
     ) -> None:
         """初始化服务。
 
@@ -422,6 +446,9 @@ class ChatService:
             emotion_service: 轻情绪引擎服务（None = 现场构造默认实例——
                 读 ``EMOTION_`` env；M 态读写仅在持久化会话绑定且已落库
                 时发生——纯内存形态零附加 I/O，见模块 docstring）。
+            directive_service: 长期指令服务（None = 不注入长期指令块——
+                行为与既有完全一致；注入后持久化会话回合在 compose 前
+                读取现行指令——纯内存形态零附加 I/O，见模块 docstring）。
 
         Raises:
             BusinessException: ``tools`` 与 ``tool_executor`` 未成对注入
@@ -436,6 +463,8 @@ class ChatService:
         self._emotion_service = (
             emotion_service if emotion_service is not None else EmotionService()
         )
+        #: 长期指令服务绑定（None = 不注入——纯内存 / 未接线形态零 I/O）。
+        self._directive_service = directive_service
         bound_tools = list(tools) if tools else []
         if bound_tools and tool_executor is None:
             raise BusinessException(
@@ -654,7 +683,10 @@ class ChatService:
         user_turn = self._append_user_turn(state, user_text)
         await self._persist_turn(state, user_turn)
         emotion_summary = await self._current_emotion_summary(state)
-        result = compose_messages(state, emotion_summary=emotion_summary)
+        directives = await self._current_directives(state)
+        result = compose_messages(
+            state, emotion_summary=emotion_summary, directives=directives
+        )
         # 功能式回合状态回存：组装纯函数不回写会话态，冷却时钟推进由
         # 本服务消费后落回（快径路径不组装、不推进——时钟只度量真实
         # 组装回合）。
@@ -712,7 +744,10 @@ class ChatService:
         user_turn = self._append_user_turn(state, user_text)
         await self._persist_turn(state, user_turn)
         emotion_summary = await self._current_emotion_summary(state)
-        result = compose_messages(state, emotion_summary=emotion_summary)
+        directives = await self._current_directives(state)
+        result = compose_messages(
+            state, emotion_summary=emotion_summary, directives=directives
+        )
         # 功能式回合状态回存（与 reply 同构——冷却时钟只度量真实组装回合）。
         state.world_book_state = result.world_book_state
         stripper = StreamTagStripper()
@@ -959,6 +994,35 @@ class ChatService:
         if not self._emotion_runtime_active(state):
             return None
         return await self._emotion_service.summary(state.persona_id)
+
+    async def _current_directives(self, state: ChatSessionStateModel) -> list[str]:
+        """读取现行长期指令（compose 长期指令块注入面）。
+
+        运行判定：持久化会话已落库 + 服务已接线（与情绪引擎同轴——M 态 /
+        指令一律依赖数据库；纯内存形态零附加 I/O）。读取失败不阻断回复
+        （日志 + 空列表——常备指令是增强面）。
+
+        Args:
+            state: 会话状态。
+
+        Returns:
+            现行指令正文列表（新写入在前）；未接线 / 未落库 / 读取失败
+            时为空列表。
+        """
+        if (
+            self._directive_service is None
+            or self._session_service is None
+            or state.session_id is None
+        ):
+            return []
+        try:
+            async with session_scope() as db_session, bind_persona_context(state.persona_id):
+                return await self._directive_service.list_active_texts(db_session)
+        except Exception:  # best-effort：指令读取失败不阻断回复链路
+            logger.opt(exception=True).warning(
+                "长期指令读取失败（本轮不注入长期指令块）: persona_id={}", state.persona_id
+            )
+            return []
 
     async def _emotion_round_meta(
         self, state: ChatSessionStateModel, parsed: ParsedAssistantOutputModel

@@ -406,3 +406,37 @@ export interface PersonaImportBatchResult {
   /** 逐文件结果（与提交顺序一致）。 */
   items: PersonaImportBatchItem[]
 }
+
+// ---------------------------------------------------------------------------
+// 长期指令（directives——USER.md 式常备指令；策展记忆 user_note 收窄面）
+// ---------------------------------------------------------------------------
+
+/** 长期指令记录（策展记忆行收窄投影——管理面 / 面板读取面）。 */
+export interface DirectiveRecord {
+  /** 策展记忆主键（删除 / 更新锚点）。 */
+  id: number
+  /** 主题键（directive: 前缀——同 topic 覆盖为 supersede）。 */
+  topic: string
+  /** 指令正文。 */
+  content: string
+  /** 链内版本号（supersede 递增——面板展示 vN）。 */
+  version: number
+  /** 落库时间（epoch 毫秒）。 */
+  created_at: number
+  /** 行更新时间（epoch 毫秒）。 */
+  updated_at: number
+}
+
+/** 长期指令创建请求（同 topic 覆盖为 supersede——「编辑」语义）。 */
+export interface DirectiveCreateRequest {
+  /** 指令正文（1-500 字符）。 */
+  content: string
+  /** 主题键（undefined = 按正文派生 directive:<指纹>；显式同 topic 覆盖）。 */
+  topic?: string
+}
+
+/** 长期指令更新请求（按既有 topic 重写——supersede 链 +1）。 */
+export interface DirectiveUpdateRequest {
+  /** 指令正文（1-500 字符）。 */
+  content: string
+}

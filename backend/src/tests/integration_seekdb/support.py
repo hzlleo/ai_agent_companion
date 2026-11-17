@@ -52,6 +52,7 @@ __all__ = [
     "fetch_column_names",
     "fetch_table_names",
     "recreate_scratch_database",
+    "assert_reminder_scan_lock",
     "resolve_seekdb_test_target",
     "run_alembic_command",
 ]
@@ -84,10 +85,11 @@ _MISSING_ENV_MESSAGE = (
     "未注入测试服务 env 的本地运行。"
 )
 
-#: alembic 迁移链 head 版本戳（0010——会话消息变体列 / 复合唯一键迁移）。
-HEAD_REVISION = "000000000010"
+#: alembic 迁移链 head 版本戳（0011——持久化提醒表迁移）。
+HEAD_REVISION = "000000000011"
 
-#: 升级 head 后的全量表集（live 实测形态：alembic_version + 8 张 ff_* 域表）。
+#: 升级 head 后的全量表集（alembic_version + 9 张 ff_* 域表——0011 新增
+#: ff_reminders）。
 EXPECTED_HEAD_TABLES: frozenset[str] = frozenset(
     {
         "alembic_version",
@@ -98,6 +100,7 @@ EXPECTED_HEAD_TABLES: frozenset[str] = frozenset(
         "ff_memory_episodes",
         "ff_persona_states",
         "ff_personas",
+        "ff_reminders",
         "ff_usage_records",
     }
 )
@@ -401,3 +404,58 @@ def run_alembic_command(
             command.downgrade(alembic_config, revision)
         else:
             command.upgrade(alembic_config, revision)
+
+
+#: 提醒扫描语句（与 harness/reminders/service 的 scan_due_reminders 同形——
+#: 锁定子句方言面断言真源）。
+_REMINDER_SCAN_LOCK_SQL = (
+    "SELECT id FROM ff_reminders"
+    " WHERE status = 'pending' AND due_at_ms <= %s"
+    " ORDER BY id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+)
+
+
+async def assert_reminder_scan_lock(target: SeekDbTestTarget) -> None:
+    """真引擎断言提醒扫描锁定子句可用（FOR UPDATE SKIP LOCKED）。
+
+    语义（锁定决策）：扫描作业以 ``FOR UPDATE SKIP LOCKED`` 让并发扫描
+    实例抢占互不重叠的到期行；MySQL 8 / SeekDB 支持该子句，SQLite 方言
+    忽略——因此该能力只能在真引擎锁定。断言形态：插入一条到期行 → 两
+    个连接分别执行同形扫描语句（autocommit=False 持锁）——第一个连接
+    命中并持锁，第二个连接因 SKIP LOCKED 立即返回空集（不阻塞、不报错）。
+
+    Args:
+        target: 连接目标（scratch 库已迁移到 head）。
+
+    Raises:
+        aiomysql.MySQLError: 方言不支持 SKIP LOCKED（语句解析失败）——
+            测试红（真引擎强制面）。
+    """
+    seed = await connect_scratch(target)
+    try:
+        async with seed.cursor() as cursor:
+            await cursor.execute(
+                "INSERT INTO ff_reminders"
+                " (persona_id, title, due_at_ms, status, delivery_attempts, source,"
+                " created_at, updated_at)"
+                " VALUES ('1', 'scan-lock-probe', 1, 'pending', 0, 'manual', 1, 1)"
+            )
+    finally:
+        seed.close()
+
+    first = await connect_scratch(target, autocommit=False)
+    second = await connect_scratch(target, autocommit=False)
+    try:
+        async with first.cursor() as cursor:
+            await cursor.execute(_REMINDER_SCAN_LOCK_SQL, (1000,))
+            first_rows = await cursor.fetchall()
+        async with second.cursor() as cursor:
+            await cursor.execute(_REMINDER_SCAN_LOCK_SQL, (1000,))
+            second_rows = await cursor.fetchall()
+        assert len(first_rows) == 1, f"首个连接未命中到期行: {first_rows!r}"
+        assert len(second_rows) == 0, f"SKIP LOCKED 未生效: {second_rows!r}"
+    finally:
+        await first.rollback()
+        first.close()
+        await second.rollback()
+        second.close()

@@ -13,6 +13,7 @@
 | `orm.py` | 注册表 ORM（`ff_personas` + `ff_persona_states`） | `PersonaRow` / `PersonaStateRow` |
 | `dtos.py` | 创建 / 更新 / 复制 / 记录 / 卡片 / 状态 / 查询 / 批量 / 导入 / 特质库 DTO（Unit 文件） | `PersonaCreateDTO` / `PersonaUpdateDTO` / `PersonaCopyDTO` / `PersonaRecordDTO` / `PersonaCardDTO` / `PersonaStateUpsertDTO` / `PersonaStateDTO` / `PersonaQueryDTO` / `PersonaBatchDelete*` / `PersonaImportRequestDTO` / `PersonaImportResultModel` / `PersonaImportBatch*` / `TraitLibraryDTO` |
 | `service.py` | 注册 CRUD / 事务性主人格切换 / 可寻址集 / 状态层读写 / 批量删除 / 导入（幂等 + 冲突策略）+ `bind_persona_context` 运行期绑定 | `PersonaService` / `bind_persona_context` / `canonical_card_hash` |
+| `directives.py` / `directives_models.py` | 长期指令（USER.md 式常备指令）服务与 DTO——策展记忆 `user_note` + `directive:` 前缀命名空间的收窄面（R2b D7-14） | `DirectivesService` / `DirectiveCreateDTO` / `DirectiveUpdateDTO` / `DirectiveRecordDTO` / `DIRECTIVE_TOPIC_PREFIX` |
 
 依赖方向：persona → core（dtos 分页 / errors / context）+ database（Base Mixins / get_async_db）+ voice（预设建议语音 `VoiceProfileModel`）；app 层（api/personas + middleware/error_handler）→ persona + core + database。**两张表均非 PersonaMixin**（见下）。
 
@@ -332,6 +333,63 @@ async with bind_persona_context(persona.id):                      # 运行期任
 
 卡片补丁合并语义（`PersonaUpdateDTO.card`）：仅出现字段覆写既有卡片（`exclude_unset` 合并后整体重校验——合并结果违约 `VALIDATION_ERROR` fail loud）；`character_book` 提供时整体替换（不做条目级合并），显式 `null` 清除世界书。
 
+
+## 长期指令（R2b D7-14——USER.md 式常备指令）
+
+长期指令是主人对人格的**持久行为约定**（如「以后都用简体中文」「别再熬夜了」）——
+与一次性记忆的区别是它在每轮对话组装的系统提示里恒常注入（chat compose 链的
+【长期指令】块，见 [chat.md](chat.md) 组装链）。
+
+**存储决策（锁定）**：**不新建表**——复用策展记忆域 `ff_curated_memory` 的
+`kind=user_note` + `topic='directive:<slug>'` 行；supersede 语义（同 topic 单
+active + 历史链 + 唯一键强制）与删除语义直接继承策展层，本域只做命名空间收窄与
+边界校验（不复制存储实现）。
+
+| 项 | 取值 | 说明 |
+|---|---|---|
+| `kind` | `user_note` | 固定（策展类型值域既有成员） |
+| `topic` | `directive:<slug>` | 前缀强制（`DIRECTIVE_TOPIC_PREFIX`）；缺省 slug = 正文 sha256 前 12 hex（同文重复创建收敛同链——天然去重）；显式 topic 用于编辑（同 topic 覆盖 supersede，`version` 递增） |
+| `content` | 1-500 字符 | 首尾空白裁剪；超长 / 空白拒绝（`VALIDATION_ERROR`） |
+| `provenance` | `owner` | 固定（长期指令恒源自主人——对话捕获与面板创建同轴） |
+| 注入帽 | 20 条 / 2000 字符 | chat compose 渲染帽（超帽追加截断说明行） |
+
+`DirectivesService` API（人格作用域——调用方先 `bind_persona_context`）：
+
+```python
+service = DirectivesService()                                     # 无状态；Session 逐调用注入
+record = await service.create(session, DirectiveCreateDTO(content=..., topic=None))   # 创建 / 同 topic 覆盖
+record = await service.update(session, directive_id, DirectiveUpdateDTO(content=...)) # 按既有 topic 重写
+records = await service.list_active(session, limit=200)           # 现行指令（id 降序）
+texts = await service.list_active_texts(session, limit=20)        # compose 注入面（正文列表）
+await service.delete(session, directive_id)                       # 删除（策展行删除）
+```
+
+同域非指令行（普通 `user_note` 备忘）在列表 / 更新 / 删除面均不可见（topic 前缀
+收窄——非本域行 `NOT_FOUND`）。他人格指令同样 `NOT_FOUND`（PersonaMixin 作用域）。
+
+### 管理 API 面（app/api/directives.py）
+
+前缀 `/api/v1/directives`；全部响应经 `ResultDTO` 封装，DB Session 经
+`get_async_db` 注入（事务边界归服务层）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/directives` | 现行指令列表（`persona_id` 可选——缺省主人格；他人格不可见） |
+| POST | `/api/v1/directives` | 创建（body `{content, topic?}`；同 topic 覆盖为 supersede） |
+| PUT | `/api/v1/directives/{id}` | 按既有 topic 重写（body `{content}`；supersede 链 +1） |
+| DELETE | `/api/v1/directives/{id}` | 删除（策展行删除；不可恢复） |
+
+### 对话捕获（意图快径 DIRECTIVE——R2b）
+
+通道对话里以「记住 / 记得 / 以后都 / 以后 / 别再 / 不要」开头的消息经意图快径
+`DIRECTIVE` 类型捕获（见 [chat.md](chat.md) 意图快径一节）：正文经装配注入的
+`DirectiveSinkFace` 落库为长期指令（`provenance=owner`），**落库成功才**回复
+「已记住：正文」；落库失败 / 未接线时退化为普通附和（不承诺记住——避免下一轮
+compose 读不到指令时自相矛盾）。副作用恒不阻断回复链路。
+
+前端消费面（`frontend/src/pages/personas/DirectivesPanel.tsx`）：人格编辑页
+「常备指令」卡片——列表 / 新建 / 编辑（supersede）/ 删除（确认）。
+
 ## 管理 API 面（app/api/personas.py）
 
 前缀 `/api/v1/personas`；全部响应经 `ResultDTO` 封装，分页经 `PageResponse`，DB Session 经 `get_async_db` 注入（事务边界归服务层）：
@@ -360,7 +418,7 @@ async with bind_persona_context(persona.id):                      # 运行期任
 
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元：v2 基础校验 + R2b 高级字段界校验 / include_group 归一 / recursive 总开关规格一致性 / 加性字段 JSON 往返）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_trait_library.py`（R2b-2 特质库：组件 / 预设模型规格（kebab / 分类值域 / 空组合拒绝）+ 纯函数生成（后缀拼接 / 分号拼接序 / 指令行拼接 / `<START>` 台词块 / 建议世界书并入 / 冲突软警告双向去重 / 未知组件 fail loud）+ 官方库装载（真实随包 YAML——8 预设名单序 / 全引用合法 / 发行零冲突 / 缓存命中）+ 显式目录违约形态 fail loud（缺失 / 结构 / 重复 id / 未知引用 / 发行冲突预设 / 空库））/ `test_persona_import_service.py`（R2b-2 导入服务：判定序（内容同卡三策略恒幂等）+ 名称冲突三策略矩阵（skip / rename 自动后缀链 / overwrite 保状态保标记保语音）+ 期望名 / 载荷恰一 + 批量部分成功（合法跳过成功项 / 解析失败失败项 / 计数面））/ `test_persona_import_api.py`（R2b-2 导入 HTTP 面：预设库读取 + JSON / multipart 双面矩阵（预设生成 / 期望名 + 后缀 / 同卡幂等 / 冲突三策略 / 未知预设 404 / 载荷恰一 422 / 策略非法 422 / 空体 400 / 非法 JSON 400/422）+ 批量部分成功（rename 策略表单字段）+ 处理器直调契约面）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；世界书选择算法链的运行语义测试在 chat 域 `test_chat_world_book.py`（见 chat.md）；
+- 测试位置：`src/tests/unit/test_directives_service.py`（长期指令：topic 派生 / 同文收敛 / 显式 topic 覆盖 / 边界 / 命名空间收窄 / 注入帽 / 链更新 / 删除 / 人格隔离）/ `test_directives_api.py`（长期指令 HTTP 面：CRUD + 隔离 404）/ `src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元：v2 基础校验 + R2b 高级字段界校验 / include_group 归一 / recursive 总开关规格一致性 / 加性字段 JSON 往返）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_trait_library.py`（R2b-2 特质库：组件 / 预设模型规格（kebab / 分类值域 / 空组合拒绝）+ 纯函数生成（后缀拼接 / 分号拼接序 / 指令行拼接 / `<START>` 台词块 / 建议世界书并入 / 冲突软警告双向去重 / 未知组件 fail loud）+ 官方库装载（真实随包 YAML——8 预设名单序 / 全引用合法 / 发行零冲突 / 缓存命中）+ 显式目录违约形态 fail loud（缺失 / 结构 / 重复 id / 未知引用 / 发行冲突预设 / 空库））/ `test_persona_import_service.py`（R2b-2 导入服务：判定序（内容同卡三策略恒幂等）+ 名称冲突三策略矩阵（skip / rename 自动后缀链 / overwrite 保状态保标记保语音）+ 期望名 / 载荷恰一 + 批量部分成功（合法跳过成功项 / 解析失败失败项 / 计数面））/ `test_persona_import_api.py`（R2b-2 导入 HTTP 面：预设库读取 + JSON / multipart 双面矩阵（预设生成 / 期望名 + 后缀 / 同卡幂等 / 冲突三策略 / 未知预设 404 / 载荷恰一 422 / 策略非法 422 / 空体 400 / 非法 JSON 400/422）+ 批量部分成功（rename 策略表单字段）+ 处理器直调契约面）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；世界书选择算法链的运行语义测试在 chat 域 `test_chat_world_book.py`（见 chat.md）；
 - 全部 `async def test_`；引擎经共享会话级 SQLite fixture（StaticPool 单连接 + 每测试自动清表）；HTTP 面零真实网络（ASGITransport 本地装配 app）；预设库装载测试用真实随包 YAML（仓库数据即 hermetic）；
 - 覆盖率（scoped 实测）：harness/persona **100%**、app/api **100%**、app/middleware **100%**；
 - 运行：`cd backend && pixi run tests-unit`。

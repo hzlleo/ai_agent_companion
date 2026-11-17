@@ -129,6 +129,21 @@
         "schema_key": "PersonaImportBatchResultDTO"
       },
       {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "DirectiveCreateRequest",
+        "schema_key": "DirectiveCreateDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "DirectiveUpdateRequest",
+        "schema_key": "DirectiveUpdateDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "DirectiveRecord",
+        "schema_key": "DirectiveRecordDTO"
+      },
+      {
         "frontend_file": "frontend/src/types/memory.ts",
         "frontend_type": "EpisodeCreateRequest",
         "schema_key": "EpisodeCreateDTO"
@@ -242,6 +257,36 @@
         "frontend_file": "frontend/src/types/memory.ts",
         "frontend_type": "DreamTriggerRequest",
         "schema_key": "DreamTriggerRequestDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/reminders.ts",
+        "frontend_type": "ReminderCreateRequest",
+        "schema_key": "ReminderCreateModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/reminders.ts",
+        "frontend_type": "ReminderRecord",
+        "schema_key": "ReminderRecordDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/reminders.ts",
+        "frontend_type": "ReminderListParams",
+        "schema_key": "ReminderQueryDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/reminders.ts",
+        "frontend_type": "ReminderBatchCancelRequest",
+        "schema_key": "ReminderBatchCancelRequest"
+      },
+      {
+        "frontend_file": "frontend/src/types/reminders.ts",
+        "frontend_type": "ReminderBatchCancelItem",
+        "schema_key": "ReminderBatchCancelItemDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/reminders.ts",
+        "frontend_type": "ReminderBatchCancelResponse",
+        "schema_key": "ReminderBatchCancelResponseDTO"
       },
       {
         "frontend_file": "frontend/src/types/usage.ts",
@@ -2048,6 +2093,100 @@
         "content"
       ],
       "title": "CuratedUpsertDTO",
+      "type": "object"
+    },
+    "DirectiveCreateDTO": {
+      "description": "长期指令创建入参（创建 / 覆盖写入面）。\n\nAttributes:\n    content: 指令正文（1-500 字符——首尾空白由服务层裁剪）。\n    topic: 主题键（可空——缺省按正文派生 ``directive:<指纹>``；显式\n        传入时同 topic 的既有 active 行被 supersede——「编辑」语义\n        经此承载）。",
+      "properties": {
+        "content": {
+          "description": "指令正文（1-500 字符）",
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "topic": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "主题键（可空——缺省按正文派生；显式同 topic 覆盖为 supersede）",
+          "title": "Topic"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "title": "DirectiveCreateDTO",
+      "type": "object"
+    },
+    "DirectiveRecordDTO": {
+      "description": "长期指令记录（策展记忆行的收窄投影——管理面 / 面板读取面）。\n\nAttributes:\n    id: 策展记忆主键（删除 / 更新锚点）。\n    topic: 主题键（``directive:`` 前缀——同 topic 覆盖为 supersede）。\n    content: 指令正文。\n    version: 链内版本号（supersede 递增——面板展示 vN）。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒）。",
+      "properties": {
+        "content": {
+          "description": "指令正文",
+          "title": "Content",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "落库时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "id": {
+          "description": "策展记忆主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "topic": {
+          "description": "主题键（directive: 前缀）",
+          "title": "Topic",
+          "type": "string"
+        },
+        "updated_at": {
+          "description": "行更新时间（epoch 毫秒）",
+          "title": "Updated At",
+          "type": "integer"
+        },
+        "version": {
+          "description": "链内版本号",
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "topic",
+        "content",
+        "version",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "DirectiveRecordDTO",
+      "type": "object"
+    },
+    "DirectiveUpdateDTO": {
+      "description": "长期指令更新入参（同 topic supersede——正文替换）。\n\nAttributes:\n    content: 指令正文（1-500 字符——首尾空白由服务层裁剪）。",
+      "properties": {
+        "content": {
+          "description": "指令正文（1-500 字符）",
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "title": "DirectiveUpdateDTO",
       "type": "object"
     },
     "DreamDecisionModel": {
@@ -6066,6 +6205,374 @@
         }
       },
       "title": "RegistryStateDTO",
+      "type": "object"
+    },
+    "ReminderBatchCancelItemDTO": {
+      "description": "批量取消结果单条目（部分成功形态）。\n\nAttributes:\n    id: 提醒主键。\n    success: 是否取消成功。\n    code: 失败错误码（成功为 None）。\n    message: 面向用户的提示信息。",
+      "properties": {
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "失败错误码（成功为 None）",
+          "title": "Code"
+        },
+        "id": {
+          "description": "提醒主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "message": {
+          "default": "",
+          "description": "提示信息",
+          "title": "Message",
+          "type": "string"
+        },
+        "success": {
+          "description": "是否取消成功",
+          "title": "Success",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "success"
+      ],
+      "title": "ReminderBatchCancelItemDTO",
+      "type": "object"
+    },
+    "ReminderBatchCancelRequest": {
+      "description": "批量取消请求（部分成功形态——逐 id 独立判定）。\n\nAttributes:\n    ids: 待取消提醒主键列表（1-100 个且不得重复）。",
+      "properties": {
+        "ids": {
+          "description": "待取消提醒主键列表（1-100 个，不得重复）",
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "ids"
+      ],
+      "title": "ReminderBatchCancelRequest",
+      "type": "object"
+    },
+    "ReminderBatchCancelResponseDTO": {
+      "$defs": {
+        "ReminderBatchCancelItemDTO": {
+          "description": "批量取消结果单条目（部分成功形态）。\n\nAttributes:\n    id: 提醒主键。\n    success: 是否取消成功。\n    code: 失败错误码（成功为 None）。\n    message: 面向用户的提示信息。",
+          "properties": {
+            "code": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "失败错误码（成功为 None）",
+              "title": "Code"
+            },
+            "id": {
+              "description": "提醒主键",
+              "title": "Id",
+              "type": "integer"
+            },
+            "message": {
+              "default": "",
+              "description": "提示信息",
+              "title": "Message",
+              "type": "string"
+            },
+            "success": {
+              "description": "是否取消成功",
+              "title": "Success",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "success"
+          ],
+          "title": "ReminderBatchCancelItemDTO",
+          "type": "object"
+        }
+      },
+      "description": "批量取消响应（部分成功形态——逐 id 结果与提交顺序一致）。\n\nAttributes:\n    total: 提交总数。\n    succeeded: 成功数量。\n    failed: 失败数量。\n    items: 逐 id 结果列表。",
+      "properties": {
+        "failed": {
+          "description": "失败数量",
+          "title": "Failed",
+          "type": "integer"
+        },
+        "items": {
+          "description": "逐 id 结果列表",
+          "items": {
+            "$ref": "#/$defs/ReminderBatchCancelItemDTO"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "succeeded": {
+          "description": "成功数量",
+          "title": "Succeeded",
+          "type": "integer"
+        },
+        "total": {
+          "description": "提交总数",
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "succeeded",
+        "failed",
+        "items"
+      ],
+      "title": "ReminderBatchCancelResponseDTO",
+      "type": "object"
+    },
+    "ReminderCreateModel": {
+      "$defs": {
+        "ReminderSource": {
+          "description": "提醒来源值域（``ff_reminders.source``——观测面）。",
+          "enum": [
+            "manual",
+            "chat"
+          ],
+          "title": "ReminderSource",
+          "type": "string"
+        }
+      },
+      "description": "提醒创建入参（管理面 API / 对话捕获共用形态）。\n\nAttributes:\n    title: 提醒标题（1-200 字符——首尾空白由服务层裁剪）。\n    due_at_ms: 到期时刻（epoch 毫秒；允许过去时刻——补投语义）。\n    source: 来源（manual / chat；缺省 manual）。\n    meta: 来源附加信息（可空 JSON——不参与业务判定）。",
+      "properties": {
+        "due_at_ms": {
+          "description": "到期时刻（epoch 毫秒）",
+          "minimum": 0,
+          "title": "Due At Ms",
+          "type": "integer"
+        },
+        "meta": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "来源附加信息",
+          "title": "Meta"
+        },
+        "source": {
+          "$ref": "#/$defs/ReminderSource",
+          "default": "manual",
+          "description": "来源"
+        },
+        "title": {
+          "description": "提醒标题（1-200 字符）",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "due_at_ms"
+      ],
+      "title": "ReminderCreateModel",
+      "type": "object"
+    },
+    "ReminderQueryDTO": {
+      "$defs": {
+        "ReminderStatus": {
+          "description": "提醒状态值域（``ff_reminders.status``——单向推进）。",
+          "enum": [
+            "pending",
+            "delivered",
+            "cancelled",
+            "failed"
+          ],
+          "title": "ReminderStatus",
+          "type": "string"
+        }
+      },
+      "description": "提醒列表查询（status 过滤 + 游标分页——id 降序，新提醒在前）。\n\nAttributes:\n    status: 状态过滤（None = 全部）。\n    cursor: 上一页返回的不透明游标（None = 首页）。\n    limit: 页大小（1-200，默认 20）。",
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "分页游标（首页为 None）",
+          "title": "Cursor"
+        },
+        "limit": {
+          "default": 20,
+          "description": "页大小",
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReminderStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "状态过滤"
+        }
+      },
+      "title": "ReminderQueryDTO",
+      "type": "object"
+    },
+    "ReminderRecordDTO": {
+      "$defs": {
+        "ReminderSource": {
+          "description": "提醒来源值域（``ff_reminders.source``——观测面）。",
+          "enum": [
+            "manual",
+            "chat"
+          ],
+          "title": "ReminderSource",
+          "type": "string"
+        },
+        "ReminderStatus": {
+          "description": "提醒状态值域（``ff_reminders.status``——单向推进）。",
+          "enum": [
+            "pending",
+            "delivered",
+            "cancelled",
+            "failed"
+          ],
+          "title": "ReminderStatus",
+          "type": "string"
+        }
+      },
+      "description": "提醒记录（ORM 行归一——读取 / 投递观测面）。\n\nAttributes:\n    id: 提醒主键。\n    persona_id: 所属人格 ID。\n    title: 提醒标题。\n    due_at_ms: 到期时刻（epoch 毫秒）。\n    status: 状态。\n    delivery_attempts: 投递失败累计次数。\n    last_error: 最近一次投递失败原因（NULL = 无失败）。\n    delivered_at_ms: 投递成功时刻（NULL = 未投递）。\n    source: 来源。\n    meta: 来源附加信息。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒）。",
+      "properties": {
+        "created_at": {
+          "description": "落库时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "delivered_at_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "投递成功时刻（epoch 毫秒）",
+          "title": "Delivered At Ms"
+        },
+        "delivery_attempts": {
+          "description": "投递失败累计次数",
+          "title": "Delivery Attempts",
+          "type": "integer"
+        },
+        "due_at_ms": {
+          "description": "到期时刻（epoch 毫秒）",
+          "title": "Due At Ms",
+          "type": "integer"
+        },
+        "id": {
+          "description": "提醒主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "last_error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "最近一次投递失败原因",
+          "title": "Last Error"
+        },
+        "meta": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "来源附加信息",
+          "title": "Meta"
+        },
+        "persona_id": {
+          "description": "所属人格 ID",
+          "title": "Persona Id",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/ReminderSource",
+          "description": "来源"
+        },
+        "status": {
+          "$ref": "#/$defs/ReminderStatus",
+          "description": "状态"
+        },
+        "title": {
+          "description": "提醒标题",
+          "title": "Title",
+          "type": "string"
+        },
+        "updated_at": {
+          "description": "行更新时间（epoch 毫秒）",
+          "title": "Updated At",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "persona_id",
+        "title",
+        "due_at_ms",
+        "status",
+        "delivery_attempts",
+        "source",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "ReminderRecordDTO",
       "type": "object"
     },
     "ResultDTO": {

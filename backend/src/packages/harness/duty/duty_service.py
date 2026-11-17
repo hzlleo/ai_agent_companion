@@ -81,7 +81,7 @@ from packages.harness.persona.service import PersonaService, bind_persona_contex
 from packages.harness.tools.registry import ToolRegistry
 from packages.harness.tools.tool_models import ToolCallRequestModel
 
-__all__ = ["DUTY_PURPOSE", "DUTY_SOURCE", "DutyService"]
+__all__ = ["DUTY_PURPOSE", "DUTY_SOURCE", "DutyService", "resolve_telegram_send_face"]
 
 #: 值班链路的用量 purpose（usage 域枚举既有成员——工具循环 + 收尾共用）。
 DUTY_PURPOSE: str = "duty"
@@ -93,11 +93,11 @@ DUTY_SOURCE: str = "duty:report"
 _DUTY_EPISODE_IMPORTANCE: int = 5
 
 
-def _telegram_send_face(router: ChannelRouter) -> ChannelAdapterProtocol | None:
-    """从通道路由器解析 Telegram 适配器发送面。
+def resolve_telegram_send_face(router: ChannelRouter) -> ChannelAdapterProtocol | None:
+    """从通道路由器解析 Telegram 适配器发送面（duty / reminders 共用）。
 
-    经 ``ChannelRouter.get_adapter`` 公共读取面获取（duty 出站与通道
-    入站共用同一注册实例；未注册返回 None = 无通道路径）。
+    经 ``ChannelRouter.get_adapter`` 公共读取面获取（出站与通道入站共用
+    同一注册实例；未注册返回 None = 无通道路径）。
 
     Args:
         router: 通道路由器（app.state.channels_router 装配实例）。
@@ -415,7 +415,7 @@ class DutyService:
         if not self._owner_chat_id:
             logger.info("值班报告仅落记忆：属主会话 ID 未配置")
             return DutyOwnerDelivery.SKIPPED_NO_OWNER
-        adapter = _telegram_send_face(self._channel_router)
+        adapter = resolve_telegram_send_face(self._channel_router)
         if adapter is None:
             logger.info("值班报告仅落记忆：Telegram 适配器未注册（无通道）")
             return DutyOwnerDelivery.SKIPPED_NO_CHANNEL

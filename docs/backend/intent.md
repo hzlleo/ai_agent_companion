@@ -15,7 +15,7 @@
 
 依赖方向：intent_models / intent_texts → pydantic only；matcher → rhythm 纯函数（`is_sleeping`——问候深夜带消费，单向）；service → matcher + rhythm 模型；chat → intent_models（协议结构化消费，**不** import intent/service——`IntentShortcutFace` 结构化类型解耦）。
 
-## 类型值域（四类封顶——锁定决策）
+## 类型值域（五类封顶——锁定决策）
 
 | 类型 | 触发问法（例） | 罐头回复形态 |
 |---|---|---|
@@ -23,6 +23,7 @@
 | `GREETING` | 你好 / 早 / 晚安 / hi / 在吗 | 按时段带：`早上好呀～{persona_name}在这里` / 下午 / 晚上 / `这么晚还没睡呀？{persona_name}陪着你呢…` |
 | `IDENTITY` | 你是谁 / 你叫什么 / who are you | `我是{persona_name}呀，你的专属小伙伴…` |
 | `HELP` | 帮助 / 你能干什么 / help | 静态能力清单（陪伴对话 / 记忆 / 时间问答 + 能力解锁提示） |
+| `DIRECTIVE` | 记住… / 记得… / 以后都… / 以后… / 别再… / 不要… | 常备指令捕获（`directive_text` 剥前缀后经注入的 `DirectiveSinkFace` 落库；成功确认「好，我记住啦：{正文}」，sink 缺失或失败降级为普通纪律 ack——恒不阻断回复） |
 
 `STOP_STEER` 等**对话控制类有意不收**（控制流语义需要上下文感知，罐头回复会破坏对话状态机——后续心流层统一承载）。
 
@@ -31,7 +32,7 @@
 ```
 原文
     ↓ 归一：NFKC（全角→半角）+ 去全部空白 + casefold
-    ↓ ① 精确层：整句等值（四类按 TIME_QUERY → GREETING → IDENTITY → HELP 优先序）→ confidence 0.95
+    ↓ ① 精确层：整句等值（五类按 DIRECTIVE → TIME_QUERY → GREETING → IDENTITY → HELP 优先序；DIRECTIVE 为前缀捕获类优先判读）→ confidence 0.95
     ↓ ② 模糊层：子串包含（同优先序）→ confidence 0.65
     ↓ 未命中 → IntentMatchModel(kind=None, confidence=0.0, response_text="", handled=False)
     ↓ 命中 → 模板渲染（{persona_name} 称呼 / {time} 本地 HH:MM 注入）
@@ -91,4 +92,4 @@ ChannelRouter.handle_inbound（既有链路不变）
 
 ## 测试
 
-`tests/unit/test_intent_matcher.py`（四类命中 / 非命中 / 全角 / 大小写 / 多语句 / 优先序 / 时段带表驱动）+ `test_intent_service.py`（委托 / 称呼提取 / 恒不抛 / 延迟区间）+ `test_intent_shortcut_wiring.py`（chat 前钩 + 持久化不变式 + router 级全链路：入站命中 → 罐头投递 + 网关零调用 + 落库；未命中 → 网关调用）+ `test_app_channels_lifespan.py::TestRhythmIntentSlots`（装配槽位 + 单一随机源 + 关闭形态）。
+`tests/unit/test_intent_matcher.py`（五类命中 / 非命中 / 全角 / 大小写 / 多语句 / 优先序 / 时段带表驱动）+ `test_intent_service.py`（委托 / 称呼提取 / 恒不抛 / 延迟区间）+ `test_intent_shortcut_wiring.py`（chat 前钩 + 持久化不变式 + router 级全链路：入站命中 → 罐头投递 + 网关零调用 + 落库；未命中 → 网关调用）+ `test_app_channels_lifespan.py::TestRhythmIntentSlots`（装配槽位 + 单一随机源 + 关闭形态）。

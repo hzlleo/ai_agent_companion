@@ -34,6 +34,7 @@ import {
 import { CharacterBookEditor } from './CharacterBookEditor'
 import { PersonaCardJsonPreview } from './PersonaCardJsonPreview'
 import { PersonaStatesPanel } from './PersonaStatesPanel'
+import { DirectivesPanel } from './DirectivesPanel'
 
 export interface PersonaFormPageProps {
   /** 表单模式：create = 新建；edit = 编辑既有人格。 */
@@ -425,6 +426,18 @@ export default function PersonaFormPage({ mode }: PersonaFormPageProps) {
             </div>
           </CardContent>
         </Card>
+
+        {/* 常备指令（仅编辑模式——人格作用域数据） */}
+        {isEditMode && Number.isInteger(parsedId) && (
+          <Card>
+            <CardHeader>
+              <CardTitle>常备指令</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <DirectivesPanel personaId={parsedId} />
+            </CardContent>
+          </Card>
+        )}
 
         {/* 状态层（仅编辑模式） */}
         {isEditMode && Number.isInteger(parsedId) && (

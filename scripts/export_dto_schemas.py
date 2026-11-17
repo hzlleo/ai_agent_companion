@@ -92,6 +92,11 @@ from packages.harness.memory.retrieval_models import (
     MemorySearchRequestDTO,
     MemorySearchResultDTO,
 )
+from packages.harness.persona.directives_models import (
+    DirectiveCreateDTO,
+    DirectiveRecordDTO,
+    DirectiveUpdateDTO,
+)
 from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
     CharaBookModel,
@@ -119,6 +124,14 @@ from packages.harness.persona.dtos import (
 from packages.harness.persona.trait_library import (
     TraitComponentModel,
     TraitPresetModel,
+)
+from packages.harness.reminders.models import (
+    ReminderBatchCancelItemDTO,
+    ReminderBatchCancelRequest,
+    ReminderBatchCancelResponseDTO,
+    ReminderCreateModel,
+    ReminderQueryDTO,
+    ReminderRecordDTO,
 )
 from packages.harness.usage.dtos import (
     UsageAggregateDTO,
@@ -148,6 +161,7 @@ DTO_SCHEMAS_FIXTURE_PATH: Path = (
 _FRONTEND_COMMON = "frontend/src/types/common.ts"
 _FRONTEND_PERSONA = "frontend/src/types/persona.ts"
 _FRONTEND_MEMORY = "frontend/src/types/memory.ts"
+_FRONTEND_REMINDERS = "frontend/src/types/reminders.ts"
 _FRONTEND_USAGE = "frontend/src/types/usage.ts"
 _FRONTEND_REGISTRY = "frontend/src/types/model-registry.ts"
 
@@ -218,6 +232,10 @@ def build_manifest() -> list[SchemaExportEntry]:
         SchemaExportEntry("PersonaImportResultModel", PersonaImportResultModel, "PersonaImportResult", _FRONTEND_PERSONA),
         SchemaExportEntry("PersonaImportBatchItemDTO", PersonaImportBatchItemDTO, "PersonaImportBatchItem", _FRONTEND_PERSONA),
         SchemaExportEntry("PersonaImportBatchResultDTO", PersonaImportBatchResultDTO, "PersonaImportBatchResult", _FRONTEND_PERSONA),
+        # persona 域——长期指令（R2b D7-14；策展记忆 user_note 收窄面）。
+        SchemaExportEntry("DirectiveCreateDTO", DirectiveCreateDTO, "DirectiveCreateRequest", _FRONTEND_PERSONA),
+        SchemaExportEntry("DirectiveUpdateDTO", DirectiveUpdateDTO, "DirectiveUpdateRequest", _FRONTEND_PERSONA),
+        SchemaExportEntry("DirectiveRecordDTO", DirectiveRecordDTO, "DirectiveRecord", _FRONTEND_PERSONA),
         # memory 域——情景事件。
         SchemaExportEntry("EpisodeCreateDTO", EpisodeCreateDTO, "EpisodeCreateRequest", _FRONTEND_MEMORY),
         SchemaExportEntry("EpisodeRecordDTO", EpisodeRecordDTO, "EpisodeRecord", _FRONTEND_MEMORY),
@@ -261,6 +279,28 @@ def build_manifest() -> list[SchemaExportEntry]:
         SchemaExportEntry("DreamDecisionModel", DreamDecisionModel, "DreamDecision", _FRONTEND_MEMORY),
         SchemaExportEntry("DreamRunRecordDTO", DreamRunRecordDTO, "DreamRunRecord", _FRONTEND_MEMORY),
         SchemaExportEntry("DreamTriggerRequestDTO", DreamTriggerRequestDTO, "DreamTriggerRequest", _FRONTEND_MEMORY),
+        # reminders 域——持久化提醒（P10=B）。
+        SchemaExportEntry("ReminderCreateModel", ReminderCreateModel, "ReminderCreateRequest", _FRONTEND_REMINDERS),
+        SchemaExportEntry("ReminderRecordDTO", ReminderRecordDTO, "ReminderRecord", _FRONTEND_REMINDERS),
+        SchemaExportEntry("ReminderQueryDTO", ReminderQueryDTO, "ReminderListParams", _FRONTEND_REMINDERS),
+        SchemaExportEntry(
+            "ReminderBatchCancelRequest",
+            ReminderBatchCancelRequest,
+            "ReminderBatchCancelRequest",
+            _FRONTEND_REMINDERS,
+        ),
+        SchemaExportEntry(
+            "ReminderBatchCancelItemDTO",
+            ReminderBatchCancelItemDTO,
+            "ReminderBatchCancelItem",
+            _FRONTEND_REMINDERS,
+        ),
+        SchemaExportEntry(
+            "ReminderBatchCancelResponseDTO",
+            ReminderBatchCancelResponseDTO,
+            "ReminderBatchCancelResponse",
+            _FRONTEND_REMINDERS,
+        ),
         # usage 域。
         SchemaExportEntry("UsageRecordDTO", UsageRecordDTO, "UsageRecord", _FRONTEND_USAGE),
         SchemaExportEntry("UsageAggregateDTO", UsageAggregateDTO, "UsageAggregate", _FRONTEND_USAGE),

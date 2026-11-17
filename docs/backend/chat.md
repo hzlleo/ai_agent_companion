@@ -30,22 +30,43 @@
     ④ 心情状态块（emotion_summary 非空时）              R2b 轻情绪——M 态
                                                        非中性摘要（见
                                                        [emotion.md](emotion.md)）
-    ⑤ render_output_protocol()                          R2b 输出格式协议
+    ⑤ 长期指令块（directives 非空时）                   R2b D7-14 USER.md
+                                                       式常备指令（见
+                                                       [persona.md](persona.md)
+                                                       长期指令一节）
+    ⑥ render_output_protocol()                          R2b 输出格式协议
                                                        （心声 / 情绪标签指令）
-    ⑥ 世界书 after_char 条目块                          检索增强（行为补充）
+    ⑦ 世界书 after_char 条目块                          检索增强（行为补充）
 [历史回合]
-    ⑦ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合）
+    ⑧ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合）
 [system 末块]
-    ⑧ render_post_history_message(card)                历史后再注入（deep
+    ⑨ render_post_history_message(card)                历史后再注入（deep
                                                        anti-drift nudge——
                                                        卡片声明 post_history_instructions 时）
 ```
 
-各块以 `\n\n` 连接；⑧ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
+各块以 `\n\n` 连接；⑨ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
 
-注：`compose_messages(state, rng=None, emotion_summary=None)` 仍是纯函数
-——M 态读取 / 衰减在 `ChatService` 侧（仅持久化会话已落库时激活），纯内存
-形态 / 无持久化测试面零附加 I/O。
+长期指令块（⑤）的渲染语义（`render_directives_block`）：每条指令一行
+`- 正文`；最多 20 条且总字符 ≤ 2000（含列表符号）——超帽追加
+「（其余长期指令已省略）」说明行；无有效指令时整块跳过。块文本模板
+（`DIRECTIVES_BLOCK_TEMPLATE`）与截断说明行（`DIRECTIVES_TRUNCATION_NOTE`）
+同属 prompt Unit 文件 byte-lock 面（版本常量 `DIRECTIVES_BLOCK_TEMPLATE_VERSION`）。
+
+注：`compose_messages(state, rng=None, emotion_summary=None, directives=None)`
+仍是纯函数——M 态读取 / 衰减与常备指令读取均在 `ChatService` 侧（仅持久化
+会话已落库且对应服务已接线时激活），纯内存形态 / 无持久化测试面零附加 I/O。
+长期指令读取失败不阻断回复（日志 + 空块——增强面语义）。
+
+### 意图快径（含 DIRECTIVE 常备指令捕获——R2b D7-14）
+
+通道路径的 `ChatService.reply` 前端可注入意图快径面（`INTENT_ENABLED` 默认开启）：
+高频固定问法（时间 / 问候 / 身份 / 帮助）直接命中罐头回复并**完全跳过网关**。
+R2b 追加的 `DIRECTIVE` 类型捕获「记住 / 记得 / 以后都 / 以后 / 别再 / 不要」开头
+的消息：matcher 剥离前缀与句末标点得到正文，经装配注入的 `DirectiveSinkFace`
+落库为长期指令（[persona.md](persona.md) 长期指令一节），**落库成功才**回复
+「已记住：正文」；落库失败 / 未接线时退化为普通附和（不承诺记住）。副作用恒不
+阻断回复链路（错误仅日志）；快径回合照常落用户 + 助手回合（记忆 / 梦境可见）。
 
 ### 世界书筛选语义（R2b 高级触发——`world_book.select_world_book_entries` 纯函数）
 
