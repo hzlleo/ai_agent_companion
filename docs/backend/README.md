@@ -5,7 +5,7 @@
 | 模块 | 文档 | 状态 |
 |---|---|---|
 | core（errors/dtos/time_utils/logging/thread_pool/background_tasks/context/i18n/cache/enums） | [core.md](core.md) | 已交付 |
-| config（loader/models/settings/wizard/三件套生成 + SeekDB env 面） | [config.md](config.md) | 已交付（含 SeekDBSettings 检索 env 面） |
+| config（loader/models/settings + section_admin 配置节管理基座 + registry_admin LLM 注册表管理 + wizard / 三件套生成 + SeekDB env 面） | [config.md](config.md) | 已交付（含 SeekDBSettings 检索 env 面；配置节管理基座——写路径共享机械，规划供搜索 provider 注册表等复用） |
 | database（engine/base Mixins/session/alembic） | [database.md](database.md) | 已交付 |
 | pools（manager/http/llm/seekdb 共享池 + 熔断） | [pools.md](pools.md) | 已交付（含 SeekDB 检索池） |
 | llm（模型网关：多 provider / roles 路由 / 用量埋点；含注册表管理 API：models 路由 + 原子持久化 / 热重建 / 回滚） | [llm.md](llm.md) | 已交付（含注册表管理面） |

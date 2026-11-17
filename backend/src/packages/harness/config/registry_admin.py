@@ -1,11 +1,32 @@
-"""LLM 注册表管理服务——config.yaml 写路径（/api/v1/models 管理面后端）。
+"""LLM 注册表管理服务——config.yaml ``llm`` 段写路径（/api/v1/models 管理面后端）。
+
+本模块是 :class:`packages.harness.config.section_admin.ConfigSectionAdmin`
+共享基座的 **LLM 专属子类**：基座持有节无关机械（写锁串行化 / 原子持久化
++ 备份轮换 / 热重建 + 失败回滚编排——见该模块 docstring 的缝契约），
+本模块只承载 LLM 域语义：
+
+    - 条目 CRUD（唯一性 409 / 存在性 404 / 删除角色绑定守卫 409——
+      操作特定的条目级校验在各突变方法的锁窗口内先行完成）；
+    - 角色绑定面（五角色读取 + 解析状态合并）；
+    - 读取脱敏（条目只回 ``api_key_env`` 变量名，永不回密钥值）；
+    - ``llm`` 段序列化（Model Class ↔ yaml 段 dict 无损回读）。
+
+LLM 子类的缝实现一览::
+
+    ``_section_key``               → ``"llm"``
+    ``_current_section``           → ``loader.runtime_llm_config``
+    ``_apply_section_to_runtime``  → ``loader.apply_llm_config_to_runtime``
+    ``_render_section``            → ``_llm_section``（本模块）
+    ``_validate_section``          → 空体（见该方法 docstring 的域决策）
+    ``_rebuild_from_disk``         → ``loader.load_config_yaml(path=...)``
+    ``_resolve_yaml_path``         → ``loader.get_loaded_config_yaml_path()``
 
 链路顺序（单一真相，文档化于 docs/backend/llm.md 注册表管理一节）::
 
     校验（DTO 层：base_url http(s) / 非空 / extra=forbid；
           服务层：条目名唯一 409 / 存在性 404 / 删除角色绑定守卫 409）
         ↓ 构造新 LlmConfig（不可变重建——绝不原地修改运行时对象）
-        ↓ 原子持久化（写前备份 config.yaml.bak-<epoch-ms> → 临时文件
+        ↓ 原子持久化（基座：写前备份 config.yaml.bak-<epoch-ms> → 临时文件
           写入 + fsync → os.replace 原子换名；失败清理临时文件）
         ↓ 热重建（load_config_yaml 重读磁盘——证明落盘内容可加载，
           并整体换血运行时：runtime_llm_config + 解析器 + 回退链）
@@ -30,18 +51,15 @@
     - **写串行化**：``asyncio.Lock`` 串行化全部突变（单事件循环内
       校验→持久化→重建为原子窗口，杜绝并发写相互覆盖丢失条目）；
     - **阻塞 I/O 下沉**：文件读写 / 备份 / 换名全部经
-      ``run_blocking_ops``（YAML 序列化为纯内存计算，留在事件循环）。
+      ``run_blocking_ops``（基座持有；YAML 序列化为纯内存计算，留在
+      事件循环）。
 """
 
 from __future__ import annotations
 
-import asyncio
-import os
-import shutil
 from pathlib import Path
 from typing import Any, Final
 
-import yaml
 from loguru import logger
 
 from packages.harness.config import loader as config_loader
@@ -60,9 +78,12 @@ from packages.harness.config.registry_admin_dtos import (
     RegistryStateDTO,
     RoleBindingDTO,
 )
+from packages.harness.config.section_admin import (
+    DEFAULT_BACKUP_KEEP,
+    ConfigSectionAdmin,
+    _dump_config_yaml_text,
+)
 from packages.harness.core.errors import BusinessException, ErrorCode
-from packages.harness.core.thread_pool import run_blocking_ops
-from packages.harness.core.time_utils import now_ms
 
 __all__ = [
     "RegistryAdminService",
@@ -71,8 +92,8 @@ __all__ = [
 ]
 
 
-#: 备份保留份数（轮换上限——超出即清理最旧备份）。
-REGISTRY_BACKUP_KEEP: Final[int] = 10
+#: 备份保留份数（轮换上限——超出即清理最旧备份；值单一真源为基座默认）。
+REGISTRY_BACKUP_KEEP: Final[int] = DEFAULT_BACKUP_KEEP
 
 
 # ---------------------------------------------------------------------------
@@ -148,120 +169,63 @@ def render_config_yaml_text(config: LlmConfig, raw_existing: dict[str, Any] | No
     Returns:
         完整 config.yaml 文本（UTF-8 YAML，键序稳定）。
     """
-    data: dict[str, Any] = dict(raw_existing) if raw_existing else {}
-    data["llm"] = _llm_section(config)
-    text: str = yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False)
-    return text
+    return _dump_config_yaml_text("llm", _llm_section(config), raw_existing)
 
 
 # ---------------------------------------------------------------------------
-# 阻塞 I/O（经 run_blocking_ops 下沉；全部同步函数）
+# 服务（ConfigSectionAdmin 的 LLM 子类）
 # ---------------------------------------------------------------------------
 
 
-def _read_raw_yaml_blocking(yaml_path: Path) -> dict[str, Any] | None:
-    """读取既有 config.yaml 顶层 dict（阻塞形态——经线程池下沉）。
-
-    Args:
-        yaml_path: config.yaml 路径。
-
-    Returns:
-        顶层 dict（文件缺失 = None；空文件 = 空 dict）。
-
-    Raises:
-        BusinessException: 文件存在但不可解析 / 顶层非 mapping
-            （``CONFIG_INVALID``——fail loud，绝不覆盖不可审计的既有文件）。
-    """
-    if not yaml_path.is_file():
-        return None
-    try:
-        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise BusinessException(
-            code=ErrorCode.CONFIG_INVALID,
-            message=f"既有 config.yaml 不可解析，拒绝覆写: {yaml_path}",
-            details={"path": str(yaml_path), "reason": str(exc)},
-        ) from exc
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        raise BusinessException(
-            code=ErrorCode.CONFIG_INVALID,
-            message=f"既有 config.yaml 顶层结构非 mapping，拒绝覆写: {yaml_path}",
-            details={"path": str(yaml_path), "got": type(data).__name__},
-        )
-    return data
-
-
-def _prune_backups_blocking(yaml_path: Path) -> None:
-    """备份轮换：保留最新 ``REGISTRY_BACKUP_KEEP`` 份，清理更旧备份。
-
-    文件名字典序 == epoch-ms 数值序（当前纪元毫秒恒 13 位定长），
-    排序后裁尾即删除最旧。
-
-    Args:
-        yaml_path: config.yaml 路径（备份与其同目录同名前缀）。
-    """
-    backups = sorted(
-        path for path in yaml_path.parent.glob(f"{yaml_path.name}.bak-*") if path.is_file()
-    )
-    for stale in backups[:-REGISTRY_BACKUP_KEEP] if len(backups) > REGISTRY_BACKUP_KEEP else []:
-        stale.unlink(missing_ok=True)
-        logger.debug("已清理过期注册表备份: {}", stale)
-
-
-def _atomic_persist_blocking(yaml_path: Path, content: str) -> Path | None:
-    """原子持久化 config.yaml（阻塞形态——经线程池下沉）。
-
-    步骤：写前整文件备份（``.bak-<epoch-ms>``）→ 临时文件写入 + flush
-    + fsync → ``os.replace`` 原子换名 → 备份轮换。任一步失败时清理
-    临时文件（不留 ``.tmp-*`` 残留），原文件内容不受影响（备份先行、
-    换名最后——崩溃窗口内至多多出一份备份，config.yaml 恒为完整旧版
-    或完整新版）。
-
-    Args:
-        yaml_path: 目标 config.yaml 路径。
-        content: 完整文件文本。
-
-    Returns:
-        备份文件路径（写前文件存在时）；无既有文件返回 None。
-
-    Raises:
-        Exception: 备份 / 写入 / 换名失败的底层异常（调用方统一包装）。
-    """
-    backup_path: Path | None = None
-    if yaml_path.is_file():
-        backup_path = yaml_path.with_name(f"{yaml_path.name}.bak-{now_ms()}")
-        shutil.copy2(yaml_path, backup_path)
-    tmp_path = yaml_path.with_name(f"{yaml_path.name}.tmp-{now_ms()}")
-    try:
-        with tmp_path.open("w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
-    os.replace(tmp_path, yaml_path)
-    _prune_backups_blocking(yaml_path)
-    return backup_path
-
-
-# ---------------------------------------------------------------------------
-# 服务
-# ---------------------------------------------------------------------------
-
-
-class RegistryAdminService:
+class RegistryAdminService(ConfigSectionAdmin[LlmConfig]):
     """LLM 注册表管理服务（读脱敏 / 写原子持久化 + 热重建 + 失败回滚）。
 
     无状态读写共享 loader 运行时（``runtime_llm_config`` / 全局解析器）；
-    写突变经 ``asyncio.Lock`` 串行化（校验→持久化→重建原子窗口）。
+    写突变经基座 ``asyncio.Lock`` 串行化（校验→持久化→重建原子窗口）。
     """
 
     def __init__(self) -> None:
-        """初始化服务（写锁——单事件循环内串行化全部突变）。"""
-        self._write_lock = asyncio.Lock()
+        """初始化服务（基座写锁 + LLM 注册表备份轮换参数）。"""
+        super().__init__(backup_keep=REGISTRY_BACKUP_KEEP)
+
+    # ------------------------------------------------------------------
+    # 基座缝实现（llm 段形态与 loader 运行时挂点）
+    # ------------------------------------------------------------------
+
+    def _section_key(self) -> str:
+        """本管理面持有的 config.yaml 顶层键（LLM 注册表 = ``llm``）。"""
+        return "llm"
+
+    def _current_section(self) -> LlmConfig:
+        """读取内存运行时当前节（loader ``runtime_llm_config`` 全局真源）。"""
+        return config_loader.runtime_llm_config
+
+    def _apply_section_to_runtime(self, section: LlmConfig) -> None:
+        """把节整体应用到运行时（loader 最小公开重建入口——回滚路径）。"""
+        apply_llm_config_to_runtime(section)
+
+    def _render_section(self, section: LlmConfig) -> dict[str, Any]:
+        """LlmConfig → ``llm`` 段 dict（无损回读序列化）。"""
+        return _llm_section(section)
+
+    def _validate_section(self, section: LlmConfig) -> None:
+        """节级校验钩子——LLM 域决策：空体。
+
+        条目级校验（唯一性 409 / 存在性 404 / 删除守卫 409）在各突变
+        方法的锁窗口内先行完成（错误面携带操作上下文）；跨操作的节级
+        不变式（重名条目 / 悬挂显式绑定）在本域为**告警容错**语义
+        （解析器 ``rebuild`` 告警并保持先注册者，见 model_resolver），
+        不构成拒绝持久化的闸门——故本钩子无额外校验。
+        """
+        return None
+
+    def _rebuild_from_disk(self, yaml_path: Path) -> None:
+        """热重建钩子（load_config_yaml 重读磁盘——整体换血运行时）。"""
+        load_config_yaml(path=yaml_path)
+
+    def _resolve_yaml_path(self) -> Path:
+        """默认持久化目标（进程实际加载的 config.yaml——写路径一致性）。"""
+        return get_loaded_config_yaml_path()
 
     # ------------------------------------------------------------------
     # 读取面（脱敏）
@@ -300,7 +264,7 @@ class RegistryAdminService:
         Returns:
             注册表状态 DTO（条目声明顺序）。
         """
-        current = config_loader.runtime_llm_config
+        current = self._current_section()
         resolver = get_model_resolver()
         return RegistryStateDTO(
             entries=[self._mask_entry(entry, resolver) for entry in current.models],
@@ -328,7 +292,7 @@ class RegistryAdminService:
         return bindings
 
     # ------------------------------------------------------------------
-    # 写入面（原子持久化 + 热重建 + 失败回滚）
+    # 写入面（原子持久化 + 热重建 + 失败回滚——机械在基座）
     # ------------------------------------------------------------------
 
     def _roles_bound_to(self, name: str) -> set[str]:
@@ -365,8 +329,8 @@ class RegistryAdminService:
                 （``CONFIG_INVALID`` → 422，内存已回滚写前快照）。
         """
         async with self._write_lock:
-            path = yaml_path if yaml_path is not None else get_loaded_config_yaml_path()
-            current = config_loader.runtime_llm_config
+            path = yaml_path if yaml_path is not None else self._resolve_yaml_path()
+            current = self._current_section()
             if any(entry.name == req.name for entry in current.models):
                 raise BusinessException(
                     code=ErrorCode.CONFLICT,
@@ -415,8 +379,8 @@ class RegistryAdminService:
                 （``CONFIG_INVALID``，内存已回滚写前快照）。
         """
         async with self._write_lock:
-            path = yaml_path if yaml_path is not None else get_loaded_config_yaml_path()
-            current = config_loader.runtime_llm_config
+            path = yaml_path if yaml_path is not None else self._resolve_yaml_path()
+            current = self._current_section()
             entry = next((item for item in current.models if item.name == name), None)
             if entry is None:
                 raise BusinessException(
@@ -477,8 +441,8 @@ class RegistryAdminService:
                 失败（``CONFIG_INVALID``，内存已回滚写前快照）。
         """
         async with self._write_lock:
-            path = yaml_path if yaml_path is not None else get_loaded_config_yaml_path()
-            current = config_loader.runtime_llm_config
+            path = yaml_path if yaml_path is not None else self._resolve_yaml_path()
+            current = self._current_section()
             entry = next((item for item in current.models if item.name == name), None)
             if entry is None:
                 raise BusinessException(
@@ -513,58 +477,3 @@ class RegistryAdminService:
             # 状态快照在写锁内读取并返回——锁外读会与下一次写突变的
             # 校验→持久化窗口交错（读到半更新视图）
             return await self.state()
-
-    async def _persist_and_rebuild(
-        self, new_config: LlmConfig, *, snapshot: LlmConfig, yaml_path: Path
-    ) -> None:
-        """原子持久化 + 热重建 + 失败回滚（全部写突变的共享尾段）。
-
-        Args:
-            new_config: 待落盘的新 LlmConfig。
-            snapshot: 写前运行时快照（重建失败回滚源）。
-            yaml_path: 目标 config.yaml 路径。
-
-        Raises:
-            BusinessException: 既有文件不可解析（``CONFIG_INVALID``）；
-                持久化 I/O 失败（``INTERNAL_ERROR``——临时文件已清理，
-                原文件不变）；热重建失败（``CONFIG_INVALID``——内存已
-                回滚写前快照，磁盘保留新内容与 .bak 写前备份）。
-        """
-        raw_existing = await run_blocking_ops(_read_raw_yaml_blocking, yaml_path)
-        content = render_config_yaml_text(new_config, raw_existing)
-        try:
-            backup_path = await run_blocking_ops(_atomic_persist_blocking, yaml_path, content)
-        except BusinessException:
-            raise
-        except Exception as exc:
-            raise BusinessException(
-                code=ErrorCode.INTERNAL_ERROR,
-                message=f"config.yaml 原子持久化失败（临时文件已清理，原文件不变）: {yaml_path}",
-                details={"path": str(yaml_path), "reason": str(exc)},
-            ) from exc
-        logger.info(
-            "config.yaml 已原子持久化: path={}, bytes={}, backup={}",
-            yaml_path,
-            len(content),
-            backup_path.name if backup_path is not None else "(首次创建，无写前备份)",
-        )
-        try:
-            load_config_yaml(path=yaml_path)
-        except Exception as exc:
-            apply_llm_config_to_runtime(snapshot)
-            logger.opt(exception=True).error(
-                "持久化后热重建失败，内存注册表已回滚写前快照: path={}", yaml_path
-            )
-            raise BusinessException(
-                code=ErrorCode.CONFIG_INVALID,
-                message=(
-                    "config.yaml 持久化后热重建失败，内存注册表已回滚写前快照"
-                    f"（磁盘保留新内容，写前备份: {backup_path.name if backup_path is not None else '无'}）"
-                ),
-                details={
-                    "path": str(yaml_path),
-                    "reason": str(exc),
-                    "rollback": "in-memory",
-                    "backup": backup_path.name if backup_path is not None else None,
-                },
-            ) from exc
