@@ -1,18 +1,19 @@
 # config — 配置域
 
-`backend/src/packages/harness/config/` 承载全工程配置：env 面 Settings（server / database / log / pools / llm 等十五分节）、config.yaml 结构化面（模型注册表 / 角色绑定 / 多模态回退链）、extensions_config.json 工具清单、运行时加载器（含热重载地基）、配置节管理基座（原子持久化 / 热重建 / 回滚共享机械）、模型解析器、wire 构建器与交互式配置向导。
+`backend/src/packages/harness/config/` 承载全工程配置：env 面 Settings（server / database / log / pools / llm 等十六分节）、config.yaml 结构化面（模型注册表 / 角色绑定 / 多模态回退链 / 搜索 provider 注册表）、extensions_config.json 工具清单、运行时加载器（含热重载地基）、配置节管理基座（原子持久化 / 热重建 / 回滚共享机械）、模型解析器、wire 构建器与交互式配置向导。
 
 ## 模块一览
 
 | 模块 | 职责 | 关键导出 |
 |---|---|---|
-| `models.py` | 配置树 Model Classes（env 面五分节 + Settings 聚合器 + LlmConfig / MultimodalFallbackConfig / ExtensionsConfig） | `Settings` / `settings` / `LlmConfig` |
+| `models.py` | 配置树 Model Classes（env 面五分节 + Settings 聚合器 + LlmConfig / MultimodalFallbackConfig / SearchConfig / ExtensionsConfig） | `Settings` / `settings` / `LlmConfig` / `SearchConfig` |
 | `settings.py` | 全局单例访问面 + 隔离构造助手 | `settings` / `build_isolated_settings` |
 | `loader.py` | config.yaml + extensions_config.json 运行时加载（分层加载 + 重载回调） | `load_all_config` / `register_reload_callback` |
 | `section_admin.py` | 配置节管理基座（写锁串行化 / 原子持久化 + 备份轮换 / 热重建 + 失败回滚——节无关共享机械） | `ConfigSectionAdmin` / `DEFAULT_BACKUP_KEEP` |
 | `registry_admin.py` | LLM 注册表管理服务（基座的 llm 段子类：条目 CRUD + 角色绑定守卫 + 脱敏读取） | `RegistryAdminService` / `render_config_yaml_text` |
 | `registry_admin_dtos.py` | 注册表管理传输契约（创建 / 更新 / 脱敏 / 状态 / 角色绑定行 DTO） | `ModelEntryCreateDTO` / `RegistryStateDTO` |
-| `model_entry.py` | 模型注册表条目 + 角色枚举 + 密钥解析 | `LlmModelEntry` / `ModelRole` / `parse_model_entry` |
+| `search_registry.py` | 搜索 provider 注册表管理服务（基座的 search 段子类：provider CRUD + 唯一 provider 守卫 + 脱敏 + 运行时真源三件套） | `SearchRegistryAdminService` / `runtime_search_config` / `load_search_config` |
+| `model_entry.py` | 模型注册表条目 + 角色枚举 + 密钥解析 | `LlmModelEntry` / `ModelRole` / `parse_model_entry` / `resolve_api_key` |
 | `model_resolver.py` | 角色 → 条目解析器（热重建安全） | `ModelResolver` / `get_model_resolver` |
 | `llm_wire.py` | 条目 → 网关 wire 配置（密钥解析收口） | `build_llm_wire_config` |
 | `multimodal_fallback_loader.py` | look_at 非多模态时的回退链裁决 | `resolve_multimodal_chain` |
@@ -53,6 +54,7 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 | ToolsSandboxSettings | `TOOLS_SANDBOX_` | `ENABLED`(false) · `BASE_URL`(http://127.0.0.1:8765) · `TOKEN_ENV`(SANDBOX_TOKEN) · `REQUEST_TIMEOUT_SECONDS`(15.0) |
 | VoiceSettings.tts（TtsSettings） | `VOICE_TTS_` | `ENABLED`(false) · `BASE_URL`(http://127.0.0.1:9880) · `MODEL_ENTRY`(cosyvoice3) · `REQUEST_TIMEOUT_SECONDS`(30.0) · `DEFAULT_SPEAKER`(中文女) · `DEFAULT_SPEED`(1.0) |
 | VoiceSettings.asr（AsrSettings） | `VOICE_ASR_` | `ENABLED`(false) · `BASE_URL`(http://127.0.0.1:8082) · `MODEL_ENTRY`(qwen3-asr-0.6b) · `REQUEST_TIMEOUT_SECONDS`(60.0) · `LANGUAGE`(null) · `MAX_UPLOAD_BYTES`(26214400) |
+| WebSearchSettings（`Settings.search`） | `SEARCH_` | `ENABLED`(false) · `TOOL_ENABLED`(false) · `DAILY_BUDGET_PER_PERSONA`(50) · `DAILY_BUDGET_GLOBAL`(200) · `COOLDOWN_SECONDS`(60) |
 | Settings | （无前缀） | `ENV`(local) |
 
 分节与 `.env.example` 逐分节对齐（生成器 `scripts/generate_examples_env.py` 的 `_ENV_SECTIONS` 登记表为序——键面以 `.env.example` 为真源，本表为语义说明；敏感字段在 example 中恒留空）。各分节语义详见所属域文档（channels / duty / tools-sandbox / voice）。
@@ -145,7 +147,7 @@ look_at 角色绑定的条目 multimodal=true？
 
 ## 配置节管理基座（section_admin.py — ConfigSectionAdmin）
 
-config.yaml 结构化配置节**写路径的共享抽象基建**：从 LLM 注册表管理面抽取的节无关机械，全部配置节管理面（现有：`llm` 段注册表；规划中：搜索 provider 注册表等）复用同一实现，不再各自复制。
+config.yaml 结构化配置节**写路径的共享抽象基建**：从 LLM 注册表管理面抽取的节无关机械，全部配置节管理面（现有消费者：`llm` 段注册表（registry_admin）、`search` 段搜索 provider 注册表（search_registry））复用同一实现，不再各自复制。
 
 ### 基座提供的机械
 
@@ -188,9 +190,71 @@ config.yaml 结构化配置节**写路径的共享抽象基建**：从 LLM 注�
                 （磁盘保留新内容与 .bak 写前备份——下次成功写自愈覆盖）
 ```
 
-### 未来配置节接入（如 R2a-4 搜索 provider 注册表）
+### 未来配置节接入
 
 新配置节管理面 = 定义节 Model Class（列表节 + 绑定式语义）→ 子类化 `ConfigSectionAdmin[节类型]` 实现七个缝 → 条目 CRUD 突变方法走读改写形态（锁内校验 + 构造）。机械（锁 / 备份 / 轮换 / 重建编排 / 回滚）零复制——与 LLM 注册表行为同源。
+
+### 搜索 provider 注册表子类（search_registry.py — R2a-4 已接入）
+
+基座的第二个消费者，缝实现：
+
+| 缝 | 搜索子类实现（SearchRegistryAdminService） |
+|---|---|
+| `_section_key` | `"search"` |
+| `_current_section` | 本模块 `runtime_search_config`（运行时真源——loader 语义镜像，**消费方经模块属性访问**，加载 / CRUD 换血后自动生效） |
+| `_apply_section_to_runtime` | `apply_search_config_to_runtime`（回滚路径） |
+| `_render_section` | `_search_section`（providers + web_search 全量——子块按当前生效值落盘） |
+| `_validate_section` | 条目名唯一（节级兜底——跨操作不变式） |
+| `_rebuild_from_disk` | `_rebuild_runtime_from_yaml`（重读磁盘 search 段整体换血） |
+| `_resolve_yaml_path` | 搜索域加载路径（`load_search_config` 记录）回落 loader 路径——同一 config.yaml |
+
+条目级守卫（锁窗口内先行）：唯一名 409 / 存在性 404 / **唯一 provider 守卫**
+（`web_search.enabled=true` 时删除最后一个条目 → 409 + 两步指引——保住
+「启用即至少一个条目」的启动校验不变式；能力关闭时允许清空）。脱敏读取：
+条目只回 `api_key_env` 变量名 + failover 链位次（`chain_position`）。
+
+### WebSearchSettings（搜索运营 env 面——单类双源）
+
+`WebSearchSettings`（env_prefix=`SEARCH_`）承载联网搜索运营开关 / 预算 / 冷却，
+**同时是 config.yaml `search.web_search` 子块的类型**（分层合并遵循本文件顶部
+优先级链——yaml 子块键覆盖 env，未提供的键回落 env / 代码默认；provider CRUD
+持久化时把当前生效值整体落盘——yaml 最高层，写入即固化）。要点：
+
+- `ENABLED=false`（默认）——零配置开发可用、测试 hermetic；`ENABLED=true` 且
+  `search` 段无 provider 条目时启动期 fail fast；
+- `TOOL_ENABLED` 与 `ENABLED` 为**两级开关**——`web_search` 工具仅在两者同真
+  时注册（能力总闸 + 工具面曝光闸）；
+- 密钥间接键（`SEARCH_BOCHA_API_KEY` / `SEARCH_ZHIPU_API_KEY`——provider 条目
+  `api_key_env` 默认指向的变量）不在 Settings env 面内（yaml 注册表间接引用），
+  按敏感键守卫在 `.env.example` 留空。
+
+全部字段语义 / 预算口径 / failover 链详见 [search.md](search.md)。
+
+## config.yaml — search 段（搜索 provider 注册表）
+
+```yaml
+search:
+  providers:            # 列表序 = failover 尝试序（前者为主、后者兜底）
+    - name: "bocha-main"
+      kind: "bocha"     # bocha | zhipu
+      api_key_env: "SEARCH_BOCHA_API_KEY"   # 密钥本值永不落 yaml
+      max_results: 8
+      timeout_seconds: 15
+    - name: "zhipu-fallback"
+      kind: "zhipu"
+      model: "search_std"                    # zhipu 引擎码（缺省 search_std）
+      api_key_env: "SEARCH_ZHIPU_API_KEY"
+  web_search:           # 运营子块（WebSearchSettings——yaml 键优先于 SEARCH_* env）
+    enabled: true
+    tool_enabled: true
+    daily_budget_per_persona: 50
+    daily_budget_global: 200
+    cooldown_seconds: 60
+```
+
+`search` 段由 `search_registry.load_search_config` 自行解析（loader 仅解析
+`llm` 段——其「未知顶层键」告警对本段无害，键值原样保留）；条目字段表 /
+wire 契约 / 管理面详见 [search.md](search.md)。
 
 ## llm_wire — 网关下发契约（llm 网关消费）
 

@@ -3,10 +3,10 @@
 装配契约：
 
     - :func:`create_app` —— FastAPI 工厂（共享异常处理器 + personas /
-      memories / usage / voice / look_at / models / channels-qq / health
-      共八路由 + 管理面 owner-token 鉴权（六管理路由统一挂接，health /
-      qq webhook 豁免——豁免契约见 :func:`_include_routers`）+ CORS +
-      lifespan）；
+      memories / usage / voice / look_at / models / search / channels-qq /
+      health 共九路由 + 管理面 owner-token 鉴权（七管理路由统一挂接，
+      health / qq webhook 豁免——豁免契约见 :func:`_include_routers`）+
+      CORS + lifespan）；
     - :func:`startup_app_state` / :func:`shutdown_app_state` —— **可独立
       驱动的纯异步函数对**（不藏在 lifespan 闭包内——测试无需 ASGI
       lifespan runner 即可直调，本工程不引入 asgi-lifespan 依赖）；
@@ -22,18 +22,25 @@
         ↓ app.state.memory_store = build_memory_store(settings)
                                                  记忆检索存储上挂（检索 /
                                                  梦境 / 调度器共用同一产出）
+        ↓ _startup_search(app, settings)       搜索能力（SEARCH_ENABLED 时：
+                                                 search 段加载 + 启动校验 +
+                                                 SearchService + web_search
+                                                 工具面；**先于通道**——通道
+                                                 ChatService 工厂消费工具面；
+                                                 缺省 no-op）
         ↓ _startup_channels(app, settings)  通道层（TELEGRAM_ENABLED 时
-                                                装配 runner 后台任务；token
-                                                缺失 fail fast；QQ_ENABLED
-                                                时注册适配器 + 启动校验
-                                                warn-and-continue；缺省 no-op）
+                                                 装配 runner 后台任务；token
+                                                 缺失 fail fast；QQ_ENABLED
+                                                 时注册适配器 + 启动校验
+                                                 warn-and-continue；缺省 no-op）
         ↓ _startup_scheduler(app, settings)    中央调度器（DUTY_ENABLED /
                                                  DREAM_SCHEDULE_ENABLED 任一
                                                  开启时装配；**后于通道**——
                                                  duty 报告出站复用通道路由器；
                                                  缺省 no-op；duty 启用时工具
                                                  注册表在内置工具后追加沙盒
-                                                 工具面与 look_at 工具）
+                                                 工具面、look_at 工具与
+                                                 web_search 工具）
 
 停机序列（启动逆序）::
 
@@ -89,6 +96,7 @@ from app.api.look_at import router as look_at_router
 from app.api.memories import router as memories_router
 from app.api.models import router as models_router
 from app.api.personas import router as personas_router
+from app.api.search import router as search_router
 from app.api.usage import router as usage_router
 from app.api.voice import router as voice_router
 from app.middleware.admin_auth import (
@@ -103,9 +111,11 @@ from packages.harness.channels.qq.qq_client import NapCatOneBotClient
 from packages.harness.channels.telegram.tg_client import TelegramClient
 from packages.harness.channels.telegram.tg_runner import TelegramChannelRunner
 from packages.harness.chat.service import ChatService
+from packages.harness.config import search_registry
 from packages.harness.config.loader import load_all_config, setup_logging_from_settings
 from packages.harness.config.models import Settings
 from packages.harness.config.models import settings as global_settings
+from packages.harness.config.search_registry import load_search_config
 from packages.harness.core.background_tasks import background_task_manager
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.thread_pool import shutdown_shared_thread_pool
@@ -121,6 +131,8 @@ from packages.harness.multimodal.look_at import LookAtService, register_look_at_
 from packages.harness.persona.service import PersonaService
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
 from packages.harness.scheduler import Scheduler, build_dream_trigger_job
+from packages.harness.search.search_service import SearchService
+from packages.harness.search.tool import build_web_search_tool, register_web_search_tool
 from packages.harness.tools.registry import ToolRegistry, register_builtin_tools
 from packages.harness.tools.sandbox import (
     build_sandbox_client,
@@ -132,6 +144,7 @@ from packages.harness.tools.sandbox_models import (
     HTTP_FETCH_TOOL_NAME,
     build_http_fetch_spec,
 )
+from packages.harness.usage.service import UsageService
 
 # ORM 模型注册（导入副作用——见模块 docstring「ORM 注册」一节）。
 _ORM_REGISTRY = (persona_orm, usage_orm)
@@ -186,6 +199,7 @@ async def startup_app_state(
         usage_recorder=wire_default_usage_recorder(),
     )
     app.state.memory_store = build_memory_store(settings)
+    await _startup_search(app, settings, config_dir=config_dir)
     await _startup_channels(app, settings)
     await _startup_scheduler(app, settings)
 
@@ -214,6 +228,87 @@ async def shutdown_app_state(app: FastAPI) -> None:
     shutdown_shared_thread_pool(wait=True)
     app.state.gateway = None
     app.state.memory_store = None
+    # 搜索槽位复位（服务无自有资源——共享池 client 生命周期归 pools）。
+    app.state.search_service = None
+    app.state.search_tool_registry = None
+    app.state.search_tool_specs = None
+
+
+async def _startup_search(
+    app: FastAPI, settings: Settings, *, config_dir: Path | None = None
+) -> None:
+    """装配联网搜索能力（SEARCH_ENABLED 时：段加载 → 启动校验 → 服务 + 工具面）。
+
+    装配链（顺序锁定，文档化于 docs/backend/search.md）：
+
+        1. ``load_search_config``（config.yaml ``search`` 段——管理面 /
+           服务运行时真源；**先于通道 / 调度器**——通道的 ChatService
+           工厂与 duty 注册表都消费本步产物）；
+        2. ``enabled=false`` → no-op（零搜索对象构造——管理面 CRUD 仍
+           可用，操作的是运行时默认态）；
+        3. 启动校验：``enabled=true`` 且无 provider 条目 → fail fast
+           （清晰中文错误——``CONFIG_INVALID``）；
+        4. SearchService 装配（共享 HTTP client + UsageService 上挂
+           ``app.state.search_service``）；
+        5. ``tool_enabled=true`` 时构建 chat 工具注册表（仅 web_search）
+           + 规格列表上挂（``app.state.search_tool_registry`` /
+           ``app.state.search_tool_specs``——chat 通道工厂与 duty 注册表
+           各自消费）；两级开关：``enabled`` 能力总闸 + ``tool_enabled``
+           工具面曝光闸。
+
+    Args:
+        app: 待装配的 FastAPI 应用（search 槽位上挂 ``app.state``）。
+        settings: 生效 Settings（搜索运营 env 面——``settings.search``
+            与 yaml ``web_search`` 子块分层合并，yaml 优先）。
+        config_dir: 结构化配置目录（与 ``load_all_config`` 同参——保证
+            搜索段与 llm 段读同一份 config.yaml）。
+
+    Raises:
+        BusinessException: 能力启用但无 provider 条目（``CONFIG_INVALID``
+            ——fail fast，清晰中文错误）；公共池未启动
+            （``INTERNAL_ERROR``——装配顺序契约破坏面）。
+    """
+    app.state.search_service = None
+    app.state.search_tool_registry = None
+    app.state.search_tool_specs = None
+    load_search_config(config_dir=config_dir)
+    config = search_registry.runtime_search_config
+    if not config.web_search.enabled:
+        logger.info("联网搜索未启用（SEARCH_ENABLED / search.web_search.enabled 关闭）——跳过装配")
+        return
+    if not config.providers:
+        raise BusinessException(
+            code=ErrorCode.CONFIG_INVALID,
+            message=(
+                "联网搜索已启用但 config.yaml 的 search 段无 provider 条目——"
+                "启用前须至少配置一个搜索 provider（Bocha / Zhipu，见 docs/backend/search.md）"
+            ),
+        )
+    manager = get_pool_manager()
+    if manager is None or not manager.started:
+        raise BusinessException(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="搜索装配前置失败：公共池未启动（lifespan 装配顺序破坏）",
+        )
+    service = SearchService(
+        http_client=manager.get_http_client(),
+        usage_face=UsageService(),
+    )
+    app.state.search_service = service
+    logger.info(
+        "联网搜索服务已装配: providers={}, tool_enabled={}",
+        [entry.name for entry in config.providers],
+        config.web_search.tool_enabled,
+    )
+    if not config.web_search.tool_enabled:
+        logger.info("web_search 工具面未启用（SEARCH_TOOL_ENABLED / search.web_search.tool_enabled 关闭）")
+        return
+    chat_registry = ToolRegistry()
+    register_web_search_tool(chat_registry, service)
+    web_spec, _ = build_web_search_tool(service)
+    app.state.search_tool_registry = chat_registry
+    app.state.search_tool_specs = [web_spec]
+    logger.info("web_search 工具已注册（duty 注册表在调度器装配时追加；chat 工具循环经通道工厂消费）")
 
 
 async def _startup_channels(app: FastAPI, settings: Settings) -> None:
@@ -262,11 +357,23 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
             message="通道装配前置失败：公共池未启动（lifespan 装配顺序破坏）",
         )
     gateway = app.state.gateway
+
+    def _chat_service_factory() -> ChatService:
+        """逐消息 ChatService 工厂（工具面按当前装配态收缩——搜索工具
+        注册表 + 规格列表就绪时绑定 chat 工具循环，否则零工具形态）。"""
+        tool_specs = getattr(app.state, "search_tool_specs", None)
+        tool_registry = getattr(app.state, "search_tool_registry", None)
+        if tool_specs and tool_registry is not None:
+            return ChatService(
+                gateway=gateway,
+                session_service=ChatSessionService(),
+                tools=tool_specs,
+                tool_executor=tool_registry,
+            )
+        return ChatService(gateway=gateway, session_service=ChatSessionService())
+
     router = ChannelRouter(
-        chat_service_factory=lambda: ChatService(
-            gateway=gateway,
-            session_service=ChatSessionService(),
-        ),
+        chat_service_factory=_chat_service_factory,
         session_factory=session_scope,
     )
     if telegram.enabled:
@@ -425,6 +532,12 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
         # look_at 工具（图像理解——duty 工具循环消费面）：经装配网关
         # 构建服务（用量随网关发射），在内置 + 沙盒工具后注册。
         register_look_at_tool(registry, LookAtService(gateway=app.state.gateway))
+        # web_search 工具（联网搜索——duty 工具循环消费面）：在内置 +
+        # 沙盒 + look_at 工具后注册（仅搜索服务装配且工具面启用时；
+        # 预算 / failover 在 SearchService 内闭环）。
+        search_service = getattr(app.state, "search_service", None)
+        if search_service is not None and search_registry.runtime_search_config.web_search.tool_enabled:
+            register_web_search_tool(registry, search_service)
         duty_service = DutyService(
             gateway=app.state.gateway,
             registry=registry,
@@ -646,7 +759,7 @@ def _include_routers(app: FastAPI) -> None:
     挂载契约（R2 审计放行条件——新端点不得扩张无鉴权面）：
 
         - **受保护路由集**：personas / memories / usage / voice /
-          look_at / models 六个管理路由统一挂 ``require_admin_token``
+          look_at / models / search 七个管理路由统一挂 ``require_admin_token``
           依赖——经单一 ``APIRouter(dependencies=[...])`` 包装路由**一次
           注册**（依赖定义在 ``app/middleware/admin_auth``；token 经
           ``ServerConfig.admin_token_env`` env 间接，空 = 鉴权关闭）；
@@ -671,6 +784,7 @@ def _include_routers(app: FastAPI) -> None:
     admin_api.include_router(voice_router)
     admin_api.include_router(look_at_router)
     admin_api.include_router(models_router)
+    admin_api.include_router(search_router)
     app.include_router(admin_api)
     # 豁免面（见本函数 docstring 豁免契约——不挂 require_admin_token）。
     app.include_router(qq_channels_router)

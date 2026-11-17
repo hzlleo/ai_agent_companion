@@ -206,6 +206,21 @@ os.environ["VOICE_ASR_LANGUAGE"] = ""
 # 注入小上限隔离驱动，不依赖本全局值）
 os.environ["VOICE_ASR_MAX_UPLOAD_BYTES"] = "26214400"
 
+# --- 联网搜索（SEARCH_ 前缀 → WebSearchSettings；默认关闭 → 测试零真实
+#     连接（搜索 provider 为外部 API）；S3 硬覆盖模式——开发者 shell
+#     导出的同名真实配置不得泄入测试。api_key_env 间接键（示例条目默认
+#     指向的 SEARCH_BOCHA_API_KEY / SEARCH_ZHIPU_API_KEY）同节硬覆盖为
+#     测试专用值——单测经 MockTransport 消费，永不触达真实端点；示例
+#     模板（.env.example）侧该类含 api_key 字样键按敏感键守卫留空） ---
+os.environ["SEARCH_ENABLED"] = "false"
+os.environ["SEARCH_TOOL_ENABLED"] = "false"
+os.environ["SEARCH_DAILY_BUDGET_PER_PERSONA"] = "50"
+os.environ["SEARCH_DAILY_BUDGET_GLOBAL"] = "200"
+os.environ["SEARCH_COOLDOWN_SECONDS"] = "60"
+# api_key_env 间接键本值（测试专用值，不可触达真实搜索账号）
+os.environ["SEARCH_BOCHA_API_KEY"] = "test-only-bocha-api-key"
+os.environ["SEARCH_ZHIPU_API_KEY"] = "test-only-zhipu-api-key"
+
 # --- 运行环境标识（Settings.env → ENV） ---
 os.environ["ENV"] = "test"
 

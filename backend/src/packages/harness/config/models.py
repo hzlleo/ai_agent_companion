@@ -34,9 +34,13 @@
     - ``TtsSettings`` / ``AsrSettings`` / ``VoiceSettings`` —— 语音域分节
       （``Settings.voice``；子模型 env_prefix=``VOICE_TTS_`` /
       ``VOICE_ASR_``——voice 域）
+    - ``WebSearchSettings`` —— 联网搜索运营分节（``Settings.search``；
+      env_prefix=``SEARCH_``——search 域开关 / 预算 / 冷却）
     - ``Settings``           —— 聚合器（全局单例 ``settings``）
     - ``LlmConfig``          —— config.yaml 的 ``llm`` 段（模型注册表 / 角色绑定 /
       多模态回退链）
+    - ``SearchProviderEntry`` / ``SearchConfig`` —— config.yaml 的
+      ``search`` 段（搜索 provider 注册表 + web_search 子块）
     - ``MultimodalFallbackConfig`` —— look_at 角色非多模态时的回退链配置
     - ``JsonSchema`` / ``ExtensionTool`` / ``ExtensionsConfig`` —— extensions_config.json
       的运行时表示
@@ -73,9 +77,14 @@ __all__ = [
     "TtsSettings",
     "AsrSettings",
     "VoiceSettings",
+    "WebSearchSettings",
     "Settings",
     "settings",
     "LlmConfig",
+    "SearchProviderEntry",
+    "SearchConfig",
+    "SEARCH_PROVIDER_KINDS",
+    "default_search_model_for_kind",
     "MultimodalFallbackConfig",
     "JsonSchema",
     "ExtensionTool",
@@ -849,6 +858,54 @@ class VoiceSettings(BaseModel):
     asr: AsrSettings = Field(default_factory=AsrSettings, description="ASR 转写配置")
 
 
+class WebSearchSettings(BaseSettings):
+    """联网搜索运营配置（env_prefix=``SEARCH_``——search 域）。
+
+    锁定决策（D5=A + P6=B）：``enabled=False``（默认）——联网搜索是
+    **可选能力面**（外部搜索 provider 经 HTTP 契约消费），缺省零配置
+    开发可用、测试 hermetic；``enabled=True`` 且 config.yaml ``search``
+    段无 provider 条目时启动期 fail fast（中文错误）。
+
+    本类同时是 config.yaml ``search.web_search`` 子块的类型（分层加载链
+    单类双源——yaml 子块键优先于 SEARCH_* env，与「代码默认 < .env <
+    env < config.yaml」的文档化优先级一致：yaml 提供的键覆盖 env，
+    未提供的键回落 env / 代码默认）。provider CRUD 持久化 ``search``
+    段时会把当前生效值（env 已合并）一并落盘——yaml 是最高层，写入
+    即固化（运维在 env 调值后再做 CRUD 会把 env 值固化进 yaml，
+    .bak 备份与审计面可回溯）。
+
+    Attributes:
+        enabled: 是否启用联网搜索能力（False = 工具面 / 服务面不装配）。
+        tool_enabled: 是否注册 ``web_search`` LLM 工具（duty 工具循环 +
+            chat 工具循环共用；**工具仅在 enabled 与本开关同时为真时
+            注册**——两级开关：能力总闸 + 工具面曝光闸）。
+        daily_budget_per_persona: 单人格每日搜索调用数预算（按 usage
+            行计数——含失败尝试行，防 provider 故障重试风暴绕过预算）。
+        daily_budget_global: 全局每日搜索调用数预算（全部人格合计）。
+        cooldown_seconds: provider 失败降级冷却秒数（冷却窗口内跳过
+            该 provider 直落下一级；全部降级 → 清晰业务异常）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用联网搜索能力")
+    tool_enabled: bool = Field(
+        default=False, description="是否注册 web_search 工具（需 enabled 同时为真）"
+    )
+    daily_budget_per_persona: int = Field(
+        default=50, ge=1, description="单人格每日搜索调用数预算"
+    )
+    daily_budget_global: int = Field(default=200, ge=1, description="全局每日搜索调用数预算")
+    cooldown_seconds: int = Field(
+        default=60, ge=1, description="provider 失败降级冷却秒数"
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="SEARCH_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class Settings(BaseSettings):
     """全局配置聚合器——所有 env 面子配置的聚合入口。
 
@@ -878,6 +935,9 @@ class Settings(BaseSettings):
             运行时，duty 工具面在沙盒不可达时回落到内置工具）。
         voice: 语音域配置（TTS / ASR 默认关闭；外部本地
             模型服务经 HTTP 契约消费，部署接线属部署侧事务）。
+        search: 联网搜索运营配置（开关 / 工具面 / 预算 / 冷却——
+            SEARCH_ env 面；provider 注册表经 config.yaml ``search``
+            段承载，见 :class:`SearchConfig`）。
         env: 运行环境标识（local / dev / prod）。
     """
 
@@ -893,6 +953,7 @@ class Settings(BaseSettings):
     scheduler: SchedulerSettings = SchedulerSettings()
     tools_sandbox: ToolsSandboxSettings = ToolsSandboxSettings()
     voice: VoiceSettings = VoiceSettings()
+    search: WebSearchSettings = WebSearchSettings()
     env: str = Field(default="local", description="运行环境标识（local / dev / prod）")
 
     model_config = SettingsConfigDict(
@@ -1056,6 +1117,149 @@ class LlmConfig(BaseModel):
             空角色绑定映射（文档性展示用）。
         """
         return {}
+
+
+# ---------------------------------------------------------------------------
+# 联网搜索配置节（config.yaml ``search`` 段——provider 注册表 + web_search
+# 子块；管理面见 harness/config/search_registry.py）
+# ---------------------------------------------------------------------------
+
+#: 搜索 provider kind 值域（bocha 主 / zhipu 兜底——D5=A 两 provider 决策）。
+SEARCH_PROVIDER_KINDS: tuple[str, str] = ("bocha", "zhipu")
+
+#: 各 kind 的缺省 API Key 环境变量名（api_key_env 间接——密钥本值永不落
+#: yaml / 配置树；示例与测试面统一指向这两个变量）。
+_DEFAULT_API_KEY_ENV_FOR_KIND: dict[str, str] = {
+    "bocha": "SEARCH_BOCHA_API_KEY",
+    "zhipu": "SEARCH_ZHIPU_API_KEY",
+}
+
+#: 各 kind 的缺省 base_url（官方端点——条目可覆写）。
+_DEFAULT_BASE_URL_FOR_KIND: dict[str, str] = {
+    "bocha": "https://api.bochaai.com",
+    "zhipu": "https://open.bigmodel.cn",
+}
+
+
+def default_search_model_for_kind(kind: str) -> str:
+    """按 kind 返回 provider 专属 model 字段缺省值。
+
+    语义（provider 差异）：bocha 的 web-search 端点无模型选择参数——
+    ``model`` 为观测标识（恒 ``web-search``）；zhipu 的
+    ``/api/paas/v4/web_search`` 端点以 ``search_engine`` 字段选择引擎
+    （``model`` 缺省 ``search_std``——P6=B 兜底档；可配 ``search_pro`` 等）。
+
+    Args:
+        kind: provider kind（bocha / zhipu）。
+
+    Returns:
+        该 kind 的 model 字段缺省值。
+
+    Raises:
+        ValueError: 未知 kind。
+    """
+    if kind == "bocha":
+        return "web-search"
+    if kind == "zhipu":
+        return "search_std"
+    raise ValueError(f"未知搜索 provider kind: {kind!r}（合法值: {list(SEARCH_PROVIDER_KINDS)}）")
+
+
+class SearchProviderEntry(BaseModel):
+    """搜索 provider 条目（config.yaml ``search.providers`` 列表项）。
+
+    密钥不变式（与 llm 条目 ``api_key_env`` 同模式）：条目只携带
+    环境变量名，密钥本值经 ``os.environ`` 在调用链解析点读取——
+    **永不落 yaml / 配置树 / 响应面**。
+
+    Attributes:
+        name: 条目唯一标识（failover 链内引用；usage 行 model_entry 列）。
+        kind: provider 类型（``bocha`` 博查 Web Search API / ``zhipu``
+            智谱 Web Search API）。
+        base_url: provider API 基础 URL（空 = 按 kind 缺省官方端点）。
+        api_key_env: API Key 环境变量名（空 = 按 kind 缺省变量名；
+            指向的变量为空时调用链 fail loud）。
+        model: provider 专属模型 / 引擎标识（空 = 按 kind 缺省——bocha
+            观测标识 ``web-search`` / zhipu 引擎码缺省 ``search_std``）。
+        max_results: 单次搜索返回条数上限（1-20；请求级可覆盖）。
+        timeout_seconds: 单次请求超时秒数（httpx.Timeout 全阶段）。
+    """
+
+    name: str = Field(min_length=1, max_length=64, description="条目唯一标识")
+    kind: Literal["bocha", "zhipu"] = Field(description="provider 类型（bocha/zhipu）")
+    base_url: str = Field(
+        default="", min_length=0, max_length=512, description="API 基础 URL（空=按 kind 缺省）"
+    )
+    api_key_env: str = Field(
+        default="",
+        min_length=0,
+        max_length=128,
+        description="API Key 环境变量名（空=按 kind 缺省；密钥本值永不落 yaml）",
+    )
+    model: str = Field(
+        default="", min_length=0, max_length=128, description="provider 专属模型/引擎标识（空=按 kind 缺省）"
+    )
+    max_results: int = Field(
+        default=8, ge=1, le=20, description="单次搜索返回条数上限（1-20）"
+    )
+    timeout_seconds: float = Field(default=15.0, gt=0, le=120, description="单次请求超时（秒）")
+
+    @model_validator(mode="after")
+    def _fill_kind_defaults(self) -> SearchProviderEntry:
+        """按 kind 物化缺省值（base_url / api_key_env / model 三个空值缝）。
+
+        Returns:
+            缺省物化后的实例（显式提供的值原样保留）。
+        """
+        if not self.base_url:
+            self.base_url = _DEFAULT_BASE_URL_FOR_KIND[self.kind]
+        if not self.api_key_env:
+            self.api_key_env = _DEFAULT_API_KEY_ENV_FOR_KIND[self.kind]
+        if not self.model:
+            self.model = default_search_model_for_kind(self.kind)
+        return self
+
+
+class SearchConfig(BaseModel):
+    """config.yaml ``search`` 段——搜索 provider 注册表 + web_search 子块。
+
+    config.yaml 示例::
+
+        search:
+          providers:
+            - name: "bocha-main"
+              kind: "bocha"
+              api_key_env: "SEARCH_BOCHA_API_KEY"
+              max_results: 8
+              timeout_seconds: 15
+            - name: "zhipu-fallback"
+              kind: "zhipu"
+              model: "search_std"
+              api_key_env: "SEARCH_ZHIPU_API_KEY"
+          web_search:
+            enabled: true
+            tool_enabled: true
+            daily_budget_per_persona: 50
+            daily_budget_global: 200
+            cooldown_seconds: 60
+
+    failover 语义：``providers`` 列表序即尝试序（前者为主、后者兜底）；
+    条目失败后进入降级冷却（``web_search.cooldown_seconds``），冷却窗口
+    内跳过直落下一级；全部降级 → 清晰业务异常。
+
+    Attributes:
+        providers: provider 条目列表（列表序 = failover 尝试序；条目名
+            节内唯一——管理面 CRUD 校验）。
+        web_search: 运营子块（开关 / 工具面 / 预算 / 冷却——
+            :class:`WebSearchSettings`；yaml 键优先于 SEARCH_* env）。
+    """
+
+    providers: list[SearchProviderEntry] = Field(
+        default_factory=list, description="provider 条目列表（列表序=failover 尝试序）"
+    )
+    web_search: WebSearchSettings = Field(
+        default_factory=WebSearchSettings, description="运营子块（开关/预算/冷却）"
+    )
 
 
 class JsonSchema(BaseModel):

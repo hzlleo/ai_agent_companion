@@ -32,6 +32,7 @@ from packages.harness.config.models import (
     TelegramSettings,
     ToolsSandboxSettings,
     TtsSettings,
+    WebSearchSettings,
 )
 
 # .env.example 分节标题: (section_title, config_classes)
@@ -50,6 +51,7 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("TOOLS_SANDBOX — 工具沙盒配置（可选运行时；令牌经 SANDBOX_TOKEN 间接）", [ToolsSandboxSettings]),
     ("VOICE.TTS — 语音合成配置（CosyVoice3 服务端点）", [TtsSettings]),
     ("VOICE.ASR — 语音识别配置（Qwen3-ASR 服务端点）", [AsrSettings]),
+    ("SEARCH.WEB — 联网搜索运营配置（默认关闭；密钥经 SEARCH_BOCHA_API_KEY / SEARCH_ZHIPU_API_KEY 间接——条目表在 config.yaml search 节管理）", [WebSearchSettings]),
 ]
 
 

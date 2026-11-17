@@ -5,19 +5,20 @@
 | 模块 | 文档 | 状态 |
 |---|---|---|
 | core（errors/dtos/time_utils/logging/thread_pool/background_tasks/context/i18n/cache/enums） | [core.md](core.md) | 已交付 |
-| config（loader/models/settings + section_admin 配置节管理基座 + registry_admin LLM 注册表管理 + wizard / 三件套生成 + SeekDB env 面） | [config.md](config.md) | 已交付（含 SeekDBSettings 检索 env 面；配置节管理基座——写路径共享机械，规划供搜索 provider 注册表等复用） |
+| config（loader/models/settings + section_admin 配置节管理基座 + registry_admin LLM 注册表管理 + search_registry 搜索 provider 注册表管理 + wizard / 三件套生成 + SeekDB env 面） | [config.md](config.md) | 已交付（含 SeekDBSettings 检索 env 面；配置节管理基座——写路径共享机械，搜索 provider 注册表为第二个消费者） |
 | database（engine/base Mixins/session/alembic） | [database.md](database.md) | 已交付 |
 | pools（manager/http/llm/seekdb 共享池 + 熔断） | [pools.md](pools.md) | 已交付（含 SeekDB 检索池） |
 | llm（模型网关：多 provider / roles 路由 / 用量埋点；含注册表管理 API：models 路由 + 原子持久化 / 热重建 / 回滚） | [llm.md](llm.md) | 已交付（含注册表管理面） |
 | usage（token 用量记录与多维聚合；含用量观测 API：records / aggregates / summary 路由——跨人格口径） | [usage.md](usage.md) | 已交付（含管理 API） |
 | persona（chara card / 注册表 / 主人格切换与可寻址集 / 切换复制 / L-M-S 状态；含人格语音绑定 voice_profile） | [persona.md](persona.md) | 已交付（多激活可寻址模型——多人格同时可用、主人格唯一（DB 唯一键强制）；含首个 app 层：personas 管理 API + 共享异常处理器；语音绑定增列见 [voice.md](voice.md)） |
-| chat（会话循环 / prompt 组装 / 世界书 / 控制台 CLI / 会话持久化） | [chat.md](chat.md) | 已交付（含持久化与恢复） |
+| chat（会话循环 / prompt 组装 / 世界书 / 控制台 CLI / 会话持久化 / 可选工具循环（R2a-4——构造注入 tools 后 reply 走有界循环，见 [search.md](search.md)）） | [chat.md](chat.md) | 已交付（含持久化与恢复；工具循环经 web_search 装配消费——CLI 零变更） |
 | app 装配（create_app + lifespan + health 存活面 + CORS（ServerConfig.cors_origins 驱动，Vite dev 默认来源）+ 管理面 owner-token 鉴权（见下方「认证」一节）） | [chat.md](chat.md#app-装配appmainpy--appapihealthpy) | 已交付（随 chat 域文档建档；含 memories / usage / models 路由 + CORS + owner-token 鉴权） |
 | memory（三层记忆：情景 / 策展 / 工作层存储 + 管理 API + 检索层 + 夜间梦境） | [memory.md](memory.md) | 已交付（存储 / 持久化 / API；检索层：MemoryStore + SeekDB / SQLite 回退 + 索引管道 + search API；夜间梦境：巩固合并 + 日记 + 运行日志 + 手工触发 API） |
 | duty / scheduler（值班轮与中央调度：LLM 原生工具调用 + 工具注册表 + 章程驱动值班工具循环 + 手滚调度器 + 梦境定时触发） | [duty.md](duty.md) | 已交付（含 harness/tools 工具注册表与内置工具——沙盒执行器见 [tools-sandbox.md](tools-sandbox.md)） |
 | tools / sandbox（工具沙盒：docker/tool-sandbox-agent 独立隔离运行时 + wire 契约双树镜像 + 后端沙盒客户端 / registry 代理注册 + http_fetch 示例工具 + compose 加固部署） | [tools-sandbox.md](tools-sandbox.md) | 已交付（沙盒为可选运行时——enabled=false 默认，平台工具按 http_fetch 范式接入） |
 | voice（语音域：CosyVoice3 TTS 客户端 + Qwen3-ASR OpenAI 兼容转写客户端 + VoiceService 编排 / 用量埋点 + persona 语音绑定 + voice 管理 API + CLI --voice） | [voice.md](voice.md) | 已交付（外部本地模型服务经 HTTP 契约消费——enabled=false 默认，compose 接线由部署侧另行承接；B站通道规划中） |
 | multimodal（多模态 look_at 域：llm 内容分块（OpenAI 兼容 vision 消息）+ LookAtService 编排（config 回退链消费）/ purpose="look_at" 用量埋点 + look_at 工具注册（duty 工具循环——app 装配在 _startup_scheduler duty 分支注册）+ look_at 管理 API（multipart 上传）） | [multimodal.md](multimodal.md) | 已交付（视觉模型 = llm 注册表 multimodal 条目——生产形态本地 llama-server + Qwen3-VL GGUF 子模型；B站通道规划中） |
+| search（联网搜索域：Bocha / Zhipu Web Search 双 provider 客户端（failover + 降级冷却）+ SearchService 预算门禁（per-day / per-persona 按调用行计数）+ purpose="search" 用量埋点 + web_search 工具（duty / chat 工具循环共用——app 装配在 _startup_search 注册）+ chat 工具循环（ChatService 可选工具面）+ 搜索注册表管理 API（/api/v1/search）） | [search.md](search.md) | 已交付（R2a-4：config.yaml `search` 段注册表——ConfigSectionAdmin 基座第二个消费者；SEARCH_* env 面运营开关 / 预算 / 冷却） |
 | 工具层与辅助模型客户端（工具注册表 / docker 沙盒 / 语音 / 多模态） | 聚合说明（无独立文档）：工具注册表见 [duty.md](duty.md)，docker 沙盒见 [tools-sandbox.md](tools-sandbox.md)，语音见 [voice.md](voice.md)，多模态见 [multimodal.md](multimodal.md) | 已交付（分域建档） |
 | channels（平台通道：通道中立路由器 + Telegram 适配器 / 长轮询 runner / offset 持久化 / 4096 分段 + QQ 适配器 / NapCat OneBot v11 webhook 推送入站 / 消息展平 / message_id 去重） | [channels.md](channels.md) | 已交付（Telegram；duty 报告出站经既有路由器消费；QQ / NapCat——推送式入站无 runner，warn-and-continue 启动校验；B站通道 / safety 审批红线规划中） |
 
@@ -57,7 +58,7 @@ R2 设计审计放行条件：管理 API（含成本驱动与账号驱动能力�
 
 | 路由集 | 挂载 | 豁免理由 |
 |---|---|---|
-| personas / memories / usage / voice / look_at / models | **受保护**（统一挂 `require_admin_token`） | 管理面全操作集（含模型注册表与沙盒消费的成本 / 账号驱动能力） |
+| personas / memories / usage / voice / look_at / models / search | **受保护**（统一挂 `require_admin_token`） | 管理面全操作集（含模型注册表 / 搜索 provider 注册表与沙盒消费的成本 / 账号驱动能力） |
 | `GET /api/v1/health` | **豁免** | 零依赖存活面（health.py docstring 契约：liveness 探针不触 DB / 池 / LLM，同理不得因鉴权配置拒答） |
 | `POST /api/v1/channels/qq/webhook` | **豁免** | 自鉴权面：NapCat 事件上报经自身 `webhook_token_env` Bearer 校验（见 [channels.md](channels.md)）；再叠 admin token 会要求部署机持有管理凭据——双重鉴权破坏上报链路 |
 

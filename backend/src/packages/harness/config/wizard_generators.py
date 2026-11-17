@@ -59,6 +59,7 @@ _STEP_DEFINITIONS: list[tuple[str, list[str]]] = [
     ("工具沙盒配置", ["TOOLS_SANDBOX_"]),
     ("语音合成配置", ["VOICE_TTS_"]),
     ("语音识别配置", ["VOICE_ASR_"]),
+    ("联网搜索配置", ["SEARCH_"]),
     ("其他配置", ["ENV"]),
 ]
 

@@ -27,6 +27,25 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
 优先于上下文变量——与 ``bind_persona_context`` 语义等价，选直传因其
 可测性与可读性）。
 
+可选工具循环（R2a-4——构造注入 ``tools`` + ``tool_executor`` 后，
+``reply`` 走有界工具循环；缺省 ``tools=None`` 保持既有零工具形态）：
+
+    - 循环机械与 duty 域同构（``duty_service._tool_loop`` 镜像）：
+      gateway ``chat_by_role(chat, messages, tools=specs)`` →
+      ``tool_calls`` 非空则 assistant 轮回放 + 逐调用经 ``tool_executor``
+      （:class:`ToolExecutorFace`——``ToolRegistry.execute_call`` 结构
+      满足）执行 + tool 轮反馈（``tool_call_id`` 配对）；``tool_calls``
+      空则 content 即最终回复；
+    - 步数上限 :data:`CHAT_TOOL_STEP_CAP`（锁定 5——chat 单轮收敛快于
+      duty 巡检）；超限追加收尾指令（system）+ **无工具面**最终调用
+      （final-report forcing）；
+    - **持久化不变**：会话回合只落用户回合 + 最终 assistant 文本
+      （工具步是循环内部消息——不进入 ``state.turns`` / 不落
+      ``ff_chat_messages``；resume / 后续组装不可见工具中间态，
+      文档化决策）；
+    - 流式 ``stream_reply`` 恒 content-only（网关面 tools+stream 已
+      拒绝——本域不组合二者）。
+
 会话持久化（**可选绑定，缺省关闭**）：
 
     - 构造注入 ``session_service``（memory 域 ``ChatSessionService``）
@@ -44,7 +63,9 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Sequence
+from typing import Final, Protocol
 
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,6 +91,7 @@ from packages.harness.llm.llm_models import (
     ChatMessageModel,
     ChatMessageRole,
     ChatResponseModel,
+    ToolDefinitionModel,
 )
 from packages.harness.memory.service import ChatSessionService
 from packages.harness.persona.chara_card import (
@@ -80,15 +102,33 @@ from packages.harness.persona.chara_card import (
 )
 from packages.harness.persona.dtos import PersonaRecordDTO
 from packages.harness.persona.service import PersonaService, bind_persona_context
+from packages.harness.tools.tool_models import (
+    ToolCallRequestModel,
+    ToolResultModel,
+    ToolSpecModel,
+)
 
 __all__ = [
     "ChatService",
+    "ToolExecutorFace",
+    "CHAT_TOOL_STEP_CAP",
     "compose_messages",
     "estimate_text_tokens",
 ]
 
 #: 用途常量——chat 会话调用恒以 chat 用途落用量账（usage 域枚举校验）。
 CHAT_PURPOSE: str = "chat"
+
+#: chat 工具循环步数上限（锁定决策：5——chat 单轮回复的工具面收敛快于
+#: duty 巡检的 8 步；超限触发收尾指令 + 无工具面最终调用）。
+CHAT_TOOL_STEP_CAP: Final[int] = 5
+
+#: 收尾指令（步数上限触发——system 追加块，本轮不再携带工具面）。
+#: 就地定义说明：chat/prompts.py 不在本变更允许清单内（prompt Unit
+#: 文件迁移属后续独立变更）；文本经测试锁定。
+_TOOL_LOOP_FINAL_INSTRUCTION: Final[str] = (
+    "【收尾指令】\n工具调用步数已用尽。请立即基于已有信息直接回复用户，不再调用任何工具。"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +173,31 @@ def estimate_text_tokens(text: str) -> int:
     cjk = sum(1 for ch in text if _is_cjk_char(ch))
     other = len(text) - cjk
     return cjk + (other + 3) // 4
+
+
+# ---------------------------------------------------------------------------
+# 工具结果反馈渲染（chat 本地——duty render_tool_result 的 chat 侧对应物）
+# ---------------------------------------------------------------------------
+
+
+def _render_tool_result_content(result: ToolResultModel) -> str:
+    """工具执行结果 → tool 角色消息正文。
+
+    优先取执行器预格式化 ``text`` 块（web_search 的紧凑中文结果块）；
+    其余结果整体紧凑 JSON（与 duty ``render_tool_result`` 同信息量——
+    ok / result / error / 时延全量反馈，失败形态原样供模型自行调整）。
+
+    Args:
+        result: 执行结果（registry 归一终态）。
+
+    Returns:
+        tool 消息正文文本。
+    """
+    if result.ok:
+        preformatted = result.result.get("text")
+        if isinstance(preformatted, str) and preformatted:
+            return preformatted
+    return json.dumps(result.model_dump(), ensure_ascii=False, separators=(",", ":"))
 
 
 # ---------------------------------------------------------------------------
@@ -289,12 +354,34 @@ def compose_messages(state: ChatSessionStateModel) -> MessageCompositionResult:
 # ---------------------------------------------------------------------------
 
 
+class ToolExecutorFace(Protocol):
+    """chat 工具执行面协议（duty 工具注册表的结构化消费契约）。
+
+    结构化类型：真实 :class:`~packages.harness.tools.registry.ToolRegistry`
+    天然满足（同签名 ``execute_call``——恒不抛异常的隔离执行契约）；
+    测试注入 fake 同形态。
+    """
+
+    async def execute_call(self, call: ToolCallRequestModel) -> ToolResultModel:
+        """执行单次工具调用（异常隔离——归一 ``ok=False`` 结果，不上抛）。
+
+        Args:
+            call: 执行请求（工具名 + 参数 dict）。
+
+        Returns:
+            执行结果（ok / result / error / 时延）。
+        """
+        ...
+
+
 class ChatService:
     """人格感知聊天会话服务（组装 + 网关调用 + 会话内存态维护 + 可选持久化）。
 
-    构造注入（测试 / 装配友好）：网关 / 人格服务 / 会话持久化服务均可
-    显式注入；测试注入 fake 网关记录组装消息断言组装契约（零真实网络）。
-    ``session_service=None``（缺省）即纯内存形态——持久化可选。
+    构造注入（测试 / 装配友好）：网关 / 人格服务 / 会话持久化服务 /
+    LLM 工具面均可显式注入；测试注入 fake 网关记录组装消息断言组装契约
+    （零真实网络）。``session_service=None``（缺省）即纯内存形态——
+    持久化可选。``tools=None``（缺省）即零工具形态——既有 reply 行为
+    全量保持（CLI 不传工具面——零变更）。
     """
 
     def __init__(
@@ -303,6 +390,8 @@ class ChatService:
         gateway: LlmGateway,
         persona_service: PersonaService | None = None,
         session_service: ChatSessionService | None = None,
+        tools: Sequence[ToolSpecModel] | None = None,
+        tool_executor: ToolExecutorFace | None = None,
     ) -> None:
         """初始化服务。
 
@@ -313,10 +402,47 @@ class ChatService:
             session_service: 会话持久化服务（None = 纯内存态——兼容既有
                 形态；绑定后 create_session(db_session=...) 落库、reply /
                 stream_reply 逐回合持久化、resume_session 可用）。
+            tools: LLM 工具规格列表（None / 空 = 零工具形态——既有
+                行为；非空时 ``reply`` 走有界工具循环，与
+                ``tool_executor`` 成对注入）。
+            tool_executor: 工具执行面（``ToolRegistry`` 结构满足；
+                与 ``tools`` 成对注入——缺一即装配错误 fail loud）。
+
+        Raises:
+            BusinessException: ``tools`` 与 ``tool_executor`` 未成对注入
+                （``INTERNAL_ERROR``——装配面编程错误）。
         """
         self._gateway = gateway
         self._persona_service = persona_service if persona_service is not None else PersonaService()
         self._session_service = session_service
+        bound_tools = list(tools) if tools else []
+        if bound_tools and tool_executor is None:
+            raise BusinessException(
+                code=ErrorCode.INTERNAL_ERROR,
+                message="chat 工具面装配错误：注入 tools 须同时注入 tool_executor",
+            )
+        if not bound_tools and tool_executor is not None:
+            raise BusinessException(
+                code=ErrorCode.INTERNAL_ERROR,
+                message="chat 工具面装配错误：注入 tool_executor 须同时注入 tools",
+            )
+        #: 工具面绑定（None = 零工具形态；成对原子绑定——定义列表 +
+        #: 执行面，杜绝单侧注入）。定义面经 ToolSpecModel →
+        #: ToolDefinitionModel 一次转换（name / description / parameters
+        #: 三键直映——args_model 校验留在 executor 侧 registry）。
+        self._tools_binding: tuple[list[ToolDefinitionModel], ToolExecutorFace] | None = None
+        if bound_tools and tool_executor is not None:
+            self._tools_binding = (
+                [
+                    ToolDefinitionModel(
+                        name=spec.name,
+                        description=spec.description,
+                        parameters=spec.args_schema,
+                    )
+                    for spec in bound_tools
+                ],
+                tool_executor,
+            )
 
     # ------------------------------------------------------------------
     # 会话生命周期
@@ -458,6 +584,10 @@ class ChatService:
     async def reply(self, state: ChatSessionStateModel, user_text: str) -> str:
         """单轮回复（非流式）：追加用户回合 → 组装 → 网关 chat_by_role。
 
+        工具面分派：``tools`` 绑定时走有界工具循环（步数上限 + 收尾
+        forcing——见模块 docstring「可选工具循环」；工具步为循环内部
+        消息，不进入会话回合 / 持久化）；未绑定为既有单次调用形态。
+
         失败语义：网关异常原样上抛（用户回合保留在历史——调用方决定
         重试或提示）。重试语义（文档化决策）：调用方对 ``reply`` 的任何
         重试都是**完整重发**——用户消息再次进入会话历史；持久化绑定且
@@ -471,7 +601,8 @@ class ChatService:
 
         Returns:
             人格回复文本（已追加为 assistant 回合；持久化绑定且已落库
-            时用户 + 助手回合均落 ``ff_chat_messages``）。
+            时用户 + 助手回合均落 ``ff_chat_messages``——仅最终 assistant
+            文本，工具中间态不落库）。
 
         Raises:
             BusinessException: 输入为空（``VALIDATION_ERROR``）；模型返回
@@ -481,13 +612,16 @@ class ChatService:
         user_turn = self._append_user_turn(state, user_text)
         await self._persist_turn(state, user_turn)
         result = compose_messages(state)
-        response: ChatResponseModel = await self._gateway.chat_by_role(
-            ModelRole.CHAT,
-            result.messages,
-            persona_id=str(state.persona_id),
-            purpose=CHAT_PURPOSE,
-        )
-        content = response.content.strip()
+        if self._tools_binding is not None:
+            content = await self._tool_loop(result.messages, state, self._tools_binding)
+        else:
+            response: ChatResponseModel = await self._gateway.chat_by_role(
+                ModelRole.CHAT,
+                result.messages,
+                persona_id=str(state.persona_id),
+                purpose=CHAT_PURPOSE,
+            )
+            content = response.content.strip()
         if not content:
             raise BusinessException(
                 code=ErrorCode.LLM_CALL_FAILED,
@@ -573,6 +707,74 @@ class ChatService:
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
+
+    async def _tool_loop(
+        self,
+        messages: Sequence[ChatMessageModel],
+        state: ChatSessionStateModel,
+        binding: tuple[list[ToolDefinitionModel], ToolExecutorFace],
+    ) -> str:
+        """有界工具循环（返回最终回复文本；机械镜像 duty_service._tool_loop）。
+
+        循环消息为本地副本（组装结果 + assistant 工具调用轮回放 + tool
+        反馈轮）——**不进入 ``state.turns`` / 持久化**（仅最终 assistant
+        文本由 ``reply`` 落回合）。
+
+        Args:
+            messages: 组装结果消息序列（system + 历史 + 历史后再注入）。
+            state: 会话状态（persona_id 归属面）。
+            binding: 工具面绑定（定义列表 + 执行面——reply 分派传入）。
+
+        Returns:
+            最终回复文本（空串 = 模型未产出——调用方归
+            ``LLM_CALL_FAILED``）。
+
+        Raises:
+            Exception: 网关链路异常（原样上抛——与零工具形态同失败语义；
+            ``tool_executor.execute_call`` 自身恒不抛）。
+        """
+        definitions, executor = binding
+        loop_messages: list[ChatMessageModel] = list(messages)
+        persona_id = str(state.persona_id)
+        for _ in range(CHAT_TOOL_STEP_CAP):
+            response = await self._gateway.chat_by_role(
+                ModelRole.CHAT,
+                loop_messages,
+                tools=definitions,
+                persona_id=persona_id,
+                purpose=CHAT_PURPOSE,
+            )
+            if not response.tool_calls:
+                return response.content.strip()
+            loop_messages.append(
+                ChatMessageModel(
+                    role=ChatMessageRole.ASSISTANT,
+                    content=response.content,
+                    tool_calls=response.tool_calls,
+                )
+            )
+            for call in response.tool_calls:
+                result = await executor.execute_call(
+                    ToolCallRequestModel(name=call.name, arguments=call.arguments)
+                )
+                loop_messages.append(
+                    ChatMessageModel(
+                        role=ChatMessageRole.TOOL,
+                        content=_render_tool_result_content(result),
+                        tool_call_id=call.id,
+                    )
+                )
+        # 步数上限触发：收尾指令 + 无工具面最终调用（final-report forcing）。
+        loop_messages.append(
+            ChatMessageModel(role=ChatMessageRole.SYSTEM, content=_TOOL_LOOP_FINAL_INSTRUCTION)
+        )
+        final_response = await self._gateway.chat_by_role(
+            ModelRole.CHAT,
+            loop_messages,
+            persona_id=persona_id,
+            purpose=CHAT_PURPOSE,
+        )
+        return final_response.content.strip()
 
     def _append_user_turn(self, state: ChatSessionStateModel, user_text: str) -> ChatTurnModel:
         """追加用户回合（空白输入拒绝——边界校验）。
