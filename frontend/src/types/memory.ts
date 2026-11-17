@@ -235,6 +235,16 @@ export interface ChatSessionSummary {
   last_active_at: number
 }
 
+/** 会话消息元数据（内部观测面——心声 / 情绪增量 / 情绪快照；对方不可见）。 */
+export interface ChatMessageMeta {
+  /** 内心独白（``<心声>`` 内容；无元数据为 null）。 */
+  thought: string | null
+  /** 该轮情绪增量（维度 → -1..1）。 */
+  emotion_deltas: Record<string, number>
+  /** 该轮推进后的情绪快照（维度 → 0..1；无增量为 null）。 */
+  emotion_snapshot: Record<string, number> | null
+}
+
 /** 会话消息（按 session 归属，seq 升序）。 */
 export interface ChatMessage {
   /** 消息主键。 */
@@ -249,6 +259,8 @@ export interface ChatMessage {
   content: string
   /** 消息时间（epoch 毫秒）。 */
   ts_ms: number
+  /** 回合元数据（心声 / 情绪增量 / 情绪快照；无元数据为 null）。 */
+  meta?: ChatMessageMeta | null
 }
 
 /** 会话详情（摘要 + 全量消息 seq 升序）。 */

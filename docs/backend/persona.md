@@ -91,7 +91,7 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | `id` | BIGINT | PK 自增（SQLite 渲染 INTEGER） | 主键 |
 | `persona_id` | BIGINT | 非空；FK `ff_personas.id`（ON DELETE CASCADE）；索引 | 所属人格 |
 | `layer` | VARCHAR(8) | 非空；`(persona_id, layer)` 唯一 | 状态层（M=中期；S=短期） |
-| `state` | JSON | 非空 | 状态 JSON 文档（整体替换式更新） |
+| `state` | JSON | 非空 | 状态 JSON 文档（整体替换式更新；M 层可含 `emotion` 子文档——R2b 轻情绪引擎，见 [emotion.md](emotion.md)） |
 | `created_at` / `updated_at` | BIGINT | 非空 | epoch 毫秒（TimestampMixin） |
 
 迁移链：`backend/alembic/versions/000000000003_add_personas.py`（Revision 000000000003，Revises 000000000002——两表 + 索引 + 唯一约束）→ `000000000006_add_persona_voice_profile.py`（Revision 000000000006，Revises 000000000005——`ff_personas` 增 `voice_profile` JSON 可空列，纯增列、既有行落 NULL）→ `000000000008_persona_primary_marker.py`（Revision 000000000008，Revises 000000000007——多激活可寻址模型重构：增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active=1` 行回填 `'primary'`（旧单激活不变式保证至多一行），删 `is_active` 列；降级逆向重建；升级 / 降级 / 再升级均经 SQLite 冒烟验证）。
@@ -241,10 +241,17 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
   "state": {
     "mood": "期待",
     "relationship": 80,
-    "last_summary": "主人这周工作很忙，聊了三次加班"
+    "last_summary": "主人这周工作很忙，聊了三次加班",
+    "emotion": {
+      "values": {"joy": 0.62, "affection": 0.58},
+      "updated_at_ms": 1760000000000
+    }
   }
 }
 ```
+
+（`emotion` 子文档由轻情绪引擎经同一 upsert 面合并写入——其他 M 层键原样
+保留；结构 / 衰减 / 摘要规则见 [emotion.md](emotion.md)。）
 
 ```json
 {

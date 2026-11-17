@@ -21,7 +21,11 @@
     - :data:`POST_HISTORY_TEMPLATE`            —— 历史后再注入（deep
       anti-drift nudge——拼在全部对话历史**之后**的强约束）；
     - :data:`FIRST_GREETING_FALLBACK_TEMPLATE` —— 开场白兜底（卡片
-      ``first_mes`` 为空时的首条人格消息）。
+      ``first_mes`` 为空时的首条人格消息）；
+    - :data:`OUTPUT_PROTOCOL_TEMPLATE`        —— 输出格式协议（心声 /
+      情绪标签指令——接在人格正典之后的格式块，R2b）；
+    - :data:`EMOTION_STATE_TEMPLATE`          —— 心情状态块（非中性
+      情绪摘要注入——R2b 轻情绪引擎 compose 面）。
 
 渲染函数（纯函数——只做文本装配，不做条目选择 / 关键词匹配等逻辑；
 世界书筛选逻辑在 service 层）：chara card 字段 → 上述模板的最终文本。
@@ -41,6 +45,8 @@ __all__ = [
     "WORLD_BOOK_ENTRY_TEMPLATE_VERSION",
     "POST_HISTORY_TEMPLATE_VERSION",
     "FIRST_GREETING_FALLBACK_VERSION",
+    "OUTPUT_PROTOCOL_TEMPLATE_VERSION",
+    "EMOTION_STATE_TEMPLATE_VERSION",
     "CHARTER_TEMPLATE",
     "PERSONA_NAME_HEADER_TEMPLATE",
     "PERSONA_DESCRIPTION_SECTION_TEMPLATE",
@@ -50,15 +56,19 @@ __all__ = [
     "WORLD_BOOK_SECTION_SEPARATOR",
     "POST_HISTORY_TEMPLATE",
     "FIRST_GREETING_FALLBACK_TEMPLATE",
+    "OUTPUT_PROTOCOL_TEMPLATE",
+    "EMOTION_STATE_TEMPLATE",
     "render_charter",
     "render_persona_system_prompt",
     "render_world_book_block",
     "render_post_history_message",
     "render_first_greeting",
+    "render_output_protocol",
+    "render_emotion_state_block",
 ]
 
 #: prompt 套件总版本（任一模板变更时同步上调）。
-PROMPTS_VERSION: str = "1.0.0"
+PROMPTS_VERSION: str = "1.1.0"
 
 # ---------------------------------------------------------------------------
 # 版本常量——逐模板独立版本（byte-lock 测试按模板分别锁定摘要）
@@ -74,6 +84,10 @@ WORLD_BOOK_ENTRY_TEMPLATE_VERSION: str = "1.0.0"
 POST_HISTORY_TEMPLATE_VERSION: str = "1.0.0"
 #: 开场白兜底模板版本。
 FIRST_GREETING_FALLBACK_VERSION: str = "1.0.0"
+#: 输出格式协议模板版本（心声 / 情绪标签指令）。
+OUTPUT_PROTOCOL_TEMPLATE_VERSION: str = "1.0.0"
+#: 心情状态块模板版本（非中性情绪摘要注入）。
+EMOTION_STATE_TEMPLATE_VERSION: str = "1.0.0"
 
 # ---------------------------------------------------------------------------
 # 模板文本（byte-lock——修改须同步版本常量与测试摘要）
@@ -122,6 +136,21 @@ POST_HISTORY_TEMPLATE: str = (
 FIRST_GREETING_FALLBACK_TEMPLATE: str = (
     "（{name}抬起头看向你，微微一笑）嗯，你回来啦。今天想聊点什么？"
 )
+
+#: 输出格式协议（无占位符——接在人格正典之后的格式指令块；标签由
+#: ``chat/output_protocol.parse_assistant_output`` 解析，永不进入可见
+#: 正文 / 通道 / TTS）。
+OUTPUT_PROTOCOL_TEMPLATE: str = (
+    "【回复格式协议】\n"
+    "若你有内心想法，在回复最前面输出 <心声>一两句不会直接说出口的内心活动</心声>；"
+    "若当前情绪相对上一条回复有变化，紧跟输出 <情绪>维度:+增量,...</情绪>（增量取值 -1~1）；"
+    "随后输出正文。心声与情绪标签永远不会展示给对方。\n"
+    "可用情绪维度：joy 愉悦、affection 亲昵、shyness 羞怯、excitement 兴奋、"
+    "calm 平静、sadness 低落、anxiety 不安、annoyance 微恼。"
+)
+
+#: 心情状态块（占位符 ``{summary}``——非中性情绪摘要行；全中性不注入）。
+EMOTION_STATE_TEMPLATE: str = "【心情状态】\n{summary}"
 
 # ---------------------------------------------------------------------------
 # 渲染函数（纯文本装配——无状态 / 无 I/O / 无条目选择逻辑）
@@ -176,6 +205,31 @@ def render_world_book_block(entries: list[CharaBookEntryModel]) -> str:
         return ""
     blocks = [WORLD_BOOK_ENTRY_TEMPLATE.format(content=entry.content) for entry in entries]
     return WORLD_BOOK_SECTION_SEPARATOR.join(blocks)
+
+
+def render_output_protocol() -> str:
+    """渲染输出格式协议块（无占位符——原样返回模板）。
+
+    Returns:
+        输出格式协议文本（接在人格正典之后；标签解析见
+        ``chat/output_protocol``）。
+    """
+    return OUTPUT_PROTOCOL_TEMPLATE
+
+
+def render_emotion_state_block(summary: str | None) -> str:
+    """渲染心情状态块（非中性情绪摘要 → 注入块文本）。
+
+    Args:
+        summary: 情绪摘要行（``summarize_emotion`` 产出；None / 空白 =
+            全中性——返回空串，组装链跳过空块）。
+
+    Returns:
+        心情状态块文本；空摘要返回空串。
+    """
+    if summary is None or not summary.strip():
+        return ""
+    return EMOTION_STATE_TEMPLATE.format(summary=summary.strip())
 
 
 def render_post_history_message(card: CharaCardModel) -> str:

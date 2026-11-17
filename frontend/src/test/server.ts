@@ -535,7 +535,19 @@ export function mockSessionDetail(
     last_active_at: 1731000001000,
     messages: [
       { id: 1, session_id: sessionId, seq: 1, role: 'user', content: '今天好累', ts_ms: 1731000000000 },
-      { id: 2, session_id: sessionId, seq: 2, role: 'assistant', content: '辛苦了，想聊聊吗？', ts_ms: 1731000000500 },
+      {
+        id: 2,
+        session_id: sessionId,
+        seq: 2,
+        role: 'assistant',
+        content: '辛苦了，想聊聊吗？',
+        ts_ms: 1731000000500,
+        meta: {
+          thought: '他听起来真的很累，先别急着给建议。',
+          emotion_deltas: { affection: 0.2 },
+          emotion_snapshot: { affection: 0.7, shyness: 0.55 },
+        },
+      },
       { id: 3, session_id: sessionId, seq: 3, role: 'user', content: '就是工作上的事', ts_ms: 1731000001000 },
     ],
     ...overrides,

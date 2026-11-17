@@ -7,6 +7,7 @@
 | 模块 | 职责 | 关键导出 |
 |---|---|---|
 | `prompts.py` | **全部 LLM 提示词文本的唯一存放地**（Unit 文件）：模板 + 逐模板版本常量 + 纯渲染函数 | `CHARTER_TEMPLATE` / `PERSONA_*_SECTION_TEMPLATE` / `WORLD_BOOK_ENTRY_TEMPLATE` / `POST_HISTORY_TEMPLATE` / `FIRST_GREETING_FALLBACK_TEMPLATE` / `render_*` |
+| `output_protocol.py` | 输出协议解析（R2b——纯函数 Unit）：前导 ``<心声>`` / ``<情绪>`` 标签 → 可见正文 / 心声 / 情绪增量；流式起始前缀 best-effort 剥离器 | `parse_assistant_output` / `ParsedAssistantOutputModel` / `StreamTagStripper` / `strip_leading_protocol_prefix` |
 | `chat_models.py` | 会话回合 / 会话状态 / 组装结果 Model Classes（Unit 文件；含世界书回合状态——冷却追踪） | `ChatTurnModel` / `ChatSessionStateModel` / `MessageCompositionResult` |
 | `world_book.py` | 世界书高级选择算法链（R2b——纯函数 Unit 文件；rng / 回合状态可注入）+ token 近似估算 | `select_world_book_entries` / `SelectedEntryModel` / `WorldBookTurnStateModel` / `WorldBookSelectionResult` / `RECURSION_HOP_CAP` / `estimate_text_tokens` |
 | `service.py` | 消息组装（消费选择结果）+ `ChatService` 会话循环（回合状态回存） | `compose_messages` / `ChatService` |
@@ -26,16 +27,25 @@
         ├─ card.system_prompt 非空 → 整体覆写（正典自定义提示）
         └─ 否则 name 自称头 + 非空叙事段（description / personality / scenario，
            空字段段跳过）
-    ④ 世界书 after_char 条目块                          检索增强（行为补充）
+    ④ 心情状态块（emotion_summary 非空时）              R2b 轻情绪——M 态
+                                                       非中性摘要（见
+                                                       [emotion.md](emotion.md)）
+    ⑤ render_output_protocol()                          R2b 输出格式协议
+                                                       （心声 / 情绪标签指令）
+    ⑥ 世界书 after_char 条目块                          检索增强（行为补充）
 [历史回合]
-    ⑤ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合）
+    ⑦ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合）
 [system 末块]
-    ⑥ render_post_history_message(card)                历史后再注入（deep
+    ⑧ render_post_history_message(card)                历史后再注入（deep
                                                        anti-drift nudge——
                                                        卡片声明 post_history_instructions 时）
 ```
 
-各块以 `\n\n` 连接；⑥ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
+各块以 `\n\n` 连接；⑧ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
+
+注：`compose_messages(state, rng=None, emotion_summary=None)` 仍是纯函数
+——M 态读取 / 衰减在 `ChatService` 侧（仅持久化会话已落库时激活），纯内存
+形态 / 无持久化测试面零附加 I/O。
 
 ### 世界书筛选语义（R2b 高级触发——`world_book.select_world_book_entries` 纯函数）
 
@@ -82,6 +92,12 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 
 网关调用参数恒定：`role=chat`、`purpose="chat"`、`persona_id=str(persona_id)` 显式直传（与 `bind_persona_context` 上下文语义等价；选直传为可测性）。
 
+**输出协议（R2b——`reply` 面）**：模型原始输出先经
+`output_protocol.parse_assistant_output` 解析——返回 / 落回合 / 进历史 /
+发通道的**只有可见正文**；心声与情绪增量只进回合 `meta`（`ff_chat_messages.meta`，
+9 号迁移）与会话详情 API。协议语法与解析规则见下节「输出协议」；流式边界
+见同节「stream_reply 边界」。
+
 失败 / 边界语义：
 
 - 空白用户输入 → `VALIDATION_ERROR`；模型空回复 / 空流 → `LLM_CALL_FAILED`；
@@ -99,9 +115,56 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 
 **锁定决策（保持）**：会话创建时快照卡片（运行期管理面编辑不热更到在途会话；resume 按当前正典重取）。
 
+## 输出协议（`<心声>` / `<情绪>`——R2b）
+
+`prompts.py` 的 `OUTPUT_PROTOCOL_TEMPLATE`（版本常量
+`OUTPUT_PROTOCOL_TEMPLATE_VERSION`）在 compose 中作为格式指令块注入，要求
+模型按下列文法输出：
+
+```
+[<心声>一两句不会直接说出口的内心活动</心声>]
+[<情绪>维度:+增量,维度:增量,...</情绪>]
+正文
+```
+
+- 两个标签均可选、次序容忍、各至多生效一次；`<心声>` 内容只属于题内面
+  （persist 到 meta），**永不进入可见正文 / 通道 / TTS**；
+- 情绪维度值域 = emotion 域 `EmotionDimension` 8 维（joy 愉悦 / affection
+  亲昵 / shyness 羞怯 / excitement 兴奋 / calm 平静 / sadness 低落 /
+  anxiety 不安 / annoyance 微恼）；增量取值 -1..1，解析器夹取越界值；
+- 未知维度丢弃（debug 记录）、重复维度后者覆盖、同种标签重复时首个生效
+  （重复标签连同内容消费丢弃）；
+- **优雅降级**：无标签 / 标签未闭合 / 标签内容全非法 → 原文可见、
+  `thought=None`、`emotion_deltas={}`——解析器从不抛异常（模型输出不可信）。
+
+解析产物落库形态（`ff_chat_messages.meta`——JSON，可空）：
+
+```json
+{
+  "thought": "他今天又迟到了，会不会有麻烦。",
+  "emotion_deltas": {"joy": 0.4, "affection": 0.2},
+  "emotion_snapshot": {"joy": 0.9, "affection": 0.7, "calm": 0.5}
+}
+```
+
+`GET /api/v1/memories/sessions/{id}` 的 `messages[].meta` 即上述文档（未产生
+元数据的回合为 `null`）；前端会话详情以灰色斜体「心声:」块与情绪小标签
+渲染（对方不可见面）。情绪状态推进 / 衰减 / 摘要规则见
+[emotion.md](emotion.md)。
+
+### stream_reply 边界（锁定）
+
+流式路径**不跑完整协议**：`stream_reply` 经 `StreamTagStripper` 仅对流的
+**起始前缀**做 best-effort 标签剥离（完整出现的前导标签区扣留并丢弃；未知
+标签原样放行；未闭合标签在流结束时剥离开标签标记、其后文本原样交还）；
+**心声 / 情绪不落 meta、不推进 M 态**（流式通道是操作员可见面——诚实边界，
+不引入逐块语义解析复杂度）。落库正文 = 已放行（客户端实际可见）文本。
+
 ## prompt 版本与 byte-lock
 
-prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本）+ 逐模板 `*_TEMPLATE_VERSION`。模板文本变更 = 行为变更，须同步：① 上调版本常量；② 更新 `tests/unit/test_chat_prompts.py` 的 sha256 摘要锁（`_BYTE_LOCKS`）——测试红即「知情确认」关卡。
+prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本——R2b 输出协议 /
+心情块加入后为 1.1.0）+ 逐模板 `*_TEMPLATE_VERSION`（含新增
+`OUTPUT_PROTOCOL_TEMPLATE_VERSION` / `EMOTION_STATE_TEMPLATE_VERSION`）。模板文本变更 = 行为变更，须同步：① 上调版本常量；② 更新 `tests/unit/test_chat_prompts.py` 的 sha256 摘要锁（`_BYTE_LOCKS`）——测试红即「知情确认」关卡。
 
 ## 控制台 CLI（pixi run chat）
 
@@ -212,6 +275,12 @@ lifespan                                          上述函数对的 asynccontex
 - `tests/unit/test_chat_prompts.py`——byte-lock（sha256 摘要锁）+ 渲染契约（覆写 / 空段跳过 / 兜底）；
 - `tests/unit/test_chat_world_book.py`——R2b 选择算法链纯函数面：constant 恒注入 / 关键词窗口 / selective 副键 / 递归 2 跳上限与环安全 / 互斥分组确定性（含平局索引裁定）/ 概率门三态（种子 rng 按渲染序消耗）/ 冷却阻塞-解禁 / 功能式状态传递（入参不变更）/ token 预算截止（截断不记冷却）/ 深度槽渲染序 / 缺省字段 = 既有行为（兼容证明）；
 - `tests/unit/test_chat_service.py`——假网关记录组装消息：正典字段 / 世界书全语义（constant / scan_depth / selective / 大小写 / 预算截断 / 位置次序）/ PHI 末位 / 参数直通 / 流式聚合与提前终止 / 会话上限 / 查库路径（共享 SQLite）；R2b 增补：组装回合状态功能式推进 / 种子 rng 概率门 / 冷却会话循环闭环（第 1 轮注入 → 2/3 轮缺席 → 第 4 轮回归）；
+- `tests/unit/test_output_protocol.py`——协议解析矩阵（心声 / 情绪 / 双标签
+  两种次序 / 无标签 / 未闭合 / 未知维度 / 越界夹取 / 重复标签 / 纯标签空正文）
+  + 流式前缀剥离（扣留 / 直通 / flush 交还 / 跨块标签）；
+- `tests/unit/test_chat_emotion.py`——协议 + 情绪引擎集成（真实 SQLite：可见
+  正文返回 / meta 落库 + 详情 DTO 读回 / M 态推进 / 心情块注入位置 / 无标签
+  零状态 / 引擎停用 / 流式边界不落 meta）；
 - `tests/unit/test_chat_persistence.py`——持久化集成：落库 / 网关失败保留用户回合 / resume 全链路 / 持久化关闭兼容纯内存形态 / CLI `/new` `/sessions` `/resume` 命令（真实启动栈 + tmp SQLite + 假网关）；
 - `tests/unit/test_chat_cli.py`——注入式 I/O 驱动全流程（真实启动栈 + tmp SQLite + 假网关，never real stdin）：命令面 / 无主人格指引（退出码 1）/ 业务异常不崩 REPL / main 入口；
 - `tests/unit/test_app_main.py`——create_app 路由注册 / startup-shutdown 函数对（真实组件 + LIFO 追踪）/ health 与 personas 经 ASGITransport 走真实 app / lifespan 全周期 / 外部引擎治理；

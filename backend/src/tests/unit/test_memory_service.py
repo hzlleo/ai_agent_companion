@@ -701,6 +701,7 @@ async def test_append_message_seq_conflict_retry_recomputes(
         role: ChatMessageRole,
         content: str,
         ts_ms: int | None = None,
+        meta: dict[str, object] | None = None,
     ) -> object:
         """首次尝试：模拟并发赢家抢先追加一条消息（计数同步推进）后抛唯一键冲突。"""
         if not calls:
@@ -714,7 +715,7 @@ async def test_append_message_seq_conflict_retry_recomputes(
                 Exception("Duplicate entry for key 'uq_ff_chat_messages_seq'"),
             )
         return await original_once(
-            inner_self, session, session_id, role=role, content=content, ts_ms=ts_ms
+            inner_self, session, session_id, role=role, content=content, ts_ms=ts_ms, meta=meta
         )
 
     monkeypatch.setattr(ChatSessionService, "_append_message_once", conflicting_then_real)

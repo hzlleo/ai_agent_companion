@@ -71,7 +71,29 @@
 ### ff_chat_sessions / ff_chat_messages（工作层）
 
 `ff_chat_sessions`：`persona_id`（PersonaMixin）/ `title` / `message_count`（下一消息 seq）/ `last_active_at`（索引）。
-`ff_chat_messages`：`session_id`（FK ff_chat_sessions.id，级联删除，索引）/ `seq`（会话内从 1 递增；唯一键 `uq_ff_chat_messages_seq (session_id, seq)`——DB 级兜底，迁移 0007）/ `role`（user/assistant/system）/ `content` / `ts_ms`。
+`ff_chat_messages`：`session_id`（FK ff_chat_sessions.id，级联删除，索引）/ `seq`（会话内从 1 递增；唯一键 `uq_ff_chat_messages_seq (session_id, seq)`——DB 级兜底，迁移 0007）/ `role`（user/assistant/system）/ `content` / `ts_ms` / `meta`（JSON 可空——回合内部观测元数据：`thought` 心声 / `emotion_deltas` 情绪增量 / `emotion_snapshot` 情绪快照，**永不进入可见正文**；迁移 0009，见 [emotion.md](emotion.md)）。
+
+`append_message(..., meta=None)` 为可选追加参数（既有调用方零变更）；会话详情
+DTO `messages[].meta`（`ChatMessageMetaModel`）为读侧形态——无元数据回合为
+`null`。`GET /api/v1/memories/sessions/{id}` 响应示例（assistant 回合）：
+
+```json
+{
+  "id": 2,
+  "session_id": 1,
+  "seq": 2,
+  "role": "assistant",
+  "content": "你回来啦，快坐下。",
+  "ts_ms": 1760000000500,
+  "meta": {
+    "thought": "他终于来了，等了好久。",
+    "emotion_deltas": {"joy": 0.4, "affection": 0.2},
+    "emotion_snapshot": {"joy": 0.9, "affection": 0.7, "calm": 0.5}
+  }
+}
+```
+
+（`meta` 为可空字段；流式路径不落 meta——边界见 [chat.md](chat.md)。）
 
 ## provenance 规则（全记忆层统一 taxonomy）
 

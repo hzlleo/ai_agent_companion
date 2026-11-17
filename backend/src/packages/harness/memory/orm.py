@@ -201,6 +201,8 @@ class ChatMessageRow(Base, BigIntIdMixin, TimestampMixin):
         role: 消息角色（user/assistant/system）。
         content: 消息文本。
         ts_ms: 消息时间（epoch 毫秒——回合产生时刻）。
+        meta: 回合元数据 JSON（可空——心声 / 情绪增量 / 情绪快照等内部
+            观测面；永不进入对方可见文本）。
     """
 
     __tablename__ = "ff_chat_messages"
@@ -218,3 +220,8 @@ class ChatMessageRow(Base, BigIntIdMixin, TimestampMixin):
     role: Mapped[str] = mapped_column(String(16), comment="消息角色（user/assistant/system）")
     content: Mapped[str] = mapped_column(Text, comment="消息文本")
     ts_ms: Mapped[int] = mapped_column(BigInteger, comment="消息时间（epoch 毫秒）")
+    meta: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON,
+        nullable=True,
+        comment="回合元数据 JSON（心声 / 情绪增量 / 情绪快照；NULL = 无元数据）",
+    )

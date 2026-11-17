@@ -49,6 +49,7 @@ __all__ = [
     "connect_server",
     "drop_scratch_database",
     "fetch_alembic_version",
+    "fetch_column_names",
     "fetch_table_names",
     "recreate_scratch_database",
     "resolve_seekdb_test_target",
@@ -83,8 +84,8 @@ _MISSING_ENV_MESSAGE = (
     "未注入测试服务 env 的本地运行。"
 )
 
-#: alembic 迁移链 head 版本戳（0008——主人格标记迁移）。
-HEAD_REVISION = "000000000008"
+#: alembic 迁移链 head 版本戳（0009——会话消息元数据列迁移）。
+HEAD_REVISION = "000000000009"
 
 #: 升级 head 后的全量表集（live 实测形态：alembic_version + 8 张 ff_* 域表）。
 EXPECTED_HEAD_TABLES: frozenset[str] = frozenset(
@@ -286,6 +287,30 @@ async def fetch_alembic_version(target: SeekDbTestTarget) -> str | None:
     finally:
         conn.close()
     return str(row[0]) if row else None
+
+
+async def fetch_column_names(target: SeekDbTestTarget, table_name: str) -> set[str]:
+    """读指定表的列名集合（迁移列断言面——information_schema 直查）。
+
+    Args:
+        target: 连接目标。
+        table_name: 表名。
+
+    Returns:
+        列名集合。
+    """
+    conn = await connect_scratch(target)
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT COLUMN_NAME FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = %s",
+                (target.database, table_name),
+            )
+            rows = await cur.fetchall()
+    finally:
+        conn.close()
+    return {str(row[0]) for row in rows}
 
 
 @contextmanager

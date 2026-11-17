@@ -6,9 +6,13 @@
         ↓ ① prompts.render_charter()                      会话章程帧
         ↓ ② 世界书 before_char 条目块                      检索增强（前段）
         ↓ ③ prompts.render_persona_system_prompt(card)     人格正典（覆写感知）
-        ↓ ④ 世界书 after_char 条目块                       检索增强（后段）
-        ↓ ⑤ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合）
-        ↓ ⑥ prompts.render_post_history_message(card)      历史后再注入（末块）
+        ↓ ④ 非中性情绪摘要块（render_emotion_state_block——R2b 轻情绪引擎；
+             无状态 / 全中性跳过）
+        ↓ ⑤ prompts.render_output_protocol()               输出格式协议（心声 /
+             情绪标签指令——R2b）
+        ↓ ⑥ 世界书 after_char 条目块                       检索增强（后段）
+        ↓ ⑦ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合）
+        ↓ ⑧ prompts.render_post_history_message(card)      历史后再注入（末块）
 
 世界书筛选语义（chara card v2 规格 + R2b 高级触发——算法链全文见
 ``world_book`` 模块文档，此处为消费面摘要）：
@@ -53,6 +57,23 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
     - 流式 ``stream_reply`` 恒 content-only（网关面 tools+stream 已
       拒绝——本域不组合二者）。
 
+输出协议 + 轻情绪引擎（R2b D7-2 / D7-7——模块文档锁定边界）：
+
+    - ``reply`` 的模型原始输出经 ``output_protocol.parse_assistant_output``
+      解析：``<心声>`` / ``<情绪>`` 前导标签被剥离，**返回 / 落回合 /
+      进历史 / 发通道的只有可见正文**；心声与情绪增量只进回合 meta
+      （``ff_chat_messages.meta``）与会话详情 API；
+    - 情绪引擎仅在「持久化会话绑定且已落库」时激活（M 态存储面依赖
+      数据库——纯内存形态零附加 I/O）；激活时 reply 在组装前读 M 态
+      产出摘要行注入心情块，回复后按 ``<情绪>`` 增量推进并持久化 M 态，
+      同时把推进后快照写入回合 meta；
+    - ``stream_reply`` **不跑完整协议**（流式通道是操作员可见面——
+      既有 content-only 契约不变）：仅经 ``StreamTagStripper`` 对流的
+      起始前缀做 best-effort 标签剥离（未闭合标签原样放行），
+      心声 / 情绪**不落 meta、不推进 M 态**；
+    - 不合规模型（无标签 / 标签残缺）优雅降级：原文可见、零状态变化
+      ——协议面永不因模型输出抛异常。
+
 意图快径前钩（R2a-6——构造注入 ``intent_shortcut`` 后，``reply`` 前端
 先试快径；缺省 ``intent_shortcut=None`` 保持既有零快径形态）：
 
@@ -92,7 +113,7 @@ from __future__ import annotations
 import json
 import random
 from collections.abc import AsyncIterator, Sequence
-from typing import Final, Protocol
+from typing import Any, Final, Protocol
 
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -102,10 +123,17 @@ from packages.harness.chat.chat_models import (
     ChatTurnModel,
     MessageCompositionResult,
 )
+from packages.harness.chat.output_protocol import (
+    ParsedAssistantOutputModel,
+    StreamTagStripper,
+    parse_assistant_output,
+)
 from packages.harness.chat.prompts import (
     WORLD_BOOK_SECTION_SEPARATOR,
     render_charter,
+    render_emotion_state_block,
     render_first_greeting,
+    render_output_protocol,
     render_persona_system_prompt,
     render_post_history_message,
     render_world_book_block,
@@ -118,6 +146,7 @@ from packages.harness.chat.world_book import (
 from packages.harness.config.model_entry import ModelRole
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.database.session import session_scope
+from packages.harness.emotion.service import EmotionService
 from packages.harness.intent.intent_models import IntentMatchModel, PersonaNaming
 from packages.harness.llm.gateway import LlmGateway
 from packages.harness.llm.llm_models import (
@@ -215,16 +244,24 @@ def _split_sections(
 
 
 def compose_messages(
-    state: ChatSessionStateModel, *, rng: random.Random | None = None
+    state: ChatSessionStateModel,
+    *,
+    rng: random.Random | None = None,
+    emotion_summary: str | None = None,
 ) -> MessageCompositionResult:
     """组装完整请求消息序列（纯函数——无 I/O / 无网关调用 / 无会话回写）。
 
     消息序列结构::
 
-        [system]  章程 + 世界书 before 段 + 人格正典 + 世界书 after 段
+        [system]  章程 + 世界书 before 段 + 人格正典 + 心情状态块 +
+                  输出格式协议块 + 世界书 after 段
         [user/assistant ...]  全部历史回合（含刚追加的用户回合）
         [system]  历史后再注入（卡片声明 post_history_instructions 时；
                   位于**最后一条历史回合之后**——deep anti-drift 位置）
+
+    心情状态块仅在 ``emotion_summary`` 非空时注入（非中性情绪——由
+    ChatService 经 emotion 域读取 M 态产出）；输出格式协议块恒注入
+    （心声 / 情绪标签指令——解析面见 ``chat/output_protocol``）。
 
     世界书选择经 ``world_book.select_world_book_entries``（算法链与
     渲染序裁定见该模块文档）；推进后的回合状态（冷却时钟 + 注入
@@ -235,6 +272,8 @@ def compose_messages(
         state: 会话状态（卡片快照 + 回合列表 + 世界书回合状态）。
         rng: 概率门随机源（None = 现场构造非种子实例；仅卡片声明
             ``trigger_probability < 1.0`` 时消耗——缺省卡片零随机性）。
+        emotion_summary: 非中性情绪摘要行（None / 空白 = 不注入心情块；
+            M 态读取与衰减在调用方——本函数保持纯函数无 I/O）。
 
     Returns:
         组装结果（消息序列 + 观测元数据 + 推进后的世界书回合状态）。
@@ -255,6 +294,10 @@ def compose_messages(
     if before_block:
         system_parts.append(before_block)
     system_parts.append(render_persona_system_prompt(state.card))
+    emotion_block = render_emotion_state_block(emotion_summary)
+    if emotion_block:
+        system_parts.append(emotion_block)
+    system_parts.append(render_output_protocol())
     after_block = render_world_book_block(after_entries)
     if after_block:
         system_parts.append(after_block)
@@ -275,6 +318,7 @@ def compose_messages(
         included_book_entries=selection.included,
         estimated_system_tokens=estimate_text_tokens(system_prompt),
         world_book_state=selection.turn_state,
+        emotion_summary=emotion_summary if emotion_block else None,
     )
 
 
@@ -356,6 +400,7 @@ class ChatService:
         tools: Sequence[ToolSpecModel] | None = None,
         tool_executor: ToolExecutorFace | None = None,
         intent_shortcut: IntentShortcutFace | None = None,
+        emotion_service: EmotionService | None = None,
     ) -> None:
         """初始化服务。
 
@@ -374,6 +419,9 @@ class ChatService:
             intent_shortcut: 意图快径面（None = 零快径形态——既有行为；
                 注入后 ``reply`` 前端先试快径，命中即罐头回复 + 跳过
                 网关——通道装配专属注入面，见模块 docstring）。
+            emotion_service: 轻情绪引擎服务（None = 现场构造默认实例——
+                读 ``EMOTION_`` env；M 态读写仅在持久化会话绑定且已落库
+                时发生——纯内存形态零附加 I/O，见模块 docstring）。
 
         Raises:
             BusinessException: ``tools`` 与 ``tool_executor`` 未成对注入
@@ -384,6 +432,10 @@ class ChatService:
         self._session_service = session_service
         #: 意图快径面绑定（None = 零快径形态——reply 前钩判定面）。
         self._intent_shortcut = intent_shortcut
+        #: 轻情绪引擎绑定（默认实例读 EMOTION_ env——停用时零读写）。
+        self._emotion_service = (
+            emotion_service if emotion_service is not None else EmotionService()
+        )
         bound_tools = list(tools) if tools else []
         if bound_tools and tool_executor is None:
             raise BusinessException(
@@ -577,9 +629,10 @@ class ChatService:
             user_text: 用户输入（空白拒绝）。
 
         Returns:
-            人格回复文本（已追加为 assistant 回合；持久化绑定且已落库
-            时用户 + 助手回合均落 ``ff_chat_messages``——仅最终 assistant
-            文本，工具中间态不落库；快径命中时为罐头文本，网关零调用）。
+            **可见正文**（已追加为 assistant 回合；持久化绑定且已落库时
+            用户 + 助手回合均落 ``ff_chat_messages``——仅最终 assistant
+            可见文本，工具中间态与协议标签均不落库正文；心声 / 情绪
+            增量只进回合 meta；快径命中时为罐头文本，网关零调用）。
 
         Raises:
             BusinessException: 输入为空（``VALIDATION_ERROR``）；模型返回
@@ -600,13 +653,14 @@ class ChatService:
                 )
         user_turn = self._append_user_turn(state, user_text)
         await self._persist_turn(state, user_turn)
-        result = compose_messages(state)
+        emotion_summary = await self._current_emotion_summary(state)
+        result = compose_messages(state, emotion_summary=emotion_summary)
         # 功能式回合状态回存：组装纯函数不回写会话态，冷却时钟推进由
         # 本服务消费后落回（快径路径不组装、不推进——时钟只度量真实
         # 组装回合）。
         state.world_book_state = result.world_book_state
         if self._tools_binding is not None:
-            content = await self._tool_loop(result.messages, state, self._tools_binding)
+            raw_content = await self._tool_loop(result.messages, state, self._tools_binding)
         else:
             response: ChatResponseModel = await self._gateway.chat_by_role(
                 ModelRole.CHAT,
@@ -614,15 +668,18 @@ class ChatService:
                 persona_id=str(state.persona_id),
                 purpose=CHAT_PURPOSE,
             )
-            content = response.content.strip()
+            raw_content = response.content
+        parsed = parse_assistant_output(raw_content)
+        content = parsed.visible_text
         if not content:
             raise BusinessException(
                 code=ErrorCode.LLM_CALL_FAILED,
                 message="模型返回空回复",
                 details={"persona_id": state.persona_id},
             )
+        meta = await self._emotion_round_meta(state, parsed)
         assistant_turn = state.append_turn(ChatMessageRole.ASSISTANT, content)
-        await self._persist_turn(state, assistant_turn)
+        await self._persist_turn(state, assistant_turn, meta=meta)
         return content
 
     async def stream_reply(
@@ -630,8 +687,11 @@ class ChatService:
     ) -> AsyncIterator[str]:
         """单轮流式回复：追加用户回合 → 组装 → 网关 stream_by_role。
 
-        增量语义：逐块 ``yield chunk.content``（空增量块跳过）；流自然
-        结束后聚合全文追加为 assistant 回合。消费方提前终止
+        增量语义：逐块经 ``StreamTagStripper`` 做**起始前缀** best-effort
+        标签剥离后 yield（空增量块跳过；未知 / 未闭合标签原样放行）；
+        流自然结束后聚合已放行文本追加为 assistant 回合。本路径**不跑
+        完整输出协议**：心声 / 情绪增量不落 meta、不推进 M 态（流式
+        通道是操作员可见面——边界文档化于模块 docstring）。消费方提前终止
         （``GeneratorExit``）时**不追加助手回合**——半截回复不入历史
         （文档化决策；持久化面同语义——半截助手回合不落库）。重试语义
         同 ``reply``：调用方重试是完整重发——用户回合已落库时再落一行
@@ -651,9 +711,11 @@ class ChatService:
         """
         user_turn = self._append_user_turn(state, user_text)
         await self._persist_turn(state, user_turn)
-        result = compose_messages(state)
+        emotion_summary = await self._current_emotion_summary(state)
+        result = compose_messages(state, emotion_summary=emotion_summary)
         # 功能式回合状态回存（与 reply 同构——冷却时钟只度量真实组装回合）。
         state.world_book_state = result.world_book_state
+        stripper = StreamTagStripper()
         parts: list[str] = []
         async for chunk in self._gateway.stream_by_role(
             ModelRole.CHAT,
@@ -663,8 +725,15 @@ class ChatService:
         ):
             if not chunk.content:
                 continue
-            parts.append(chunk.content)
-            yield chunk.content
+            emitted = stripper.feed(chunk.content)
+            if not emitted:
+                continue
+            parts.append(emitted)
+            yield emitted
+        tail = stripper.flush()
+        if tail:
+            parts.append(tail)
+            yield tail
         content = "".join(parts).strip()
         if not content:
             raise BusinessException(
@@ -828,7 +897,13 @@ class ChatService:
                 message="用户输入不能为空",
             ) from exc
 
-    async def _persist_turn(self, state: ChatSessionStateModel, turn: ChatTurnModel) -> None:
+    async def _persist_turn(
+        self,
+        state: ChatSessionStateModel,
+        turn: ChatTurnModel,
+        *,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
         """持久化单回合（持久化绑定 + 会话已落库时；否则 no-op）。
 
         经 ``session_scope`` 独立短事务写入（CLI / API 入口零 Session
@@ -839,6 +914,8 @@ class ChatService:
         Args:
             state: 会话状态（``session_id`` 为 None 时 no-op）。
             turn: 待落库回合。
+            meta: 回合元数据（心声 / 情绪增量 / 情绪快照；None = 无
+                元数据——既有调用方零变更）。
         """
         if self._session_service is None or state.session_id is None:
             return
@@ -849,4 +926,66 @@ class ChatService:
                 role=turn.role,
                 content=turn.content,
                 ts_ms=turn.ts_ms,
+                meta=meta,
             )
+
+    def _emotion_runtime_active(self, state: ChatSessionStateModel) -> bool:
+        """情绪引擎运行判定（持久化会话已落库 + 引擎启用）。
+
+        M 态存储面依赖数据库会话——纯内存形态 / 未落库会话一律停机
+        （零附加 I/O，既有纯内存测试面零变更）。
+
+        Args:
+            state: 会话状态。
+
+        Returns:
+            True = 本次回复可读 / 写 M 态情绪。
+        """
+        return (
+            self._session_service is not None
+            and state.session_id is not None
+            and self._emotion_service.enabled
+        )
+
+    async def _current_emotion_summary(self, state: ChatSessionStateModel) -> str | None:
+        """读取当前情绪摘要行（compose 心情块注入面——非中性才非空）。
+
+        Args:
+            state: 会话状态。
+
+        Returns:
+            中文摘要行；引擎未激活 / 无状态 / 全中性时为 None。
+        """
+        if not self._emotion_runtime_active(state):
+            return None
+        return await self._emotion_service.summary(state.persona_id)
+
+    async def _emotion_round_meta(
+        self, state: ChatSessionStateModel, parsed: ParsedAssistantOutputModel
+    ) -> dict[str, Any] | None:
+        """构建本轮回合元数据（心声 + 情绪增量 + 推进后快照）。
+
+        引擎未激活时仍保留心声 / 增量留档（观测面），快照为 None；
+        无心声且无增量时返回 None（零 meta 写入——既有行形态不变）。
+
+        Args:
+            state: 会话状态。
+            parsed: 输出协议解析结果。
+
+        Returns:
+            回合元数据字典；无任何元数据时为 None。
+        """
+        if parsed.thought is None and not parsed.emotion_deltas:
+            return None
+        snapshot: dict[str, float] | None = None
+        if self._emotion_runtime_active(state) and parsed.emotion_deltas:
+            advanced = await self._emotion_service.apply_deltas(
+                state.persona_id, parsed.emotion_deltas
+            )
+            if advanced is not None:
+                snapshot = dict(advanced.values)
+        return {
+            "thought": parsed.thought,
+            "emotion_deltas": dict(parsed.emotion_deltas),
+            "emotion_snapshot": snapshot,
+        }

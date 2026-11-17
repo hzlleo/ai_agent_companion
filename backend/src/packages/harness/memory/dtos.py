@@ -49,6 +49,7 @@ __all__ = [
     "ChatSessionSummaryDTO",
     "ChatSessionDetailDTO",
     "ChatMessageDTO",
+    "ChatMessageMetaModel",
 ]
 
 #: kind → 载荷 Model Class 判别表（DTO 边界 content 解析真源；与
@@ -365,6 +366,27 @@ class ChatSessionSummaryDTO(BaseModel):
     last_active_at: int = Field(description="最后活跃时间（epoch 毫秒）")
 
 
+class ChatMessageMetaModel(BaseModel):
+    """会话消息元数据（内部观测面——永不进入对方可见文本）。
+
+    Attributes:
+        thought: 内心独白（``<心声>`` 内容；未声明为 None——会话详情
+            以灰色斜体渲染，通道 / TTS 永不消费）。
+        emotion_deltas: 该轮情绪增量（维度 → -1..1；协议解析结果原样
+            留档）。
+        emotion_snapshot: 该轮推进后的情绪状态快照（维度 → 0..1；引擎
+            停用 / 无增量时为 None）。
+    """
+
+    thought: str | None = Field(default=None, description="内心独白（永不展示给对方）")
+    emotion_deltas: dict[str, float] = Field(
+        default_factory=dict, description="该轮情绪增量（维度 → -1..1）"
+    )
+    emotion_snapshot: dict[str, float] | None = Field(
+        default=None, description="该轮推进后的情绪快照（维度 → 0..1；无增量为 null）"
+    )
+
+
 class ChatMessageDTO(BaseModel):
     """会话消息 DTO（ORM 行归一——按 session 归属，非人格作用域行）。
 
@@ -375,6 +397,7 @@ class ChatMessageDTO(BaseModel):
         role: 消息角色（user/assistant/system）。
         content: 消息文本。
         ts_ms: 消息时间（epoch 毫秒）。
+        meta: 回合元数据（心声 / 情绪增量 / 情绪快照；无元数据为 null）。
     """
 
     model_config = ConfigDict(from_attributes=True, protected_namespaces=())
@@ -385,6 +408,9 @@ class ChatMessageDTO(BaseModel):
     role: ChatMessageRole = Field(description="消息角色")
     content: str = Field(description="消息文本")
     ts_ms: int = Field(description="消息时间（epoch 毫秒）")
+    meta: ChatMessageMetaModel | None = Field(
+        default=None, description="回合元数据（心声 / 情绪增量 / 情绪快照；无元数据为 null）"
+    )
 
 
 class ChatSessionDetailDTO(BaseModel):

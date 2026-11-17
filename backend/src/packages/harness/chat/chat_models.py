@@ -134,6 +134,8 @@ class MessageCompositionResult(BaseModel):
         world_book_state: 推进后的世界书回合状态（组装调用 +1 与本次
             注入记录——**组装是纯函数不回写会话态**，由 ChatService
             消费后回存；直调测试忽略即丢弃，功能式语义）。
+        emotion_summary: 本次注入的心情摘要行（非中性情绪时由调用方
+            经 emotion 域产出并传入；None = 未注入——纯观测面）。
     """
 
     messages: list[ChatMessageModel] = Field(description="完整请求消息序列")
@@ -146,4 +148,7 @@ class MessageCompositionResult(BaseModel):
     world_book_state: WorldBookTurnStateModel = Field(
         default_factory=WorldBookTurnStateModel,
         description="推进后的世界书回合状态（会话层回存面）",
+    )
+    emotion_summary: str | None = Field(
+        default=None, description="本次注入的心情摘要行（None = 未注入）"
     )

@@ -23,6 +23,18 @@ export interface SessionDetailDialogProps {
   sessionId: number
 }
 
+/** 情绪维度 → 中文展示名（与后端 emotion 域枚举一致）。 */
+const EMOTION_LABELS: Record<string, string> = {
+  joy: '愉悦',
+  affection: '亲昵',
+  shyness: '羞怯',
+  excitement: '兴奋',
+  calm: '平静',
+  sadness: '低落',
+  anxiety: '不安',
+  annoyance: '微恼',
+}
+
 /** 消息角色 → 中文标签 + 徽章变体。 */
 const ROLE_LABELS: Record<ChatMessageRole, { label: string; variant: 'info' | 'success' | 'secondary' }> = {
   user: { label: '用户', variant: 'info' },
@@ -85,6 +97,27 @@ export function SessionDetailDialog({
                     <p className="whitespace-pre-wrap text-sm text-[var(--color-text)]">
                       {message.content}
                     </p>
+                    {message.meta?.thought ? (
+                      <p
+                        data-testid={`session-thought-${message.seq}`}
+                        className="mt-2 whitespace-pre-wrap text-xs italic text-[var(--color-text-muted)]"
+                      >
+                        心声:{message.meta.thought}
+                      </p>
+                    ) : null}
+                    {message.meta?.emotion_snapshot &&
+                    Object.keys(message.meta.emotion_snapshot).length > 0 ? (
+                      <div
+                        data-testid={`session-emotion-${message.seq}`}
+                        className="mt-1 flex flex-wrap gap-1"
+                      >
+                        {Object.entries(message.meta.emotion_snapshot).map(([dimension, value]) => (
+                          <Badge key={dimension} variant="secondary">
+                            {EMOTION_LABELS[dimension] ?? dimension} {value.toFixed(2)}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : null}
                   </li>
                 )
               })}

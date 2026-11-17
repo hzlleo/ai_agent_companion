@@ -35,6 +35,7 @@ Session 契约：方法接收调用方注入的 :class:`AsyncSession`（app 层�
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 from loguru import logger
 from sqlalchemy import delete, desc, select
@@ -866,6 +867,7 @@ class ChatSessionService:
         role: ChatMessageRole,
         content: str,
         ts_ms: int | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> ChatMessageDTO:
         """追加会话消息（seq = message_count + 1 递增；会话行同事务更新）。
 
@@ -882,6 +884,8 @@ class ChatSessionService:
             role: 消息角色。
             content: 消息文本（非空）。
             ts_ms: 消息时间（epoch 毫秒；None = 当前时间）。
+            meta: 回合元数据（可空——心声 / 情绪增量 / 情绪快照；缺省
+                None 保持既有调用方零变更）。
 
         Returns:
             落库后的消息 DTO。
@@ -892,7 +896,7 @@ class ChatSessionService:
         """
         try:
             message = await self._append_message_once(
-                session, session_id, role=role, content=content, ts_ms=ts_ms
+                session, session_id, role=role, content=content, ts_ms=ts_ms, meta=meta
             )
         except IntegrityError:
             # 并发追加抢先落了同 seq 行——回滚重读计数重算（行锁下重读
@@ -901,7 +905,7 @@ class ChatSessionService:
             logger.info("会话消息 seq 并发冲突，重读计数重算重试: session_id={}", session_id)
             try:
                 message = await self._append_message_once(
-                    session, session_id, role=role, content=content, ts_ms=ts_ms
+                    session, session_id, role=role, content=content, ts_ms=ts_ms, meta=meta
                 )
             except IntegrityError as exc:
                 await _rollback_quietly(session)
@@ -920,6 +924,7 @@ class ChatSessionService:
         role: ChatMessageRole,
         content: str,
         ts_ms: int | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> ChatMessageRow:
         """单次消息追加尝试（行锁读取 + 计数推进——无重试）。
 
@@ -929,6 +934,7 @@ class ChatSessionService:
             role: 消息角色。
             content: 消息文本（非空）。
             ts_ms: 消息时间（epoch 毫秒；None = 当前时间）。
+            meta: 回合元数据（可空——原样落 JSON 列）。
 
         Returns:
             落库后的消息 ORM 行。
@@ -947,6 +953,7 @@ class ChatSessionService:
             role=role.value,
             content=content,
             ts_ms=resolved_ts,
+            meta=meta,
         )
         session.add(message)
         row.message_count = message.seq
