@@ -2,7 +2,7 @@
 
 入站形态（与 Telegram 的**拉取式**长轮询根本不同）：NapCat 部署侧配置
 HTTP POST 事件上报，把 OneBot 事件**推送**到本后端的 webhook 端点
-（``app/api/channels_qq``——P4 chunk 4 交付面）；因此 QQ 通道**没有
+（``app/api/channels_qq``——webhook 交付面）；因此 QQ 通道**没有
 runner**——零后台任务，仅 webhook 处理器（``qq_webhook``）+ 本发送面
 适配器。
 

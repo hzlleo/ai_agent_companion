@@ -17,7 +17,7 @@
 
     - **手滚调度**（无 APScheduler / cron 解析 / 时区数据库依赖）：
       作业面只有间隔（``every_seconds``）与每日定时（``daily_at`` "HH:MM"）
-      两类——duty 每日 + dream 每日 + P4 未来作业足够；
+      两类——duty 每日 + dream 每日 + 未来作业足够；
     - **naive 本地时间**（文档化）：每日作业的 "HH:MM" 按进程本地时区
       的墙钟语义解析（``datetime.fromtimestamp`` 无 tz 参数——与
       ``tools.get_current_time`` 同约定）；不引入 zoneinfo / DST 规则；

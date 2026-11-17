@@ -70,7 +70,7 @@ def _settings(**seekdb_overrides: Any):
 async def test_create_seekdb_pool_passes_autocommit_and_bounds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """池创建传参：autocommit=True + minsize/maxsize + db（via 动态加载面）。"""
+    """池创建传参：autocommit=True + minsize/maxsize + db（假驱动注入）。"""
     captured: dict[str, Any] = {}
 
     class _StubAiomysql:
@@ -82,7 +82,7 @@ async def test_create_seekdb_pool_passes_autocommit_and_bounds(
             captured.update(kwargs)
             return FakePool()
 
-    monkeypatch.setattr(seekdb_compat, "_AIOMYSQL_MODULE", _StubAiomysql())
+    monkeypatch.setattr(seekdb_compat, "aiomysql", _StubAiomysql())
 
     pool = await seekdb_compat.create_seekdb_pool(
         host="seek.local",
@@ -209,6 +209,38 @@ async def test_pool_manager_seekdb_pool_creation_fail_loud(
         await manager.start()
     assert exc_info.value.code == ErrorCode.INTERNAL_ERROR
     assert manager.started is False
+
+
+async def test_pool_manager_seekdb_fail_loud_releases_http_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """池创建失败路径：已建共享 HTTP client 先释放（aclose 并置 None）。"""
+    import httpx
+
+    async def _boom(**kwargs: Any) -> FakePool:
+        """失败工厂（模拟实例不可达）。"""
+        raise OSError("connection refused")
+
+    created: list[httpx.AsyncClient] = []
+
+    def _fake_build_client(pools: Any) -> httpx.AsyncClient:
+        """记录真实 client 构造（追踪其是否被 aclose）。"""
+        client = httpx.AsyncClient()
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(manager_module, "create_seekdb_pool", _boom)
+    monkeypatch.setattr(manager_module, "build_shared_http_client", _fake_build_client)
+
+    manager = PoolManager(_settings(enabled=True))
+    with pytest.raises(BusinessException):
+        await manager.start()
+
+    assert manager.started is False
+    # 半装配资源已释放：槽位置 None 且底层 client 已 aclose
+    assert manager.http_client is None
+    assert created, "HTTP client 应已被构造"
+    assert all(client.is_closed for client in created)
 
 
 # ---------------------------------------------------------------------------

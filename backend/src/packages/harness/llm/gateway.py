@@ -13,12 +13,14 @@
 
     - **llm 不硬依赖 usage 域**：网关持有注入的异步记录器
       (:data:`UsageRecorder`)；默认接线经 :func:`wire_default_usage_recorder`
-      （P0-6 app 装配调用，函数体内惰性 import usage 域——模块导入期
-      零耦合）；
+      （app 装配调用，函数体内惰性 import usage 域——模块导入期零耦合）；
     - **client 按调用瞬时构建**（零连接资源）：wire 配置随 config 热重建
       自然生效，无缓存失效问题；
     - **熔断结果上报**：client 调用成功 → ``record_success``；失败 →
-      ``record_failure``（pools llm_pool 文档化的网关调用点契约）；
+      ``record_failure``（pools llm_pool 文档化的网关调用点契约）。
+      例外：``VALIDATION_ERROR``（本地编程错误——空向量化输入 / 流式
+      携带多模态内容分块等，未触达端点）在 ``entry_gate`` 之前拒绝且
+      不计熔断失败——端点健康信号只反映真实传输结果；
     - **用量发射恒不阻断主调用**：记录器异常仅告警（用量是观测面，
       不是业务面）；
     - **上下文轴**：persona_id / request_id 显式参数优先，缺省读
@@ -49,6 +51,7 @@ from packages.harness.llm.llm_models import (
     LlmUsageEvent,
     TokenUsageModel,
     ToolDefinitionModel,
+    messages_have_content_parts,
 )
 from packages.harness.pools.llm_pool import LlmEntryPool
 from packages.harness.pools.manager import PoolManager, get_pool_manager
@@ -91,7 +94,7 @@ class LlmGateway:
             pool_manager: 池管理器（None = 全局单例，调用时读取）。
             settings: Settings（None = config 全局单例；仅用其 llm 兜底
                 密钥与 llm_request_timeout_seconds）。
-            usage_recorder: 用量记录器（None = 未接线——零记录，P0-6
+            usage_recorder: 用量记录器（None = 未接线——零记录，app
                 装配时经 wire_default_usage_recorder 绑定）。
             retry_attempts: 传输重试总次数上限（含首次）。
             retry_wait_seconds: 指数退避基数秒。
@@ -181,8 +184,11 @@ class LlmGateway:
             归一增量块（末块携带 usage 时被网关聚合进用量记录）。
 
         Raises:
-            BusinessException: 角色未绑定 / 熔断中 / 传输失败（首个迭代
-                步抛出——异步生成器语义）。
+            BusinessException: 角色未绑定（``MODEL_NOT_FOUND``）；消息携带
+                多模态内容分块（``VALIDATION_ERROR``——流式恒 content-only，
+                门控前拒绝且不计条目熔断失败）；条目熔断中
+                （``LLM_REQUEST_FAILED``）；传输失败（首个迭代步抛出
+                ——异步生成器语义；含流中段传输中断映射）。
         """
         entry = self._resolve_role(role)
         resolved_purpose = purpose if purpose is not None else _role_value(role)
@@ -224,8 +230,9 @@ class LlmGateway:
 
         Raises:
             BusinessException: embed 角色未绑定（``MODEL_NOT_FOUND``）；
-                条目熔断中（``LLM_REQUEST_FAILED``）；传输失败（见
-                client 映射表）。
+                空输入列表（``VALIDATION_ERROR``——网关入口先行拒绝，
+                不计条目熔断失败）；条目熔断中（``LLM_REQUEST_FAILED``）；
+                传输失败（见 client 映射表）。
         """
         entry = self._resolve_role(ModelRole.EMBED)
         resolved_persona = persona_id if persona_id is not None else persona_id_var.get()
@@ -235,11 +242,20 @@ class LlmGateway:
         breaker = entry_pool.get_entry_breaker(entry)
         started_ms = now_ms()
         try:
+            if not texts:
+                # 本地编程错误在 entry_gate 之前拒绝——不计条目熔断失败
+                # （端点健康信号只反映真实传输结果）。
+                raise BusinessException(
+                    code=ErrorCode.VALIDATION_ERROR,
+                    message="向量化输入不能为空",
+                    details={"model": entry.model},
+                )
             async with entry_pool.entry_gate(entry):
                 try:
                     response = await client.embeddings(texts)
-                except BusinessException:
-                    breaker.record_failure()
+                except BusinessException as exc:
+                    if exc.code != ErrorCode.VALIDATION_ERROR:
+                        breaker.record_failure()
                     raise
                 breaker.record_success()
             await self._emit_usage(
@@ -255,6 +271,7 @@ class LlmGateway:
             )
             return response
         except BusinessException as exc:
+            self._log_call_failure(entry, purpose="embed", exc=exc)
             await self._emit_usage(
                 entry=entry,
                 purpose="embed",
@@ -320,8 +337,9 @@ class LlmGateway:
                     response = await client.chat(
                         messages, params, tools=tools, tool_choice=tool_choice
                     )
-                except BusinessException:
-                    breaker.record_failure()
+                except BusinessException as exc:
+                    if exc.code != ErrorCode.VALIDATION_ERROR:
+                        breaker.record_failure()
                     raise
                 breaker.record_success()
             await self._emit_usage(
@@ -337,6 +355,7 @@ class LlmGateway:
             )
             return response
         except BusinessException as exc:
+            self._log_call_failure(entry, purpose=purpose, exc=exc)
             await self._emit_usage(
                 entry=entry,
                 purpose=purpose,
@@ -421,14 +440,23 @@ class LlmGateway:
         started_ms = now_ms()
         aggregated_usage: TokenUsageModel | None = None
         try:
+            if messages_have_content_parts(messages):
+                # 本地编程错误在 entry_gate 之前拒绝——不计条目熔断失败
+                # （流式传输面恒 content-only，与请求体构建层守卫同语义）。
+                raise BusinessException(
+                    code=ErrorCode.VALIDATION_ERROR,
+                    message="流式请求不支持多模态内容分块（流式传输面恒 content-only 纯文本）",
+                    details={"messages_with_parts": len(messages)},
+                )
             async with entry_pool.entry_gate(entry):
                 try:
                     async for chunk in client.stream(messages, params):
                         if chunk.usage is not None:
                             aggregated_usage = chunk.usage
                         yield chunk
-                except BusinessException:
-                    breaker.record_failure()
+                except BusinessException as exc:
+                    if exc.code != ErrorCode.VALIDATION_ERROR:
+                        breaker.record_failure()
                     raise
                 breaker.record_success()
             await self._emit_usage(
@@ -443,6 +471,7 @@ class LlmGateway:
                 error_code=None,
             )
         except BusinessException as exc:
+            self._log_call_failure(entry, purpose=purpose, exc=exc)
             await self._emit_usage(
                 entry=entry,
                 purpose=purpose,
@@ -464,8 +493,33 @@ class LlmGateway:
             raise
 
     # ------------------------------------------------------------------
-    # 内部——用量发射
+    # 内部——用量发射 / 失败日志
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _log_call_failure(entry: LlmModelEntry, *, purpose: str, exc: BusinessException) -> None:
+        """LLM 调用失败告警（网关失败捕获点统一单条日志——不与 client 重复）。
+
+        字段面（无密钥 / 无 PII）：条目名与模型名是配置标识；``cause``
+        为业务异常的中文消息一行；``status_code`` 仅在端点返回非成功
+        状态时携带（details 内取值，缺失不输出）。
+
+        Args:
+            entry: 失败调用归属的模型条目。
+            purpose: 调用用途。
+            exc: 捕获的业务异常（错误码 / 消息 / 可选 HTTP 状态）。
+        """
+        status_code = exc.details.get("status_code") if exc.details else None
+        logger.warning(
+            "LLM 调用失败: entry={}, model={}, purpose={}, error_code={},"
+            " status_code={}, cause={}",
+            entry.name,
+            entry.model,
+            purpose,
+            str(exc.code),
+            status_code,
+            exc.message,
+        )
 
     async def _emit_usage(
         self,
@@ -523,7 +577,7 @@ class LlmGateway:
 
 
 def wire_default_usage_recorder() -> UsageRecorder:
-    """装配默认用量记录器（绑定 usage 域服务——P0-6 app 装配调用）。
+    """装配默认用量记录器（绑定 usage 域服务——app 装配调用）。
 
     llm 域不硬依赖 usage 域：本函数是唯一接线点，函数体内惰性 import
     （调用时才解析 usage 模块——llm 模块导入期零耦合）。装配形态::

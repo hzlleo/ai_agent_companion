@@ -7,15 +7,19 @@ MemoryService（情景层 + 策展层）：
       部分成功）/ 日记输入面（全天事件按时间序取回）；
     - 策展层 supersede：upsert（同 (persona, kind, topic) active 行 →
       单事务内「新行落库 → 旧行标记 superseded + 链接」——至多一条
-      active 的不变式由事务原子性保证）/ 查询 / 单条读取 / 历史链读取 /
-      管理面删除；**untrusted 来源一律拒绝**（VALIDATION_ERROR——平台
-      内容永不入策展层，检索 / 晋升链路依赖此不变式）。
+      active 的不变式由 DB 唯一键 ``uq_ff_curated_active`` 强制，
+      并发双写经唯一键拒绝 + 重试一次收敛）/ 查询 / 单条读取 / 历史链
+      读取 / 管理面删除；**untrusted 来源一律拒绝**（VALIDATION_ERROR
+      ——平台内容永不入策展层，检索 / 晋升链路依赖此不变式）。
 
 ChatSessionService（工作层）：
 
-    - 会话生命周期：create / list（游标）/ get（含全量消息）/ delete；
-    - 消息追加：append_message（seq = message_count + 1 递增，会话行
-      message_count / last_active_at 同事务更新）。
+    - 会话生命周期：create / list（游标）/ get（含全量消息）/ delete
+      （消息单语句批量清理 + 会话行 ORM 删除——两语句同事务）；
+    - 消息追加：append_message（seq = message_count + 1 递增——会话行
+      经 ``SELECT ... FOR UPDATE`` 行锁串行化计数，``(session_id, seq)``
+      唯一键 DB 级兜底 + 冲突重试一次；会话行 message_count /
+      last_active_at 同事务更新）。
 
 人格作用域契约：三张 PersonaMixin 表（episodes / curated / sessions）
 的读写经 database.base 的自动注入 / 自动过滤隔离——**调用方须先经
@@ -33,7 +37,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from loguru import logger
-from sqlalchemy import desc, select
+from sqlalchemy import delete, desc, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.harness.core.dtos import PageResponse, decode_cursor, encode_cursor
@@ -131,21 +136,27 @@ def _episode_record(row: MemoryEpisodeRow) -> EpisodeRecordDTO:
     )
 
 
+#: 策展单 active 守卫标记值（与 CuratedStatus.ACTIVE 同字面——DB 唯一
+#: 键 uq_ff_curated_active 的非 NULL 侧标记；superseded 行为 NULL）。
+_CURATED_ACTIVE_MARKER: str = CuratedStatus.ACTIVE.value
+
+
 class MemoryService:
     """记忆域服务（情景 + 策展；无状态——Session 由调用方注入）。
 
-    检索索引联动（P1 chunk 2，可选）：构造注入 ``indexer``
-    （:class:`MemoryIndexer`——默认 None，M1 行为不变）后，情景事件
-    **提交后**触发索引链（append → commit → embed → upsert；best-effort
-    ——任何失败仅告警，不影响写入结果与响应，见 ``_fire_indexing``）。
+    检索索引联动（可选）：构造注入 ``indexer``
+    （:class:`MemoryIndexer`——默认 None，写入路径零索引调用）后，
+    情景事件**提交后**触发索引链（append → commit → embed → upsert；
+    best-effort——任何失败仅告警，不影响写入结果与响应，见
+    ``_fire_indexing``）。
     """
 
     def __init__(self, *, indexer: MemoryIndexer | None = None) -> None:
         """初始化服务。
 
         Args:
-            indexer: 记忆索引管道（None = 未绑定——写入路径零索引调用，
-                M1 行为；绑定后 append 提交即触发索引分发）。
+            indexer: 记忆索引管道（None = 未绑定——写入路径零索引调用；
+                绑定后 append 提交即触发索引分发）。
         """
         self._indexer = indexer
 
@@ -166,7 +177,8 @@ class MemoryService:
             session: 注入的异步 Session。
             dto: 创建 DTO（provenance 缺省 owner；ts_ms 缺省当前时间）。
             dedup: 内容指纹去重开关（True 时同 (persona, kind, source,
-                content) 已存在则返回既有行——幂等摄入；False 恒插入）。
+                content) 已存在则返回既有行——幂等摄入；同指纹多行时取
+                id 最小行，命中确定；False 恒插入）。
 
         Returns:
             落库后的记录 DTO（去重命中时为既有行——命中路径不触发
@@ -177,9 +189,9 @@ class MemoryService:
             existing = (
                 (
                     await session.execute(
-                        select(MemoryEpisodeRow).where(
-                            MemoryEpisodeRow.content_hash == content_hash
-                        )
+                        select(MemoryEpisodeRow)
+                        .where(MemoryEpisodeRow.content_hash == content_hash)
+                        .order_by(MemoryEpisodeRow.id.asc())
                     )
                 )
                 .scalars()
@@ -238,9 +250,9 @@ class MemoryService:
                 existing = (
                     (
                         await session.execute(
-                            select(MemoryEpisodeRow).where(
-                                MemoryEpisodeRow.content_hash == content_hash
-                            )
+                            select(MemoryEpisodeRow)
+                            .where(MemoryEpisodeRow.content_hash == content_hash)
+                            .order_by(MemoryEpisodeRow.id.asc())
                         )
                     )
                     .scalars()
@@ -347,7 +359,8 @@ class MemoryService:
 
         Args:
             session: 注入的异步 Session。
-            ids: 待删除事件主键序列（去重由调用方约束）。
+            ids: 待删除事件主键序列（唯一性由请求 DTO
+                ``EpisodeBatchDeleteRequest`` 校验强制——重复项 422）。
 
         Returns:
             批量删除响应（total / succeeded / failed / 逐 id 结果）。
@@ -420,7 +433,7 @@ class MemoryService:
 
         链路：episode_to_index_entry（人格 ID 数值化 + 载荷文本化）→
         indexer.dispatch（fire-and-forget / 内联 await 见 retrieval 模块
-        分发决策）。索引未绑定（M1 形态）时零调用。
+        分发决策）。索引未绑定时零调用。
 
         Args:
             records: 本次新增落库的记录（去重命中项不含——既有事件
@@ -478,12 +491,17 @@ class MemoryService:
     async def upsert_curated(
         self, session: AsyncSession, dto: CuratedUpsertDTO
     ) -> CuratedRecordDTO:
-        """策展记忆 upsert（supersede 语义——单事务原子切换）。
+        """策展记忆 upsert（supersede 语义——单事务原子切换 + 并发收敛）。
 
         链路：同 (persona, kind, topic) 无 active 行 → 插入新 active 行
         （version=1）；有 → 新行落库（version=旧行+1）→ 旧行标记
-        superseded + superseded_by_id 链接——单事务提交，至多一条 active
-        的不变式由事务原子性保证。
+        superseded + superseded_by_id 链接 → 新行取得 active 标记——
+        单事务提交。**至多一条 active 的不变式由 DB 唯一键
+        ``uq_ff_curated_active (persona_id, kind, topic, active_marker)``
+        强制**（active 行 ``active_marker='active'``、superseded 行
+        NULL——MySQL / SQLite 唯一键均忽略 NULL，多代 superseded 行
+        共存）；并发 upsert 撞唯一键时回滚后重试一次（重读 active 行
+        走 supersede 分支），再冲突则映射 ``INTERNAL_ERROR``。
 
         Args:
             session: 注入的异步 Session。
@@ -494,7 +512,8 @@ class MemoryService:
 
         Raises:
             BusinessException: provenance=untrusted（``VALIDATION_ERROR``
-                ——平台内容永不入策展层）。
+                ——平台内容永不入策展层）；重试后仍并发冲突
+                （``INTERNAL_ERROR``）。
         """
         if dto.provenance == MemoryProvenance.UNTRUSTED:
             raise BusinessException(
@@ -502,6 +521,45 @@ class MemoryService:
                 message="untrusted 来源的内容禁止进入策展记忆",
                 details={"topic": dto.topic, "provenance": dto.provenance.value},
             )
+        try:
+            return await self._upsert_curated_once(session, dto)
+        except IntegrityError:
+            # 并发 upsert 抢先落了 active 行——回滚后重读走 supersede 分支
+            await _rollback_quietly(session)
+            logger.info(
+                "策展记忆并发单 active 冲突，重读 active 行后重试: topic={}", dto.topic
+            )
+        try:
+            return await self._upsert_curated_once(session, dto)
+        except IntegrityError as exc:
+            await _rollback_quietly(session)
+            raise BusinessException(
+                code=ErrorCode.INTERNAL_ERROR,
+                message="策展记忆并发写入冲突（重试后仍冲突）",
+                details={"topic": dto.topic},
+            ) from exc
+
+    async def _upsert_curated_once(
+        self, session: AsyncSession, dto: CuratedUpsertDTO
+    ) -> CuratedRecordDTO:
+        """单次 upsert 尝试（无重试——由 ``upsert_curated`` 编排并发收敛）。
+
+        语句序（确定性——腾位后占位）：无既有 active 行 → 新行直接携带
+        active 标记插入；有 → 新行先以 NULL 标记落库（取主键）→ 旧行
+        解除标记 + superseded + 链接（flush）→ 新行取得 active 标记 →
+        提交。任一 flush 点至多一条 ``active_marker='active'`` 行。
+
+        Args:
+            session: 注入的异步 Session。
+            dto: upsert DTO（untrusted 已在公共入口拒绝）。
+
+        Returns:
+            新 active 行的记录 DTO。
+
+        Raises:
+            IntegrityError: 并发双写撞 ``uq_ff_curated_active``（由上层
+                重试收敛）。
+        """
         active_row = (
             (
                 await session.execute(
@@ -525,12 +583,16 @@ class MemoryService:
             status=CuratedStatus.ACTIVE.value,
             superseded_by_id=None,
             version=new_version,
+            active_marker=_CURATED_ACTIVE_MARKER if active_row is None else None,
         )
         session.add(row)
         if active_row is not None:
             await session.flush()  # 取新行主键——旧行链接需要
             active_row.status = CuratedStatus.SUPERSEDED.value
             active_row.superseded_by_id = row.id
+            active_row.active_marker = None
+            await session.flush()  # 旧行先解除 active 标记——唯一键腾位（语句序确定）
+            row.active_marker = _CURATED_ACTIVE_MARKER
             logger.info(
                 "策展记忆已取代: topic={}, old_version={}, new_version={}",
                 dto.topic,
@@ -774,7 +836,12 @@ class ChatSessionService:
         )
 
     async def delete_session(self, session: AsyncSession, session_id: int) -> None:
-        """删除会话（消息同事务显式清理——SQLite 测试方言不启用 FK 强制）。
+        """删除会话（消息 + 会话行同事务清理——两语句形态）。
+
+        消息经单条批量 DELETE 语句按 session_id 清理（不逐行加载 /
+        逐行删除）；会话行经 ORM delete（人格作用域已由 ``_require_session``
+        校验）。SQLite 测试方言不启用 FK 强制——显式两语句保持跨方言
+        一致（DB 级 CASCADE 仅直删 SQL 兜底）。
 
         Args:
             session: 注入的异步 Session。
@@ -784,18 +851,9 @@ class ChatSessionService:
             BusinessException: 会话不存在或不在当前人格作用域（``NOT_FOUND``）。
         """
         row = await self._require_session(session, session_id)
-        # 消息行显式删除（跨方言一致；DB 级 CASCADE 仅直删 SQL 兜底）
-        messages = list(
-            (
-                await session.execute(
-                    select(ChatMessageRow).where(ChatMessageRow.session_id == session_id)
-                )
-            )
-            .scalars()
-            .all()
+        await session.execute(
+            delete(ChatMessageRow).where(ChatMessageRow.session_id == session_id)
         )
-        for message in messages:
-            await session.delete(message)
         await session.delete(row)
         await _commit(session)
         logger.info("会话已删除（含消息）: id={}", session_id)
@@ -811,6 +869,13 @@ class ChatSessionService:
     ) -> ChatMessageDTO:
         """追加会话消息（seq = message_count + 1 递增；会话行同事务更新）。
 
+        并发不变式（双层防线）：会话行经 ``SELECT ... FOR UPDATE``
+        锁定读取（MySQL 行锁串行化同会话并发追加——第二事务阻塞至
+        首者提交后取到新计数；SQLite 方言无 FOR UPDATE，但其单写者
+        天然串行）；``(session_id, seq)`` 唯一键 ``uq_ff_chat_messages_seq``
+        为 DB 级兜底——冲突时回滚重读计数重算 seq 重试一次，再冲突
+        映射 ``INTERNAL_ERROR``。
+
         Args:
             session: 注入的异步 Session。
             session_id: 会话主键。
@@ -822,9 +887,59 @@ class ChatSessionService:
             落库后的消息 DTO。
 
         Raises:
-            BusinessException: 会话不存在或不在当前人格作用域（``NOT_FOUND``）。
+            BusinessException: 会话不存在或不在当前人格作用域
+                （``NOT_FOUND``）；重试后仍 seq 冲突（``INTERNAL_ERROR``）。
         """
-        row = await self._require_session(session, session_id)
+        try:
+            message = await self._append_message_once(
+                session, session_id, role=role, content=content, ts_ms=ts_ms
+            )
+        except IntegrityError:
+            # 并发追加抢先落了同 seq 行——回滚重读计数重算（行锁下重读
+            # 已含并发赢家推进后的计数）
+            await _rollback_quietly(session)
+            logger.info("会话消息 seq 并发冲突，重读计数重算重试: session_id={}", session_id)
+            try:
+                message = await self._append_message_once(
+                    session, session_id, role=role, content=content, ts_ms=ts_ms
+                )
+            except IntegrityError as exc:
+                await _rollback_quietly(session)
+                raise BusinessException(
+                    code=ErrorCode.INTERNAL_ERROR,
+                    message="会话消息并发写入冲突（重试后仍 seq 冲突）",
+                    details={"session_id": session_id},
+                ) from exc
+        return ChatMessageDTO.model_validate(message)
+
+    async def _append_message_once(
+        self,
+        session: AsyncSession,
+        session_id: int,
+        *,
+        role: ChatMessageRole,
+        content: str,
+        ts_ms: int | None = None,
+    ) -> ChatMessageRow:
+        """单次消息追加尝试（行锁读取 + 计数推进——无重试）。
+
+        Args:
+            session: 注入的异步 Session。
+            session_id: 会话主键。
+            role: 消息角色。
+            content: 消息文本（非空）。
+            ts_ms: 消息时间（epoch 毫秒；None = 当前时间）。
+
+        Returns:
+            落库后的消息 ORM 行。
+
+        Raises:
+            BusinessException: 会话不存在或不在当前人格作用域
+                （``NOT_FOUND``）。
+            IntegrityError: 并发追加撞 ``uq_ff_chat_messages_seq``（由
+                上层重试收敛）。
+        """
+        row = await self._require_session(session, session_id, for_update=True)
         resolved_ts = ts_ms if ts_ms is not None else now_ms()
         message = ChatMessageRow(
             session_id=session_id,
@@ -837,16 +952,19 @@ class ChatSessionService:
         row.message_count = message.seq
         row.last_active_at = resolved_ts
         await _commit(session)
-        return ChatMessageDTO.model_validate(message)
+        return message
 
     async def _require_session(
-        self, session: AsyncSession, session_id: int
+        self, session: AsyncSession, session_id: int, *, for_update: bool = False
     ) -> ChatSessionRow:
         """按主键取会话行（人格作用域自动过滤）；缺失 fail loud。
 
         Args:
             session: 注入的异步 Session。
             session_id: 会话主键。
+            for_update: True 时行锁读取（``SELECT ... FOR UPDATE``——
+                MySQL 行锁串行化并发；SQLite 方言忽略该子句，由其单
+                写者串行承担同等语义）。
 
         Returns:
             对应 :class:`ChatSessionRow`。
@@ -854,15 +972,10 @@ class ChatSessionService:
         Raises:
             BusinessException: 会话不存在或不在当前人格作用域（``NOT_FOUND``）。
         """
-        row = (
-            (
-                await session.execute(
-                    select(ChatSessionRow).where(ChatSessionRow.id == session_id)
-                )
-            )
-            .scalars()
-            .first()
-        )
+        stmt = select(ChatSessionRow).where(ChatSessionRow.id == session_id)
+        if for_update:
+            stmt = stmt.with_for_update()
+        row = (await session.execute(stmt)).scalars().first()
         if row is None:
             raise BusinessException(
                 code=ErrorCode.NOT_FOUND,

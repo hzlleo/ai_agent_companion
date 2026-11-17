@@ -1,7 +1,7 @@
 """统一进程内 TTL 缓存装饰器。
 
-P0 决策：**NO Redis**——缓存走进程内实现（单实例部署；多实例阶段再
-评审引入分布式缓存）。提供 ``async_ttl_cache`` 装饰器，为 async 函数
+工程决策：**不引入 Redis**——缓存走进程内实现（工程为单实例部署；
+未来多实例化时再评审引入分布式缓存）。提供 ``async_ttl_cache`` 装饰器，为 async 函数
 提供 TTL 缓存能力（key_func / prefix / TTL / 降级 / 防穿透语义），
 后端存储为进程内 LRU+TTL 表。
 
@@ -17,7 +17,8 @@ P0 决策：**NO Redis**——缓存走进程内实现（单实例部署；多�
    逻辑；读写异常按 best-effort 吞掉（debug 日志）。
 5. **缓存穿透**：``None`` 结果不缓存（避免缓存穿透）。
 6. **容量上限**：``max_entries`` 满 FIFO 淘汰最旧条目 + 惰性清除过期
-   条目（epoch-ms 判定，见 ``core.time_utils``）。
+   条目（epoch-ms 判定，见 ``core.time_utils``）；覆写已有 key 刷新
+   插入位（热键不因首插序被误淘汰）。
 7. **批量友好**：``delete(*keys)`` 批量删除、``invalidate_pattern``
    按通配 pattern 批量失效（fnmatch 语义）。
 
@@ -87,7 +88,8 @@ class MemoryTTLCache:
     """进程内 TTL 缓存表（单事件循环内使用，无需加锁）。
 
     容量语义：``max_entries`` 满时先惰性清除过期条目，仍满则 FIFO 淘汰
-    最旧条目（dict 保持插入序，首个 key 即最旧）。
+    最旧条目（dict 保持插入序，首个 key 即最旧）。覆写已有 key 时先
+    pop 再插入——刷新插入位（活跃热键不会被 FIFO 误判为最旧而淘汰）。
     """
 
     def __init__(self, max_entries: int = 10_000) -> None:
@@ -141,7 +143,7 @@ class MemoryTTLCache:
         return entry.value
 
     async def set(self, key: str, value: Any, ttl_seconds: float = 3600.0) -> None:
-        """写入缓存值（容量满时先淘汰）。
+        """写入缓存值（覆写刷新插入位；容量满时先淘汰）。
 
         Args:
             key: 缓存 key。
@@ -149,6 +151,10 @@ class MemoryTTLCache:
                 直接调用本方法时按调用方语义写入）。
             ttl_seconds: TTL 秒数（float；``0`` 即立即过期——测试用）。
         """
+        # 覆写已有 key：先 pop 再插入——插入位刷新为最新（FIFO 淘汰
+        # 按写入序判最旧，覆写不刷新会让活跃热键被误淘汰）
+        if key in self._entries:
+            self._entries.pop(key)
         if len(self._entries) >= self._max_entries:
             self._evict_if_full()
         expire_at_ms = now_ms() + int(ttl_seconds * 1000)

@@ -16,11 +16,12 @@
 # 用法：
 #   cd docker/tool-sandbox-agent && pixi install    # 安装 default 环境
 #   cd docker/tool-sandbox-agent && pixi run tests-unit   # 单元测试（覆盖率 ≥80 enforce）
+#   cd docker/tool-sandbox-agent && pixi run coverage-gates   # 按模块覆盖率门禁（≥80 enforce）
 #   cd docker/tool-sandbox-agent && pixi run lint    # ruff 静态检查
 #   cd docker/tool-sandbox-agent && pixi run typecheck    # mypy 类型检查
 #
-# 任务名契约：tests-unit / lint / typecheck 为跨树契约名（与 backend 子项目
-# 同名同义）——严禁更名。
+# 任务名契约：tests-unit / lint / typecheck / coverage-gates 为跨树契约名
+# （与 backend 子项目同名同义）——严禁更名。
 #
 # 鉴权 / 域名允许清单等运行时环境变量见本目录 README.md。
 
@@ -67,9 +68,16 @@ PYTHONPATH = "$PIXI_PROJECT_ROOT/src"
 [tasks]
 # 单元测试：src/tests/unit/ 下的纯单元测试（hermetic——零真实网络：
 # http_fetch 经注入 fetch 函数 / monkeypatch 测试；server 经手写 ASGI 调用）。
-# 覆盖率阈值 80（--cov-fail-under，镜像后端 80% 门禁数值）；逐模块读数经
-# term-missing 报告核对（tool_sandbox 各模块 + server 均须 ≥80）。
+# 覆盖率阈值 80（--cov-fail-under，镜像后端 80% 门禁数值）；逐模块 ≥80
+# 由 coverage-gates 任务机器门禁（不再依赖人工读数）。
 tests-unit = { cmd = "pytest src/tests/unit/ -v --asyncio-mode=auto --cov=tool_sandbox --cov=server --cov-report=term-missing --cov-fail-under=80", description = "运行单元测试（src/tests/unit/；asyncio auto + 覆盖率 ≥80 enforce）" }
+# 按模块覆盖率门禁（每模块 ≥80，与 backend 同口径的机器门禁）：单 session
+# 测试 + 覆盖率采集 → coverage.json → 根 scripts/check_coverage_per_module.py
+# tool-sandbox 剖面逐组强制 ≥80%（server.py 单文件一组 + tool_sandbox 逐
+# 模块一组；任一组缺口即退出 1）。coverage.json / 根脚本均用绝对形态路径
+# （$PIXI_PROJECT_ROOT 锚定——cd-safe）；根脚本经本树 pixi python 执行
+# （工程门禁面，非运行时依赖）。
+coverage-gates = { cmd = "pytest $PIXI_PROJECT_ROOT/src/tests/unit/ --asyncio-mode=auto --cov=tool_sandbox --cov=server --cov-report=json:$PIXI_PROJECT_ROOT/coverage.json -q && python $PIXI_PROJECT_ROOT/../../scripts/check_coverage_per_module.py $PIXI_PROJECT_ROOT/coverage.json --enforce --profile tool-sandbox", description = "全量单元测试 + 按模块覆盖率门禁（enforce 模式，阈值 80，显式 tool-sandbox 剖面防 auto-detect 漂移）" }
 # 静态检查：ruff（树根 server.py + src/ 全量——含测试）
 lint = { cmd = "ruff check server.py src/", description = "ruff 静态检查（server.py + src/）" }
 # 格式化

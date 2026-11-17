@@ -10,7 +10,7 @@ pytest 的 conftest 层级机制：根 conftest 先于子目录 conftest 加载�
 
 关键设计：
     - **测试配置完全独立**：Settings 全量 env 面逐键在此硬覆盖为测试
-      专用安全值（P0-3 config chunk 落地后扩充到位——硬覆盖而非
+      专用安全值（硬覆盖而非
       setdefault，开发者 shell 导出的同名变量不得泄入测试），测试不
       依赖 ``.env`` / ``config.yaml`` 文件，可在任意 CWD 下运行。
     - **CWD 隔离（防真实配置泄漏）**：pydantic-settings 按相对路径
@@ -74,6 +74,9 @@ os.environ["LOG_ROTATION"] = "1 day"
 os.environ["LOG_RETENTION"] = "30 days"
 os.environ["LOG_MODULE_LEVELS"] = ""
 os.environ["LOG_COLORIZE_CONSOLE"] = "false"
+# 异常 diagnose 开关（LogConfig.diagnose_exceptions env 面）——测试默认
+# 关闭（与生产默认一致：traceback 不展示帧局部变量）
+os.environ["LOG_DIAGNOSE_EXCEPTIONS"] = "false"
 
 # --- 共享池（POOLS_ 前缀 → PoolsConfig） ---
 os.environ["POOLS_THREAD_POOL_SIZE"] = "10"
@@ -185,6 +188,9 @@ os.environ["VOICE_ASR_BASE_URL"] = "http://127.0.0.1:8082"
 os.environ["VOICE_ASR_MODEL_ENTRY"] = "qwen3-asr-0.6b"
 os.environ["VOICE_ASR_REQUEST_TIMEOUT_SECONDS"] = "60"
 os.environ["VOICE_ASR_LANGUAGE"] = ""
+# 上传上限（与生产默认同值——字节精确边界测试经 app.state.settings
+# 注入小上限隔离驱动，不依赖本全局值）
+os.environ["VOICE_ASR_MAX_UPLOAD_BYTES"] = "26214400"
 
 # --- 运行环境标识（Settings.env → ENV） ---
 os.environ["ENV"] = "test"

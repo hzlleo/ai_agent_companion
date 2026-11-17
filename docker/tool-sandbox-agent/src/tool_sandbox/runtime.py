@@ -20,7 +20,7 @@
     - 时钟注入（epoch 毫秒）——测试确定性驱动（latency 断言面）。
 
 执行器契约：``Callable[[dict], Awaitable[dict]]``——与后端
-:data:`ToolExecutor` 同形态（P4 平台工具按此接入，零 registry 改动）。
+:data:`ToolExecutor` 同形态（平台工具按此接入，零 registry 改动）。
 """
 
 from __future__ import annotations

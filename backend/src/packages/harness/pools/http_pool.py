@@ -5,7 +5,7 @@
 开销。连接上限与超时全部来自 :class:`PoolsConfig`（env 面
 ``POOLS_HTTP_*``）。
 
-LLM 端点专用连接隔离由 P0-4 网关按模型条目自建 client 承担（带
+LLM 端点专用连接隔离由 LLM 网关按模型条目自建 client 承担（带
 per-entry 超时），本模块只管「通用出站」池。
 """
 

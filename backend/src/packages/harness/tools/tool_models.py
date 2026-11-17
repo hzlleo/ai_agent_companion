@@ -16,8 +16,8 @@
 
 执行器契约（registry 消费）：``Callable[[dict], Awaitable[dict]]``——
 异步可调用、参数 dict 入 / 结果 dict 出；**无网络、无文件系统**（依赖
-一律构造注入——本 chunk 内置工具零外部副作用；docker 沙盒执行器属
-后续 chunk，registry API 保持 executor 无关）。
+一律构造注入——内置工具零外部副作用；docker 沙盒执行器经同一契约
+接入（见 ``tools/sandbox.py``），registry API 保持 executor 无关）。
 """
 
 from __future__ import annotations

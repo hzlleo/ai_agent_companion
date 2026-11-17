@@ -198,15 +198,30 @@ class EpisodeBatchDeleteRequest(BaseModel):
     """情景事件批量删除请求（部分成功形态——逐 id 独立事务）。
 
     Attributes:
-        ids: 待删除事件主键列表（1-100 个；append-only 语义下删除是
-            管理面显式动作）。
+        ids: 待删除事件主键列表（1-100 个且**不得重复**——重复项在
+            DTO 边界校验拒绝（422）；append-only 语义下删除是管理面
+            显式动作）。
     """
 
     ids: list[int] = Field(
         min_length=1,
         max_length=100,
-        description="待删除事件主键列表（1-100 个）",
+        description="待删除事件主键列表（1-100 个，不得重复）",
     )
+
+    @model_validator(mode="after")
+    def _verify_ids_unique(self) -> EpisodeBatchDeleteRequest:
+        """ids 唯一性校验（重复项拒绝——防「先成功后 NOT_FOUND」畸形结果）。
+
+        Returns:
+            校验通过的实例。
+
+        Raises:
+            ValueError: ids 存在重复项。
+        """
+        if len(set(self.ids)) != len(self.ids):
+            raise ValueError("待删除事件主键列表存在重复项")
+        return self
 
 
 class EpisodeBatchDeleteItemDTO(BaseModel):

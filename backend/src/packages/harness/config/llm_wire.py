@@ -1,7 +1,7 @@
 """模型条目 → LLM 客户端 wire 配置的单一真源构建器。
 
 wire 形态（:class:`LlmClientConfigModel`）是 config 域向 LLM 网关
-（P0-4 交付面）下发的客户端配置契约：条目的 ``api_key_env`` 在此解析为
+（harness/llm）下发的客户端配置契约：条目的 ``api_key_env`` 在此解析为
 密钥明文（密钥只经环境变量进入进程，wire 构建即解析点），下游网关不再
 触碰 ``os.environ``——密钥解析收口于 config 域单一位置。
 """

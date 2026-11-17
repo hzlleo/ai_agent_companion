@@ -253,6 +253,12 @@ class TestDedup:
         assert len(router.handled) == 1
         assert router.handled[0].message_id == "-400500600"
 
+    async def test_cap_below_one_rejected(self) -> None:
+        """cap < 1：入口 ValueError（零容量去重静默失效面——拒绝构造）。"""
+        for invalid in (0, -1):
+            with pytest.raises(ValueError, match="cap 须 ≥ 1"):
+                QqMessageDedupWindow(cap=invalid)
+
 
 class TestIgnoreAndIsolation:
     async def test_notice_event_acknowledged_and_ignored(self) -> None:

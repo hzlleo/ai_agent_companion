@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 
 from packages.harness.core.context import bind_context, persona_id_var
 from packages.harness.core.errors import BusinessException, ErrorCode
@@ -170,6 +170,93 @@ async def test_persona_filter_skip_option_bypasses(db_session) -> None:
         .all()
     )
     assert {row.persona_id for row in rows} == {"p-a", "p-b"}
+
+
+async def test_persona_bulk_update_without_context_fails_loud(db_session) -> None:
+    """批量改守卫：无人格上下文的 ORM bulk UPDATE → PERSONA_CONTEXT_REQUIRED。"""
+    async with bind_context(persona_id="p-seed"):
+        db_session.add(PersonaNoteRow(content="seed"))
+        await db_session.commit()
+
+    with pytest.raises(BusinessException) as exc_info:
+        await db_session.execute(update(PersonaNoteRow).values(content="mutated"))
+    assert exc_info.value.code == ErrorCode.PERSONA_CONTEXT_REQUIRED
+
+
+async def test_persona_bulk_update_with_context_scopes_to_bound_persona(db_session) -> None:
+    """批量改守卫：有上下文的 ORM bulk UPDATE 只变异当前人格的行。"""
+    for persona in ("p-a", "p-b"):
+        async with bind_context(persona_id=persona):
+            for i in range(2):
+                db_session.add(PersonaNoteRow(content=f"{persona}-{i}"))
+            await db_session.commit()
+
+    async with bind_context(persona_id="p-a"):
+        result = await db_session.execute(update(PersonaNoteRow).values(content="mutated"))
+        await db_session.commit()
+    assert result.rowcount == 2
+
+    # 跨人格全量核验（skip 通道）：p-b 的行不受影响
+    rows = (
+        (
+            await db_session.execute(
+                select(PersonaNoteRow).execution_options(**{PERSONA_FILTER_SKIP_OPTION: True})
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_persona: dict[str, set[str]] = {}
+    for row in rows:
+        by_persona.setdefault(row.persona_id, set()).add(row.content)
+    assert by_persona["p-a"] == {"mutated"}
+    assert by_persona["p-b"] == {"p-b-0", "p-b-1"}
+
+
+async def test_persona_bulk_delete_skip_option_bypasses(db_session) -> None:
+    """批量删守卫：skip 选项 + 无上下文 → 跨人格全量删除（管理面语义）。"""
+    for persona in ("p-a", "p-b"):
+        async with bind_context(persona_id=persona):
+            db_session.add(PersonaNoteRow(content=persona))
+            await db_session.commit()
+
+    await db_session.execute(
+        delete(PersonaNoteRow).execution_options(**{PERSONA_FILTER_SKIP_OPTION: True})
+    )
+    await db_session.commit()
+
+    remaining = (
+        (
+            await db_session.execute(
+                select(PersonaNoteRow).execution_options(**{PERSONA_FILTER_SKIP_OPTION: True})
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
+
+
+async def test_core_table_bulk_delete_without_context_unaffected(db_session) -> None:
+    """Core 表级 DELETE（无 ORM 实体）：不触发人格守卫（运维 / 清表形态）。"""
+    async with bind_context(persona_id="p-seed"):
+        db_session.add(PersonaNoteRow(content="seed"))
+        await db_session.commit()
+
+    # 无上下文 + Core 表级 DELETE → 正常执行（entity_description 无 entity 键）
+    await db_session.execute(delete(PersonaNoteRow.__table__))
+    await db_session.commit()
+
+    remaining = (
+        (
+            await db_session.execute(
+                select(PersonaNoteRow).execution_options(**{PERSONA_FILTER_SKIP_OPTION: True})
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
 
 
 async def test_plain_table_unaffected_by_persona_guards(db_session) -> None:

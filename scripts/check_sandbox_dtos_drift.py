@@ -1,10 +1,10 @@
 """沙盒 wire 契约漂移门禁（backend ↔ docker/tool-sandbox-agent）。
 
-两树零代码共享，wire 契约（Model Class 定义块 + 工具名常量行）以文本
-镜像方式耦合——本脚本对两侧定义做文本比对：任一侧漂移即红（红灯输出
-首个差异的 unified diff 上下文）。
+两树零代码共享，wire 契约（Model Class 定义块 + 工具名常量行 + 部署
+契约常量行）以文本镜像方式耦合——本脚本对两侧定义做文本比对：任一侧
+漂移即红（红灯输出首个差异的 unified diff 上下文）。
 
-比对项（9 模型块 + 6 常量行）：
+比对项（8 模型块 + 8 常量行，共 16 项）：
 
     - ``InvokeRequestModel`` / ``InvokeResponseModel`` /
       ``HealthResponseModel``（backend ``harness/tools/sandbox_models.py``
@@ -14,7 +14,11 @@
     - ``BiliSearchVideosArgsModel`` / ``BiliVideoInfoArgsModel`` /
       ``BiliVideoCommentsArgsModel`` / ``BiliSubtitleArgsModel``
       （backend ``sandbox_models.py`` ↔ 沙盒树 ``tool_sandbox/bili_tools.py``）；
-    - ``HTTP_FETCH_TOOL_NAME`` 与四个 ``BILI_*_TOOL_NAME`` 常量行（同上文件）。
+    - ``HTTP_FETCH_TOOL_NAME`` 与四个 ``BILI_*_TOOL_NAME`` 常量行（同上文件）；
+    - ``SANDBOX_INVOKE_PATH`` / ``SANDBOX_HEALTH_PATH`` /
+      ``SANDBOX_TOKEN_ENV_DEFAULT`` 部署契约常量行（backend
+      ``harness/tools/sandbox.py`` ↔ 沙盒树 ``server.py``——端点路径与
+      token 环境变量缺省名构成两树共享的部署契约面）。
 
 块提取口径：从定义行（``class <名>(`` 顶层起点 / 常量赋值行）到下一个
 顶层定义行或文件尾，去除块尾空行——其余文本（含 docstring 与注释）
@@ -50,6 +54,12 @@ _SANDBOX_FETCH: Path = REPO_ROOT / "docker/tool-sandbox-agent/src/tool_sandbox/h
 
 #: 沙盒树侧 B站工具定义文件。
 _SANDBOX_BILI: Path = REPO_ROOT / "docker/tool-sandbox-agent/src/tool_sandbox/bili_tools.py"
+
+#: backend 侧部署契约常量文件（端点路径 / token 环境变量缺省名）。
+_BACKEND_CLIENT: Path = REPO_ROOT / "backend/src/packages/harness/tools/sandbox.py"
+
+#: 沙盒树侧部署契约常量文件（路由定义 / token env 同名镜像）。
+_SANDBOX_SERVER: Path = REPO_ROOT / "docker/tool-sandbox-agent/server.py"
 
 #: 顶层定义行模式（class 定义 / 常量赋值 / 函数定义——块边界）。
 _TOP_LEVEL_DEF: re.Pattern[str] = re.compile(r"^(class\s+\w+|[A-Z][A-Z0-9_]+\s*[:=]|def\s+\w+)")
@@ -126,7 +136,14 @@ def main() -> int:
     Returns:
         0 = 全部一致；1 = 存在漂移；2 = 文件/块缺失。
     """
-    paths = [_BACKEND_MODELS, _SANDBOX_WIRE, _SANDBOX_FETCH, _SANDBOX_BILI]
+    paths = [
+        _BACKEND_MODELS,
+        _SANDBOX_WIRE,
+        _SANDBOX_FETCH,
+        _SANDBOX_BILI,
+        _BACKEND_CLIENT,
+        _SANDBOX_SERVER,
+    ]
     missing = [str(p.relative_to(REPO_ROOT)) for p in paths if not p.is_file()]
     if missing:
         print(f"[check_sandbox_dtos_drift] 契约文件缺失: {missing}", file=sys.stderr)
@@ -136,6 +153,8 @@ def main() -> int:
     wire_text = _SANDBOX_WIRE.read_text(encoding="utf-8")
     fetch_text = _SANDBOX_FETCH.read_text(encoding="utf-8")
     bili_text = _SANDBOX_BILI.read_text(encoding="utf-8")
+    client_text = _BACKEND_CLIENT.read_text(encoding="utf-8")
+    server_text = _SANDBOX_SERVER.read_text(encoding="utf-8")
 
     items: list[tuple[str, str, str]] = [
         (
@@ -183,6 +202,18 @@ def main() -> int:
             "BILI_VIDEO_INFO_TOOL_NAME",
             "BILI_VIDEO_COMMENTS_TOOL_NAME",
             "BILI_VIDEO_SUBTITLE_TOOL_NAME",
+        )
+    )
+    items.extend(
+        (
+            constant,
+            _extract_constant_line(client_text, constant),
+            _extract_constant_line(server_text, constant),
+        )
+        for constant in (
+            "SANDBOX_INVOKE_PATH",
+            "SANDBOX_HEALTH_PATH",
+            "SANDBOX_TOKEN_ENV_DEFAULT",
         )
     )
 

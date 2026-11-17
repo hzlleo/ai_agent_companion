@@ -21,6 +21,12 @@ SQLAlchemy 2.0 会将 Mixin 中的 ``Mapped`` + ``mapped_column`` 合并到
     读路径（SELECT）  do_orm_execute —— 语句触及人格作用域实体时自动附加
                                         WHERE persona_id = <当前上下文>；
                                         无上下文 → 同上 fail loud
+    批量改（UPDATE /
+    DELETE，ORM 语句） do_orm_execute —— 同 SELECT 语义：有上下文时经
+                                        with_loader_criteria 将批量变异
+                                        限定在当前人格行内；无上下文 →
+                                        同上 fail loud（Core 表级 DELETE
+                                        不触发——仅 ORM-enabled 语句）
     绕过方式（管理面/系统级操作）
         session.execute(stmt, execution_options={"skip_persona_filter": True})
 
@@ -107,13 +113,14 @@ class PersonaMixin:
 
     继承此 Mixin 的模型表内按 ``persona_id`` 逻辑分区：写路径经
     ``before_flush`` 从 :data:`persona_id_var` 自动注入（业务代码无需
-    显式赋值），读路径经 ``do_orm_execute`` 自动附加 ``WHERE persona_id
-    = <当前上下文>``（业务代码无需手写过滤）。
+    显式赋值），读路径与 ORM 批量 UPDATE / DELETE 经 ``do_orm_execute``
+    自动附加 ``WHERE persona_id = <当前上下文>``（业务代码无需手写
+    过滤；批量变异同样限定在当前人格行内）。
 
-    两个守卫均 fail loud（``PERSONA_CONTEXT_REQUIRED``）：触及人格作用域
+    全部守卫均 fail loud（``PERSONA_CONTEXT_REQUIRED``）：触及人格作用域
     实体而无人格上下文是编程错误（入口层必须先绑定 persona 上下文，
     见 ``core.context.bind_context``），静默放行会造成全表可见的数据
-    泄漏。绕过通道（管理面 / 跨人格聚合）::
+    泄漏或跨人格变更。绕过通道（管理面 / 跨人格聚合）::
 
         session.execute(stmt, execution_options={"skip_persona_filter": True})
     """
@@ -157,14 +164,37 @@ def _statement_touches_persona(statement: Any) -> bool:
     if final_froms is None:
         return False
     from_table_names = {getattr(table, "name", "") for table in final_froms()}
-    for mapped in Base.registry._class_registry.values():
+    # 经 registry.mappers 公共 API 遍历已注册 ORM 类（mapper.class_），
+    # 不触达 _class_registry 私有字典
+    for mapper in Base.registry.mappers:
+        mapped = mapper.class_
         if (
-            isinstance(mapped, type)
-            and issubclass(mapped, PersonaMixin)
+            issubclass(mapped, PersonaMixin)
             and getattr(mapped, "__tablename__", None) in from_table_names
         ):
             return True
     return False
+
+
+def _dml_statement_touches_persona(statement: Any) -> bool:
+    """判定 ORM-enabled UPDATE / DELETE 语句是否触及人格作用域实体。
+
+    仅 ORM-enabled 语句（``update(Entity)`` / ``delete(Entity)``）的
+    ``entity_description`` 携带 ``entity`` 键（实体类）；Core 表级
+    ``update(table)`` / ``delete(table)`` 不携带——不触发守卫（测试
+    清表 / 运维脚本形态）。
+
+    Args:
+        statement: SQLAlchemy Update / Delete 语句。
+
+    Returns:
+        语句针对 PersonaMixin 实体做批量变异返回 True。
+    """
+    description = getattr(statement, "entity_description", None)
+    if not isinstance(description, dict):
+        return False
+    entity = description.get("entity")
+    return isinstance(entity, type) and issubclass(entity, PersonaMixin)
 
 
 def _require_persona_context(operation: str) -> str:
@@ -216,23 +246,43 @@ def _inject_persona_id(session: Session, flush_context: Any, instances: Any) -> 
 
 @event.listens_for(Session, "do_orm_execute")
 def _persona_filter(execute_state: Any) -> None:
-    """读路径守卫——人格作用域 SELECT 自动附加当前人格过滤。
+    """读 / 批量改路径守卫——人格作用域语句自动附加当前人格过滤。
 
-    语句触及 PersonaMixin 实体时经 ``with_loader_criteria`` 附加
-    ``WHERE persona_id = <当前上下文>``（含 alias 场景）；非人格作用域
-    语句零影响（criteria 对不相关实体为 no-op）。缺上下文时 fail loud。
+    SELECT 与 ORM-enabled UPDATE / DELETE 触及 PersonaMixin 实体时经
+    ``with_loader_criteria`` 附加 ``WHERE persona_id = <当前上下文>``
+    （含 alias 场景；批量变异因此限定在当前人格行内）；非人格作用域
+    语句零影响（criteria 对不相关实体为 no-op）。缺上下文时 fail loud
+    （SELECT 与批量变异同语义——静默放行批量 UPDATE / DELETE 会造成
+    跨人格变更缺口）。Core 表级 DML（无 ORM 实体）不触发本守卫。
 
     Args:
-        execute_state: SQLAlchemy ORMExecuteState（仅 SELECT 处理）。
+        execute_state: SQLAlchemy ORMExecuteState（SELECT / UPDATE /
+            DELETE 处理；其余语句形态零影响）。
     """
-    if not execute_state.is_select:
+    if execute_state.is_select:
+        if execute_state.execution_options.get(PERSONA_FILTER_SKIP_OPTION):
+            return
+        if not _statement_touches_persona(execute_state.statement):
+            return
+        persona_id = _require_persona_context("SELECT persona-scoped rows")
+        execute_state.statement = execute_state.statement.options(
+            with_loader_criteria(
+                PersonaMixin,
+                lambda cls: cls.persona_id == persona_id,
+                include_aliases=True,
+            )
+        )
+        return
+
+    if not (execute_state.is_update or execute_state.is_delete):
         return
     if execute_state.execution_options.get(PERSONA_FILTER_SKIP_OPTION):
         return
-    if not _statement_touches_persona(execute_state.statement):
+    if not _dml_statement_touches_persona(execute_state.statement):
         return
 
-    persona_id = _require_persona_context("SELECT persona-scoped rows")
+    operation = "UPDATE" if execute_state.is_update else "DELETE"
+    persona_id = _require_persona_context(f"{operation} persona-scoped rows")
     execute_state.statement = execute_state.statement.options(
         with_loader_criteria(
             PersonaMixin,

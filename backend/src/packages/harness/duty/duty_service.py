@@ -164,7 +164,10 @@ class DutyService:
 
         Args:
             session: 注入的异步 Session（人格解析 + 报告落库共用）。
-            now_ms: 注入时钟（epoch 毫秒；None = 当前真实时间）。
+            now_ms: 注入时钟（epoch 毫秒；None = 当前真实时间）。轮次起止
+                时间戳同轴：入口一次采值——无激活人格的零副作用早退路径
+                ``finished_ts_ms == started_ts_ms``（同一注入轴读数，
+                不混真实时钟）。
             cfg: 运行参数（None = DutyRunConfigModel 全默认——装配面
                 经 Settings.duty 映射注入）。
 
@@ -179,7 +182,7 @@ class DutyService:
             return DutyReportModel(
                 persona="",
                 started_ts_ms=started_ms,
-                finished_ts_ms=time_utils.now_ms(),
+                finished_ts_ms=started_ms,
                 status=DutyStatus.ERROR,
                 error="无激活人格——本轮值班未执行",
                 final_report="",

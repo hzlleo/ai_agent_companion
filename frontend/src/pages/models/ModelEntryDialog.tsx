@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/Input'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { useToast } from '@/components/ui/useToast'
 import { toApiError } from '@/api/client'
+import { apiErrorFieldSuffix } from '@/api/errorDetails'
 import { useCreateModelEntry, useUpdateModelEntry } from '@/hooks/useModelsApi'
 import type { ModelEntryMasked, ModelRole } from '@/types/model-registry'
 import {
@@ -80,7 +81,8 @@ export function ModelEntryDialog({ open, onOpenChange, mode, entry }: ModelEntry
           onOpenChange(false)
         },
         onError: (error) => {
-          toast.error(toApiError(error).message)
+          const apiError = toApiError(error)
+          toast.error(`${apiError.message}${apiErrorFieldSuffix(apiError)}`)
         },
       })
       return
@@ -93,7 +95,8 @@ export function ModelEntryDialog({ open, onOpenChange, mode, entry }: ModelEntry
           onOpenChange(false)
         },
         onError: (error) => {
-          toast.error(toApiError(error).message)
+          const apiError = toApiError(error)
+          toast.error(`${apiError.message}${apiErrorFieldSuffix(apiError)}`)
         },
       },
     )

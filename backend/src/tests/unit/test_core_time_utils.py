@@ -34,6 +34,25 @@ class TestToMs:
         dt = datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
         assert to_ms(dt) == 1_704_067_200_000
 
+    async def test_naive_datetime_interpreted_as_utc_tz_stable(self) -> None:
+        """naive datetime 统一按 UTC 解释——跨时区部署结果稳定。"""
+        import os
+        import time
+
+        original_tz = os.environ.get("TZ")
+        try:
+            for tz_name in ("Asia/Shanghai", "America/New_York", "UTC"):
+                os.environ["TZ"] = tz_name
+                time.tzset()
+                # naive 2024-01-01 00:00 恒按 UTC 解释 → 固定 epoch 毫秒
+                assert to_ms(datetime(2024, 1, 1)) == 1_704_067_200_000
+        finally:
+            if original_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = original_tz
+            time.tzset()
+
     async def test_epoch_origin(self) -> None:
         """epoch 原点 → 0。"""
         assert to_ms(datetime(1970, 1, 1, tzinfo=UTC)) == 0

@@ -84,6 +84,10 @@ describe('标签表与提示文案', () => {
     expect(SEARCH_SCORE_DIRECTION_HINTS['dense']).toContain('越小越相关')
   })
 
+  it('hybrid 分数方向与后端契约一致（融合相关度，越大越相关）', () => {
+    expect(SEARCH_SCORE_DIRECTION_HINTS['hybrid']).toBe('分数为融合相关度（越大越相关）')
+  })
+
   it('载荷模板可解析为 JSON 对象且键与 kind 契约对齐', () => {
     for (const [kind, template] of Object.entries(EPISODE_PAYLOAD_TEMPLATES)) {
       const parsed: unknown = JSON.parse(template)

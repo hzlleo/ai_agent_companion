@@ -1,4 +1,4 @@
-"""记忆管理 admin 路由——三层记忆的操作面（P1 chunk 1 交付）。
+"""记忆管理 admin 路由——三层记忆的操作面。
 
     - GET    /api/v1/memories/episodes                    —— 情景事件游标分页（过滤面）
     - POST   /api/v1/memories/episodes                    —— 手工注入（provenance 缺省 owner）
@@ -12,13 +12,13 @@
     - GET    /api/v1/memories/sessions                    —— 会话游标分页
     - GET    /api/v1/memories/sessions/{id}               —— 会话详情（含全量消息）
     - DELETE /api/v1/memories/sessions/{id}               —— 删除（消息同事务清理）
-    - POST   /api/v1/memories/search                      —— 记忆检索（P1 chunk 2：dense /
-                                                                  keyword / hybrid 三模式）
-    - POST   /api/v1/memories/dream/trigger               —— 手工触发夜间梦境整理（P1 chunk 3：
-                                                                  同步运行——admin 触发语义，
-                                                                  自动调度属 P3）
-    - GET    /api/v1/memories/dream/runs                  —— 梦境运行日志游标分页（P1 chunk 3）
-    - GET    /api/v1/memories/dream/runs/{id}             —— 运行详情（含逐事件决策，P1 chunk 3）
+    - POST   /api/v1/memories/search                      —— 记忆检索（dense /
+                                                                   keyword / hybrid 三模式）
+    - POST   /api/v1/memories/dream/trigger               —— 手工触发夜间梦境整理（同步
+                                                                   运行——admin 触发语义；
+                                                                   自动调度属中央调度器）
+    - GET    /api/v1/memories/dream/runs                  —— 梦境运行日志游标分页
+    - GET    /api/v1/memories/dream/runs/{id}             —— 运行详情（含逐事件决策）
 
 人格作用域约定：三张 PersonaMixin 表的记忆数据按人格逻辑隔离——全部
 端点先解析目标人格（``persona_id`` 查询参数显式指定；缺省 = 当前激活
@@ -40,6 +40,7 @@ from typing import cast
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from packages.harness.config.models import Settings
 from packages.harness.config.models import settings as global_settings
 from packages.harness.core.dtos import PageResponse, ResultDTO
 from packages.harness.core.errors import BusinessException, ErrorCode
@@ -49,6 +50,7 @@ from packages.harness.memory.dreaming import DreamService
 from packages.harness.memory.dreaming_models import (
     DreamRunQueryDTO,
     DreamRunRecordDTO,
+    DreamRunStatus,
     DreamTriggerRequestDTO,
 )
 from packages.harness.memory.dtos import (
@@ -84,7 +86,7 @@ from packages.harness.persona.service import PersonaService, bind_persona_contex
 router = APIRouter(prefix="/api/v1/memories", tags=["memories"])
 
 #: 记忆服务实例（无状态——Session 逐请求注入，服务可安全共享；indexer
-#: 未绑定——app 装配的索引联动属后续 chunk，本路由保持 M1 写入行为）。
+#: 未绑定——经本路由写入的情景事件只落库，不同步检索索引）。
 memory_service = MemoryService()
 #: 会话持久化服务实例（同上）。
 chat_session_service = ChatSessionService()
@@ -93,22 +95,34 @@ dream_service = DreamService()
 #: 人格服务实例（目标人格解析面）。
 persona_service = PersonaService()
 
-#: 检索存储进程级缓存（build_memory_store 产出——SeekDB 自持池 / 回退
-#: 存储的 once 守卫跨请求复用；注入式池形态下无状态，缓存仅省构造）。
-_memory_store: MemoryStore | None = None
 
+def _resolve_request_memory_store(request: Request) -> MemoryStore:
+    """解析请求可用的记忆检索存储（app.state.memory_store 优先）。
 
-def _get_memory_store() -> MemoryStore:
-    """取记忆检索存储（进程级 once 构造——存储选择见 build_memory_store）。
+    解析序：``app.state.memory_store``（lifespan 装配的进程级存储——
+    SeekDB 自持池 / 回退存储的 once 守卫跨请求复用）→ 缺省时按
+    ``app.state.settings``（未上挂回落全局单例）构建**一次**并上挂到
+    同一 ``app.state``（后续请求复用——与 lifespan 装配形态等价）。
+    与 ``_resolve_request_gateway`` / channels_qq 的 state 读取口径
+    一致：请求面不读模块级缓存。
+
+    Args:
+        request: 当前请求（app.state.memory_store / app.state.settings
+            由 lifespan 或 create_app 装配）。
 
     Returns:
-        就绪的 :class:`MemoryStore`（SeekDB / SQLite 回退——由全局
+        就绪的 :class:`MemoryStore`（SeekDB / SQLite 回退——由生效
         settings.seekdb.enabled 决定）。
     """
-    global _memory_store
-    if _memory_store is None:
-        _memory_store = build_memory_store(global_settings)
-    return _memory_store
+    store = cast("MemoryStore | None", getattr(request.app.state, "memory_store", None))
+    if store is not None:
+        return store
+    settings = cast("Settings | None", getattr(request.app.state, "settings", None)) or (
+        global_settings
+    )
+    built = build_memory_store(settings)
+    request.app.state.memory_store = built
+    return built
 
 
 def _resolve_request_gateway(request: Request) -> LlmGateway:
@@ -503,7 +517,7 @@ async def delete_session(
 
 
 # ---------------------------------------------------------------------------
-# 记忆检索（retrieval——P1 chunk 2：索引面混合检索）
+# 记忆检索（retrieval——索引面混合检索）
 # ---------------------------------------------------------------------------
 
 
@@ -538,7 +552,7 @@ async def search_memories(
     record = await _resolve_target_persona(db, req.persona_id)
     gateway = _resolve_request_gateway(request)
     service = MemorySearchService(
-        store=_get_memory_store(),
+        store=_resolve_request_memory_store(request),
         embedder=gateway.embed_by_role,
     )
     query = MemorySearchQueryDTO(
@@ -557,7 +571,7 @@ async def search_memories(
 
 
 # ---------------------------------------------------------------------------
-# 夜间梦境（dreaming——P1 chunk 3：巩固合并 + 日记 + 运行日志）
+# 夜间梦境（dreaming——巩固合并 + 日记 + 运行日志）
 # ---------------------------------------------------------------------------
 
 
@@ -572,12 +586,13 @@ async def trigger_dream(
     链路：解析目标人格（请求体 ``persona_id`` 可选——缺省激活人格）→
     ``bind_persona_context``（DreamService 全链人格作用域）→
     ``DreamService.run_dream``（网关 / 检索存储注入：网关经
-    ``app.state.gateway`` 优先——与检索端点同一解析面；存储经进程级
-    once 缓存）→ 返回运行记录。
+    ``app.state.gateway`` 优先——与检索端点同一解析面；存储经
+    ``app.state.memory_store`` 解析——lifespan 装配优先，缺省 once
+    构建上挂）→ 返回运行记录。
 
     同步语义（文档化决策）：本端点**同步执行**整条梦境链（合并 + 日记
-    的 LLM 调用内联在请求内）——P1 的手工触发面；夜间自动调度（cron /
-    duty 轮）属 P3 调度器 chunk。运行失败是**业务结果**而非请求失败：
+    的 LLM 调用内联在请求内）——手工触发面；夜间自动调度（cron /
+    duty 轮）属中央调度器。运行失败是**业务结果**而非请求失败：
     响应恒 200，``data.status`` / ``data.error`` 呈现终态（fail-closed
     语义见 harness/memory/dreaming.py 模块文档）。
 
@@ -602,10 +617,10 @@ async def trigger_dream(
             db,
             gateway=gateway,
             persona_name=record.display_name,
-            store=_get_memory_store(),
+            store=_resolve_request_memory_store(request),
             cfg=req.cfg,
         )
-    if run.status == "failed":
+    if run.status == DreamRunStatus.FAILED:
         message = f"梦境整理失败：{run.error or '未知原因'}"
     else:
         message = (

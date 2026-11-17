@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """中文注释门禁（Chinese comment gate）——扫描非测试源码的 docstring 合规性。
 
-扫描范围（当前仓库树：backend + 根级 scripts/；docker 沙盒树落地后在
+扫描范围（当前仓库树：backend + 沙盒树 + 根级 scripts/——新树落地时在
 本脚本 ``_TREE_ROOTS`` 登记）：
 
     - backend/src（排除 src/tests/）
+    - docker 沙盒树 src + server.py
     - 仓库根 scripts/（工程级脚本）
 
 测试文件豁免（约定不同）：路径含 ``tests/`` 的文件、``test_*.py`` /
@@ -19,8 +20,9 @@
         - 参数数 > 1（不含 self/cls）的函数 → 建议补 ``Args:`` 段；
         - 返回注解非 ``None`` 的函数 → 建议补 ``Returns:`` 段；
         - 函数体含直接 ``raise`` 语句 → 建议补 ``Raises:`` 段。
-       段落缺失只打印 hints（不计入退出码）——历史存量较大，本批先锁
-       存在性 + 中文两条硬规则，段落要素留待后续批补齐；启发式不确定时
+       段落缺失只打印 hints（不计入退出码）——历史存量较大，硬规则
+       现阶段只锁存在性 + 中文两条，段落要素作为后续增强项逐步补齐；
+       启发式不确定时
        （生成器 / 纯 stub / 装饰器剥离了签名）记入 skips。
 
 退出码由规则 1/2 的违规驱动：无违规 0；有违规 1（明细 + 计数摘要打印到

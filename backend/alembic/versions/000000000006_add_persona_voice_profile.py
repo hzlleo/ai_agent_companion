@@ -1,4 +1,4 @@
-"""人格语音绑定列迁移——P4 chunk 1 交付（voice 域人格扩展点）。
+"""人格语音绑定列迁移（voice 域人格扩展点）。
 
 harness/persona 域 ``ff_personas`` 表新增一列：
 
@@ -14,7 +14,6 @@ harness/persona 域 ``ff_personas`` 表新增一列：
 
 Revision ID: 000000000006
 Revises: 000000000005
-Create Date: 2026-11-16
 """
 
 from typing import Sequence, Union

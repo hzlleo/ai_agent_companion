@@ -20,6 +20,25 @@ export type PersonaStateLayer = 'M' | 'S'
 export type CharaBookPosition = 'before_char' | 'after_char'
 
 // ---------------------------------------------------------------------------
+// 语音绑定（voice_profile——人格级 TTS 配置覆盖）
+// ---------------------------------------------------------------------------
+
+/**
+ * 人格语音绑定（镜像后端 VoiceProfileModel）。
+ *
+ * 绑定语义：人格绑定存在时，其 speaker / speed 覆盖 settings 缺省；
+ * 请求级显式参数又覆盖人格绑定（请求 > 人格绑定 > settings 缺省）。
+ */
+export interface VoiceProfile {
+  /** 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名；1-128 字符）。 */
+  speaker: string
+  /** instruct2 模式风格指令（null = 普通合成；提供时透传 CosyVoice instruct2 模式）。 */
+  instruct_text: string | null
+  /** 语速（0.5-2.0，默认 1.0——1.0 为自然语速）。 */
+  speed: number
+}
+
+// ---------------------------------------------------------------------------
 // chara card v2 卡片
 // ---------------------------------------------------------------------------
 
@@ -99,6 +118,8 @@ export interface PersonaRecord {
   is_active: boolean
   /** 人格卡片。 */
   card: CharaCard
+  /** 语音绑定（null = 未绑定——合成回落 settings 缺省发音人）。 */
+  voice_profile: VoiceProfile | null
   /** 创建时间（epoch 毫秒）。 */
   created_at: number
   /** 更新时间（epoch 毫秒）。 */
@@ -143,6 +164,8 @@ export interface PersonaCreateRequest {
   status: PersonaStatus
   /** 人格卡片。 */
   card: CharaCard
+  /** 语音绑定（null = 不绑定——合成回落 settings 缺省发音人）。 */
+  voice_profile: VoiceProfile | null
 }
 
 /** 卡片补丁（部分合并面——仅出现字段覆写；character_book 整体替换）。 */
@@ -177,6 +200,8 @@ export interface PersonaUpdateRequest {
   status?: PersonaStatus
   /** 卡片补丁。 */
   card?: CharaCardPatch
+  /** 语音绑定（出现即整体替换——显式 null 清除绑定；缺席则原样保留）。 */
+  voice_profile?: VoiceProfile | null
 }
 
 /** 复制人格请求。 */

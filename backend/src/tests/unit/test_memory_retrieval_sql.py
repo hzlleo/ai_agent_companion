@@ -474,8 +474,8 @@ async def test_hybrid_execution_skips_malformed_rows() -> None:
 
 
 async def test_hybrid_execution_payload_anomalies_fail_loud() -> None:
-    """hybrid 执行：载荷形态异常（零行 / 零列 / 非字符串 / 非法 JSON / 非数组）→ INTERNAL_ERROR。"""
-    for rows in ([], [()], [(123,)], [("{not json",)], [(json.dumps({"hits": []}),)]):
+    """hybrid 执行：载荷形态异常（零行 / 零列 / 多列 / 非字符串 / 非法 JSON / 非数组）→ INTERNAL_ERROR。"""
+    for rows in ([], [()], [("col_a", "col_b")], [(123,)], [("{not json",)], [(json.dumps({"hits": []}),)]):
         pool = _CellPool(rows)
         store = SeekDBStore(_seekdb_config(), pool=pool)
         with pytest.raises(BusinessException) as exc_info:

@@ -254,7 +254,7 @@ def build_http_fetch_spec() -> ToolSpecModel:
 
 
 # ---------------------------------------------------------------------------
-# B 站只读工具组（P4 平台工具——参数面与沙盒树 bili_tools.py 人为镜像）
+# B 站只读工具组（平台工具——参数面与沙盒树 bili_tools.py 人为镜像）
 # ---------------------------------------------------------------------------
 # 块边界约定（镜像 HttpFetchArgsModel 范式——漂移门禁块提取口径）：四个
 # 参数模型类**连续排布**，其前可以有注释 / 常量；BiliSubtitleArgsModel
@@ -419,7 +419,7 @@ class BiliVideoCommentsArgsModel(BaseModel):
 
     Attributes:
         bvid: Bilibili 视频 BV 号（``BV`` + 10 位字母数字，共 12 字符）。
-        page: 页码（1-50，默认 1——mode=2 时间序游标换算页序）。
+        page: 页码（1-50，默认 1——sort=2 时间序页序）。
         page_size: 每页条数（10-20，默认 20——接口 ps 上限 20）。
     """
 

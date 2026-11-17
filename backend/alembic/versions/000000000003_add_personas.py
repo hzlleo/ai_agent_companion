@@ -1,4 +1,4 @@
-"""人格注册表迁移——P0-5 交付（ff_personas + ff_persona_states）。
+"""人格注册表迁移（ff_personas + ff_persona_states）。
 
 harness/persona 域两张表：
 
@@ -14,7 +14,6 @@ INTEGER——rowid 自增）。
 
 Revision ID: 000000000003
 Revises: 000000000002
-Create Date: 2026-11-12
 """
 
 from typing import Sequence, Union

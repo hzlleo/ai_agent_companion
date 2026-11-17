@@ -5,7 +5,7 @@
     - create_app 静态装配（路由注册面断言）；
     - startup/shutdown 函数对直调（真实组件：隔离 Settings + tmp SQLite +
       真实 PoolManager——无需 ASGI lifespan runner）；
-    - 停机 LIFO 追踪（pools → db → thread_pool 顺序锁定）；
+    - 停机 LIFO 追踪（background_drain → pools → db → thread_pool 顺序锁定）；
     - health / personas 经 ASGITransport 走真实 app 对象（零真实网络；
       ASGITransport 不触发 lifespan——health 无 DB 依赖契约的实证）。
 """
@@ -71,13 +71,31 @@ async def test_startup_app_state_drives_real_components(isolated_settings, tmp_p
 async def test_shutdown_app_state_lifo_order(
     isolated_settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """shutdown 函数对：LIFO 停机（pools → db → thread_pool）+ 全复位。"""
+    """shutdown 函数对：LIFO 停机（后台任务 drain → pools → db → thread_pool）+ 全复位。
+
+    后台任务 drain 经 stub 管理器追踪（不触真实单例——shutdown 会将其
+    is_shutting_down 永久置位；真实 drain 语义由 test_core_background_tasks
+    覆盖）；断言 drain 先于池关闭（在途 fire-and-forget 任务消费池资源）。
+    """
     app = create_app()
     await startup_app_state(app, isolated_settings, config_dir=tmp_path)
     manager = get_pool_manager()
     assert manager is not None
 
     order: list[str] = []
+    drain_timeouts: list[float] = []
+
+    class _TracedBackgroundManager:
+        """stub 后台任务管理器（仅追踪 shutdown 调用序与超时参数）。"""
+
+        async def shutdown(self, timeout: float = 30.0) -> None:
+            order.append("background_drain")
+            drain_timeouts.append(timeout)
+
+    monkeypatch.setattr(
+        app_main, "background_task_manager", _TracedBackgroundManager()
+    )
+
     real_stop = manager.stop
 
     async def traced_stop() -> None:
@@ -104,7 +122,8 @@ async def test_shutdown_app_state_lifo_order(
 
     await shutdown_app_state(app)
 
-    assert order == ["pools", "db", "thread_pool"]
+    assert order == ["background_drain", "pools", "db", "thread_pool"]
+    assert drain_timeouts == [app_main._BACKGROUND_DRAIN_TIMEOUT_SECONDS]
     assert manager.started is False
     assert db_engine_holder.async_engine is None
     assert app.state.gateway is None

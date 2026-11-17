@@ -13,6 +13,7 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Select } from '@/components/ui/Select'
 import { useToast } from '@/components/ui/useToast'
 import { toApiError } from '@/api/client'
+import { apiErrorFieldSuffix } from '@/api/errorDetails'
 import { useUpsertCurated } from '@/hooks/useMemoriesApi'
 import type { CuratedKind, CuratedRecord, CuratedUpsertRequest, MemoryProvenance } from '@/types/memory'
 import { CURATED_KIND_LABELS } from './memoryDisplay'
@@ -104,7 +105,8 @@ export function CuratedUpsertDialog({ open, onOpenChange, personaId, initial }: 
           onOpenChange(false)
         },
         onError: (error) => {
-          toast.error(toApiError(error).message)
+          const apiError = toApiError(error)
+          toast.error(`${apiError.message}${apiErrorFieldSuffix(apiError)}`)
         },
       },
     )

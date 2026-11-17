@@ -3,7 +3,7 @@
 覆盖矩阵：四工具规格呈现面（名称 / 描述 / args_model / JSON Schema
 形态——enum / pattern / 边界）；参数模型校验矩阵与 JSON Schema 锚点
 （**规格镜像的行为锚点**——与沙盒树 test_bili_tools.py 的同组断言对齐，
-两树行为等价即镜像面未漂移；文本面看护属根漂移门禁扩展——主 agent 面）；
+两树行为等价即镜像面未漂移；文本面看护由根级漂移门禁承担）；
 ``register_sandbox_tools_for_bili`` 代理回路（fake 客户端 ok → registry
 ok=True；ok=False → INTERNAL_ERROR 归一；本地校验 fail-fast——客户端
 零调用；默认值物化经 wire）。

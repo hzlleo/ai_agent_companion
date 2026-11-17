@@ -84,6 +84,44 @@ describe('DreamTab', () => {
     })
   })
 
+  it('新增旋钮（孤儿收敛 / 回溯窗 / 窗口事件上限）值域校验 + 覆写进入 cfg', async () => {
+    const user = userEvent.setup()
+    let capturedBody: Record<string, unknown> | null = null
+    server.use(
+      http.post(`${BACKEND_ORIGIN}/memories/dream/trigger`, async ({ request }) => {
+        capturedBody = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json(okResult(mockDreamRun({ id: 9 })))
+      }),
+    )
+    renderWithProviders(<DreamTab personaId={3} />)
+    await screen.findByTestId('dream-run-row-2')
+
+    await user.type(screen.getByLabelText('窗口事件上限'), '100001')
+    await user.click(screen.getByRole('button', { name: /触发梦境整理/ }))
+    expect(await screen.findByText('窗口事件上限须为 1-100000 的整数')).toBeInTheDocument()
+
+    await user.clear(screen.getByLabelText('窗口事件上限'))
+    await user.type(screen.getByLabelText('孤儿收敛阈值（毫秒）'), '0')
+    await user.click(screen.getByRole('button', { name: /触发梦境整理/ }))
+    expect(await screen.findByText('孤儿收敛阈值须为不小于 1 的整数（毫秒）')).toBeInTheDocument()
+
+    await user.clear(screen.getByLabelText('孤儿收敛阈值（毫秒）'))
+    await user.type(screen.getByLabelText('孤儿收敛阈值（毫秒）'), '7200000')
+    await user.type(screen.getByLabelText('已晋升回溯窗（毫秒）'), '604800000')
+    await user.type(screen.getByLabelText('窗口事件上限'), '3000')
+    await user.click(screen.getByRole('button', { name: /触发梦境整理/ }))
+    await waitFor(() => expect(capturedBody).not.toBeNull())
+    expect(capturedBody).toEqual({
+      persona_id: 3,
+      cfg: {
+        stale_running_threshold_ms: 7200000,
+        promoted_lookback_ms: 604800000,
+        max_episodes: 3000,
+        diary_enabled: true,
+      },
+    })
+  })
+
   it('触发请求失败（404 无激活人格）→ toast 错误', async () => {
     const user = userEvent.setup()
     server.use(

@@ -13,6 +13,7 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Select } from '@/components/ui/Select'
 import { useToast } from '@/components/ui/useToast'
 import { toApiError } from '@/api/client'
+import { apiErrorFieldSuffix } from '@/api/errorDetails'
 import { useCreateEpisode } from '@/hooks/useMemoriesApi'
 import type { EpisodeKind, MemoryProvenance } from '@/types/memory'
 import {
@@ -86,7 +87,8 @@ export function EpisodeInjectDialog({ open, onOpenChange, personaId }: EpisodeIn
           onOpenChange(false)
         },
         onError: (error) => {
-          toast.error(toApiError(error).message)
+          const apiError = toApiError(error)
+          toast.error(`${apiError.message}${apiErrorFieldSuffix(apiError)}`)
         },
       },
     )

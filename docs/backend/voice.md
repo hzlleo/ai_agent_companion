@@ -1,8 +1,8 @@
-# voice — 语音域（P4 chunk 1 交付：TTS 合成 + ASR 转写 + 人格语音绑定）
+# voice — 语音域（TTS 合成 + ASR 转写 + 人格语音绑定）
 
 `backend/src/packages/harness/voice/` 承载语音能力面：**TTS 客户端**（CosyVoice3 包装服务——文本 → WAV 音频）、**ASR 客户端**（Qwen3-ASR OpenAI 兼容 audio 端点——音频 → 文本）、**VoiceService 编排门面**（enabled 门控 / 人格绑定参数解析 / 用量埋点）+ persona 域的**人格语音绑定**（`ff_personas.voice_profile`）+ app 层 **voice 管理 API** + CLI **`--voice` 旗标**。
 
-锁定设计决策：**语音服务是部署机上的外部本地进程**——CosyVoice3 与 Qwen3-ASR 权重经 `models/` 子模块承载（部署机关注；compose 接线属后续部署 chunk），后端**只经 HTTP 契约消费，永不读取模型文件路径**（与 llm 域「只连端点」同约定）。缺省双关闭（`VOICE_TTS_ENABLED=false` / `VOICE_ASR_ENABLED=false`）——零配置开发可用、测试 hermetic。
+锁定设计决策：**语音服务是部署机上的外部本地进程**——CosyVoice3 与 Qwen3-ASR 权重经 `models/` 子模块承载（部署机关注；compose 接线由部署侧另行承接），后端**只经 HTTP 契约消费，永不读取模型文件路径**（与 llm 域「只连端点」同约定）。缺省双关闭（`VOICE_TTS_ENABLED=false` / `VOICE_ASR_ENABLED=false`）——零配置开发可用、测试 hermetic。
 
 ## 模块一览
 
@@ -33,11 +33,15 @@ usage 域（wire_default_voice_usage_recorder → UsageCreateDTO）
     → ff_usage_records（purpose="tts"，token 0/0/0，真实时延，persona 绑定）
 ```
 
-ASR 同构（`VoiceService.transcribe(audio, filename, persona)` → `Qwen3AsrClient` → `POST {base_url}/v1/audio/transcriptions` multipart → `AsrResultModel` → usage 行 `purpose="asr"`）。用量语义（锁定决策）：**语音调用无 token 语义**——input / output / total 恒 0 落账（调用计数 + 真实时延仍有观测价值；`UsagePurpose` 枚举 tts / asr 成员为既有预留，本 chunk 消费）。用量发射恒不阻断主调用（记录器异常仅告警——与 llm 网关同契约）。
+ASR 同构（`VoiceService.transcribe(audio, filename, persona)` → `Qwen3AsrClient` → `POST {base_url}/v1/audio/transcriptions` multipart → `AsrResultModel` → usage 行 `purpose="asr"`）。用量语义（锁定决策）：**语音调用无 token 语义**——input / output / total 恒 0 落账（调用计数 + 真实时延仍有观测价值；`UsagePurpose` 枚举 tts / asr 成员为既有预留，本域消费）。用量发射恒不阻断主调用（记录器异常仅告警——与 llm 网关同契约）。
 
 ### 大输出边界（文档化决策）
 
-TTS 结果为**内存字节**（`audio: bytes`）——单次合成受请求文本 500 字符约束，音频体量在 MB 量级内；若后续 chunk 需要长文本 / 流式音频，在服务层演进流式传输面（结果模型保持归一形态不变）。
+TTS 结果为**内存字节**（`audio: bytes`）——单次合成受请求文本 500 字符约束，音频体量在 MB 量级内；若后续需要长文本 / 流式音频，在服务层演进流式传输面（结果模型保持归一形态不变）。
+
+### ASR 上传上限（资源面守卫——与 look_at 图像 10MB 上限同性质）
+
+ASR 端点对 multipart 请求体设大小上限（`VOICE_ASR_MAX_UPLOAD_BYTES`，默认 25MB）：超限在解析前拒绝（422 `VALIDATION_ERROR`，details 携带上限与实际字节数）。与 look_at 图像 10MB 上限的不对称是**文档化决策**：两者均为资源面守卫（防无限请求体内存缓冲），量级差异源于音频载荷体积天然大于截图——一段 30s WAV 即可超过 10MB。
 
 ## 人格语音绑定（persona voice_profile）
 
@@ -46,10 +50,10 @@ TTS 结果为**内存字节**（`audio: bytes`）——单次合成受请求文�
 | 字段 | 类型 | 语义 |
 |---|---|---|
 | `speaker` | str（1-128） | 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名） |
-| `instruct_text` | str \| null | instruct2 模式风格指令（自然语言控制语气 / 情绪；null = 普通合成） |
+| `instruct_text` | str \| null（≤2000 字符） | instruct2 模式风格指令（自然语言控制语气 / 情绪；null = 普通合成） |
 | `speed` | float（0.5-2.0，默认 1.0） | 语速 |
 
-**参数解析优先级（P4 锁定决策）：请求参数 > 人格绑定 > settings 缺省。** 无人格绑定（列 NULL / 未传人格）→ settings 缺省（`VOICE_TTS_DEFAULT_SPEAKER` / `VOICE_TTS_DEFAULT_SPEED`）。绑定管理经 personas 既有端点（`POST /api/v1/personas` 携带 / `PUT /api/v1/personas/{id}` 替换或显式 null 清除——出现即整体替换语义，无字段级合并；复制人格随卡片一并继承绑定）。
+**参数解析优先级（锁定决策）：请求参数 > 人格绑定 > settings 缺省。** 无人格绑定（列 NULL / 未传人格）→ settings 缺省（`VOICE_TTS_DEFAULT_SPEAKER` / `VOICE_TTS_DEFAULT_SPEED`）。绑定管理经 personas 既有端点（`POST /api/v1/personas` 携带 / `PUT /api/v1/personas/{id}` 替换或显式 null 清除——出现即整体替换语义，无字段级合并；复制人格随卡片一并继承绑定）。
 
 ## Settings（env 面）
 
@@ -66,8 +70,9 @@ TTS 结果为**内存字节**（`audio: bytes`）——单次合成受请求文�
 | `VOICE_ASR_MODEL_ENTRY` | `qwen3-asr-0.6b` | 用量记账条目名（兼 multipart `model` 字段值） |
 | `VOICE_ASR_REQUEST_TIMEOUT_SECONDS` | `60` | 单次转写请求超时（音频上传 + 转写） |
 | `VOICE_ASR_LANGUAGE` | （空） | 缺省语言提示（空 = 端点自动检测；请求级参数覆盖） |
+| `VOICE_ASR_MAX_UPLOAD_BYTES` | `26214400` | ASR 上传请求体上限（字节，25MB——超限 422；量级依据见上节） |
 
-注：`.env.example` 的 VOICE_* 段待后续登记进 `scripts/generate_examples_env.py` 分节表后经 `pixi run gen-examples` 再生成（scripts/ 树不在本 chunk 文件面内）。
+键面以 `.env.example`（`pixi run gen-examples` 生成）为真源，本表为语义说明。
 
 ## 管理 API（app/api/voice.py）
 
@@ -109,7 +114,7 @@ zh
        "data": {"text": "今天也要元气满满哦", "duration_ms": 3400, "language": "zh"}}
 ```
 
-`language` 字段可选（缺省 settings / 端点自动检测）；用量绑定当前激活人格。**inbound multipart 零新增依赖**（锁定决策）：FastAPI `File` / `Form` 参数面需要 `python-multipart` 运行时——本工程不引入；端点经原始 `Request` 读取请求体，用 stdlib `email` 解析器解析 multipart/form-data（RFC 2046 边界 / 引号与 RFC 2231 文件名由 stdlib 承担；字节载荷 byte 级原样透传——经 httpx 原生编码体实证）。形态不符 / 缺 `file` 字段 → 400 `BAD_REQUEST`；ASR 未启用 → 409。
+`language` 字段可选（缺省 settings / 端点自动检测）；用量绑定当前激活人格。**inbound multipart 零新增依赖**（锁定决策）：FastAPI `File` / `Form` 参数面需要 `python-multipart` 运行时——本工程不引入；端点经原始 `Request` 读取请求体，用 stdlib `email` 解析器解析 multipart/form-data（RFC 2046 边界 / 引号与 RFC 2231 文件名由 stdlib 承担；字节载荷 byte 级原样透传——经 httpx 原生编码体实证）。形态不符 / 缺 `file` 字段 → 400 `BAD_REQUEST`；请求体超过 `VOICE_ASR_MAX_UPLOAD_BYTES` → 422 `VALIDATION_ERROR`；ASR 未启用 → 409。
 
 curl 示例：
 
@@ -147,7 +152,7 @@ POST {VOICE_TTS_BASE_URL}/tts
 200 ← Content-Type: audio/wav；响应体 = WAV 容器音频字节
 ```
 
-缺省请求体恰为前三键（`instruct_text` 仅人格绑定携带时出现——instruct2 模式扩展）。权重编排（compose 接线 / 端口 9880 分配）属后续部署 chunk。
+缺省请求体恰为前三键（`instruct_text` 仅人格绑定携带时出现——instruct2 模式扩展，≤2000 字符）。权重编排（compose 接线 / 端口 9880 分配）由部署侧另行承接。
 
 ### Qwen3-ASR（ASR）
 
@@ -166,11 +171,11 @@ file: (filename, audio_bytes)    model: <model_id>    language?: str
 | 失败类别 | 错误码 | HTTP |
 |---|---|---|
 | TTS / ASR 未启用 | `CONFLICT` | 409 |
-| 请求参数越界（文本 / 语速 / 空音频 / 空文件名） | `VALIDATION_ERROR` | 422 |
+| 请求参数越界（文本 / 语速 / 空音频 / 空文件名 / ASR 上传超限） | `VALIDATION_ERROR` | 422 |
 | 上传形态不符（非 multipart / 缺 file 字段） | `BAD_REQUEST` | 400 |
 | 传输异常 / 非 200 / 响应契约破坏（内容类型 / JSON / 空体） | `LLM_CALL_FAILED` | 503 |
 | 公共池未启动（惰性构建前置破坏） | `INTERNAL_ERROR` | 500 |
 
 ## 测试
 
-`src/tests/unit/test_voice_{settings,clients,service,api}.py` + `test_persona_voice_profile.py` + `test_chat_cli_voice.py`（81 例）：客户端 MockTransport（请求形状 / multipart 体 / 内容类型校验 / 超时 / 错误映射）、服务（优先级 / 用量含错误行 / disabled / 惰性构建 / 默认接线真实落库）、人格绑定全链路 round-trip（服务 / DTO / API）、API（ASGI + 处理器直调双面：字节响应 + 头 / multipart 解析 / 校验 400）、CLI（旗标开关 / 人格绑定 / 失败存活 / 旗标透传）。迁移 `000000000006` 经 scratch SQLite `alembic upgrade head` → `downgrade -1` → 再 upgrade 实证（升列 / 降列 / 复升三态）。
+`src/tests/unit/test_voice_{settings,clients,service,api}.py` + `test_persona_voice_profile.py` + `test_chat_cli_voice.py`（82 例）：客户端 MockTransport（请求形状 / multipart 体 / 内容类型校验 / 超时 / 错误映射）、服务（优先级 / 用量含错误行 / disabled / 惰性构建 / 默认接线真实落库）、人格绑定全链路 round-trip（服务 / DTO / API）、API（ASGI + 处理器直调双面：字节响应 + 头 / multipart 解析 / 校验 400 / 上传上限字节精确边界）、CLI（旗标开关 / 人格绑定 / 失败存活 / 旗标透传）。迁移 `000000000006` 经 scratch SQLite `alembic upgrade head` → `downgrade -1` → 再 upgrade 实证（升列 / 降列 / 复升三态）。

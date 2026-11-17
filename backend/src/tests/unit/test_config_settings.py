@@ -42,6 +42,7 @@ async def test_settings_log_section_maps_env() -> None:
     assert settings.log.retention == "30 days"
     assert settings.log.module_levels == ""
     assert settings.log.colorize_console is False
+    assert settings.log.diagnose_exceptions is False
 
 
 async def test_settings_pools_section_maps_env() -> None:
@@ -128,6 +129,7 @@ async def test_log_to_core_config_field_mapping() -> None:
         retention="7 days",
         module_levels="a.b=DEBUG",
         colorize_console=False,
+        diagnose_exceptions=True,
     )
     core: LoggingConfig = log.to_core_config()
     assert core.level == "DEBUG"  # LoggingConfig 校验统一大写
@@ -137,6 +139,7 @@ async def test_log_to_core_config_field_mapping() -> None:
     assert core.retention == "7 days"
     assert core.module_levels == "a.b=DEBUG"
     assert core.colorize_console is False
+    assert core.diagnose_exceptions is True
 
 
 async def test_database_url_mysql_with_special_chars() -> None:

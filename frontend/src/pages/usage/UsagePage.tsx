@@ -296,6 +296,9 @@ export default function UsagePage() {
                     </option>
                   ))}
                 </Select>
+                <p className="text-xs text-[var(--color-text-muted)]" data-testid="usage-bucket-utc-hint">
+                  时间桶按 UTC 对齐（day 桶边界为 UTC 零点；显示已换算为本地时区）
+                </p>
               </>
             )}
           </div>

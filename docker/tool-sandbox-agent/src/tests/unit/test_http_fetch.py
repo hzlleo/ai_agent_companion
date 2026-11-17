@@ -3,8 +3,9 @@
 覆盖矩阵：parse_allowlist 归一化；域名点边界匹配（含前缀仿冒负例）；
 HttpFetchArgsModel 校验（协议 / 主机 / 超时边界 / 默认值）；重定向逐跳
 校验（允许 / 拒绝）；default_fetch 经 monkeypatch build_opener（成功形态 /
-8KB 截断 / 字符集回退 / HTTP 错误 / 传输失败 / 超时 / 首跳拒绝）；执行器
-经注入 fetch（禁用拒绝 / 参数透传 / 经运行时全链默认值物化）。
+8KB 截断 / 字符集回退 / HTTP 错误 / 传输失败 / 超时 / 首跳拒绝 / 环境代理
+禁用——opener 携带空 ProxyHandler）；执行器经注入 fetch（禁用拒绝 /
+参数透传 / 经运行时全链默认值物化）。
 
 hermetic 红线：零真实网络——default_fetch 的 urlopen 面经 fake opener
 替换；执行器测试注入 fake fetch 函数。
@@ -298,9 +299,38 @@ class TestDefaultFetch:
         """首跳拒绝：URL 校验先于请求（opener 零调用）。"""
         opener = _FakeOpener(response=_FakeResponse())
         _patch_opener(monkeypatch, opener)
-        with pytest.raises(SandboxToolError, match="允许清单"):
+        with pytest.raises(SandboxToolError, match="不在允许清单"):
             default_fetch("http://evil.example.org/x", 10, ["allowed.example"])
         assert opener.calls == []
+
+    async def test_env_proxy_ignored_opener_carries_empty_proxy_handler(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """环境代理禁用：env 设 http_proxy 时 opener 仍携带空 ProxyHandler。
+
+        前置自证：urllib 缺省 ``build_opener`` 会拾取 env 代理（getproxies
+        非空）——本测试证明 default_fetch 显式传入的 ``ProxyHandler({})``
+        覆盖该缺省（点对点直连，与 bili_tools 同锁定决策）。
+        """
+        monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+        assert urllib.request.getproxies().get("http") == "http://127.0.0.1:9"
+        captured: list[tuple[Any, ...]] = []
+
+        def _capture_build(*handlers: Any) -> _FakeOpener:
+            captured.append(handlers)
+            return _FakeOpener(response=_FakeResponse())
+
+        monkeypatch.setattr(urllib.request, "build_opener", _capture_build)
+        result = default_fetch("http://allowed.example/direct", 10, ["allowed.example"])
+
+        assert result["status_code"] == 200
+        proxy_handlers = [
+            handler
+            for handler in captured[0]
+            if isinstance(handler, urllib.request.ProxyHandler)
+        ]
+        assert proxy_handlers, "default_fetch 须显式传入 ProxyHandler"
+        assert all(handler.proxies == {} for handler in proxy_handlers)
 
 
 class TestRedirectHandler:

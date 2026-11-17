@@ -1,4 +1,4 @@
-"""Bilibili 只读工具组——公开 JSON 接口的白名单裁剪读取面（P4 平台工具）。
+"""Bilibili 只读工具组——公开 JSON 接口的白名单裁剪读取面（平台工具）。
 
 本模块按 ``http_fetch`` 的接入范式实现四个**只读** B 站工具（工厂函数 +
 参数 Model Class + :class:`SandboxToolError` 受控失败 + ``asyncio.to_thread``
@@ -52,6 +52,13 @@ mixin key 后取 md5 即 ``w_rfd``。nav 键每进程缓存（TTL 1800 秒——
 
 阻塞 I/O 下沉：stdlib urllib 在线程池执行（``asyncio.to_thread``——
 本树零 httpx 依赖，与 http_fetch 同锁定决策）。
+
+线程安全（共享核心状态面）：四工具执行器经 ``asyncio.to_thread`` 下沉
+到线程池并发调用——``_BiliClientCore`` 以 ``threading.Lock`` 守护共享
+状态迁移：``_gate`` 的限速检查-等待-置位整体持锁（并发下 1 秒最小间隔
+不可穿透——「全部出站请求统一过闸」在并发面成立）；``_get_wbi_keys``
+的 TTL 判定与键落位持锁（nav 取键在锁外经 ``_nav_gated`` 自行过闸——
+罕见并发双取为同值良性竞态，文档化取舍）。
 """
 
 from __future__ import annotations
@@ -61,6 +68,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -139,7 +147,7 @@ _SEARCH_PATH: str = "/x/web-interface/wbi/search/type"
 #: 视频详情端点（非 WBI——bvid 直查公开数据）。
 _VIEW_PATH: str = "/x/web-interface/view"
 
-#: 评论主端点（mode=2 时间序游标分页——ps 上限 20）。
+#: 评论主端点（sort=2 时间序 + pn/ps 页序——ps 上限 20）。
 _REPLY_PATH: str = "/x/v2/reply"
 
 #: 播放器端点（view→cid 后查字幕清单；部分视频须登录才有字幕——空容忍）。
@@ -261,7 +269,7 @@ class BiliVideoCommentsArgsModel(BaseModel):
 
     Attributes:
         bvid: Bilibili 视频 BV 号（``BV`` + 10 位字母数字，共 12 字符）。
-        page: 页码（1-50，默认 1——mode=2 时间序游标换算页序）。
+        page: 页码（1-50，默认 1——sort=2 时间序页序）。
         page_size: 每页条数（10-20，默认 20——接口 ps 上限 20）。
     """
 
@@ -847,6 +855,10 @@ class _BiliClientCore:
         - 硬冷却（到期时刻 + 连击计数——412 x2 递增封顶 1800 秒）；
         - WBI 键缓存（img/sub 键 + 取键时刻——TTL 1800 秒）。
 
+    线程安全：执行器经 ``asyncio.to_thread`` 并发进入——共享状态迁移
+    （限速水位 / WBI 键缓存）经 ``threading.Lock`` 串行化（见 ``_gate`` /
+    ``_get_wbi_keys``；锁不可重入——nav 取键在 WBI 锁段外自行过闸）。
+
     Args（构造期属性文档见 ``__init__`` docstring）:
         无（见 ``__init__``）。
     """
@@ -875,6 +887,7 @@ class _BiliClientCore:
         self._sleep = sleep
         self._nav_fetch = nav_fetch
         self._allowlist_provider = allowlist_provider
+        self._state_lock = threading.Lock()
         self._last_request_at: float | None = None
         self._cooldown_until: float = 0.0
         self._cooldown_streak: int = 0
@@ -888,18 +901,23 @@ class _BiliClientCore:
     def _gate(self) -> None:
         """出站前置闸（硬冷却快速失败 + 最小间隔等待——零网络面先行）。
 
+        线程安全：检查-等待-置位整体持 ``_state_lock``——并发调用在
+        闸前排队，1 秒最小间隔在并发面不可穿透（等待期持锁为有意
+        串行化：后续调用按预约水位依次过闸）。
+
         Raises:
             SandboxToolError: 硬冷却中（剩余秒数入文案——零网络快速失败）。
         """
-        now = self._clock()
-        if now < self._cooldown_until:
-            remaining = int(self._cooldown_until - now)
-            raise SandboxToolError(f"Bilibili 风险控制硬冷却中（约剩余 {remaining} 秒）——请稍后再试")
-        if self._last_request_at is not None:
-            wait = self._last_request_at + _MIN_INTERVAL_SECONDS - self._clock()
-            if wait > 0:
-                self._sleep(wait)
-        self._last_request_at = self._clock()
+        with self._state_lock:
+            now = self._clock()
+            if now < self._cooldown_until:
+                remaining = int(self._cooldown_until - now)
+                raise SandboxToolError(f"Bilibili 风险控制硬冷却中（约剩余 {remaining} 秒）——请稍后再试")
+            if self._last_request_at is not None:
+                wait = self._last_request_at + _MIN_INTERVAL_SECONDS - self._clock()
+                if wait > 0:
+                    self._sleep(wait)
+            self._last_request_at = self._clock()
 
     def _enter_cooldown(self) -> float:
         """进入硬冷却（连击 x2 递增封顶——成功响应由调用方归零）。
@@ -936,18 +954,26 @@ class _BiliClientCore:
     def _get_wbi_keys(self) -> tuple[str, str]:
         """取 WBI 键（TTL 内复用进程缓存；过期经 nav 获取——闸门统一覆盖）。
 
+        线程安全：TTL 判定与键落位各持 ``_state_lock`` 短临界段；nav
+        取键在锁段外经 ``_nav_gated`` 自行过闸（锁不可重入——防自锁）。
+        罕见并发双取为同值良性竞态（后写覆盖先写，值恒同——文档化取舍）。
+
         Returns:
             ``(img_key, sub_key)`` 二元组。
 
         Raises:
             SandboxToolError: nav 获取失败 / 412 冷却 / 响应形态非法。
         """
-        now = self._clock()
-        if self._wbi_keys is None or (now - self._wbi_keys_at) > _NAV_KEY_TTL_SECONDS:
-            nav_json = self._nav_gated()
-            self._wbi_keys = extract_wbi_keys(nav_json)
-            self._wbi_keys_at = now
-        return self._wbi_keys
+        with self._state_lock:
+            now = self._clock()
+            if self._wbi_keys is not None and (now - self._wbi_keys_at) <= _NAV_KEY_TTL_SECONDS:
+                return self._wbi_keys
+        nav_json = self._nav_gated()
+        keys = extract_wbi_keys(nav_json)
+        with self._state_lock:
+            self._wbi_keys = keys
+            self._wbi_keys_at = self._clock()
+        return keys
 
     def _nav_gated(self) -> dict[str, Any]:
         """nav 获取（闸门 + 允许清单 + 412 转冷却 + code 判定）。
@@ -1056,7 +1082,8 @@ class _BiliClientCore:
         """字幕 CDN 抓取（后缀允许清单 + 闸门 + 状态判定 + JSON 解析）。
 
         与 API 允许清单的分工：字幕 URL 由 B 站接口下发（不可预先枚举），
-        信任面 = 固定后缀清单（``biliapi.net`` / ``bilivideo.com``）。
+        信任面 = 固定后缀清单（``biliapi.net`` / ``bilivideo.com`` /
+        ``hdslb.com``——与 ``_SUBTITLE_CDN_SUFFIXES`` 一致）。
 
         Args:
             url: 字幕文件 URL（已归一 https 形态）。
@@ -1261,7 +1288,7 @@ def _allowlist_from_env() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# 工厂（依赖构造注入——P4 平台工具接入范式；执行器恒不抛未受控异常）
+# 工厂（依赖构造注入——平台工具接入范式；执行器恒不抛未受控异常）
 # ---------------------------------------------------------------------------
 
 

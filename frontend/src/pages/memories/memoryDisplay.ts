@@ -98,11 +98,11 @@ export const SEARCH_MODE_LABELS: Record<MemorySearchMode, string> = {
   hybrid: '混合检索',
 }
 
-/** 检索模式 → 分数方向说明（dense/hybrid 为 cosine 距离，keyword 为相关度）。 */
+/** 检索模式 → 分数方向说明（dense 为 cosine 距离；keyword 为全文相关度、hybrid 为 SeekDB 融合相关度——越大越相关）。 */
 export const SEARCH_SCORE_DIRECTION_HINTS: Record<MemorySearchMode, string> = {
   dense: '分数为 cosine 距离（越小越相关）',
   keyword: '分数为全文相关度（越大越相关）',
-  hybrid: '分数为 cosine 距离（越小越相关）',
+  hybrid: '分数为融合相关度（越大越相关）',
 }
 
 /** 长文本截断（展示面单行摘要用）。 */

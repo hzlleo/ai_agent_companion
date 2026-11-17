@@ -6,12 +6,14 @@ import {
   createEmptyCard,
   createEmptyEntry,
   createEmptyForm,
+  createEmptyVoiceForm,
   formToBaseUpdateRequest,
   formToCreateRequest,
   parseKeys,
   recordToFormState,
   stringifyKeys,
   validatePersonaForm,
+  voiceFormToWire,
 } from './personaFormModel'
 import type { PersonaRecord } from '@/types/persona'
 
@@ -52,6 +54,7 @@ function sampleRecord(): PersonaRecord {
         ],
       },
     },
+    voice_profile: null,
     created_at: 1,
     updated_at: 2,
   }
@@ -79,6 +82,14 @@ describe('wire → 表单态', () => {
     expect(form.status).toBe('active')
     expect(form.card.character_book?.scan_depth).toBe('4')
     expect(form.card.character_book?.entries[0]?.keys).toBe('问候, 打招呼')
+    expect(form.voice).toEqual(createEmptyVoiceForm())
+  })
+
+  it('recordToFormState：语音绑定落地表单态', () => {
+    const record = sampleRecord()
+    record.voice_profile = { speaker: '温柔女声', instruct_text: '语气轻柔', speed: 1.2 }
+    const form = recordToFormState(record)
+    expect(form.voice).toEqual({ speaker: '温柔女声', instruct_text: '语气轻柔', speed: '1.2' })
   })
 
   it('无世界书 → character_book null', () => {
@@ -153,6 +164,29 @@ describe('validatePersonaForm', () => {
     expect(errors['card.character_book.entries.0.secondary_keys']).toBeDefined()
   })
 
+  it('selective=true 且副触发键全空 → 对称分支报错（镜像后端空副键拒绝）', () => {
+    const form = createEmptyForm()
+    form.name = 'x'
+    form.card.name = 'y'
+    form.card.character_book = createEmptyBook()
+    form.card.character_book.entries[0]!.selective = true
+    form.card.character_book.entries[0]!.secondary_keys = ''
+    const errors = validatePersonaForm(form)
+    expect(errors['card.character_book.entries.0.secondary_keys']).toBe(
+      '开启选择性触发的条目必须填写至少一个副触发关键词',
+    )
+  })
+
+  it('selective=true 且副触发键仅空白 → 同样报错（parseKeys 去空）', () => {
+    const form = createEmptyForm()
+    form.name = 'x'
+    form.card.name = 'y'
+    form.card.character_book = createEmptyBook()
+    form.card.character_book.entries[0]!.selective = true
+    form.card.character_book.entries[0]!.secondary_keys = '  ,  '
+    expect(validatePersonaForm(form)['card.character_book.entries.0.secondary_keys']).toBeDefined()
+  })
+
   it('selective=true 携带副触发键合法', () => {
     const form = createEmptyForm()
     form.name = 'x'
@@ -162,6 +196,51 @@ describe('validatePersonaForm', () => {
     form.card.character_book.entries[0]!.secondary_keys = '夜谈'
     const errors = validatePersonaForm(form)
     expect(errors['card.character_book.entries.0.secondary_keys']).toBeUndefined()
+  })
+
+  it('语音绑定：仅填指令 / 语速而缺发音人 → 报错', () => {
+    const form = createEmptyForm()
+    form.name = 'x'
+    form.card.name = 'y'
+    form.voice.instruct_text = '语气轻柔'
+    form.voice.speed = '1.2'
+    const errors = validatePersonaForm(form)
+    expect(errors['voice.speaker']).toBe('填写发音人后才会绑定语音（指令 / 语速不单独生效）')
+  })
+
+  it('语音绑定：语速界外（<0.5 / >2.0 / 非数值）→ 报错', () => {
+    const form = createEmptyForm()
+    form.name = 'x'
+    form.card.name = 'y'
+    form.voice.speaker = '温柔女声'
+    form.voice.speed = '0.4'
+    expect(validatePersonaForm(form)['voice.speed']).toBe('语速须在 0.5-2.0 之间')
+    form.voice.speed = '2.1'
+    expect(validatePersonaForm(form)['voice.speed']).toBe('语速须在 0.5-2.0 之间')
+    form.voice.speed = 'abc'
+    expect(validatePersonaForm(form)['voice.speed']).toBe('语速须在 0.5-2.0 之间')
+  })
+
+  it('语音绑定：风格指令超 2000 字符 → 报错；恰 2000 通过', () => {
+    const form = createEmptyForm()
+    form.name = 'x'
+    form.card.name = 'y'
+    form.voice.speaker = '温柔女声'
+    form.voice.instruct_text = '柔'.repeat(2001)
+    expect(validatePersonaForm(form)['voice.instruct_text']).toBe('风格指令长度不得超过 2000 个字符')
+    form.voice.instruct_text = '柔'.repeat(2000)
+    expect(validatePersonaForm(form)['voice.instruct_text']).toBeUndefined()
+  })
+
+  it('语音绑定：发音人 + 合法语速通过', () => {
+    const form = createEmptyForm()
+    form.name = 'x'
+    form.card.name = 'y'
+    form.voice.speaker = '温柔女声'
+    form.voice.speed = '1.2'
+    const errors = validatePersonaForm(form)
+    expect(errors['voice.speaker']).toBeUndefined()
+    expect(errors['voice.speed']).toBeUndefined()
   })
 })
 
@@ -198,27 +277,55 @@ describe('表单态 → wire', () => {
     expect(wire.character_book).toBeNull()
   })
 
-  it('formToCreateRequest：展示名空白归一 null + trim', () => {
+  it('formToCreateRequest：展示名空白归一 null + trim + 语音绑定收敛', () => {
     const form = createEmptyForm()
     form.name = '  companion-x  '
     form.display_name = '   '
     form.card.name = '小夜'
+    form.voice.speaker = '  温柔女声  '
+    form.voice.instruct_text = '  语气轻柔  '
+    form.voice.speed = '1.2'
     const payload = formToCreateRequest(form)
     expect(payload.name).toBe('companion-x')
     expect(payload.display_name).toBeNull()
     expect(payload.status).toBe('disabled')
+    expect(payload.voice_profile).toEqual({
+      speaker: '温柔女声',
+      instruct_text: '语气轻柔',
+      speed: 1.2,
+    })
   })
 
-  it('formToBaseUpdateRequest：基础三字段', () => {
+  it('formToCreateRequest：语音全空 → voice_profile null（不绑定）', () => {
+    const form = createEmptyForm()
+    form.name = 'x'
+    form.card.name = 'y'
+    const payload = formToCreateRequest(form)
+    expect(payload.voice_profile).toBeNull()
+  })
+
+  it('voiceFormToWire：speed 空 / 非法 → 兜底默认 1.0；指令空 → null', () => {
+    expect(voiceFormToWire(createEmptyVoiceForm())).toBeNull()
+    expect(
+      voiceFormToWire({ speaker: '温柔女声', instruct_text: '', speed: '' }),
+    ).toEqual({ speaker: '温柔女声', instruct_text: null, speed: 1.0 })
+    expect(
+      voiceFormToWire({ speaker: '温柔女声', instruct_text: '', speed: 'abc' }),
+    ).toEqual({ speaker: '温柔女声', instruct_text: null, speed: 1.0 })
+  })
+
+  it('formToBaseUpdateRequest：基础字段 + 语音绑定', () => {
     const form = createEmptyForm()
     form.name = 'renamed'
     form.display_name = '新展示名'
     form.status = 'active'
     form.card.name = '小夜'
+    form.voice.speaker = '温柔女声'
     expect(formToBaseUpdateRequest(form)).toEqual({
       name: 'renamed',
       display_name: '新展示名',
       status: 'active',
+      voice_profile: { speaker: '温柔女声', instruct_text: null, speed: 1.0 },
     })
   })
 })

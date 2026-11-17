@@ -26,15 +26,16 @@
       resolver / pools——app lifespan 装配后生效）；resolver 缺省
       config 全局单例（loader 热重建后自动生效）；
     - **图像字节永不落日志**：日志仅携带尺寸 / MIME / 条目名等元数据；
-    - **单条目链透传原始错误**（角色条目多模态直连的失败不被包裹——
-      熔断 / 鉴权 / 传输错误码原样上抛）；多级链全部失败时汇总为
-      ``LLM_CALL_FAILED``（details 携带链清单与末次错误码）。
+    - **单条目链透传原始错误**（多模态直连或仅一级回退的失败不被
+      包裹——熔断 / 鉴权 / 传输错误码原样上抛）；多级链全部失败时
+      汇总为 ``LLM_CALL_FAILED``（details 携带链清单与末次错误码）。
 
 工具注册面（:func:`register_look_at_tool`）：LLM 工具循环消费——
 图像经 base64 字符串进入参数面（LLM 无法传二进制），执行器解码后
 委托本服务；解码失败是工具错误（``ok=False``——registry 异常隔离
-契约，恒不上抛）。duty / persona 轮经 ``registry.list_specs()``
-自动获得该工具（注册即出现——装配面语义）。
+契约，恒不上抛）。duty 工具循环经 ``registry.list_specs()``
+自动获得该工具（注册即出现——装配面语义；app 装配在
+``_startup_scheduler`` duty 分支经装配网关注册）。
 """
 
 from __future__ import annotations
@@ -227,8 +228,8 @@ class LookAtService:
                 latency_ms=now_ms() - started_ms,
             )
         if len(chain) == 1 and last_error is not None:
-            # 单条目链（多模态直连）透传原始错误——熔断 / 鉴权 / 传输
-            # 错误码不被包裹，调用方可按码重试。
+            # 单条目链（多模态直连或仅一级回退）透传原始错误——熔断 /
+            # 鉴权 / 传输错误码不被包裹，调用方可按码重试。
             raise last_error
         raise BusinessException(
             code=ErrorCode.LLM_CALL_FAILED,
@@ -241,7 +242,7 @@ class LookAtService:
 
 
 # =========================================================================== []
-# 工具注册面（LLM 工具循环——duty / persona 轮经 registry.list_specs() 消费）
+# 工具注册面（LLM 工具循环——duty 工具循环经 registry.list_specs() 消费）
 # =========================================================================== []
 
 
@@ -249,7 +250,7 @@ def register_look_at_tool(registry: ToolRegistry, service: LookAtFace) -> None:
     """注册 look_at 工具（图像 base64 参数面 → 解码 → 委托服务）。
 
     装配语义（与 register_builtin_tools 同约定）：注册即出现在
-    ``registry.list_specs()`` ——duty / persona 工具循环自动获得；
+    ``registry.list_specs()`` ——duty 工具循环自动获得；
     未注册 = 工具面不出现（模型无从调用，循环照常运行）。
 
     Args:

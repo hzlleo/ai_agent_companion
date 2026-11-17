@@ -1,6 +1,6 @@
 """LLM 条目池——per-entry 并发信号量 + 熔断状态机（纯池管道，无 HTTP 调用）。
 
-本模块是 P0-4 LLM 网关的池管道前置交付：
+本模块是 LLM 网关（harness/llm）的池管道前置交付：
 
     - :class:`CircuitBreaker`  —— 三态熔断状态机（closed / open /
       half-open），失败阈值 + 冷却时长均为 epoch-ms 计时（``now_ms`` 注入
@@ -22,7 +22,8 @@
 立即替换（上调生效）；更小保留较大值并告警（下调依赖 ``clear`` 后按新
 配置重建——热重建通道）。
 
-P0 决策：NO Redis——全部状态进程内（单实例部署；多实例阶段再评审）。
+工程决策：不引入 Redis——全部状态进程内（工程为单实例部署；未来
+多实例化时再评审）。
 """
 
 from __future__ import annotations
@@ -276,7 +277,7 @@ class LlmEntryPool:
     async def entry_gate(self, entry: LlmModelEntry) -> AsyncIterator[asyncio.Semaphore]:
         """条目调用组合门——熔断预检 + 信号量获取（网关调用点入口）。
 
-        网关（P0-4）用法::
+        网关用法::
 
             async with llm_entry_pool.entry_gate(entry):
                 await client.chat(...)   # 成功 → breaker.record_success()

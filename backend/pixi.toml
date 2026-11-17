@@ -77,13 +77,13 @@ tests-unit = { cmd = "pytest src/tests/unit/ -v --asyncio-mode=auto --cov=src/pa
 # 集成测试：src/tests/integration/ 下的组件协作 / 全链路测试。
 tests-integration = { cmd = "pytest src/tests/integration/ -v --asyncio-mode=auto --cov=src/packages/harness --cov-report=term-missing", description = "运行集成测试（src/tests/integration/；前置先跑单元测试）", depends-on = ["tests-unit"] }
 # 完整测试（tests-all）：单 session 运行全部 backend 树测试（单元 + 集成 +
-# harness 内嵌——后续 chunk 落地后自动并入收集）。
+# harness 域包内嵌测试——域包自带测试时自动并入收集）。
 # ⚠️ 严禁用于定向运行：追加的 CLI 参数会拼在硬编码路径【之后】——仍是全量
 # 收集。定向运行一律用：pixi run pytest <文件...> -q --asyncio-mode=auto。
 # 仅旗标类参数（-x / -q / --no-cov）可安全追加。
 # 路径必须用 $PIXI_PROJECT_ROOT 绝对形态：src/conftest.py 在收集期即 chdir
 # 至 scratch 目录（CWD 隔离），相对路径在该时点之后不可靠。
-# P0 无 xdist（dev 依赖清单未含 pytest-xdist——锁定决策，后续按需评审追加）。
+# 无 xdist（dev 依赖清单未含 pytest-xdist——锁定决策，后续按需评审追加）。
 tests-all = { cmd = "pytest $PIXI_PROJECT_ROOT/src/tests/ $PIXI_PROJECT_ROOT/src/packages/harness/ --asyncio-mode=auto", description = "运行全部后端测试（单元 + 集成 + harness 内嵌；单进程；严禁定向使用——定向用 pixi run pytest <文件> -q --asyncio-mode=auto）" }
 # 静态检查：ruff over src/（任务名契约——根 pixi lint-all / CI lint job 委托此处）
 lint = { cmd = "ruff check src/", description = "ruff 静态检查（仅 backend/src）" }
@@ -114,10 +114,14 @@ noqa-freeze = { cmd = "python ../scripts/noqa_freeze_check.py", description = "n
 # byte-stable；根 scripts/generate_examples*.py 经 backend pixi 环境执行，
 # activation 的 PYTHONPATH 使 packages.harness.* 可导入）。
 gen-examples = { cmd = "python ../scripts/generate_examples.py", description = "从配置模型再生成三件套示例模板（.env.example / config.example.yaml / extensions_config.example.json；幂等）" }
+# 后端 DTO JSON Schema 导出（前端契约漂移门禁数据源——幂等 byte-stable；
+# 产出 frontend/src/test/contract/dtoSchemas.json，由前端 dtoContract.test.ts
+# 与后端 test_dto_schema_fixture.py 双侧比对。后端 DTO 改动后须重跑并提交）。
+export-dto-schemas = { cmd = "python ../scripts/export_dto_schemas.py", description = "导出后端 DTO JSON Schema fixture（前端契约漂移门禁数据源；幂等 byte-stable）" }
 # 交互式配置向导（基于 .example 模板生成 .env / config.yaml /
 # extensions_config.json；--dry-run 预览 / --non-interactive 默认值）。
 setup = { cmd = "python src/packages/harness/config/wizard.py", description = "交互式配置向导（--dry-run 预览 / --non-interactive 用默认值）" }
-# 控制台聊天 REPL（P0-6 用户可见交付面）：启动全栈（日志 → 配置 → 公共池
+# 控制台聊天 REPL（用户可见交互面）：启动全栈（日志 → 配置 → 公共池
 # → 数据库 → 网关）后与当前激活人格流式对话；会话命令 /quit /clear /
 # /history /help；无激活人格时打印创建/激活指引并以退出码 1 结束。
 chat = { cmd = "python src/packages/harness/chat/cli.py", description = "控制台聊天 REPL（与当前激活人格流式对话；命令 /quit /clear /history /help；前置：经 /api/v1/personas 激活一个人格）" }
@@ -125,7 +129,7 @@ chat = { cmd = "python src/packages/harness/chat/cli.py", description = "控制�
 # ═══════════════════════════════════════════════════════════════════════════════
 # Feature: dev — 后端开发/测试工具（在 runtime 基础上叠加）
 # 仅 default 环境包含此 feature；prod 不包含（Docker 生产不需要 pytest/ruff/mypy）。
-# P0 决策：NO Redis——无 redis-server 系统依赖（缓存走进程内 TTL 实现）。
+# 工程决策：NO Redis——无 redis-server 系统依赖（缓存走进程内 TTL 实现）。
 # ═══════════════════════════════════════════════════════════════════════════════
 [feature.dev.pypi-dependencies]
 # dev 工具由 pyproject.toml [project.optional-dependencies.dev] 声明，

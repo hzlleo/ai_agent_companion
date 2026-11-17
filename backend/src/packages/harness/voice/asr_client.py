@@ -21,8 +21,8 @@
 
     OpenAI 兼容形态意味着标准 OpenAI SDK 亦可直连该端点；本工程按
     「不引入 SDK」约定经共享 httpx client 手写 multipart（与 llm 域 /
-    channels 域同约定）。服务编排（compose 接线 / 端口分配）属后续部署
-    chunk，本客户端零部署耦合。
+    channels 域同约定）。服务编排（compose 接线 / 端口分配）由部署侧
+    另行承接，本客户端零部署耦合。
 
 错误码映射表（voice 域——**复用既有码表，core/errors.py 不动**；与
 tts_client 同段说明：503 依赖不可用类对应 ``LLM_CALL_FAILED``）：

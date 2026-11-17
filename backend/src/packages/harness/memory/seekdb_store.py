@@ -1,6 +1,6 @@
 """SeekDB 生产检索存储——MemoryStore 的 aiomysql raw SQL 实现。
 
-架构位置（P1 chunk 2 检索层，文档化于 docs/backend/memory.md）：
+架构位置（检索层，文档化于 docs/backend/memory.md）：
 
     - 索引表 ``ff_memory_index``：向量（VECTOR(dim) + hnsw）+ 全文
       （ik）+ 标量（persona_id / kind / provenance / ts_ms）混合检索
@@ -150,6 +150,9 @@ class SeekDBStore:
         self._owns_pool = pool is None
         self._schema_ensured = False
         self._schema_lock = asyncio.Lock()
+        # 池创建专用锁（与 schema 锁分立——ensure_schema 持 schema 锁
+        # 执行 DDL 期间会经 _run_write 触发池创建，同一把锁会自锁死锁）
+        self._pool_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # MemoryStore 协议面
@@ -299,7 +302,12 @@ class SeekDBStore:
         return self._schema_ensured
 
     async def _require_pool(self) -> SeekDbPoolProtocol:
-        """取连接池（未注入时惰性自建——按配置 + 密码 env 解析）。
+        """取连接池（未注入时惰性自建——双检锁防并发冷启动双建）。
+
+        自建经 ``_pool_lock`` 串行化（与 schema 锁分立——schema 锁在
+        ``ensure_schema`` 持锁执行 DDL 期间会经本方法嵌套获取，同锁
+        自锁死锁）；首个检查无锁快速路径，锁内二次确认后按配置 +
+        密码 env 解析创建。
 
         Returns:
             就绪的连接池。
@@ -309,19 +317,21 @@ class SeekDBStore:
                 SeekDB 不可达等驱动错误映射）。
         """
         if self._pool is None:
-            password = resolve_seekdb_password(self._config.password_env)
-            try:
-                self._pool = await create_seekdb_pool(
-                    host=self._config.host,
-                    port=self._config.port,
-                    user=self._config.user,
-                    password=password,
-                    database=self._config.database,
-                    pool_min=self._config.pool_min,
-                    pool_max=self._config.pool_max,
-                )
-            except _ERROR_BASE as exc:
-                raise self._map_error("create_pool", exc) from exc
+            async with self._pool_lock:
+                if self._pool is None:
+                    password = resolve_seekdb_password(self._config.password_env)
+                    try:
+                        self._pool = await create_seekdb_pool(
+                            host=self._config.host,
+                            port=self._config.port,
+                            user=self._config.user,
+                            password=password,
+                            database=self._config.database,
+                            pool_min=self._config.pool_min,
+                            pool_max=self._config.pool_max,
+                        )
+                    except _ERROR_BASE as exc:
+                        raise self._map_error("create_pool", exc) from exc
         return self._pool
 
     async def _run_write(self, sql: str, params: Sequence[Any] | None = None) -> None:
@@ -377,9 +387,9 @@ class SeekDBStore:
         结果契约（live 实测，v1.4.0）：SEARCH 恒返回单行单列——命中集
         为 JSON 数组字符串（行 dict 含全表列 + ``_score``，引擎已按
         融合分降序排列）；**空集为 SQL NULL 单元格**（非 ``"[]"``）。
-        载荷形态偏离该契约 → ``INTERNAL_ERROR`` fail loud（协议面
-        异常不该静默吞掉）；行级畸形由 :func:`_hybrid_result_from_row`
-        警告 + 跳过。
+        载荷形态偏离该契约（行数 / 列数 / 单元格类型 / JSON 形态）→
+        ``INTERNAL_ERROR`` fail loud（协议面异常不该静默吞掉）；行级
+        畸形由 :func:`_hybrid_result_from_row` 警告 + 跳过。
 
         Args:
             sql: SEARCH 语句（构建器产出）。
@@ -389,8 +399,9 @@ class SeekDBStore:
             结果 DTO 列表（引擎融合分降序保持）。
 
         Raises:
-            BusinessException: 载荷形态异常（``INTERNAL_ERROR``）；驱动
-                执行失败（``INTERNAL_ERROR``——_run_fetch 映射）。
+            BusinessException: 载荷形态异常（``INTERNAL_ERROR``——含
+                行数 / 列数偏离单行单列）；驱动执行失败
+                （``INTERNAL_ERROR``——_run_fetch 映射）。
         """
         rows = await self._run_fetch(sql, params)
         if len(rows) != 1:
@@ -398,6 +409,10 @@ class SeekDBStore:
         first = rows[0]
         if not first:
             raise self._hybrid_payload_error("SEARCH 语句应返回单行单列，实际首行零列")
+        if len(first) != 1:
+            raise self._hybrid_payload_error(
+                f"SEARCH 语句应返回单行单列，实际列数 {len(first)}"
+            )
         cell = next(iter(first.values()))
         if cell is None:
             return []

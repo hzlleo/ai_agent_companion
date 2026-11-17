@@ -45,14 +45,33 @@ from tool_sandbox.wire_models import (
 )
 
 __all__ = [
+    "SANDBOX_HEALTH_PATH",
+    "SANDBOX_INVOKE_PATH",
+    "SANDBOX_TOKEN_ENV_DEFAULT",
     "constant_time_token_matches",
     "create_app",
     "main",
     "resolve_bind_address",
 ]
 
+
+# ---------------------------------------------------------------------------
+# 部署契约常量（与后端 harness/tools/sandbox.py 同名常量镜像——漂移门禁比对项）
+# ---------------------------------------------------------------------------
+
+#: 沙盒 invoke 端点路径（后端客户端 URL 拼接的镜像——改任一侧须同步
+#: 另一侧，漂移门禁看护）。
+SANDBOX_INVOKE_PATH: str = "/invoke"
+
+#: 沙盒 health 端点路径（同上——后端启动探测 / 容器 HEALTHCHECK 消费面）。
+SANDBOX_HEALTH_PATH: str = "/health"
+
+#: 鉴权 token 环境变量缺省名（后端客户端缺省 token_env 同名镜像——
+#: compose 注入契约）。
+SANDBOX_TOKEN_ENV_DEFAULT: str = "SANDBOX_TOKEN"
+
 #: 鉴权 token 环境变量（容器 / compose 注入；缺失 = 工厂 fail fast）。
-_TOKEN_ENV: str = "SANDBOX_TOKEN"
+_TOKEN_ENV: str = SANDBOX_TOKEN_ENV_DEFAULT
 
 #: 监听地址环境变量（容器形态默认 0.0.0.0——端口映射由编排层收敛到回环；
 #: 裸机运行建议显式 127.0.0.1，见本目录 README.md「运行」一节）。
@@ -144,13 +163,13 @@ def create_app(*, runtime: SandboxToolRuntime | None = None) -> FastAPI:
         if not constant_time_token_matches(parts[1].strip(), token):
             raise HTTPException(status_code=401, detail="鉴权失败")
 
-    @app.get("/health", response_model=HealthResponseModel)
+    @app.get(SANDBOX_HEALTH_PATH, response_model=HealthResponseModel)
     async def health() -> HealthResponseModel:
         """存活探测（无鉴权——容器 HEALTHCHECK / 后端启动探测面）。"""
         return HealthResponseModel()
 
     @app.post(
-        "/invoke",
+        SANDBOX_INVOKE_PATH,
         response_model=InvokeResponseModel,
         dependencies=[Depends(_verify_token)],
     )

@@ -1,6 +1,6 @@
 """telegram 通道 wire Model Classes——Bot API 子集（Unit 文件）。
 
-Telegram Bot API 响应对象的**严格类型化子集**（本 chunk 消费面：
+Telegram Bot API 响应对象的**严格类型化子集**（本工程消费面：
 getUpdates 长轮询 / sendMessage / getMe 启动校验）。锁定设计决策：
 不引入 aiogram / python-telegram-bot——手写客户端（见 ``tg_client``），
 wire 模型只声明消费到的字段（``extra="ignore"`` 容忍平台加字段）。

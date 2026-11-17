@@ -1,4 +1,4 @@
-"""记忆四表迁移——P1 chunk 1 交付（memory 域）。
+"""记忆四表迁移（memory 域）。
 
 harness/memory 域四张表：
 
@@ -17,7 +17,6 @@ INTEGER——rowid 自增）。
 
 Revision ID: 000000000004
 Revises: 000000000003
-Create Date: 2026-11-12
 """
 
 from typing import Sequence, Union

@@ -1,6 +1,6 @@
 """memory 域检索层 DTO——索引条目 / 检索查询 / 检索结果的传输契约（Unit 文件）。
 
-P1 chunk 2 检索层契约分层：
+检索层契约分层：
 
     - :class:`MemorySearchMode`   —— 检索模式值域（dense / keyword / hybrid）；
     - :class:`MemoryRefType`      —— 索引引用类型值域（episode / curated）；

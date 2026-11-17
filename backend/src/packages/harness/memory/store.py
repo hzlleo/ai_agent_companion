@@ -26,8 +26,8 @@ SeekDB SQL 形态约束（事实卡锁定，逐条对应构建器实现）：
     - ``ORDER BY ... APPROXIMATE LIMIT`` 必须成套（无 APPROXIMATE 退化
       全表扫）——仅向量排序路径使用；keyword 模式无 ANN，用
       ``ORDER BY MATCH(...) AGAINST(...) DESC LIMIT``（无 APPROXIMATE）；
-    - 向量字面量是 JSON 数组**字符串**（``'[".
-      ``:qv``）——经 :func:`encode_vector_literal` 编码后作绑定参数；
+    - 向量字面量是 JSON 数组**字符串**（如 ``"[0.1,0.2]"``——经
+      :func:`encode_vector_literal` 编码后作绑定参数传递）；
     - 单向量条件（本层查询形态恒单条 cosine_distance）；
     - ``persona_id`` 谓词**每条查询必带**（索引表无 PersonaMixin 概念，
       人格隔离由 SQL 谓词强制——全部构建器路径包含该谓词；Form B 中
@@ -40,8 +40,8 @@ SeekDB SQL 形态约束（事实卡锁定，逐条对应构建器实现）：
       空集为 SQL NULL；表组织须 ``HEAP``（DDL 已锁定该前置）。
 
 模式违规（查询模式与向量参数不匹配）在构建器内 fail loud
-（``VALIDATION_ERROR``——错误码纪律：本 chunk 不新增错误码成员，
-mode 违规归请求形态错误；偏差报告见交付说明）。
+（``VALIDATION_ERROR``——错误码纪律：mode 违规归请求形态错误，
+复用 VALIDATION_ERROR，存储层不新增错误码成员）。
 """
 
 from __future__ import annotations
@@ -137,8 +137,8 @@ def build_ensure_schema_sql(vector_dim: int) -> str:
 
         - ``VECTOR({vector_dim})`` —— 维度自配置插值（默认 1024 =
           Qwen3-Embedding-0.6B）；
-        - ``ORGANIZATION = HEAP`` —— DBMS_HYBRID_SEARCH（Form B，后续
-          chunk）的前置条件；
+        - ``ORGANIZATION = HEAP`` —— DBMS_HYBRID_SEARCH（Form B
+          hybrid 检索）的前置条件；
         - 全文索引中文分词 ``WITH PARSER ik``；
         - 向量索引 ``DISTANCE=cosine, TYPE=hnsw, LIB=vsag``；
         - ``UNIQUE KEY uk_ff_mem_ref`` —— 引用唯一键（upsert 的
@@ -308,7 +308,7 @@ def build_hybrid_search_payload(query: MemorySearchQueryDTO, query_vector: Seque
 def _require_mode_vector(query: MemorySearchQueryDTO, query_vector: Sequence[float] | None) -> None:
     """校验检索模式与查询向量的匹配契约（模式违规 fail loud）。
 
-    契约矩阵（文档化决策——spec 语义澄清后锁定）：
+    契约矩阵（文档化决策）：
 
         - dense / hybrid + 向量 None  → ``VALIDATION_ERROR``（向量缺失，
           无法执行 ANN 排序）；

@@ -1,4 +1,4 @@
-"""voice 管理 API——TTS 合成 / ASR 转写端点（P4 chunk 1 交付面）。
+"""voice 管理 API——TTS 合成 / ASR 转写端点。
 
     - POST /api/v1/voice/tts —— 文本 → WAV 音频字节（``audio/wav`` 响应 +
       ``X-Latency-Ms`` 合成时延头；人格绑定优先级：请求参数 >
@@ -21,7 +21,10 @@
       **stdlib ``email`` 解析器**解析 multipart/form-data（RFC 2046 边界 /
       引号与 RFC 2231 文件名由 stdlib 承担；字节载荷 byte 级原样透传
       ——经 httpx 原生编码体实证）。形态不符 / 缺 ``file`` 字段 →
-      ``BAD_REQUEST``（400）；
+      ``BAD_REQUEST``（400）；请求体超过 ``VOICE_ASR_MAX_UPLOAD_BYTES``
+      → ``VALIDATION_ERROR``（422——资源面守卫，与 look_at 图像 10MB
+      上限同性质；Settings 经 ``app.state.settings`` 优先解析，
+      缺省回落全局单例——与 channels-qq webhook 同口径）；
     - **服务装配**：模块级 :class:`VoiceService`（用量默认接线）；客户端
       在调用时经公共池共享 httpx client 瞬时构建（lifespan 已启动池——
       请求期可解析；测试经 monkeypatch 替换模块级实例注入 fake）。
@@ -37,6 +40,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from packages.harness.config.models import Settings
+from packages.harness.config.models import settings as global_settings
 from packages.harness.core.dtos import ResultDTO
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.database.session import get_async_db
@@ -83,19 +88,29 @@ async def _parse_multipart_upload(request: Request) -> tuple[bytes, str, str | N
     识别 ``file``（音频文件——字节载荷 + 文件名）与可选 ``language``
     （语言提示文本）两个字段；同名多字段取首个（其余忽略——管理面
     上传形态由调用方保证）。文件名字段经 stdlib 的 RFC 2231 / 引号
-    解析归一。
+    解析归一。请求体大小守卫先行（``settings.voice.asr.
+    max_upload_bytes``——超限 ``VALIDATION_ERROR``，不进入解析）。
 
     Args:
-        request: 原始 ASGI 请求（Content-Type 须为 multipart/form-data）。
+        request: 原始 ASGI 请求（Content-Type 须为 multipart/form-data；
+            ``app.state.settings`` 优先，缺省回落全局单例）。
 
     Returns:
         ``(audio 字节, 文件名, language | None)`` 三元组。
 
     Raises:
-        BusinessException: 请求形态不符（非 multipart / 空请求体 / 边界
-            非法 / 缺 ``file`` 字段 / ``file`` 字段无文件名——均
-            ``BAD_REQUEST`` → 400）。
+        BusinessException: 请求体超过上传上限（``VALIDATION_ERROR`` →
+            422——details 携带上限与实际字节数）；请求形态不符（非
+            multipart / 空请求体 / 边界非法 / 缺 ``file`` 字段 /
+            ``file`` 字段无文件名——均 ``BAD_REQUEST`` → 400）。
     """
+    # Settings 解析：app.state.settings 优先（create_app 注入的隔离实例），
+    # 缺省回落全局单例——处理器直调契约面（无 app 的裸 Request scope）
+    # 同样落全局单例。
+    app_state = getattr(request.scope.get("app"), "state", None)
+    settings = cast("Settings | None", getattr(app_state, "settings", None)) or (
+        global_settings
+    )
     content_type = request.headers.get("content-type", "")
     media_type = content_type.split(";", maxsplit=1)[0].strip().lower()
     if media_type != "multipart/form-data":
@@ -109,6 +124,17 @@ async def _parse_multipart_upload(request: Request) -> tuple[bytes, str, str | N
         raise BusinessException(
             code=ErrorCode.BAD_REQUEST,
             message="语音识别上传请求体为空",
+        )
+    max_upload_bytes = settings.voice.asr.max_upload_bytes
+    if len(raw) > max_upload_bytes:
+        raise BusinessException(
+            code=ErrorCode.VALIDATION_ERROR,
+            message="语音识别上传请求体超过大小上限",
+            details={
+                "max_upload_bytes": max_upload_bytes,
+                "size_bytes": len(raw),
+                "env_flag": "VOICE_ASR_MAX_UPLOAD_BYTES",
+            },
         )
     header_block = (
         f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n"
@@ -202,8 +228,8 @@ async def transcribe_audio(
 
     Raises:
         BusinessException: ASR 未启用（``CONFLICT`` → 409）；上传形态不符
-            （``BAD_REQUEST`` → 400）；音频 / 文件名语义非法
-            （``VALIDATION_ERROR`` → 422）。
+            （``BAD_REQUEST`` → 400）；请求体超过上传上限 / 音频 / 文件名
+            语义非法（``VALIDATION_ERROR`` → 422）。
     """
     audio, filename, language = await _parse_multipart_upload(request)
     persona = await persona_service.get_active_persona(db)

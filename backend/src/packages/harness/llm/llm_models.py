@@ -5,11 +5,11 @@
     - 域内契约（模型无关）：:class:`ChatMessageModel` / :class:`ChatRequestParams`
       / :class:`ChatResponseModel` / :class:`ChatStreamChunkModel` /
       :class:`TokenUsageModel`——网关门面（gateway）与业务调用方消费；
-    - 多模态内容分块契约（P4-2）：:class:`TextContentPart` /
+    - 多模态内容分块契约：:class:`TextContentPart` /
       :class:`ImageContentPart`（``ContentPartModel`` 判别联合——
       ``ChatMessageModel.content`` 升级为 ``str | list[ContentPartModel]``，
       纯文本形态全量向后兼容）；
-    - 原生工具调用契约（P3-2）：:class:`ToolParametersSchema` /
+    - 原生工具调用契约：:class:`ToolParametersSchema` /
       :class:`ToolDefinitionModel`（请求 tools 面）+ :class:`ToolCallModel`
       （响应 tool_calls 面 + assistant / tool 消息形态扩展）；
     - wire 契约（OpenAI 兼容端点）：``Wire*`` 系列——client 传输层的
@@ -67,6 +67,7 @@ __all__ = [
     "WireEmbeddingsResponse",
     "build_chat_request_body",
     "build_embeddings_request_body",
+    "messages_have_content_parts",
 ]
 
 #: 工具选择策略缺省值（OpenAI 兼容协议语义——模型自行决定是否调用工具）。
@@ -341,7 +342,7 @@ class LlmUsageEvent(BaseModel):
     """网关用量事件（llm → usage 域的注入式记录契约）。
 
     llm 域不硬依赖 usage 域：网关经注入的异步记录器发射本事件，由
-    ``gateway.wire_default_usage_recorder()``（P0-6 app 装配调用）映射为
+    ``gateway.wire_default_usage_recorder()``（app 装配调用）映射为
     usage 域的 ``UsageCreateDTO`` 落库。
 
     Attributes:
@@ -583,7 +584,7 @@ def _serialize_content(content: str | list[ContentPartModel]) -> str | list[dict
     return [_serialize_content_part(part) for part in content]
 
 
-def _has_content_parts(messages: Sequence[ChatMessageModel]) -> bool:
+def messages_have_content_parts(messages: Sequence[ChatMessageModel]) -> bool:
     """判定消息序列是否携带多模态内容分块（流式守卫判据）。
 
     Args:
@@ -689,7 +690,7 @@ def build_chat_request_body(
             message="流式请求不支持原生工具调用（流式传输面恒 content-only）",
             details={"tools": len(tools)},
         )
-    if stream and _has_content_parts(messages):
+    if stream and messages_have_content_parts(messages):
         raise BusinessException(
             code=ErrorCode.VALIDATION_ERROR,
             message="流式请求不支持多模态内容分块（流式传输面恒 content-only 纯文本）",

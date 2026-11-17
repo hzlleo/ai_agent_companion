@@ -1,4 +1,4 @@
-"""人格管理 admin 路由——多人格注册表全操作面（P0-5 首个 app 层路由）。
+"""人格管理 admin 路由——多人格注册表全操作面。
 
     - GET    /api/v1/personas                        —— 游标分页列表（status 过滤）
     - POST   /api/v1/personas                        —— 创建

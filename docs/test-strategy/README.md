@@ -17,4 +17,6 @@
 | 中文注释门 | `pixi run comment-gates` | 公开模块/类/函数 docstring 必须存在且含中文（Google 风格段落缺失仅 hint） |
 | 同步测试棘轮 | `pixi run sync-test-ratchet` | 同步 `def test_` 只降不升，基线 0 = 零容忍 |
 | noqa 冻结 | `pixi run noqa-freeze` | `# noqa` / `# type: ignore` 只减不增，基线 0 = 零容忍 |
+| 沙盒 DTO 漂移门 | `pixi run sandbox-drift` | 沙盒 wire 契约 16 项文本镜像比对（backend `sandbox_models.py` ↔ `docker/tool-sandbox-agent` 树定义块——8 模型块 + 8 常量行，任一侧漂移即红） |
+| DTO schema fixture 门 | 后端 `test_dto_schema_fixture.py` + 前端 `dtoContract.test.ts` | 49 组共享 wire 契约双侧比对（fixture 经 `pixi run export-dto-schemas` 再生，后端改动未重导出 / 前端类型漂移均即红） |
 | 覆盖率门 | `pixi run coverage-gates` | 按模块 ≥80% enforce |

@@ -4,14 +4,19 @@
 
     - ``mask_sensitive``：key=value / key: value（含引号）/ Bearer /
       sk- 前缀 / 大小写不敏感 / 短值豁免 / 多密钥同串 / 非敏感 key 不动；
-    - ``register_secret_masker``：幂等注册 / patcher 通道脱敏；
     - ``parse_module_log_levels``：空串 / 单条 / 多条 / 大小写规范化 /
       空白剥离 / 无效条目跳过；
     - ``_make_module_filter``：默认级别 / 前缀覆盖 / 最长前缀优先；
-    - ``_json_serializer``：全链路字段 / Message 形对象兼容 / exception 段；
+    - ``_json_serializer``：全链路字段 / Message 形对象兼容 / exception 段
+      （value 经 ``mask_sensitive`` 脱敏）；
     - ``setup_logging``：三 sink 落盘（文本 + JSON）/ 上下文字段注入 /
       JSON 行可解析且含脱敏 / 文件 sink 收到脱敏文本；
-    - ``LoggingConfig``：级别校验 / 路径非空校验 / 默认值。
+    - 脱敏机制（per-sink formatter 内联）：sink format 通道脱敏 /
+      Bearer 令牌消息三 sink（console + 文本 + JSON）全脱敏；
+    - ``diagnose_exceptions``：默认 False（异常帧局部变量不入文本日志）/
+      显式开启后帧变量可见（接线证明）；
+    - ``LoggingConfig``：级别校验 / 路径非空校验 / 默认值（含
+      diagnose_exceptions 默认 False）。
 """
 
 from __future__ import annotations
@@ -30,7 +35,6 @@ from packages.harness.core.logging import (
     _make_module_filter,
     mask_sensitive,
     parse_module_log_levels,
-    register_secret_masker,
     setup_logging,
 )
 from packages.harness.core.logging_models import LoggingConfig
@@ -120,42 +124,9 @@ class TestMaskSensitive:
         assert set(SENSITIVE_KEY_PARTS) == expected
 
 
-class TestRegisterSecretMasker:
-    async def test_register_is_idempotent(self) -> None:
-        """重复注册不崩溃（模块级标志幂等）。"""
-        register_secret_masker()
-        register_secret_masker()
-
-    async def test_redact_record_masks_message_and_extra(self) -> None:
-        """``_redact_record`` 直测：loguru patcher 契约（record dict 传入）。"""
-        from packages.harness.core.logging import _redact_record
-
-        record: dict[str, Any] = {
-            "message": "api_key=sk-abcdefgh123456 调用失败",
-            "extra": {
-                "request_id": "req-1",
-                "user_id": "sk-secretuserkey998877",
-                "count": 3,
-                "empty": "",
-            },
-        }
-        _redact_record(record)
-        assert record["message"] == "api_key=*** 调用失败"
-        assert record["extra"]["request_id"] == "req-1"
-        assert record["extra"]["user_id"] == "***"
-        assert record["extra"]["count"] == 3
-        assert record["extra"]["empty"] == ""
-
-    async def test_redact_record_no_message_noop(self) -> None:
-        """空 message / 无 extra 时 no-op（不抛异常）。"""
-        from packages.harness.core.logging import _redact_record
-
-        record: dict[str, Any] = {"message": "", "extra": {}}
-        _redact_record(record)
-        assert record["message"] == ""
-
+class TestSinkFormatMaskChannel:
     async def test_masker_redacts_via_sink_format(self) -> None:
-        """经 sink format 函数脱敏（patcher 之外的双保险通道）。"""
+        """经 sink format 函数内联脱敏（唯一脱敏机制的通道证明）。"""
         captured: list[str] = []
 
         def _sink(message: Any) -> None:
@@ -176,6 +147,92 @@ class TestRegisterSecretMasker:
         assert len(captured) == 1
         assert "sk-abcdefghij1234567890" not in captured[0]
         assert "***" in captured[0]
+
+
+class TestDiagnoseExceptions:
+    @staticmethod
+    def _raise_with_secret_on_line() -> None:
+        """构造帧局部密钥泄漏形态（raise 行引用密钥变量——diagnose 展示面）。"""
+        api_key = "sk-frame-local-secret-value-123456"
+        raise ValueError(api_key and "模拟 llm 客户端帧内密钥")
+
+    async def test_diagnose_disabled_by_default(self, logging_config: LoggingConfig) -> None:
+        """默认 diagnose=False：异常帧局部变量不入文本日志（防密钥泄漏）。"""
+        assert logging_config.diagnose_exceptions is False
+        setup_logging(logging_config)
+        try:
+            self._raise_with_secret_on_line()
+        except ValueError:
+            logger.opt(exception=True).error("端点调用失败")
+
+        content = Path(logging_config.log_file).read_text(encoding="utf-8")
+        # traceback 仍写入（backtrace=True），但帧局部密钥不展示
+        assert "ValueError" in content
+        assert "sk-frame-local-secret-value-123456" not in content
+
+    async def test_diagnose_enabled_shows_frame_locals(self, logging_config: LoggingConfig) -> None:
+        """diagnose_exceptions=True：帧局部变量进 traceback（接线证明）。"""
+        config = logging_config.model_copy(update={"diagnose_exceptions": True})
+        setup_logging(config)
+        try:
+            self._raise_with_secret_on_line()
+        except ValueError:
+            logger.opt(exception=True).error("端点调用失败")
+
+        content = Path(config.log_file).read_text(encoding="utf-8")
+        assert "sk-frame-local-secret-value-123456" in content
+
+
+class TestExceptionValueMasking:
+    async def test_json_serializer_masks_exception_value(self) -> None:
+        """``_json_serializer`` 直测：exception.value 经 mask_sensitive 脱敏。"""
+
+        class _Exc:
+            value = ValueError("Authorization: Bearer abcdef123456")
+
+        record = TestJsonSerializer._make_record("failing")
+        record["exception"] = _Exc()
+        payload = json.loads(_json_serializer(record))
+        assert payload["exception"]["value"] == "Authorization: Bearer ***"
+
+    async def test_json_sink_exception_value_masked(self, logging_config: LoggingConfig) -> None:
+        """JSON sink：异常消息内嵌 Bearer 令牌 → exception.value 落盘前脱敏。"""
+        setup_logging(logging_config)
+        try:
+            raise ValueError("Authorization: Bearer abcdef123456 鉴权失败")
+        except ValueError:
+            logger.opt(exception=True).error("端点调用异常")
+
+        json_file = Path(logging_config.log_json_file)
+        lines = [ln for ln in json_file.read_text(encoding="utf-8").splitlines() if ln]
+        payloads = [json.loads(ln) for ln in lines]
+        target = [p for p in payloads if p["message"] == "端点调用异常"]
+        assert len(target) == 1
+        assert target[0]["exception"]["type"] == "ValueError"
+        assert target[0]["exception"]["value"] == "Authorization: Bearer *** 鉴权失败"
+
+
+class TestBearerMaskedInAllSinks:
+    async def test_bearer_token_masked_in_all_three_sinks(
+        self,
+        logging_config: LoggingConfig,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        """Bearer 令牌消息在 console / 文本 / JSON 三 sink 全脱敏。"""
+        setup_logging(logging_config)
+        logger.info("调用端点 Authorization: Bearer abcdef123456 结束")
+
+        captured = capsys.readouterr()
+        text_content = Path(logging_config.log_file).read_text(encoding="utf-8")
+        json_content = Path(logging_config.log_json_file).read_text(encoding="utf-8")
+
+        for label, content in (
+            ("console", captured.err),
+            ("text", text_content),
+            ("json", json_content),
+        ):
+            assert "abcdef123456" not in content, f"{label} sink 泄漏令牌"
+            assert "Bearer ***" in content, f"{label} sink 未脱敏"
 
 
 class TestParseModuleLogLevels:
@@ -491,7 +548,7 @@ class TestSetupLogging:
 
 class TestLoggingConfig:
     async def test_defaults(self) -> None:
-        """默认值：INFO / 每日轮转 / 30 天保留。"""
+        """默认值：INFO / 每日轮转 / 30 天保留 / diagnose 关闭。"""
         config = LoggingConfig()
         assert config.level == "INFO"
         assert config.rotation == "1 day"
@@ -501,6 +558,7 @@ class TestLoggingConfig:
         assert config.module_levels == ""
         assert config.text_format is None
         assert config.colorize_console is True
+        assert config.diagnose_exceptions is False
 
     async def test_level_normalized_and_validated(self) -> None:
         """级别规范化大写 + 非法值拒绝。"""

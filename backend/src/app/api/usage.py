@@ -1,4 +1,4 @@
-"""用量观测 admin 路由——/api/v1/usage（P2 chunk 1 交付）。
+"""用量观测 admin 路由——/api/v1/usage。
 
     - GET /api/v1/usage/records     —— 用量记录游标分页（过滤面）
     - GET /api/v1/usage/aggregates  —— 多维聚合（model_entry / purpose / time_bucket）

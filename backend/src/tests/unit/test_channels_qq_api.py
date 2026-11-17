@@ -219,6 +219,23 @@ class TestBodyValidation:
         )
         assert response.status_code == 400
 
+    async def test_deeply_nested_json_body_400(
+        self, client: AsyncClient, qq_app: tuple[FastAPI, FakeChannelRouter]
+    ) -> None:
+        """极深嵌套 JSON（json.loads 递归上限）：400 归一（不 500——
+        恒 200/4xx 契约的 RecursionError 破口回归锚）。"""
+        deep_json = "[" * 200000 + "]" * 200000
+        response = await client.post(
+            "/api/v1/channels/qq/webhook",
+            content=deep_json,
+            headers={**_auth_headers(), "Content-Type": "application/json"},
+        )
+        assert response.status_code == 400
+        body = response.json()
+        assert body["success"] is False
+        assert body["code"] == "BAD_REQUEST"
+        assert qq_app[1].handled == []
+
     async def test_malformed_object_isolated_ack(
         self, client: AsyncClient, qq_app: tuple[FastAPI, FakeChannelRouter]
     ) -> None:

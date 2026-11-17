@@ -103,6 +103,17 @@ async def test_entry_selective_secondary_keys_rule() -> None:
     assert selective.secondary_keys == ["计划"]
 
 
+async def test_entry_selective_with_empty_secondary_keys_rejected() -> None:
+    """选择性条目空副键拒绝：空列表与全空串键均 fail loud（永不触发形态）。"""
+    with pytest.raises(ValidationError, match="空副键永不触发"):
+        CharaBookEntryModel(keys=["k"], secondary_keys=[], selective=True)
+    with pytest.raises(ValidationError, match="空副键永不触发"):
+        CharaBookEntryModel(keys=["k"], secondary_keys=[""], selective=True)
+    # 非选择性条目空副键仍是合法缺省形态（守卫只约束 selective=True）
+    plain = CharaBookEntryModel(keys=["k"], selective=False)
+    assert plain.secondary_keys == []
+
+
 async def test_entry_position_values() -> None:
     """position 值域：before_char / after_char 均可显式指定。"""
     before = CharaBookEntryModel(keys=["k"], position=CharaBookPosition.BEFORE_CHAR)

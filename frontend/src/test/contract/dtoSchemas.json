@@ -1,0 +1,5524 @@
+{
+  "manifest": {
+    "description": "后端 DTO JSON Schema fixture（契约漂移门禁数据源）——由 scripts/export_dto_schemas.py 导出（cd backend && pixi run export-dto-schemas 再生成）；前端 dtoContract.test.ts 与后端 test_dto_schema_fixture.py 双侧比对。严禁手改本文件。",
+    "mappings": [
+      {
+        "frontend_file": "frontend/src/types/common.ts",
+        "frontend_type": "ResultDTO",
+        "schema_key": "ResultDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/common.ts",
+        "frontend_type": "PageResponse",
+        "schema_key": "PageResponse"
+      },
+      {
+        "frontend_file": "frontend/src/types/common.ts",
+        "frontend_type": "BatchDeleteResult",
+        "note": "人格 / 情景事件批量删除响应同构；memory.ts 的 EpisodeBatchDeleteResponse 为本类型别名",
+        "schema_key": "PersonaBatchDeleteResponseDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "PersonaRecord",
+        "schema_key": "PersonaRecordDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "PersonaCardResponse",
+        "schema_key": "PersonaCardDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "PersonaState",
+        "schema_key": "PersonaStateDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "PersonaCreateRequest",
+        "schema_key": "PersonaCreateDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "PersonaUpdateRequest",
+        "schema_key": "PersonaUpdateDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "PersonaCopyRequest",
+        "schema_key": "PersonaCopyDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "PersonaStateUpsertRequest",
+        "schema_key": "PersonaStateUpsertDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "PersonaBatchDeleteRequest",
+        "schema_key": "PersonaBatchDeleteRequest"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "PersonaBatchDeleteItem",
+        "schema_key": "PersonaBatchDeleteItemDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "PersonaListParams",
+        "schema_key": "PersonaQueryDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "CharaCard",
+        "schema_key": "CharaCardModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "CharaBook",
+        "schema_key": "CharaBookModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "CharaBookEntry",
+        "schema_key": "CharaBookEntryModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "CharaCardPatch",
+        "schema_key": "CharaCardPatchDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "VoiceProfile",
+        "schema_key": "VoiceProfileModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "EpisodeCreateRequest",
+        "schema_key": "EpisodeCreateDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "EpisodeRecord",
+        "schema_key": "EpisodeRecordDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "EpisodeListParams",
+        "schema_key": "EpisodeQueryDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "ChatTurnPayload",
+        "schema_key": "ChatTurnPayloadModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "DutyReportPayload",
+        "schema_key": "DutyReportPayloadModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "PlatformActionPayload",
+        "schema_key": "PlatformActionPayloadModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "EpisodeNotePayload",
+        "schema_key": "EpisodeNotePayloadModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "CuratedUpsertRequest",
+        "schema_key": "CuratedUpsertDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "CuratedRecord",
+        "schema_key": "CuratedRecordDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "CuratedListParams",
+        "schema_key": "CuratedQueryDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "ChatSessionSummary",
+        "schema_key": "ChatSessionSummaryDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "ChatMessage",
+        "schema_key": "ChatMessageDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "ChatSessionDetail",
+        "schema_key": "ChatSessionDetailDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "MemorySearchRequest",
+        "schema_key": "MemorySearchRequestDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "MemorySearchResult",
+        "schema_key": "MemorySearchResultDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "DreamJobConfig",
+        "schema_key": "DreamJobConfig"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "DreamRunStats",
+        "schema_key": "DreamRunStatsModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "DreamDecision",
+        "schema_key": "DreamDecisionModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "DreamRunRecord",
+        "schema_key": "DreamRunRecordDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/memory.ts",
+        "frontend_type": "DreamTriggerRequest",
+        "schema_key": "DreamTriggerRequestDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/usage.ts",
+        "frontend_type": "UsageRecord",
+        "schema_key": "UsageRecordDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/usage.ts",
+        "frontend_type": "UsageAggregate",
+        "schema_key": "UsageAggregateDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/usage.ts",
+        "frontend_type": "UsageSummary",
+        "schema_key": "UsageSummaryDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/usage.ts",
+        "frontend_type": "UsageFilterParams",
+        "schema_key": "UsageFilterFields"
+      },
+      {
+        "frontend_file": "frontend/src/types/usage.ts",
+        "frontend_type": "UsageRecordListParams",
+        "schema_key": "UsageQueryDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/usage.ts",
+        "frontend_type": "UsageAggregateParams",
+        "schema_key": "UsageAggregateQueryDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/model-registry.ts",
+        "frontend_type": "ModelEntryCreateRequest",
+        "schema_key": "ModelEntryCreateDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/model-registry.ts",
+        "frontend_type": "ModelEntryUpdateRequest",
+        "schema_key": "ModelEntryUpdateDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/model-registry.ts",
+        "frontend_type": "ModelEntryMasked",
+        "schema_key": "ModelEntryMaskedDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/model-registry.ts",
+        "frontend_type": "RegistryState",
+        "schema_key": "RegistryStateDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/model-registry.ts",
+        "frontend_type": "RoleBinding",
+        "schema_key": "RoleBindingDTO"
+      }
+    ]
+  },
+  "schemas": {
+    "CharaBookEntryModel": {
+      "$defs": {
+        "CharaBookPosition": {
+          "description": "世界书条目插入位置值域（v2 字符串形态）。\n\n- ``before_char``：插在角色定义之前（背景 / 世界观类信息）；\n- ``after_char``：插在角色定义之后（行为补充 / 语料示例类信息）。",
+          "enum": [
+            "before_char",
+            "after_char"
+          ],
+          "title": "CharaBookPosition",
+          "type": "string"
+        }
+      },
+      "description": "世界书条目（单条检索增强设定）。\n\n触发语义：``keys`` 任一命中即插入；``selective=True`` 时进一步要求\n``secondary_keys`` 任一命中（选择性触发——主键定义话题、副键收敛\n语境）；``constant=True`` 恒插入（免触发，世界观保底条目）。\n\nAttributes:\n    keys: 主触发关键词列表（非空——无触发面的条目应为 constant）。\n    secondary_keys: 副触发关键词列表（仅 ``selective=True`` 时有意义）。\n    content: 条目正文（插入提示词的设定文本）。\n    insertion_order: 插入顺序（0-9999，值越大越靠后）。\n    constant: 是否恒插入（默认 False——按关键词触发）。\n    case_sensitive: 关键词匹配是否区分大小写（默认 False）。\n    selective: 是否选择性触发（默认 False——主键命中即插入）。\n    position: 插入位置（默认 ``after_char``——角色定义之后）。",
+      "properties": {
+        "case_sensitive": {
+          "default": false,
+          "description": "关键词匹配是否区分大小写",
+          "title": "Case Sensitive",
+          "type": "boolean"
+        },
+        "constant": {
+          "default": false,
+          "description": "是否恒插入（免触发）",
+          "title": "Constant",
+          "type": "boolean"
+        },
+        "content": {
+          "default": "",
+          "description": "条目正文",
+          "title": "Content",
+          "type": "string"
+        },
+        "insertion_order": {
+          "default": 100,
+          "description": "插入顺序（0-9999，值越大越靠后插入提示词）",
+          "maximum": 9999,
+          "minimum": 0,
+          "title": "Insertion Order",
+          "type": "integer"
+        },
+        "keys": {
+          "description": "主触发关键词列表",
+          "items": {
+            "type": "string"
+          },
+          "title": "Keys",
+          "type": "array"
+        },
+        "position": {
+          "$ref": "#/$defs/CharaBookPosition",
+          "default": "after_char",
+          "description": "插入位置"
+        },
+        "secondary_keys": {
+          "description": "副触发关键词列表（selective=True 时参与收敛）",
+          "items": {
+            "type": "string"
+          },
+          "title": "Secondary Keys",
+          "type": "array"
+        },
+        "selective": {
+          "default": false,
+          "description": "是否选择性触发",
+          "title": "Selective",
+          "type": "boolean"
+        }
+      },
+      "title": "CharaBookEntryModel",
+      "type": "object"
+    },
+    "CharaBookModel": {
+      "$defs": {
+        "CharaBookEntryModel": {
+          "description": "世界书条目（单条检索增强设定）。\n\n触发语义：``keys`` 任一命中即插入；``selective=True`` 时进一步要求\n``secondary_keys`` 任一命中（选择性触发——主键定义话题、副键收敛\n语境）；``constant=True`` 恒插入（免触发，世界观保底条目）。\n\nAttributes:\n    keys: 主触发关键词列表（非空——无触发面的条目应为 constant）。\n    secondary_keys: 副触发关键词列表（仅 ``selective=True`` 时有意义）。\n    content: 条目正文（插入提示词的设定文本）。\n    insertion_order: 插入顺序（0-9999，值越大越靠后）。\n    constant: 是否恒插入（默认 False——按关键词触发）。\n    case_sensitive: 关键词匹配是否区分大小写（默认 False）。\n    selective: 是否选择性触发（默认 False——主键命中即插入）。\n    position: 插入位置（默认 ``after_char``——角色定义之后）。",
+          "properties": {
+            "case_sensitive": {
+              "default": false,
+              "description": "关键词匹配是否区分大小写",
+              "title": "Case Sensitive",
+              "type": "boolean"
+            },
+            "constant": {
+              "default": false,
+              "description": "是否恒插入（免触发）",
+              "title": "Constant",
+              "type": "boolean"
+            },
+            "content": {
+              "default": "",
+              "description": "条目正文",
+              "title": "Content",
+              "type": "string"
+            },
+            "insertion_order": {
+              "default": 100,
+              "description": "插入顺序（0-9999，值越大越靠后插入提示词）",
+              "maximum": 9999,
+              "minimum": 0,
+              "title": "Insertion Order",
+              "type": "integer"
+            },
+            "keys": {
+              "description": "主触发关键词列表",
+              "items": {
+                "type": "string"
+              },
+              "title": "Keys",
+              "type": "array"
+            },
+            "position": {
+              "$ref": "#/$defs/CharaBookPosition",
+              "default": "after_char",
+              "description": "插入位置"
+            },
+            "secondary_keys": {
+              "description": "副触发关键词列表（selective=True 时参与收敛）",
+              "items": {
+                "type": "string"
+              },
+              "title": "Secondary Keys",
+              "type": "array"
+            },
+            "selective": {
+              "default": false,
+              "description": "是否选择性触发",
+              "title": "Selective",
+              "type": "boolean"
+            }
+          },
+          "title": "CharaBookEntryModel",
+          "type": "object"
+        },
+        "CharaBookPosition": {
+          "description": "世界书条目插入位置值域（v2 字符串形态）。\n\n- ``before_char``：插在角色定义之前（背景 / 世界观类信息）；\n- ``after_char``：插在角色定义之后（行为补充 / 语料示例类信息）。",
+          "enum": [
+            "before_char",
+            "after_char"
+          ],
+          "title": "CharaBookPosition",
+          "type": "string"
+        }
+      },
+      "description": "世界书（检索增强条目集）。\n\nAttributes:\n    name: 世界书名称。\n    description: 世界书描述。\n    scan_depth: 扫描深度（最近 N 条消息内检索关键词；None = 不限）。\n    token_budget: 条目 token 预算（超预算时按 insertion_order 截断；\n        None = 不限）。\n    recursive_scanning: 是否递归扫描（条目 content 中的命中词再触发\n        其他条目；默认 False）。\n    entries: 条目列表（按 ``insertion_order`` 升序决定插入次序）。",
+      "properties": {
+        "description": {
+          "default": "",
+          "description": "世界书描述",
+          "title": "Description",
+          "type": "string"
+        },
+        "entries": {
+          "description": "条目列表",
+          "items": {
+            "$ref": "#/$defs/CharaBookEntryModel"
+          },
+          "title": "Entries",
+          "type": "array"
+        },
+        "name": {
+          "default": "",
+          "description": "世界书名称",
+          "title": "Name",
+          "type": "string"
+        },
+        "recursive_scanning": {
+          "default": false,
+          "description": "是否递归扫描",
+          "title": "Recursive Scanning",
+          "type": "boolean"
+        },
+        "scan_depth": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "扫描深度（最近 N 条消息）",
+          "title": "Scan Depth"
+        },
+        "token_budget": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "条目 token 预算",
+          "title": "Token Budget"
+        }
+      },
+      "title": "CharaBookModel",
+      "type": "object"
+    },
+    "CharaCardModel": {
+      "$defs": {
+        "CharaBookEntryModel": {
+          "description": "世界书条目（单条检索增强设定）。\n\n触发语义：``keys`` 任一命中即插入；``selective=True`` 时进一步要求\n``secondary_keys`` 任一命中（选择性触发——主键定义话题、副键收敛\n语境）；``constant=True`` 恒插入（免触发，世界观保底条目）。\n\nAttributes:\n    keys: 主触发关键词列表（非空——无触发面的条目应为 constant）。\n    secondary_keys: 副触发关键词列表（仅 ``selective=True`` 时有意义）。\n    content: 条目正文（插入提示词的设定文本）。\n    insertion_order: 插入顺序（0-9999，值越大越靠后）。\n    constant: 是否恒插入（默认 False——按关键词触发）。\n    case_sensitive: 关键词匹配是否区分大小写（默认 False）。\n    selective: 是否选择性触发（默认 False——主键命中即插入）。\n    position: 插入位置（默认 ``after_char``——角色定义之后）。",
+          "properties": {
+            "case_sensitive": {
+              "default": false,
+              "description": "关键词匹配是否区分大小写",
+              "title": "Case Sensitive",
+              "type": "boolean"
+            },
+            "constant": {
+              "default": false,
+              "description": "是否恒插入（免触发）",
+              "title": "Constant",
+              "type": "boolean"
+            },
+            "content": {
+              "default": "",
+              "description": "条目正文",
+              "title": "Content",
+              "type": "string"
+            },
+            "insertion_order": {
+              "default": 100,
+              "description": "插入顺序（0-9999，值越大越靠后插入提示词）",
+              "maximum": 9999,
+              "minimum": 0,
+              "title": "Insertion Order",
+              "type": "integer"
+            },
+            "keys": {
+              "description": "主触发关键词列表",
+              "items": {
+                "type": "string"
+              },
+              "title": "Keys",
+              "type": "array"
+            },
+            "position": {
+              "$ref": "#/$defs/CharaBookPosition",
+              "default": "after_char",
+              "description": "插入位置"
+            },
+            "secondary_keys": {
+              "description": "副触发关键词列表（selective=True 时参与收敛）",
+              "items": {
+                "type": "string"
+              },
+              "title": "Secondary Keys",
+              "type": "array"
+            },
+            "selective": {
+              "default": false,
+              "description": "是否选择性触发",
+              "title": "Selective",
+              "type": "boolean"
+            }
+          },
+          "title": "CharaBookEntryModel",
+          "type": "object"
+        },
+        "CharaBookModel": {
+          "description": "世界书（检索增强条目集）。\n\nAttributes:\n    name: 世界书名称。\n    description: 世界书描述。\n    scan_depth: 扫描深度（最近 N 条消息内检索关键词；None = 不限）。\n    token_budget: 条目 token 预算（超预算时按 insertion_order 截断；\n        None = 不限）。\n    recursive_scanning: 是否递归扫描（条目 content 中的命中词再触发\n        其他条目；默认 False）。\n    entries: 条目列表（按 ``insertion_order`` 升序决定插入次序）。",
+          "properties": {
+            "description": {
+              "default": "",
+              "description": "世界书描述",
+              "title": "Description",
+              "type": "string"
+            },
+            "entries": {
+              "description": "条目列表",
+              "items": {
+                "$ref": "#/$defs/CharaBookEntryModel"
+              },
+              "title": "Entries",
+              "type": "array"
+            },
+            "name": {
+              "default": "",
+              "description": "世界书名称",
+              "title": "Name",
+              "type": "string"
+            },
+            "recursive_scanning": {
+              "default": false,
+              "description": "是否递归扫描",
+              "title": "Recursive Scanning",
+              "type": "boolean"
+            },
+            "scan_depth": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "扫描深度（最近 N 条消息）",
+              "title": "Scan Depth"
+            },
+            "token_budget": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "条目 token 预算",
+              "title": "Token Budget"
+            }
+          },
+          "title": "CharaBookModel",
+          "type": "object"
+        },
+        "CharaBookPosition": {
+          "description": "世界书条目插入位置值域（v2 字符串形态）。\n\n- ``before_char``：插在角色定义之前（背景 / 世界观类信息）；\n- ``after_char``：插在角色定义之后（行为补充 / 语料示例类信息）。",
+          "enum": [
+            "before_char",
+            "after_char"
+          ],
+          "title": "CharaBookPosition",
+          "type": "string"
+        }
+      },
+      "description": "chara card v2 人格卡片——长期身份正典（L 层）。\n\n作为 JSON 文档整体存储在 ``ff_personas.chara_card`` 列；会话运行期\n**不可变**（编辑即管理面操作，经 PUT 端点整体替换或补丁合并）。\n心情 / 关系等可变状态不在此处——见 L/M/S 模型（M/S 层落\n``ff_persona_states``）。\n\nAttributes:\n    name: 人格称呼名（非空——v2 规格核心字段）。\n    description: 人格简介（外观 / 背景 / 身份概述）。\n    personality: 性格描述（语气 / 行为倾向 / 价值观）。\n    scenario: 场景设定（当前处境与关系背景）。\n    first_mes: 开场白（会话首条人格消息）。\n    mes_example: 对话示例（few-shot 语态锚定）。\n    system_prompt: 系统提示覆写（非空时整体覆写默认人格 system 模板）。\n    post_history_instructions: 历史后指令（拼在对话历史之后的强约束）。\n    character_book: 世界书（检索增强条目集；None = 无世界书）。",
+      "properties": {
+        "character_book": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CharaBookModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "世界书"
+        },
+        "description": {
+          "default": "",
+          "description": "人格简介",
+          "title": "Description",
+          "type": "string"
+        },
+        "first_mes": {
+          "default": "",
+          "description": "开场白",
+          "title": "First Mes",
+          "type": "string"
+        },
+        "mes_example": {
+          "default": "",
+          "description": "对话示例",
+          "title": "Mes Example",
+          "type": "string"
+        },
+        "name": {
+          "description": "人格称呼名（非空）",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "personality": {
+          "default": "",
+          "description": "性格描述",
+          "title": "Personality",
+          "type": "string"
+        },
+        "post_history_instructions": {
+          "default": "",
+          "description": "历史后指令",
+          "title": "Post History Instructions",
+          "type": "string"
+        },
+        "scenario": {
+          "default": "",
+          "description": "场景设定",
+          "title": "Scenario",
+          "type": "string"
+        },
+        "system_prompt": {
+          "default": "",
+          "description": "系统提示覆写",
+          "title": "System Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "CharaCardModel",
+      "type": "object"
+    },
+    "CharaCardPatchDTO": {
+      "$defs": {
+        "CharaBookEntryModel": {
+          "description": "世界书条目（单条检索增强设定）。\n\n触发语义：``keys`` 任一命中即插入；``selective=True`` 时进一步要求\n``secondary_keys`` 任一命中（选择性触发——主键定义话题、副键收敛\n语境）；``constant=True`` 恒插入（免触发，世界观保底条目）。\n\nAttributes:\n    keys: 主触发关键词列表（非空——无触发面的条目应为 constant）。\n    secondary_keys: 副触发关键词列表（仅 ``selective=True`` 时有意义）。\n    content: 条目正文（插入提示词的设定文本）。\n    insertion_order: 插入顺序（0-9999，值越大越靠后）。\n    constant: 是否恒插入（默认 False——按关键词触发）。\n    case_sensitive: 关键词匹配是否区分大小写（默认 False）。\n    selective: 是否选择性触发（默认 False——主键命中即插入）。\n    position: 插入位置（默认 ``after_char``——角色定义之后）。",
+          "properties": {
+            "case_sensitive": {
+              "default": false,
+              "description": "关键词匹配是否区分大小写",
+              "title": "Case Sensitive",
+              "type": "boolean"
+            },
+            "constant": {
+              "default": false,
+              "description": "是否恒插入（免触发）",
+              "title": "Constant",
+              "type": "boolean"
+            },
+            "content": {
+              "default": "",
+              "description": "条目正文",
+              "title": "Content",
+              "type": "string"
+            },
+            "insertion_order": {
+              "default": 100,
+              "description": "插入顺序（0-9999，值越大越靠后插入提示词）",
+              "maximum": 9999,
+              "minimum": 0,
+              "title": "Insertion Order",
+              "type": "integer"
+            },
+            "keys": {
+              "description": "主触发关键词列表",
+              "items": {
+                "type": "string"
+              },
+              "title": "Keys",
+              "type": "array"
+            },
+            "position": {
+              "$ref": "#/$defs/CharaBookPosition",
+              "default": "after_char",
+              "description": "插入位置"
+            },
+            "secondary_keys": {
+              "description": "副触发关键词列表（selective=True 时参与收敛）",
+              "items": {
+                "type": "string"
+              },
+              "title": "Secondary Keys",
+              "type": "array"
+            },
+            "selective": {
+              "default": false,
+              "description": "是否选择性触发",
+              "title": "Selective",
+              "type": "boolean"
+            }
+          },
+          "title": "CharaBookEntryModel",
+          "type": "object"
+        },
+        "CharaBookModel": {
+          "description": "世界书（检索增强条目集）。\n\nAttributes:\n    name: 世界书名称。\n    description: 世界书描述。\n    scan_depth: 扫描深度（最近 N 条消息内检索关键词；None = 不限）。\n    token_budget: 条目 token 预算（超预算时按 insertion_order 截断；\n        None = 不限）。\n    recursive_scanning: 是否递归扫描（条目 content 中的命中词再触发\n        其他条目；默认 False）。\n    entries: 条目列表（按 ``insertion_order`` 升序决定插入次序）。",
+          "properties": {
+            "description": {
+              "default": "",
+              "description": "世界书描述",
+              "title": "Description",
+              "type": "string"
+            },
+            "entries": {
+              "description": "条目列表",
+              "items": {
+                "$ref": "#/$defs/CharaBookEntryModel"
+              },
+              "title": "Entries",
+              "type": "array"
+            },
+            "name": {
+              "default": "",
+              "description": "世界书名称",
+              "title": "Name",
+              "type": "string"
+            },
+            "recursive_scanning": {
+              "default": false,
+              "description": "是否递归扫描",
+              "title": "Recursive Scanning",
+              "type": "boolean"
+            },
+            "scan_depth": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "扫描深度（最近 N 条消息）",
+              "title": "Scan Depth"
+            },
+            "token_budget": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "条目 token 预算",
+              "title": "Token Budget"
+            }
+          },
+          "title": "CharaBookModel",
+          "type": "object"
+        },
+        "CharaBookPosition": {
+          "description": "世界书条目插入位置值域（v2 字符串形态）。\n\n- ``before_char``：插在角色定义之前（背景 / 世界观类信息）；\n- ``after_char``：插在角色定义之后（行为补充 / 语料示例类信息）。",
+          "enum": [
+            "before_char",
+            "after_char"
+          ],
+          "title": "CharaBookPosition",
+          "type": "string"
+        }
+      },
+      "description": "卡片补丁 DTO（部分合并面——仅出现的字段覆写既有卡片）。\n\n与 :class:`CharaCardModel` 字段一一对应但全部可选；合并语义在服务层\n实现（``既有卡片 dump ⊕ 补丁 exclude_unset dump`` 后整体重新校验）。\n``character_book`` 提供时**整体替换**世界书（不做条目级合并）。\n\nAttributes:\n    name: 人格称呼名（提供时须非空——合并校验兜底）。\n    description: 人格简介。\n    personality: 性格描述。\n    scenario: 场景设定。\n    first_mes: 开场白。\n    mes_example: 对话示例。\n    system_prompt: 系统提示覆写。\n    post_history_instructions: 历史后指令。\n    character_book: 世界书（提供时整体替换；显式 null 清除世界书）。",
+      "properties": {
+        "character_book": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CharaBookModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "世界书（整体替换）"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "人格简介",
+          "title": "Description"
+        },
+        "first_mes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "开场白",
+          "title": "First Mes"
+        },
+        "mes_example": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "对话示例",
+          "title": "Mes Example"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "人格称呼名",
+          "title": "Name"
+        },
+        "personality": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "性格描述",
+          "title": "Personality"
+        },
+        "post_history_instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "历史后指令",
+          "title": "Post History Instructions"
+        },
+        "scenario": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "场景设定",
+          "title": "Scenario"
+        },
+        "system_prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "系统提示覆写",
+          "title": "System Prompt"
+        }
+      },
+      "title": "CharaCardPatchDTO",
+      "type": "object"
+    },
+    "ChatMessageDTO": {
+      "$defs": {
+        "ChatMessageRole": {
+          "description": "聊天消息角色值域（OpenAI 兼容协议角色 + 原生工具调用扩展）。\n\n- ``system``：系统 / 人格设定指令；\n- ``user``：用户输入；\n- ``assistant``：模型回复（多轮上下文回放；原生工具调用轮次携带\n  ``tool_calls`` 形态）；\n- ``tool``：工具结果回放（原生工具调用循环——``tool_call_id`` 关联\n  assistant 轮次的调用声明）。",
+          "enum": [
+            "system",
+            "user",
+            "assistant",
+            "tool"
+          ],
+          "title": "ChatMessageRole",
+          "type": "string"
+        }
+      },
+      "description": "会话消息 DTO（ORM 行归一——按 session 归属，非人格作用域行）。\n\nAttributes:\n    id: 消息主键。\n    session_id: 所属会话主键。\n    seq: 会话内序号（从 1 递增）。\n    role: 消息角色（user/assistant/system）。\n    content: 消息文本。\n    ts_ms: 消息时间（epoch 毫秒）。",
+      "properties": {
+        "content": {
+          "description": "消息文本",
+          "title": "Content",
+          "type": "string"
+        },
+        "id": {
+          "description": "消息主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "role": {
+          "$ref": "#/$defs/ChatMessageRole",
+          "description": "消息角色"
+        },
+        "seq": {
+          "description": "会话内序号（从 1 递增）",
+          "title": "Seq",
+          "type": "integer"
+        },
+        "session_id": {
+          "description": "所属会话主键",
+          "title": "Session Id",
+          "type": "integer"
+        },
+        "ts_ms": {
+          "description": "消息时间（epoch 毫秒）",
+          "title": "Ts Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "session_id",
+        "seq",
+        "role",
+        "content",
+        "ts_ms"
+      ],
+      "title": "ChatMessageDTO",
+      "type": "object"
+    },
+    "ChatSessionDetailDTO": {
+      "$defs": {
+        "ChatMessageDTO": {
+          "description": "会话消息 DTO（ORM 行归一——按 session 归属，非人格作用域行）。\n\nAttributes:\n    id: 消息主键。\n    session_id: 所属会话主键。\n    seq: 会话内序号（从 1 递增）。\n    role: 消息角色（user/assistant/system）。\n    content: 消息文本。\n    ts_ms: 消息时间（epoch 毫秒）。",
+          "properties": {
+            "content": {
+              "description": "消息文本",
+              "title": "Content",
+              "type": "string"
+            },
+            "id": {
+              "description": "消息主键",
+              "title": "Id",
+              "type": "integer"
+            },
+            "role": {
+              "$ref": "#/$defs/ChatMessageRole",
+              "description": "消息角色"
+            },
+            "seq": {
+              "description": "会话内序号（从 1 递增）",
+              "title": "Seq",
+              "type": "integer"
+            },
+            "session_id": {
+              "description": "所属会话主键",
+              "title": "Session Id",
+              "type": "integer"
+            },
+            "ts_ms": {
+              "description": "消息时间（epoch 毫秒）",
+              "title": "Ts Ms",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "session_id",
+            "seq",
+            "role",
+            "content",
+            "ts_ms"
+          ],
+          "title": "ChatMessageDTO",
+          "type": "object"
+        },
+        "ChatMessageRole": {
+          "description": "聊天消息角色值域（OpenAI 兼容协议角色 + 原生工具调用扩展）。\n\n- ``system``：系统 / 人格设定指令；\n- ``user``：用户输入；\n- ``assistant``：模型回复（多轮上下文回放；原生工具调用轮次携带\n  ``tool_calls`` 形态）；\n- ``tool``：工具结果回放（原生工具调用循环——``tool_call_id`` 关联\n  assistant 轮次的调用声明）。",
+          "enum": [
+            "system",
+            "user",
+            "assistant",
+            "tool"
+          ],
+          "title": "ChatMessageRole",
+          "type": "string"
+        }
+      },
+      "description": "会话详情 DTO（摘要 + 全量消息——seq 升序）。\n\nAttributes:\n    id: 会话主键。\n    persona_id: 所属人格 ID。\n    title: 会话标题。\n    message_count: 消息计数。\n    created_at: 创建时间（epoch 毫秒）。\n    last_active_at: 最后活跃时间（epoch 毫秒）。\n    messages: 消息列表（seq 升序——时间序回放形态）。",
+      "properties": {
+        "created_at": {
+          "description": "创建时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "id": {
+          "description": "会话主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "last_active_at": {
+          "description": "最后活跃时间（epoch 毫秒）",
+          "title": "Last Active At",
+          "type": "integer"
+        },
+        "message_count": {
+          "description": "消息计数",
+          "title": "Message Count",
+          "type": "integer"
+        },
+        "messages": {
+          "description": "消息列表（seq 升序）",
+          "items": {
+            "$ref": "#/$defs/ChatMessageDTO"
+          },
+          "title": "Messages",
+          "type": "array"
+        },
+        "persona_id": {
+          "description": "所属人格 ID",
+          "title": "Persona Id",
+          "type": "string"
+        },
+        "title": {
+          "description": "会话标题",
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "persona_id",
+        "title",
+        "message_count",
+        "created_at",
+        "last_active_at"
+      ],
+      "title": "ChatSessionDetailDTO",
+      "type": "object"
+    },
+    "ChatSessionSummaryDTO": {
+      "description": "会话摘要 DTO（列表面——ORM 行归一）。\n\nAttributes:\n    id: 会话主键。\n    persona_id: 所属人格 ID。\n    title: 会话标题。\n    message_count: 消息计数。\n    created_at: 创建时间（epoch 毫秒）。\n    last_active_at: 最后活跃时间（epoch 毫秒）。",
+      "properties": {
+        "created_at": {
+          "description": "创建时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "id": {
+          "description": "会话主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "last_active_at": {
+          "description": "最后活跃时间（epoch 毫秒）",
+          "title": "Last Active At",
+          "type": "integer"
+        },
+        "message_count": {
+          "description": "消息计数",
+          "title": "Message Count",
+          "type": "integer"
+        },
+        "persona_id": {
+          "description": "所属人格 ID",
+          "title": "Persona Id",
+          "type": "string"
+        },
+        "title": {
+          "description": "会话标题",
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "persona_id",
+        "title",
+        "message_count",
+        "created_at",
+        "last_active_at"
+      ],
+      "title": "ChatSessionSummaryDTO",
+      "type": "object"
+    },
+    "ChatTurnPayloadModel": {
+      "description": "chat 回合事件载荷（kind=chat 的 content 形态）。\n\nAttributes:\n    user_content: 用户侧文本（单向回合可为空串）。\n    assistant_content: 人格回复文本。\n    session_id: 关联会话主键（ff_chat_sessions.id；无关联为 None）。",
+      "properties": {
+        "assistant_content": {
+          "default": "",
+          "description": "人格回复文本",
+          "title": "Assistant Content",
+          "type": "string"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "关联会话主键",
+          "title": "Session Id"
+        },
+        "user_content": {
+          "default": "",
+          "description": "用户侧文本",
+          "title": "User Content",
+          "type": "string"
+        }
+      },
+      "title": "ChatTurnPayloadModel",
+      "type": "object"
+    },
+    "CuratedQueryDTO": {
+      "$defs": {
+        "CuratedKind": {
+          "description": "策展记忆类型值域（ff_curated_memory.kind）。\n\n- ``memory``：蒸馏记忆（从情景层提炼的事实 / 偏好 / 经历）；\n- ``user_note``：主人备忘（显式注入的笔记）；\n- ``relationship``：关系状态（智能体与主人的关系演化记录）。",
+          "enum": [
+            "memory",
+            "user_note",
+            "relationship"
+          ],
+          "title": "CuratedKind",
+          "type": "string"
+        },
+        "CuratedStatus": {
+          "description": "策展记忆状态值域（ff_curated_memory.status）。\n\n- ``active``：现行版本（同 (persona, kind, topic) 至多一条）；\n- ``superseded``：已被新版本取代（superseded_by_id 指向取代者）。",
+          "enum": [
+            "active",
+            "superseded"
+          ],
+          "title": "CuratedStatus",
+          "type": "string"
+        }
+      },
+      "description": "策展记忆查询 DTO（kind / topic / status 过滤 + 游标分页——id 降序）。\n\nAttributes:\n    kind: 策展类型过滤（None = 全部）。\n    topic: 主题键精确过滤（None = 全部）。\n    status: 状态过滤（None = 全部；active = 现行版本面）。\n    cursor: 上一页返回的不透明游标（None = 首页）。\n    limit: 页大小（1-200，默认 20）。",
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "分页游标（首页为 None）",
+          "title": "Cursor"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CuratedKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "策展类型过滤"
+        },
+        "limit": {
+          "default": 20,
+          "description": "页大小",
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CuratedStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "状态过滤"
+        },
+        "topic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "主题键精确过滤",
+          "title": "Topic"
+        }
+      },
+      "title": "CuratedQueryDTO",
+      "type": "object"
+    },
+    "CuratedRecordDTO": {
+      "$defs": {
+        "CuratedKind": {
+          "description": "策展记忆类型值域（ff_curated_memory.kind）。\n\n- ``memory``：蒸馏记忆（从情景层提炼的事实 / 偏好 / 经历）；\n- ``user_note``：主人备忘（显式注入的笔记）；\n- ``relationship``：关系状态（智能体与主人的关系演化记录）。",
+          "enum": [
+            "memory",
+            "user_note",
+            "relationship"
+          ],
+          "title": "CuratedKind",
+          "type": "string"
+        },
+        "CuratedStatus": {
+          "description": "策展记忆状态值域（ff_curated_memory.status）。\n\n- ``active``：现行版本（同 (persona, kind, topic) 至多一条）；\n- ``superseded``：已被新版本取代（superseded_by_id 指向取代者）。",
+          "enum": [
+            "active",
+            "superseded"
+          ],
+          "title": "CuratedStatus",
+          "type": "string"
+        },
+        "MemoryProvenance": {
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "enum": [
+            "owner",
+            "agent",
+            "untrusted"
+          ],
+          "title": "MemoryProvenance",
+          "type": "string"
+        }
+      },
+      "description": "策展记忆读取 DTO（ORM 行归一）。\n\nAttributes:\n    id: 记忆主键。\n    persona_id: 所属人格 ID。\n    kind: 策展类型。\n    topic: 主题键。\n    content: 记忆正文。\n    importance: 重要度（1-10）。\n    provenance: 来源可信度（owner/agent）。\n    status: 状态（active/superseded）。\n    superseded_by_id: 取代者行主键（active 行为 None）。\n    version: 链内版本号（首版 1）。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒）。",
+      "properties": {
+        "content": {
+          "description": "记忆正文",
+          "title": "Content",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "落库时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "id": {
+          "description": "记忆主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "importance": {
+          "description": "重要度（1-10）",
+          "title": "Importance",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/CuratedKind",
+          "description": "策展类型"
+        },
+        "persona_id": {
+          "description": "所属人格 ID",
+          "title": "Persona Id",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/MemoryProvenance",
+          "description": "来源可信度"
+        },
+        "status": {
+          "$ref": "#/$defs/CuratedStatus",
+          "description": "状态（active/superseded）"
+        },
+        "superseded_by_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "取代者行主键（active 为 None）",
+          "title": "Superseded By Id"
+        },
+        "topic": {
+          "description": "主题键",
+          "title": "Topic",
+          "type": "string"
+        },
+        "updated_at": {
+          "description": "行更新时间（epoch 毫秒）",
+          "title": "Updated At",
+          "type": "integer"
+        },
+        "version": {
+          "description": "链内版本号",
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "persona_id",
+        "kind",
+        "topic",
+        "content",
+        "importance",
+        "provenance",
+        "status",
+        "superseded_by_id",
+        "version",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "CuratedRecordDTO",
+      "type": "object"
+    },
+    "CuratedUpsertDTO": {
+      "$defs": {
+        "CuratedKind": {
+          "description": "策展记忆类型值域（ff_curated_memory.kind）。\n\n- ``memory``：蒸馏记忆（从情景层提炼的事实 / 偏好 / 经历）；\n- ``user_note``：主人备忘（显式注入的笔记）；\n- ``relationship``：关系状态（智能体与主人的关系演化记录）。",
+          "enum": [
+            "memory",
+            "user_note",
+            "relationship"
+          ],
+          "title": "CuratedKind",
+          "type": "string"
+        },
+        "MemoryProvenance": {
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "enum": [
+            "owner",
+            "agent",
+            "untrusted"
+          ],
+          "title": "MemoryProvenance",
+          "type": "string"
+        }
+      },
+      "description": "策展记忆 upsert DTO（写入面——supersede 语义）。\n\nAttributes:\n    kind: 策展类型。\n    topic: 主题键（1-255 字符；同 (persona, kind, topic) 单 active）。\n    content: 记忆正文（非空文本）。\n    importance: 重要度（1-10，默认 5）。\n    provenance: 来源可信度（默认 owner；**untrusted 由服务层拒绝**——\n        平台内容永不入策展层）。",
+      "properties": {
+        "content": {
+          "description": "记忆正文",
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "importance": {
+          "default": 5,
+          "description": "重要度（1-10）",
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Importance",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/CuratedKind",
+          "description": "策展类型"
+        },
+        "provenance": {
+          "$ref": "#/$defs/MemoryProvenance",
+          "default": "owner",
+          "description": "来源可信度（untrusted 服务层拒绝）"
+        },
+        "topic": {
+          "description": "主题键",
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Topic",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "topic",
+        "content"
+      ],
+      "title": "CuratedUpsertDTO",
+      "type": "object"
+    },
+    "DreamDecisionModel": {
+      "$defs": {
+        "CuratedKind": {
+          "description": "策展记忆类型值域（ff_curated_memory.kind）。\n\n- ``memory``：蒸馏记忆（从情景层提炼的事实 / 偏好 / 经历）；\n- ``user_note``：主人备忘（显式注入的笔记）；\n- ``relationship``：关系状态（智能体与主人的关系演化记录）。",
+          "enum": [
+            "memory",
+            "user_note",
+            "relationship"
+          ],
+          "title": "CuratedKind",
+          "type": "string"
+        },
+        "DreamDecisionAction": {
+          "description": "逐事件决策动作值域（DreamDecisionModel.action）。\n\n- ``promoted``：事件内容经 LLM 蒸馏进入**新起链**的策展主题\n  （upsert 落 version=1——事件被晋升为记忆）；\n- ``merged``：事件内容并入**既有 active 主题**（upsert 推进\n  supersede 链，version > 1——事件并入既有记忆）；\n- ``skipped``：未参与晋升（低于分数线 / 既往已晋升 / 超出候选\n  上限 / 提案未收录或被丢弃）。",
+          "enum": [
+            "promoted",
+            "skipped",
+            "merged"
+          ],
+          "title": "DreamDecisionAction",
+          "type": "string"
+        }
+      },
+      "description": "逐事件决策记录（ff_dream_runs.decisions JSON 的元素形态）。\n\n决策覆盖口径：**全部可信候选事件**（窗口内非 untrusted 事件——\n无论过门与否每人一条；untrusted 事件不可见、不产生决策）。\n既往成功运行中 action ∈ {promoted, merged} 的 episode_id 集合构成\n后续运行的「已晋升」跳过依据。\n\nAttributes:\n    episode_id: 情景事件主键（决策主体）。\n    topic: 关联策展主题键（纯跳过决策为空串）。\n    kind: 关联策展类型（纯跳过决策为 None）。\n    action: 决策动作（promoted / skipped / merged）。\n    reason: 人读决策理由（跳过原因 / 晋升去向说明）。",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/DreamDecisionAction",
+          "description": "决策动作"
+        },
+        "episode_id": {
+          "description": "情景事件主键",
+          "title": "Episode Id",
+          "type": "integer"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CuratedKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "关联策展类型（纯跳过为 None）"
+        },
+        "reason": {
+          "default": "",
+          "description": "决策理由",
+          "title": "Reason",
+          "type": "string"
+        },
+        "topic": {
+          "default": "",
+          "description": "关联策展主题键（纯跳过为空串）",
+          "title": "Topic",
+          "type": "string"
+        }
+      },
+      "required": [
+        "episode_id",
+        "action"
+      ],
+      "title": "DreamDecisionModel",
+      "type": "object"
+    },
+    "DreamJobConfig": {
+      "description": "梦境任务构造级参数（构造注入旋钮——与 llm 网关 retry 旋钮同模式）。\n\n全部旋钮经构造函数 / 请求体覆写注入（Settings env 面迁移为已文档化\n的演进方向；届时本类保留为纯配置形态，与 SeekDBStoreConfig 的装配\n映射同模式）。\n\nAttributes:\n    window_hours: 候选窗口宽度（小时；窗口 ``[now - window_hours,\n        now)`` 左闭右开）。\n    recency_half_life_days: 时间衰减半衰期（天——事件距今每过\n        一个半衰期，recency 衰减一半；指数衰减语义）。\n    min_score: 梦境分晋级阈值（score >= min_score 才入 LLM 候选）。\n    max_candidates: 单次运行候选事件上限（按分数降序截断）。\n    topic_relevance_limit: 主题相关度判定的检索 top-N（每个既有\n        active 主题经存储 keyword 检索取 top-N 事件构成命中集）。\n    boost: 主题相关度加成系数（命中既有主题检索的事件得分乘\n        ``1 + boost``）。\n    diary_enabled: 日记生成开关（关闭则跳过日记阶段）。\n    diary_importance: 日记事件的 important 度（kind=dream 落库）。\n    stale_running_threshold_ms: 孤儿 running 行收敛阈值（epoch\n        毫秒）——run_dream 入口将 started_ms 早于\n        ``now - 阈值`` 且无终态的 running 行批量判为进程崩溃遗留。\n    promoted_lookback_ms: 已晋升跳过的回溯窗（epoch 毫秒）——\n        仅统计 finished_ms 落在 ``[now - 窗, now]`` 内的成功运行\n        决策为「既往已晋升」跳过依据。\n    max_episodes: 单次运行窗口事件上限（超出按时间序截断并告警\n        ——防超宽窗口全量入内存 / prompt）。",
+      "properties": {
+        "boost": {
+          "default": 0.5,
+          "description": "主题相关度加成系数",
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Boost",
+          "type": "number"
+        },
+        "diary_enabled": {
+          "default": true,
+          "description": "日记生成开关",
+          "title": "Diary Enabled",
+          "type": "boolean"
+        },
+        "diary_importance": {
+          "default": 5,
+          "description": "日记事件重要度",
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Diary Importance",
+          "type": "integer"
+        },
+        "max_candidates": {
+          "default": 50,
+          "description": "单次候选事件上限",
+          "maximum": 500,
+          "minimum": 1,
+          "title": "Max Candidates",
+          "type": "integer"
+        },
+        "max_episodes": {
+          "default": 2000,
+          "description": "单次运行窗口事件上限（超出按时间序截断并告警）",
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Max Episodes",
+          "type": "integer"
+        },
+        "min_score": {
+          "default": 1.0,
+          "description": "梦境分晋级阈值",
+          "minimum": 0,
+          "title": "Min Score",
+          "type": "number"
+        },
+        "promoted_lookback_ms": {
+          "default": 2592000000,
+          "description": "已晋升跳过的回溯窗（epoch 毫秒，默认 30 天）",
+          "minimum": 1,
+          "title": "Promoted Lookback Ms",
+          "type": "integer"
+        },
+        "recency_half_life_days": {
+          "default": 30.0,
+          "description": "时间衰减半衰期（天）",
+          "exclusiveMinimum": 0,
+          "title": "Recency Half Life Days",
+          "type": "number"
+        },
+        "stale_running_threshold_ms": {
+          "default": 3600000,
+          "description": "孤儿 running 行收敛阈值（epoch 毫秒，默认 1 小时）",
+          "minimum": 1,
+          "title": "Stale Running Threshold Ms",
+          "type": "integer"
+        },
+        "topic_relevance_limit": {
+          "default": 3,
+          "description": "主题相关度检索 top-N",
+          "maximum": 50,
+          "minimum": 1,
+          "title": "Topic Relevance Limit",
+          "type": "integer"
+        },
+        "window_hours": {
+          "default": 24,
+          "description": "候选窗口宽度（小时）",
+          "maximum": 720,
+          "minimum": 1,
+          "title": "Window Hours",
+          "type": "integer"
+        }
+      },
+      "title": "DreamJobConfig",
+      "type": "object"
+    },
+    "DreamRunRecordDTO": {
+      "$defs": {
+        "CuratedKind": {
+          "description": "策展记忆类型值域（ff_curated_memory.kind）。\n\n- ``memory``：蒸馏记忆（从情景层提炼的事实 / 偏好 / 经历）；\n- ``user_note``：主人备忘（显式注入的笔记）；\n- ``relationship``：关系状态（智能体与主人的关系演化记录）。",
+          "enum": [
+            "memory",
+            "user_note",
+            "relationship"
+          ],
+          "title": "CuratedKind",
+          "type": "string"
+        },
+        "DreamDecisionAction": {
+          "description": "逐事件决策动作值域（DreamDecisionModel.action）。\n\n- ``promoted``：事件内容经 LLM 蒸馏进入**新起链**的策展主题\n  （upsert 落 version=1——事件被晋升为记忆）；\n- ``merged``：事件内容并入**既有 active 主题**（upsert 推进\n  supersede 链，version > 1——事件并入既有记忆）；\n- ``skipped``：未参与晋升（低于分数线 / 既往已晋升 / 超出候选\n  上限 / 提案未收录或被丢弃）。",
+          "enum": [
+            "promoted",
+            "skipped",
+            "merged"
+          ],
+          "title": "DreamDecisionAction",
+          "type": "string"
+        },
+        "DreamDecisionModel": {
+          "description": "逐事件决策记录（ff_dream_runs.decisions JSON 的元素形态）。\n\n决策覆盖口径：**全部可信候选事件**（窗口内非 untrusted 事件——\n无论过门与否每人一条；untrusted 事件不可见、不产生决策）。\n既往成功运行中 action ∈ {promoted, merged} 的 episode_id 集合构成\n后续运行的「已晋升」跳过依据。\n\nAttributes:\n    episode_id: 情景事件主键（决策主体）。\n    topic: 关联策展主题键（纯跳过决策为空串）。\n    kind: 关联策展类型（纯跳过决策为 None）。\n    action: 决策动作（promoted / skipped / merged）。\n    reason: 人读决策理由（跳过原因 / 晋升去向说明）。",
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/DreamDecisionAction",
+              "description": "决策动作"
+            },
+            "episode_id": {
+              "description": "情景事件主键",
+              "title": "Episode Id",
+              "type": "integer"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CuratedKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "关联策展类型（纯跳过为 None）"
+            },
+            "reason": {
+              "default": "",
+              "description": "决策理由",
+              "title": "Reason",
+              "type": "string"
+            },
+            "topic": {
+              "default": "",
+              "description": "关联策展主题键（纯跳过为空串）",
+              "title": "Topic",
+              "type": "string"
+            }
+          },
+          "required": [
+            "episode_id",
+            "action"
+          ],
+          "title": "DreamDecisionModel",
+          "type": "object"
+        },
+        "DreamRunStatsModel": {
+          "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    failed: 提案丢弃计数。",
+          "properties": {
+            "candidates": {
+              "default": 0,
+              "description": "可信候选事件数",
+              "minimum": 0,
+              "title": "Candidates",
+              "type": "integer"
+            },
+            "failed": {
+              "default": 0,
+              "description": "提案丢弃计数",
+              "minimum": 0,
+              "title": "Failed",
+              "type": "integer"
+            },
+            "gated": {
+              "default": 0,
+              "description": "过门事件数",
+              "minimum": 0,
+              "title": "Gated",
+              "type": "integer"
+            },
+            "promoted": {
+              "default": 0,
+              "description": "晋升事件数（新起链）",
+              "minimum": 0,
+              "title": "Promoted",
+              "type": "integer"
+            },
+            "skipped_untrusted": {
+              "default": 0,
+              "description": "untrusted 硬排除计数",
+              "minimum": 0,
+              "title": "Skipped Untrusted",
+              "type": "integer"
+            },
+            "superseded": {
+              "default": 0,
+              "description": "并入事件数（推进既有链）",
+              "minimum": 0,
+              "title": "Superseded",
+              "type": "integer"
+            }
+          },
+          "title": "DreamRunStatsModel",
+          "type": "object"
+        },
+        "DreamRunStatus": {
+          "description": "梦境运行状态值域（ff_dream_runs.status）。\n\n- ``running``：运行中（行创建即落库——进程崩溃可能遗留终态缺失行；\n  孤儿 running 行由 ``run_dream`` 入口按\n  ``stale_running_threshold_ms`` 阈值批量收敛为 failed）；\n- ``success``：成功（合并 + 日记全部完成或按规则跳过）；\n- ``failed``：失败（LLM 输出不可解析 / 调用失败 / 日记生成失败——\n  fail-closed 语义见 dreaming 模块文档）。",
+          "enum": [
+            "running",
+            "success",
+            "failed"
+          ],
+          "title": "DreamRunStatus",
+          "type": "string"
+        }
+      },
+      "description": "梦境运行记录读取 DTO（ORM 行归一）。\n\nAttributes:\n    id: 运行主键。\n    persona_id: 所属人格 ID。\n    status: 运行状态（running / success / failed）。\n    started_ms: 开始时间（epoch 毫秒）。\n    finished_ms: 结束时间（epoch 毫秒；运行中为 None）。\n    stats: 运行统计。\n    decisions: 逐事件决策列表。\n    diary_episode_id: 日记事件主键（未生成 / 失败为 None）。\n    error: 失败原因（成功为 None）。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒）。",
+      "properties": {
+        "created_at": {
+          "description": "落库时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "decisions": {
+          "description": "逐事件决策",
+          "items": {
+            "$ref": "#/$defs/DreamDecisionModel"
+          },
+          "title": "Decisions",
+          "type": "array"
+        },
+        "diary_episode_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "日记事件主键",
+          "title": "Diary Episode Id"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "失败原因（成功为 None）",
+          "title": "Error"
+        },
+        "finished_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "结束时间（运行中为 None）",
+          "title": "Finished Ms"
+        },
+        "id": {
+          "description": "运行主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "persona_id": {
+          "description": "所属人格 ID",
+          "title": "Persona Id",
+          "type": "string"
+        },
+        "started_ms": {
+          "description": "开始时间（epoch 毫秒）",
+          "title": "Started Ms",
+          "type": "integer"
+        },
+        "stats": {
+          "$ref": "#/$defs/DreamRunStatsModel",
+          "description": "运行统计"
+        },
+        "status": {
+          "$ref": "#/$defs/DreamRunStatus",
+          "description": "运行状态"
+        },
+        "updated_at": {
+          "description": "行更新时间（epoch 毫秒）",
+          "title": "Updated At",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "persona_id",
+        "status",
+        "started_ms",
+        "stats",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "DreamRunRecordDTO",
+      "type": "object"
+    },
+    "DreamRunStatsModel": {
+      "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    failed: 提案丢弃计数。",
+      "properties": {
+        "candidates": {
+          "default": 0,
+          "description": "可信候选事件数",
+          "minimum": 0,
+          "title": "Candidates",
+          "type": "integer"
+        },
+        "failed": {
+          "default": 0,
+          "description": "提案丢弃计数",
+          "minimum": 0,
+          "title": "Failed",
+          "type": "integer"
+        },
+        "gated": {
+          "default": 0,
+          "description": "过门事件数",
+          "minimum": 0,
+          "title": "Gated",
+          "type": "integer"
+        },
+        "promoted": {
+          "default": 0,
+          "description": "晋升事件数（新起链）",
+          "minimum": 0,
+          "title": "Promoted",
+          "type": "integer"
+        },
+        "skipped_untrusted": {
+          "default": 0,
+          "description": "untrusted 硬排除计数",
+          "minimum": 0,
+          "title": "Skipped Untrusted",
+          "type": "integer"
+        },
+        "superseded": {
+          "default": 0,
+          "description": "并入事件数（推进既有链）",
+          "minimum": 0,
+          "title": "Superseded",
+          "type": "integer"
+        }
+      },
+      "title": "DreamRunStatsModel",
+      "type": "object"
+    },
+    "DreamTriggerRequestDTO": {
+      "$defs": {
+        "DreamJobConfig": {
+          "description": "梦境任务构造级参数（构造注入旋钮——与 llm 网关 retry 旋钮同模式）。\n\n全部旋钮经构造函数 / 请求体覆写注入（Settings env 面迁移为已文档化\n的演进方向；届时本类保留为纯配置形态，与 SeekDBStoreConfig 的装配\n映射同模式）。\n\nAttributes:\n    window_hours: 候选窗口宽度（小时；窗口 ``[now - window_hours,\n        now)`` 左闭右开）。\n    recency_half_life_days: 时间衰减半衰期（天——事件距今每过\n        一个半衰期，recency 衰减一半；指数衰减语义）。\n    min_score: 梦境分晋级阈值（score >= min_score 才入 LLM 候选）。\n    max_candidates: 单次运行候选事件上限（按分数降序截断）。\n    topic_relevance_limit: 主题相关度判定的检索 top-N（每个既有\n        active 主题经存储 keyword 检索取 top-N 事件构成命中集）。\n    boost: 主题相关度加成系数（命中既有主题检索的事件得分乘\n        ``1 + boost``）。\n    diary_enabled: 日记生成开关（关闭则跳过日记阶段）。\n    diary_importance: 日记事件的 important 度（kind=dream 落库）。\n    stale_running_threshold_ms: 孤儿 running 行收敛阈值（epoch\n        毫秒）——run_dream 入口将 started_ms 早于\n        ``now - 阈值`` 且无终态的 running 行批量判为进程崩溃遗留。\n    promoted_lookback_ms: 已晋升跳过的回溯窗（epoch 毫秒）——\n        仅统计 finished_ms 落在 ``[now - 窗, now]`` 内的成功运行\n        决策为「既往已晋升」跳过依据。\n    max_episodes: 单次运行窗口事件上限（超出按时间序截断并告警\n        ——防超宽窗口全量入内存 / prompt）。",
+          "properties": {
+            "boost": {
+              "default": 0.5,
+              "description": "主题相关度加成系数",
+              "maximum": 10,
+              "minimum": 0,
+              "title": "Boost",
+              "type": "number"
+            },
+            "diary_enabled": {
+              "default": true,
+              "description": "日记生成开关",
+              "title": "Diary Enabled",
+              "type": "boolean"
+            },
+            "diary_importance": {
+              "default": 5,
+              "description": "日记事件重要度",
+              "maximum": 10,
+              "minimum": 1,
+              "title": "Diary Importance",
+              "type": "integer"
+            },
+            "max_candidates": {
+              "default": 50,
+              "description": "单次候选事件上限",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Max Candidates",
+              "type": "integer"
+            },
+            "max_episodes": {
+              "default": 2000,
+              "description": "单次运行窗口事件上限（超出按时间序截断并告警）",
+              "maximum": 100000,
+              "minimum": 1,
+              "title": "Max Episodes",
+              "type": "integer"
+            },
+            "min_score": {
+              "default": 1.0,
+              "description": "梦境分晋级阈值",
+              "minimum": 0,
+              "title": "Min Score",
+              "type": "number"
+            },
+            "promoted_lookback_ms": {
+              "default": 2592000000,
+              "description": "已晋升跳过的回溯窗（epoch 毫秒，默认 30 天）",
+              "minimum": 1,
+              "title": "Promoted Lookback Ms",
+              "type": "integer"
+            },
+            "recency_half_life_days": {
+              "default": 30.0,
+              "description": "时间衰减半衰期（天）",
+              "exclusiveMinimum": 0,
+              "title": "Recency Half Life Days",
+              "type": "number"
+            },
+            "stale_running_threshold_ms": {
+              "default": 3600000,
+              "description": "孤儿 running 行收敛阈值（epoch 毫秒，默认 1 小时）",
+              "minimum": 1,
+              "title": "Stale Running Threshold Ms",
+              "type": "integer"
+            },
+            "topic_relevance_limit": {
+              "default": 3,
+              "description": "主题相关度检索 top-N",
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Topic Relevance Limit",
+              "type": "integer"
+            },
+            "window_hours": {
+              "default": 24,
+              "description": "候选窗口宽度（小时）",
+              "maximum": 720,
+              "minimum": 1,
+              "title": "Window Hours",
+              "type": "integer"
+            }
+          },
+          "title": "DreamJobConfig",
+          "type": "object"
+        }
+      },
+      "description": "手工触发梦境整理请求体（POST /api/v1/memories/dream/trigger）。\n\n与检索请求体同构：``persona_id`` 可选（缺省当前激活人格，无激活\n404）；``cfg`` 为构造级参数覆写（嵌套部分覆写——仅出现字段生效，\n其余取 DreamJobConfig 默认值）。\n\nAttributes:\n    persona_id: 目标人格主键（None = 当前激活人格）。\n    cfg: 梦境任务参数覆写（缺省全默认——DreamJobConfig 各字段）。",
+      "properties": {
+        "cfg": {
+          "$ref": "#/$defs/DreamJobConfig",
+          "description": "任务参数覆写（缺省全默认）"
+        },
+        "persona_id": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "目标人格主键（None = 当前激活人格）",
+          "title": "Persona Id"
+        }
+      },
+      "title": "DreamTriggerRequestDTO",
+      "type": "object"
+    },
+    "DutyReportPayloadModel": {
+      "description": "duty 报告事件载荷（kind=duty 的 content 形态）。\n\nAttributes:\n    title: 报告标题。\n    summary: 报告摘要。\n    details: 结构化明细（自由 JSON——报告体按任务形态自带结构）。",
+      "properties": {
+        "details": {
+          "additionalProperties": true,
+          "description": "结构化明细",
+          "title": "Details",
+          "type": "object"
+        },
+        "summary": {
+          "default": "",
+          "description": "报告摘要",
+          "title": "Summary",
+          "type": "string"
+        },
+        "title": {
+          "default": "",
+          "description": "报告标题",
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "title": "DutyReportPayloadModel",
+      "type": "object"
+    },
+    "EpisodeCreateDTO": {
+      "$defs": {
+        "ChatTurnPayloadModel": {
+          "description": "chat 回合事件载荷（kind=chat 的 content 形态）。\n\nAttributes:\n    user_content: 用户侧文本（单向回合可为空串）。\n    assistant_content: 人格回复文本。\n    session_id: 关联会话主键（ff_chat_sessions.id；无关联为 None）。",
+          "properties": {
+            "assistant_content": {
+              "default": "",
+              "description": "人格回复文本",
+              "title": "Assistant Content",
+              "type": "string"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "关联会话主键",
+              "title": "Session Id"
+            },
+            "user_content": {
+              "default": "",
+              "description": "用户侧文本",
+              "title": "User Content",
+              "type": "string"
+            }
+          },
+          "title": "ChatTurnPayloadModel",
+          "type": "object"
+        },
+        "DutyReportPayloadModel": {
+          "description": "duty 报告事件载荷（kind=duty 的 content 形态）。\n\nAttributes:\n    title: 报告标题。\n    summary: 报告摘要。\n    details: 结构化明细（自由 JSON——报告体按任务形态自带结构）。",
+          "properties": {
+            "details": {
+              "additionalProperties": true,
+              "description": "结构化明细",
+              "title": "Details",
+              "type": "object"
+            },
+            "summary": {
+              "default": "",
+              "description": "报告摘要",
+              "title": "Summary",
+              "type": "string"
+            },
+            "title": {
+              "default": "",
+              "description": "报告标题",
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "title": "DutyReportPayloadModel",
+          "type": "object"
+        },
+        "EpisodeKind": {
+          "description": "情景事件类型值域（ff_memory_episodes.kind）。\n\n- ``chat``：对话回合（陪伴对话中值得记住的交互）；\n- ``duty``：值班任务事件（日程提醒 / 例行巡检报告）；\n- ``dream``：梦境产物（记忆整理叙事——DreamService 日记阶段写入）；\n- ``platform``：平台动作（外部平台消息 / 指令记录）；\n- ``system``：系统注记（运维 / 管理面注入的备忘）。",
+          "enum": [
+            "chat",
+            "duty",
+            "dream",
+            "platform",
+            "system"
+          ],
+          "title": "EpisodeKind",
+          "type": "string"
+        },
+        "EpisodeNotePayloadModel": {
+          "description": "通用注记事件载荷（kind=dream / system 的 content 形态）。\n\nAttributes:\n    text: 注记正文。\n    metadata: 附加信息（自由 JSON）。",
+          "properties": {
+            "metadata": {
+              "additionalProperties": true,
+              "description": "附加信息",
+              "title": "Metadata",
+              "type": "object"
+            },
+            "text": {
+              "default": "",
+              "description": "注记正文",
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "title": "EpisodeNotePayloadModel",
+          "type": "object"
+        },
+        "MemoryProvenance": {
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "enum": [
+            "owner",
+            "agent",
+            "untrusted"
+          ],
+          "title": "MemoryProvenance",
+          "type": "string"
+        },
+        "PlatformActionPayloadModel": {
+          "description": "platform 动作事件载荷（kind=platform 的 content 形态）。\n\nAttributes:\n    action: 动作标识（收到消息 / 发出回复 / 执行指令等）。\n    summary: 动作摘要。\n    metadata: 平台侧附加信息（自由 JSON）。",
+          "properties": {
+            "action": {
+              "default": "",
+              "description": "动作标识",
+              "title": "Action",
+              "type": "string"
+            },
+            "metadata": {
+              "additionalProperties": true,
+              "description": "平台附加信息",
+              "title": "Metadata",
+              "type": "object"
+            },
+            "summary": {
+              "default": "",
+              "description": "动作摘要",
+              "title": "Summary",
+              "type": "string"
+            }
+          },
+          "title": "PlatformActionPayloadModel",
+          "type": "object"
+        }
+      },
+      "description": "情景事件创建 DTO（写入面——载荷按 kind 判别解析）。\n\nAttributes:\n    kind: 事件类型。\n    source: 事件来源标识（1-128 字符）。\n    content: 事件载荷（按 kind 判别的 Model Class——dict 输入在\n        DTO 边界归一解析，类型不匹配 kind 校验失败）。\n    importance: 重要度（1-10，默认 5）。\n    provenance: 来源可信度（默认 owner——管理面手工注入面）。\n    ts_ms: 事件发生时间（epoch 毫秒；None = 落库时取当前时间）。",
+      "properties": {
+        "content": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatTurnPayloadModel"
+            },
+            {
+              "$ref": "#/$defs/DutyReportPayloadModel"
+            },
+            {
+              "$ref": "#/$defs/PlatformActionPayloadModel"
+            },
+            {
+              "$ref": "#/$defs/EpisodeNotePayloadModel"
+            }
+          ],
+          "description": "事件载荷（按 kind 判别）",
+          "title": "Content"
+        },
+        "importance": {
+          "default": 5,
+          "description": "重要度（1-10）",
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Importance",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/EpisodeKind",
+          "description": "事件类型"
+        },
+        "provenance": {
+          "$ref": "#/$defs/MemoryProvenance",
+          "default": "owner",
+          "description": "来源可信度（默认 owner）"
+        },
+        "source": {
+          "description": "事件来源标识",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "ts_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "事件发生时间（epoch 毫秒；None=当前时间）",
+          "title": "Ts Ms"
+        }
+      },
+      "required": [
+        "kind",
+        "source",
+        "content"
+      ],
+      "title": "EpisodeCreateDTO",
+      "type": "object"
+    },
+    "EpisodeNotePayloadModel": {
+      "description": "通用注记事件载荷（kind=dream / system 的 content 形态）。\n\nAttributes:\n    text: 注记正文。\n    metadata: 附加信息（自由 JSON）。",
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "description": "附加信息",
+          "title": "Metadata",
+          "type": "object"
+        },
+        "text": {
+          "default": "",
+          "description": "注记正文",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "title": "EpisodeNotePayloadModel",
+      "type": "object"
+    },
+    "EpisodeQueryDTO": {
+      "$defs": {
+        "EpisodeKind": {
+          "description": "情景事件类型值域（ff_memory_episodes.kind）。\n\n- ``chat``：对话回合（陪伴对话中值得记住的交互）；\n- ``duty``：值班任务事件（日程提醒 / 例行巡检报告）；\n- ``dream``：梦境产物（记忆整理叙事——DreamService 日记阶段写入）；\n- ``platform``：平台动作（外部平台消息 / 指令记录）；\n- ``system``：系统注记（运维 / 管理面注入的备忘）。",
+          "enum": [
+            "chat",
+            "duty",
+            "dream",
+            "platform",
+            "system"
+          ],
+          "title": "EpisodeKind",
+          "type": "string"
+        },
+        "MemoryProvenance": {
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "enum": [
+            "owner",
+            "agent",
+            "untrusted"
+          ],
+          "title": "MemoryProvenance",
+          "type": "string"
+        }
+      },
+      "description": "情景事件查询 DTO（kind / provenance / 时间范围过滤 + 游标分页——\nid 降序，新事件在前）。\n\nAttributes:\n    kind: 事件类型过滤（None = 全部）。\n    provenance: 来源可信度过滤（None = 全部）。\n    start_ms: 时间范围起点（epoch 毫秒，含；None = 不限）。\n    end_ms: 时间范围终点（epoch 毫秒，不含；None = 不限）。\n    cursor: 上一页返回的不透明游标（None = 首页）。\n    limit: 页大小（1-200，默认 20）。",
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "分页游标（首页为 None）",
+          "title": "Cursor"
+        },
+        "end_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "范围终点（epoch 毫秒，不含）",
+          "title": "End Ms"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EpisodeKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "事件类型过滤"
+        },
+        "limit": {
+          "default": 20,
+          "description": "页大小",
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemoryProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "来源可信度过滤"
+        },
+        "start_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "范围起点（epoch 毫秒，含）",
+          "title": "Start Ms"
+        }
+      },
+      "title": "EpisodeQueryDTO",
+      "type": "object"
+    },
+    "EpisodeRecordDTO": {
+      "$defs": {
+        "ChatTurnPayloadModel": {
+          "description": "chat 回合事件载荷（kind=chat 的 content 形态）。\n\nAttributes:\n    user_content: 用户侧文本（单向回合可为空串）。\n    assistant_content: 人格回复文本。\n    session_id: 关联会话主键（ff_chat_sessions.id；无关联为 None）。",
+          "properties": {
+            "assistant_content": {
+              "default": "",
+              "description": "人格回复文本",
+              "title": "Assistant Content",
+              "type": "string"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "关联会话主键",
+              "title": "Session Id"
+            },
+            "user_content": {
+              "default": "",
+              "description": "用户侧文本",
+              "title": "User Content",
+              "type": "string"
+            }
+          },
+          "title": "ChatTurnPayloadModel",
+          "type": "object"
+        },
+        "DutyReportPayloadModel": {
+          "description": "duty 报告事件载荷（kind=duty 的 content 形态）。\n\nAttributes:\n    title: 报告标题。\n    summary: 报告摘要。\n    details: 结构化明细（自由 JSON——报告体按任务形态自带结构）。",
+          "properties": {
+            "details": {
+              "additionalProperties": true,
+              "description": "结构化明细",
+              "title": "Details",
+              "type": "object"
+            },
+            "summary": {
+              "default": "",
+              "description": "报告摘要",
+              "title": "Summary",
+              "type": "string"
+            },
+            "title": {
+              "default": "",
+              "description": "报告标题",
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "title": "DutyReportPayloadModel",
+          "type": "object"
+        },
+        "EpisodeKind": {
+          "description": "情景事件类型值域（ff_memory_episodes.kind）。\n\n- ``chat``：对话回合（陪伴对话中值得记住的交互）；\n- ``duty``：值班任务事件（日程提醒 / 例行巡检报告）；\n- ``dream``：梦境产物（记忆整理叙事——DreamService 日记阶段写入）；\n- ``platform``：平台动作（外部平台消息 / 指令记录）；\n- ``system``：系统注记（运维 / 管理面注入的备忘）。",
+          "enum": [
+            "chat",
+            "duty",
+            "dream",
+            "platform",
+            "system"
+          ],
+          "title": "EpisodeKind",
+          "type": "string"
+        },
+        "EpisodeNotePayloadModel": {
+          "description": "通用注记事件载荷（kind=dream / system 的 content 形态）。\n\nAttributes:\n    text: 注记正文。\n    metadata: 附加信息（自由 JSON）。",
+          "properties": {
+            "metadata": {
+              "additionalProperties": true,
+              "description": "附加信息",
+              "title": "Metadata",
+              "type": "object"
+            },
+            "text": {
+              "default": "",
+              "description": "注记正文",
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "title": "EpisodeNotePayloadModel",
+          "type": "object"
+        },
+        "MemoryProvenance": {
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "enum": [
+            "owner",
+            "agent",
+            "untrusted"
+          ],
+          "title": "MemoryProvenance",
+          "type": "string"
+        },
+        "PlatformActionPayloadModel": {
+          "description": "platform 动作事件载荷（kind=platform 的 content 形态）。\n\nAttributes:\n    action: 动作标识（收到消息 / 发出回复 / 执行指令等）。\n    summary: 动作摘要。\n    metadata: 平台侧附加信息（自由 JSON）。",
+          "properties": {
+            "action": {
+              "default": "",
+              "description": "动作标识",
+              "title": "Action",
+              "type": "string"
+            },
+            "metadata": {
+              "additionalProperties": true,
+              "description": "平台附加信息",
+              "title": "Metadata",
+              "type": "object"
+            },
+            "summary": {
+              "default": "",
+              "description": "动作摘要",
+              "title": "Summary",
+              "type": "string"
+            }
+          },
+          "title": "PlatformActionPayloadModel",
+          "type": "object"
+        }
+      },
+      "description": "情景事件读取 DTO（ORM 行归一——服务层经判别解析构造）。\n\nAttributes:\n    id: 事件主键。\n    persona_id: 所属人格 ID。\n    kind: 事件类型。\n    source: 事件来源标识。\n    content: 事件载荷（按 kind 判别的 Model Class）。\n    importance: 重要度（1-10）。\n    provenance: 来源可信度。\n    content_hash: 内容指纹（去重键）。\n    ts_ms: 事件发生时间（epoch 毫秒）。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒；append-only 下与创建同值）。",
+      "properties": {
+        "content": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatTurnPayloadModel"
+            },
+            {
+              "$ref": "#/$defs/DutyReportPayloadModel"
+            },
+            {
+              "$ref": "#/$defs/PlatformActionPayloadModel"
+            },
+            {
+              "$ref": "#/$defs/EpisodeNotePayloadModel"
+            }
+          ],
+          "description": "事件载荷（按 kind 判别）",
+          "title": "Content"
+        },
+        "content_hash": {
+          "description": "内容指纹（去重键）",
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "落库时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "id": {
+          "description": "事件主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "importance": {
+          "description": "重要度（1-10）",
+          "title": "Importance",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/EpisodeKind",
+          "description": "事件类型"
+        },
+        "persona_id": {
+          "description": "所属人格 ID",
+          "title": "Persona Id",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/MemoryProvenance",
+          "description": "来源可信度"
+        },
+        "source": {
+          "description": "事件来源标识",
+          "title": "Source",
+          "type": "string"
+        },
+        "ts_ms": {
+          "description": "事件发生时间（epoch 毫秒）",
+          "title": "Ts Ms",
+          "type": "integer"
+        },
+        "updated_at": {
+          "description": "行更新时间（epoch 毫秒）",
+          "title": "Updated At",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "persona_id",
+        "kind",
+        "source",
+        "content",
+        "importance",
+        "provenance",
+        "content_hash",
+        "ts_ms",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "EpisodeRecordDTO",
+      "type": "object"
+    },
+    "MemorySearchRequestDTO": {
+      "$defs": {
+        "MemoryProvenance": {
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "enum": [
+            "owner",
+            "agent",
+            "untrusted"
+          ],
+          "title": "MemoryProvenance",
+          "type": "string"
+        },
+        "MemorySearchMode": {
+          "description": "记忆检索模式值域。\n\n- ``dense``：稠密向量检索（查询文本经 embed 角色向量化后 ANN 近邻）；\n- ``keyword``：全文关键词检索（MATCH ... AGAINST / 回退存储 LIKE）；\n- ``hybrid``：混合检索（SeekDB ``DBMS_HYBRID_SEARCH.SEARCH``\n  引擎——关键词与向量融合排序）。",
+          "enum": [
+            "dense",
+            "keyword",
+            "hybrid"
+          ],
+          "title": "MemorySearchMode",
+          "type": "string"
+        }
+      },
+      "description": "记忆检索 API 请求体 DTO（POST /api/v1/memories/search）。\n\n与 :class:`MemorySearchQueryDTO` 的分工：请求体承载入口层可自由\n填写的字段（``persona_id`` 可选——缺省当前激活人格）；目标人格\n解析后由入口层构建查询 DTO（persona_id 必填面）。\n\nAttributes:\n    persona_id: 目标人格主键（None = 当前激活人格；无激活则 404）。\n    query: 检索文本（1-512 字符）。\n    mode: 检索模式（默认 dense）。\n    kinds: 记忆类型过滤（None = 全部）。\n    provenance: 来源可信度过滤（None = 全部）。\n    start_ms: 时间范围起点（epoch 毫秒，含；None = 不限）。\n    end_ms: 时间范围终点（epoch 毫秒，含；None = 不限）。\n    limit: 返回条数上限（1-50，默认 10）。",
+      "properties": {
+        "end_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "范围终点（epoch 毫秒，含）",
+          "title": "End Ms"
+        },
+        "kinds": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "记忆类型过滤（None = 全部）",
+          "title": "Kinds"
+        },
+        "limit": {
+          "default": 10,
+          "description": "返回条数上限（1-50）",
+          "maximum": 50,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/MemorySearchMode",
+          "default": "dense",
+          "description": "检索模式（默认 dense）"
+        },
+        "persona_id": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "目标人格主键（None = 当前激活人格）",
+          "title": "Persona Id"
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemoryProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "来源可信度过滤"
+        },
+        "query": {
+          "description": "检索文本",
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Query",
+          "type": "string"
+        },
+        "start_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "范围起点（epoch 毫秒，含）",
+          "title": "Start Ms"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "MemorySearchRequestDTO",
+      "type": "object"
+    },
+    "MemorySearchResultDTO": {
+      "$defs": {
+        "MemoryProvenance": {
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "enum": [
+            "owner",
+            "agent",
+            "untrusted"
+          ],
+          "title": "MemoryProvenance",
+          "type": "string"
+        },
+        "MemoryRefType": {
+          "description": "检索索引引用类型值域（索引行指向的记忆层来源）。\n\n- ``episode``：情景层事件（ff_memory_episodes 行）；\n- ``curated``：策展层记忆（ff_curated_memory 行）。",
+          "enum": [
+            "episode",
+            "curated"
+          ],
+          "title": "MemoryRefType",
+          "type": "string"
+        }
+      },
+      "description": "记忆检索结果 DTO（单条命中——引用定位 + 正文 + 相关度分）。\n\nscore 语义随模式而变（文档化决策——各度量的天然方向差异）：\n\n    - dense：cosine 距离（**越小越相关**，升序返回）；\n    - keyword：全文相关度（SeekDB MATCH 分数 / 回退存储朴素\n      子串计数——**越大越相关**）；\n    - hybrid：SeekDB 融合相关度 ``_score``（关键词与向量 blended\n      ——**越大越相关**，降序返回）。\n\n调用方按 ``mode`` 解释 score 方向；结果已按对应方向排好序。\n\nAttributes:\n    ref_type: 引用类型（episode / curated——回源定位用）。\n    ref_id: 引用行主键（回源定位用）。\n    kind: 记忆类型值。\n    provenance: 来源可信度。\n    ts_ms: 事件时间（epoch 毫秒）。\n    content: 索引正文（命中片段展示面）。\n    score: 相关度分（语义见类 docstring）。",
+      "properties": {
+        "content": {
+          "description": "索引正文",
+          "title": "Content",
+          "type": "string"
+        },
+        "kind": {
+          "description": "记忆类型值",
+          "title": "Kind",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/MemoryProvenance",
+          "description": "来源可信度"
+        },
+        "ref_id": {
+          "description": "引用行主键",
+          "title": "Ref Id",
+          "type": "integer"
+        },
+        "ref_type": {
+          "$ref": "#/$defs/MemoryRefType",
+          "description": "引用类型（episode/curated）"
+        },
+        "score": {
+          "description": "相关度分（方向随模式——见类 docstring）",
+          "title": "Score",
+          "type": "number"
+        },
+        "ts_ms": {
+          "description": "事件时间（epoch 毫秒）",
+          "title": "Ts Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ref_type",
+        "ref_id",
+        "kind",
+        "provenance",
+        "ts_ms",
+        "content",
+        "score"
+      ],
+      "title": "MemorySearchResultDTO",
+      "type": "object"
+    },
+    "ModelEntryCreateDTO": {
+      "$defs": {
+        "ModelRole": {
+          "description": "模型角色值域——陪伴智能体的五类模型用途。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解；非多模态条目触发回退链）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）。",
+          "enum": [
+            "chat",
+            "duty",
+            "dream",
+            "look_at",
+            "embed"
+          ],
+          "title": "ModelRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "模型条目创建请求（写面）。\n\nAttributes:\n    name: 条目唯一标识（非空；全局唯一校验在服务层——冲突 409）。\n    provider: provider 类型（默认 ``openai_compatible``）。\n    base_url: API 基础 URL（http(s)；OpenAI 兼容端点根路径含 ``/v1``）。\n    api_key_env: API Key 环境变量名（空 = 本地免鉴权端点；**只接受\n        变量名，永不接受密钥明文**）。\n    model: 模型名（非空；传给 provider 的 model 参数）。\n    roles: 条目承接的角色集（默认空——仅供显式角色绑定引用）。\n    concurrency: 条目并发上限（None = 全局默认\n        ``POOLS_LLM_SEMAPHORE_LIMIT``）。注：本工程注册表无 per-entry\n        超时字段——请求超时统一走全局 ``POOLS_LLM_REQUEST_TIMEOUT_SECONDS``。\n    multimodal: 是否支持多模态输入（look_at 链路回退判据）。",
+      "properties": {
+        "api_key_env": {
+          "default": "",
+          "description": "API Key 环境变量名（空=免鉴权）",
+          "maxLength": 128,
+          "title": "Api Key Env",
+          "type": "string"
+        },
+        "base_url": {
+          "description": "API 基础 URL（http(s)）",
+          "minLength": 1,
+          "title": "Base Url",
+          "type": "string"
+        },
+        "concurrency": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "条目并发上限（None=全局默认）",
+          "title": "Concurrency"
+        },
+        "model": {
+          "description": "模型名（provider model 参数）",
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "multimodal": {
+          "default": false,
+          "description": "是否支持多模态输入",
+          "title": "Multimodal",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "条目唯一标识",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "provider": {
+          "default": "openai_compatible",
+          "description": "provider 类型",
+          "title": "Provider",
+          "type": "string"
+        },
+        "roles": {
+          "description": "条目承接的角色集",
+          "items": {
+            "$ref": "#/$defs/ModelRole"
+          },
+          "title": "Roles",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "base_url",
+        "model"
+      ],
+      "title": "ModelEntryCreateDTO",
+      "type": "object"
+    },
+    "ModelEntryMaskedDTO": {
+      "description": "模型条目读取面（脱敏）——只携带 ``api_key_env`` 环境变量名，\n**永不携带密钥值**（密钥仅经 .env / 进程环境变量进入，运行时在\nwire 构建点解析）；不含端点健康状态（管理面不探测端点）。\n\nAttributes:\n    name: 条目唯一标识。\n    provider: provider 类型。\n    base_url: API 基础 URL。\n    api_key_env: API Key 环境变量名（空 = 免鉴权端点）。\n    model: 模型名。\n    roles: 条目声明的角色集。\n    resolved_roles: 解析器当前实际解析到本条目的角色集（显式绑定 +\n        声明先注册者胜出的合并结果——解析状态面）。\n    concurrency: 条目并发上限（None = 全局默认）。\n    multimodal: 是否支持多模态输入。",
+      "properties": {
+        "api_key_env": {
+          "description": "API Key 环境变量名（空=免鉴权；永不携带密钥值）",
+          "title": "Api Key Env",
+          "type": "string"
+        },
+        "base_url": {
+          "description": "API 基础 URL",
+          "title": "Base Url",
+          "type": "string"
+        },
+        "concurrency": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "条目并发上限（None=全局默认）",
+          "title": "Concurrency"
+        },
+        "model": {
+          "description": "模型名",
+          "title": "Model",
+          "type": "string"
+        },
+        "multimodal": {
+          "default": false,
+          "description": "是否支持多模态输入",
+          "title": "Multimodal",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "条目唯一标识",
+          "title": "Name",
+          "type": "string"
+        },
+        "provider": {
+          "description": "provider 类型",
+          "title": "Provider",
+          "type": "string"
+        },
+        "resolved_roles": {
+          "description": "解析器当前解析到本条目的角色集",
+          "items": {
+            "type": "string"
+          },
+          "title": "Resolved Roles",
+          "type": "array"
+        },
+        "roles": {
+          "description": "条目声明的角色集",
+          "items": {
+            "type": "string"
+          },
+          "title": "Roles",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "provider",
+        "base_url",
+        "api_key_env",
+        "model"
+      ],
+      "title": "ModelEntryMaskedDTO",
+      "type": "object"
+    },
+    "ModelEntryUpdateDTO": {
+      "$defs": {
+        "ModelRole": {
+          "description": "模型角色值域——陪伴智能体的五类模型用途。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解；非多模态条目触发回退链）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）。",
+          "enum": [
+            "chat",
+            "duty",
+            "dream",
+            "look_at",
+            "embed"
+          ],
+          "title": "ModelRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "模型条目部分更新请求（``name`` 不可变——字段不存在，请求体携带\n即经 ``extra=\"forbid\"`` 拒绝 400）。\n\n字段 null 语义（逐字段文档化）：\n\n    - ``provider`` / ``base_url`` / ``api_key_env`` / ``model`` /\n      ``multimodal``：null / 缺席 = 不变（``api_key_env`` 置空传\n      ``\"\"``——免鉴权端点显式声明）；\n    - ``roles``：null / 缺席 = 不变；清空传 ``[]``；\n    - ``concurrency``：**缺席 = 不变；显式 null = 重置为全局默认**\n      （经 ``model_fields_set`` 区分——唯一可空重置旋钮）。\n\nAttributes:\n    provider: 新 provider 类型（None = 不变）。\n    base_url: 新 API 基础 URL（None = 不变；提供时须 http(s)）。\n    api_key_env: 新 API Key 环境变量名（None = 不变；\"\" = 免鉴权）。\n    model: 新模型名（None = 不变）。\n    roles: 新角色集（None = 不变；[] = 清空声明）。\n    concurrency: 新并发上限（缺席 = 不变；显式 null = 重置全局默认）。\n    multimodal: 新多模态标志（None = 不变）。",
+      "properties": {
+        "api_key_env": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新 API Key 环境变量名（None=不变；空串=免鉴权）",
+          "title": "Api Key Env"
+        },
+        "base_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新 API 基础 URL（None=不变）",
+          "title": "Base Url"
+        },
+        "concurrency": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新并发上限（缺席=不变；显式 null=重置全局默认）",
+          "title": "Concurrency"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新模型名（None=不变）",
+          "title": "Model"
+        },
+        "multimodal": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新多模态标志（None=不变）",
+          "title": "Multimodal"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新 provider 类型（None=不变）",
+          "title": "Provider"
+        },
+        "roles": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ModelRole"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新角色集（None=不变；空列表=清空）",
+          "title": "Roles"
+        }
+      },
+      "title": "ModelEntryUpdateDTO",
+      "type": "object"
+    },
+    "PageResponse": {
+      "description": "分页响应封装。\n\n列表 API 返回此结构，包裹在 ResultDTO.data 中使用::\n\n    ResultDTO[PageResponse[PersonaDTO]]\n\nAttributes:\n    items: 当前页数据列表。\n    total: 符合条件的总记录数（offset 模式返回完整计数；\n        cursor 模式下若无法精确计算则返回 -1）。\n    page: 当前页码（offset 模式有效；cursor 模式恒为 1）。\n    page_size: 每页条数。\n    next_cursor: 下一页游标（cursor 模式）；offset 模式为 None。\n    has_more: 是否还有下一页（cursor 模式有效）。",
+      "properties": {
+        "has_more": {
+          "default": false,
+          "description": "是否还有下一页",
+          "title": "Has More",
+          "type": "boolean"
+        },
+        "items": {
+          "description": "当前页数据列表",
+          "items": {},
+          "title": "Items",
+          "type": "array"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "下一页游标（仅 cursor 模式返回）",
+          "title": "Next Cursor"
+        },
+        "page": {
+          "default": 1,
+          "description": "当前页码（cursor 模式恒为 1）",
+          "minimum": 1,
+          "title": "Page",
+          "type": "integer"
+        },
+        "page_size": {
+          "default": 20,
+          "description": "每页条数",
+          "minimum": 1,
+          "title": "Page Size",
+          "type": "integer"
+        },
+        "total": {
+          "default": 0,
+          "description": "总记录数；cursor 模式无精确值时为 -1",
+          "minimum": -1,
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "title": "PageResponse",
+      "type": "object"
+    },
+    "PersonaBatchDeleteItemDTO": {
+      "description": "批量删除结果单条目。\n\nAttributes:\n    id: 人格主键。\n    success: 是否删除成功。\n    code: 失败错误码（成功为 None）。\n    message: 面向用户的提示信息。",
+      "properties": {
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "失败错误码（成功为 None）",
+          "title": "Code"
+        },
+        "id": {
+          "description": "人格主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "message": {
+          "default": "",
+          "description": "提示信息",
+          "title": "Message",
+          "type": "string"
+        },
+        "success": {
+          "description": "是否删除成功",
+          "title": "Success",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "success"
+      ],
+      "title": "PersonaBatchDeleteItemDTO",
+      "type": "object"
+    },
+    "PersonaBatchDeleteRequest": {
+      "description": "批量删除人格请求（部分成功形态——逐 id 独立事务）。\n\nAttributes:\n    ids: 待删除人格主键列表（1 - 100 个；含当前激活人格的 id 会导致\n        该项失败——激活人格删除守卫见服务层）。",
+      "properties": {
+        "ids": {
+          "description": "待删除人格主键列表（1-100 个）",
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "ids"
+      ],
+      "title": "PersonaBatchDeleteRequest",
+      "type": "object"
+    },
+    "PersonaBatchDeleteResponseDTO": {
+      "$defs": {
+        "PersonaBatchDeleteItemDTO": {
+          "description": "批量删除结果单条目。\n\nAttributes:\n    id: 人格主键。\n    success: 是否删除成功。\n    code: 失败错误码（成功为 None）。\n    message: 面向用户的提示信息。",
+          "properties": {
+            "code": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "失败错误码（成功为 None）",
+              "title": "Code"
+            },
+            "id": {
+              "description": "人格主键",
+              "title": "Id",
+              "type": "integer"
+            },
+            "message": {
+              "default": "",
+              "description": "提示信息",
+              "title": "Message",
+              "type": "string"
+            },
+            "success": {
+              "description": "是否删除成功",
+              "title": "Success",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "success"
+          ],
+          "title": "PersonaBatchDeleteItemDTO",
+          "type": "object"
+        }
+      },
+      "description": "批量删除响应（部分成功形态）。\n\nAttributes:\n    total: 提交总数。\n    succeeded: 成功数量。\n    failed: 失败数量。\n    items: 逐 id 结果列表（与提交顺序一致）。",
+      "properties": {
+        "failed": {
+          "description": "失败数量",
+          "title": "Failed",
+          "type": "integer"
+        },
+        "items": {
+          "description": "逐 id 结果",
+          "items": {
+            "$ref": "#/$defs/PersonaBatchDeleteItemDTO"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "succeeded": {
+          "description": "成功数量",
+          "title": "Succeeded",
+          "type": "integer"
+        },
+        "total": {
+          "description": "提交总数",
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "succeeded",
+        "failed"
+      ],
+      "title": "PersonaBatchDeleteResponseDTO",
+      "type": "object"
+    },
+    "PersonaCardDTO": {
+      "$defs": {
+        "CharaBookEntryModel": {
+          "description": "世界书条目（单条检索增强设定）。\n\n触发语义：``keys`` 任一命中即插入；``selective=True`` 时进一步要求\n``secondary_keys`` 任一命中（选择性触发——主键定义话题、副键收敛\n语境）；``constant=True`` 恒插入（免触发，世界观保底条目）。\n\nAttributes:\n    keys: 主触发关键词列表（非空——无触发面的条目应为 constant）。\n    secondary_keys: 副触发关键词列表（仅 ``selective=True`` 时有意义）。\n    content: 条目正文（插入提示词的设定文本）。\n    insertion_order: 插入顺序（0-9999，值越大越靠后）。\n    constant: 是否恒插入（默认 False——按关键词触发）。\n    case_sensitive: 关键词匹配是否区分大小写（默认 False）。\n    selective: 是否选择性触发（默认 False——主键命中即插入）。\n    position: 插入位置（默认 ``after_char``——角色定义之后）。",
+          "properties": {
+            "case_sensitive": {
+              "default": false,
+              "description": "关键词匹配是否区分大小写",
+              "title": "Case Sensitive",
+              "type": "boolean"
+            },
+            "constant": {
+              "default": false,
+              "description": "是否恒插入（免触发）",
+              "title": "Constant",
+              "type": "boolean"
+            },
+            "content": {
+              "default": "",
+              "description": "条目正文",
+              "title": "Content",
+              "type": "string"
+            },
+            "insertion_order": {
+              "default": 100,
+              "description": "插入顺序（0-9999，值越大越靠后插入提示词）",
+              "maximum": 9999,
+              "minimum": 0,
+              "title": "Insertion Order",
+              "type": "integer"
+            },
+            "keys": {
+              "description": "主触发关键词列表",
+              "items": {
+                "type": "string"
+              },
+              "title": "Keys",
+              "type": "array"
+            },
+            "position": {
+              "$ref": "#/$defs/CharaBookPosition",
+              "default": "after_char",
+              "description": "插入位置"
+            },
+            "secondary_keys": {
+              "description": "副触发关键词列表（selective=True 时参与收敛）",
+              "items": {
+                "type": "string"
+              },
+              "title": "Secondary Keys",
+              "type": "array"
+            },
+            "selective": {
+              "default": false,
+              "description": "是否选择性触发",
+              "title": "Selective",
+              "type": "boolean"
+            }
+          },
+          "title": "CharaBookEntryModel",
+          "type": "object"
+        },
+        "CharaBookModel": {
+          "description": "世界书（检索增强条目集）。\n\nAttributes:\n    name: 世界书名称。\n    description: 世界书描述。\n    scan_depth: 扫描深度（最近 N 条消息内检索关键词；None = 不限）。\n    token_budget: 条目 token 预算（超预算时按 insertion_order 截断；\n        None = 不限）。\n    recursive_scanning: 是否递归扫描（条目 content 中的命中词再触发\n        其他条目；默认 False）。\n    entries: 条目列表（按 ``insertion_order`` 升序决定插入次序）。",
+          "properties": {
+            "description": {
+              "default": "",
+              "description": "世界书描述",
+              "title": "Description",
+              "type": "string"
+            },
+            "entries": {
+              "description": "条目列表",
+              "items": {
+                "$ref": "#/$defs/CharaBookEntryModel"
+              },
+              "title": "Entries",
+              "type": "array"
+            },
+            "name": {
+              "default": "",
+              "description": "世界书名称",
+              "title": "Name",
+              "type": "string"
+            },
+            "recursive_scanning": {
+              "default": false,
+              "description": "是否递归扫描",
+              "title": "Recursive Scanning",
+              "type": "boolean"
+            },
+            "scan_depth": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "扫描深度（最近 N 条消息）",
+              "title": "Scan Depth"
+            },
+            "token_budget": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "条目 token 预算",
+              "title": "Token Budget"
+            }
+          },
+          "title": "CharaBookModel",
+          "type": "object"
+        },
+        "CharaBookPosition": {
+          "description": "世界书条目插入位置值域（v2 字符串形态）。\n\n- ``before_char``：插在角色定义之前（背景 / 世界观类信息）；\n- ``after_char``：插在角色定义之后（行为补充 / 语料示例类信息）。",
+          "enum": [
+            "before_char",
+            "after_char"
+          ],
+          "title": "CharaBookPosition",
+          "type": "string"
+        },
+        "CharaCardModel": {
+          "description": "chara card v2 人格卡片——长期身份正典（L 层）。\n\n作为 JSON 文档整体存储在 ``ff_personas.chara_card`` 列；会话运行期\n**不可变**（编辑即管理面操作，经 PUT 端点整体替换或补丁合并）。\n心情 / 关系等可变状态不在此处——见 L/M/S 模型（M/S 层落\n``ff_persona_states``）。\n\nAttributes:\n    name: 人格称呼名（非空——v2 规格核心字段）。\n    description: 人格简介（外观 / 背景 / 身份概述）。\n    personality: 性格描述（语气 / 行为倾向 / 价值观）。\n    scenario: 场景设定（当前处境与关系背景）。\n    first_mes: 开场白（会话首条人格消息）。\n    mes_example: 对话示例（few-shot 语态锚定）。\n    system_prompt: 系统提示覆写（非空时整体覆写默认人格 system 模板）。\n    post_history_instructions: 历史后指令（拼在对话历史之后的强约束）。\n    character_book: 世界书（检索增强条目集；None = 无世界书）。",
+          "properties": {
+            "character_book": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CharaBookModel"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "世界书"
+            },
+            "description": {
+              "default": "",
+              "description": "人格简介",
+              "title": "Description",
+              "type": "string"
+            },
+            "first_mes": {
+              "default": "",
+              "description": "开场白",
+              "title": "First Mes",
+              "type": "string"
+            },
+            "mes_example": {
+              "default": "",
+              "description": "对话示例",
+              "title": "Mes Example",
+              "type": "string"
+            },
+            "name": {
+              "description": "人格称呼名（非空）",
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "personality": {
+              "default": "",
+              "description": "性格描述",
+              "title": "Personality",
+              "type": "string"
+            },
+            "post_history_instructions": {
+              "default": "",
+              "description": "历史后指令",
+              "title": "Post History Instructions",
+              "type": "string"
+            },
+            "scenario": {
+              "default": "",
+              "description": "场景设定",
+              "title": "Scenario",
+              "type": "string"
+            },
+            "system_prompt": {
+              "default": "",
+              "description": "系统提示覆写",
+              "title": "System Prompt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "CharaCardModel",
+          "type": "object"
+        }
+      },
+      "description": "人格卡片端点读取 DTO（GET / PUT ``/{id}/card`` 响应包裹）。\n\nAttributes:\n    persona_id: 人格主键。\n    card: 人格卡片（chara card v2 文档）。\n    updated_at: 卡片最近更新时间（epoch 毫秒——即行 updated_at）。",
+      "properties": {
+        "card": {
+          "$ref": "#/$defs/CharaCardModel",
+          "description": "人格卡片"
+        },
+        "persona_id": {
+          "description": "人格主键",
+          "title": "Persona Id",
+          "type": "integer"
+        },
+        "updated_at": {
+          "description": "卡片最近更新时间（epoch 毫秒）",
+          "title": "Updated At",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "persona_id",
+        "card",
+        "updated_at"
+      ],
+      "title": "PersonaCardDTO",
+      "type": "object"
+    },
+    "PersonaCopyDTO": {
+      "description": "人格复制 DTO（写入面）。\n\nAttributes:\n    new_name: 新注册名（全局唯一校验；与源名不同）。\n    display_name: 展示名；None 时承接源人格展示名。\n    include_states: 是否深拷贝 M/S 状态层（默认 False——新人格从\n        空状态起步）。",
+      "properties": {
+        "display_name": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "展示名（缺省承接源人格）",
+          "title": "Display Name"
+        },
+        "include_states": {
+          "default": false,
+          "description": "是否深拷贝 M/S 状态层",
+          "title": "Include States",
+          "type": "boolean"
+        },
+        "new_name": {
+          "description": "新注册名（全局唯一）",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "New Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "new_name"
+      ],
+      "title": "PersonaCopyDTO",
+      "type": "object"
+    },
+    "PersonaCreateDTO": {
+      "$defs": {
+        "CharaBookEntryModel": {
+          "description": "世界书条目（单条检索增强设定）。\n\n触发语义：``keys`` 任一命中即插入；``selective=True`` 时进一步要求\n``secondary_keys`` 任一命中（选择性触发——主键定义话题、副键收敛\n语境）；``constant=True`` 恒插入（免触发，世界观保底条目）。\n\nAttributes:\n    keys: 主触发关键词列表（非空——无触发面的条目应为 constant）。\n    secondary_keys: 副触发关键词列表（仅 ``selective=True`` 时有意义）。\n    content: 条目正文（插入提示词的设定文本）。\n    insertion_order: 插入顺序（0-9999，值越大越靠后）。\n    constant: 是否恒插入（默认 False——按关键词触发）。\n    case_sensitive: 关键词匹配是否区分大小写（默认 False）。\n    selective: 是否选择性触发（默认 False——主键命中即插入）。\n    position: 插入位置（默认 ``after_char``——角色定义之后）。",
+          "properties": {
+            "case_sensitive": {
+              "default": false,
+              "description": "关键词匹配是否区分大小写",
+              "title": "Case Sensitive",
+              "type": "boolean"
+            },
+            "constant": {
+              "default": false,
+              "description": "是否恒插入（免触发）",
+              "title": "Constant",
+              "type": "boolean"
+            },
+            "content": {
+              "default": "",
+              "description": "条目正文",
+              "title": "Content",
+              "type": "string"
+            },
+            "insertion_order": {
+              "default": 100,
+              "description": "插入顺序（0-9999，值越大越靠后插入提示词）",
+              "maximum": 9999,
+              "minimum": 0,
+              "title": "Insertion Order",
+              "type": "integer"
+            },
+            "keys": {
+              "description": "主触发关键词列表",
+              "items": {
+                "type": "string"
+              },
+              "title": "Keys",
+              "type": "array"
+            },
+            "position": {
+              "$ref": "#/$defs/CharaBookPosition",
+              "default": "after_char",
+              "description": "插入位置"
+            },
+            "secondary_keys": {
+              "description": "副触发关键词列表（selective=True 时参与收敛）",
+              "items": {
+                "type": "string"
+              },
+              "title": "Secondary Keys",
+              "type": "array"
+            },
+            "selective": {
+              "default": false,
+              "description": "是否选择性触发",
+              "title": "Selective",
+              "type": "boolean"
+            }
+          },
+          "title": "CharaBookEntryModel",
+          "type": "object"
+        },
+        "CharaBookModel": {
+          "description": "世界书（检索增强条目集）。\n\nAttributes:\n    name: 世界书名称。\n    description: 世界书描述。\n    scan_depth: 扫描深度（最近 N 条消息内检索关键词；None = 不限）。\n    token_budget: 条目 token 预算（超预算时按 insertion_order 截断；\n        None = 不限）。\n    recursive_scanning: 是否递归扫描（条目 content 中的命中词再触发\n        其他条目；默认 False）。\n    entries: 条目列表（按 ``insertion_order`` 升序决定插入次序）。",
+          "properties": {
+            "description": {
+              "default": "",
+              "description": "世界书描述",
+              "title": "Description",
+              "type": "string"
+            },
+            "entries": {
+              "description": "条目列表",
+              "items": {
+                "$ref": "#/$defs/CharaBookEntryModel"
+              },
+              "title": "Entries",
+              "type": "array"
+            },
+            "name": {
+              "default": "",
+              "description": "世界书名称",
+              "title": "Name",
+              "type": "string"
+            },
+            "recursive_scanning": {
+              "default": false,
+              "description": "是否递归扫描",
+              "title": "Recursive Scanning",
+              "type": "boolean"
+            },
+            "scan_depth": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "扫描深度（最近 N 条消息）",
+              "title": "Scan Depth"
+            },
+            "token_budget": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "条目 token 预算",
+              "title": "Token Budget"
+            }
+          },
+          "title": "CharaBookModel",
+          "type": "object"
+        },
+        "CharaBookPosition": {
+          "description": "世界书条目插入位置值域（v2 字符串形态）。\n\n- ``before_char``：插在角色定义之前（背景 / 世界观类信息）；\n- ``after_char``：插在角色定义之后（行为补充 / 语料示例类信息）。",
+          "enum": [
+            "before_char",
+            "after_char"
+          ],
+          "title": "CharaBookPosition",
+          "type": "string"
+        },
+        "CharaCardModel": {
+          "description": "chara card v2 人格卡片——长期身份正典（L 层）。\n\n作为 JSON 文档整体存储在 ``ff_personas.chara_card`` 列；会话运行期\n**不可变**（编辑即管理面操作，经 PUT 端点整体替换或补丁合并）。\n心情 / 关系等可变状态不在此处——见 L/M/S 模型（M/S 层落\n``ff_persona_states``）。\n\nAttributes:\n    name: 人格称呼名（非空——v2 规格核心字段）。\n    description: 人格简介（外观 / 背景 / 身份概述）。\n    personality: 性格描述（语气 / 行为倾向 / 价值观）。\n    scenario: 场景设定（当前处境与关系背景）。\n    first_mes: 开场白（会话首条人格消息）。\n    mes_example: 对话示例（few-shot 语态锚定）。\n    system_prompt: 系统提示覆写（非空时整体覆写默认人格 system 模板）。\n    post_history_instructions: 历史后指令（拼在对话历史之后的强约束）。\n    character_book: 世界书（检索增强条目集；None = 无世界书）。",
+          "properties": {
+            "character_book": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CharaBookModel"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "世界书"
+            },
+            "description": {
+              "default": "",
+              "description": "人格简介",
+              "title": "Description",
+              "type": "string"
+            },
+            "first_mes": {
+              "default": "",
+              "description": "开场白",
+              "title": "First Mes",
+              "type": "string"
+            },
+            "mes_example": {
+              "default": "",
+              "description": "对话示例",
+              "title": "Mes Example",
+              "type": "string"
+            },
+            "name": {
+              "description": "人格称呼名（非空）",
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "personality": {
+              "default": "",
+              "description": "性格描述",
+              "title": "Personality",
+              "type": "string"
+            },
+            "post_history_instructions": {
+              "default": "",
+              "description": "历史后指令",
+              "title": "Post History Instructions",
+              "type": "string"
+            },
+            "scenario": {
+              "default": "",
+              "description": "场景设定",
+              "title": "Scenario",
+              "type": "string"
+            },
+            "system_prompt": {
+              "default": "",
+              "description": "系统提示覆写",
+              "title": "System Prompt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "CharaCardModel",
+          "type": "object"
+        },
+        "PersonaStatus": {
+          "description": "人格管理面状态值域（可用性开关，与单激活位正交）。\n\n- ``active``：可用——允许被激活（activate）为当前人格；\n- ``disabled``：停用——管理面下线，激活守卫拒绝（CONFLICT）；\n  停用切换时若该人格正持有激活位则自动清位（见 service 层约定）。",
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "title": "PersonaStatus",
+          "type": "string"
+        },
+        "VoiceProfileModel": {
+          "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；≤2000\n        字符；提供时随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
+          "properties": {
+            "instruct_text": {
+              "anyOf": [
+                {
+                  "maxLength": 2000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "instruct2 风格指令（None = 普通合成；≤2000 字符）",
+              "title": "Instruct Text"
+            },
+            "speaker": {
+              "description": "发音人（speaker id）",
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Speaker",
+              "type": "string"
+            },
+            "speed": {
+              "default": 1.0,
+              "description": "语速（0.5-2.0）",
+              "maximum": 2.0,
+              "minimum": 0.5,
+              "title": "Speed",
+              "type": "number"
+            }
+          },
+          "required": [
+            "speaker"
+          ],
+          "title": "VoiceProfileModel",
+          "type": "object"
+        }
+      },
+      "description": "人格创建 DTO（写入面）。\n\nAttributes:\n    name: 注册名（全局唯一；1-128 字符）。\n    display_name: 展示名；None 时回落 ``card.name``。\n    status: 可用性状态（默认 disabled——启用是显式管理动作）。\n    card: 人格卡片（chara card v2 文档；必填——无卡片的人格无意义）。\n    voice_profile: 人格语音绑定（None = 不绑定——合成回落 settings\n        缺省发音人）。",
+      "properties": {
+        "card": {
+          "$ref": "#/$defs/CharaCardModel",
+          "description": "人格卡片（chara card v2）"
+        },
+        "display_name": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "展示名（缺省回落 card.name）",
+          "title": "Display Name"
+        },
+        "name": {
+          "description": "注册名（全局唯一）",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/PersonaStatus",
+          "default": "disabled",
+          "description": "可用性状态（默认 disabled）"
+        },
+        "voice_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VoiceProfileModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "人格语音绑定（None = 不绑定）"
+        }
+      },
+      "required": [
+        "name",
+        "card"
+      ],
+      "title": "PersonaCreateDTO",
+      "type": "object"
+    },
+    "PersonaQueryDTO": {
+      "$defs": {
+        "PersonaStatus": {
+          "description": "人格管理面状态值域（可用性开关，与单激活位正交）。\n\n- ``active``：可用——允许被激活（activate）为当前人格；\n- ``disabled``：停用——管理面下线，激活守卫拒绝（CONFLICT）；\n  停用切换时若该人格正持有激活位则自动清位（见 service 层约定）。",
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "title": "PersonaStatus",
+          "type": "string"
+        }
+      },
+      "description": "人格列表查询 DTO（status 过滤 + 游标分页——id 降序，新人格在前）。\n\nAttributes:\n    status: 可用性状态过滤（None = 全部）。\n    cursor: 上一页返回的不透明游标（None = 首页）。\n    limit: 页大小（1 - 200，默认 20）。",
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "分页游标（首页为 None）",
+          "title": "Cursor"
+        },
+        "limit": {
+          "default": 20,
+          "description": "页大小",
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PersonaStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "可用性状态过滤"
+        }
+      },
+      "title": "PersonaQueryDTO",
+      "type": "object"
+    },
+    "PersonaRecordDTO": {
+      "$defs": {
+        "CharaBookEntryModel": {
+          "description": "世界书条目（单条检索增强设定）。\n\n触发语义：``keys`` 任一命中即插入；``selective=True`` 时进一步要求\n``secondary_keys`` 任一命中（选择性触发——主键定义话题、副键收敛\n语境）；``constant=True`` 恒插入（免触发，世界观保底条目）。\n\nAttributes:\n    keys: 主触发关键词列表（非空——无触发面的条目应为 constant）。\n    secondary_keys: 副触发关键词列表（仅 ``selective=True`` 时有意义）。\n    content: 条目正文（插入提示词的设定文本）。\n    insertion_order: 插入顺序（0-9999，值越大越靠后）。\n    constant: 是否恒插入（默认 False——按关键词触发）。\n    case_sensitive: 关键词匹配是否区分大小写（默认 False）。\n    selective: 是否选择性触发（默认 False——主键命中即插入）。\n    position: 插入位置（默认 ``after_char``——角色定义之后）。",
+          "properties": {
+            "case_sensitive": {
+              "default": false,
+              "description": "关键词匹配是否区分大小写",
+              "title": "Case Sensitive",
+              "type": "boolean"
+            },
+            "constant": {
+              "default": false,
+              "description": "是否恒插入（免触发）",
+              "title": "Constant",
+              "type": "boolean"
+            },
+            "content": {
+              "default": "",
+              "description": "条目正文",
+              "title": "Content",
+              "type": "string"
+            },
+            "insertion_order": {
+              "default": 100,
+              "description": "插入顺序（0-9999，值越大越靠后插入提示词）",
+              "maximum": 9999,
+              "minimum": 0,
+              "title": "Insertion Order",
+              "type": "integer"
+            },
+            "keys": {
+              "description": "主触发关键词列表",
+              "items": {
+                "type": "string"
+              },
+              "title": "Keys",
+              "type": "array"
+            },
+            "position": {
+              "$ref": "#/$defs/CharaBookPosition",
+              "default": "after_char",
+              "description": "插入位置"
+            },
+            "secondary_keys": {
+              "description": "副触发关键词列表（selective=True 时参与收敛）",
+              "items": {
+                "type": "string"
+              },
+              "title": "Secondary Keys",
+              "type": "array"
+            },
+            "selective": {
+              "default": false,
+              "description": "是否选择性触发",
+              "title": "Selective",
+              "type": "boolean"
+            }
+          },
+          "title": "CharaBookEntryModel",
+          "type": "object"
+        },
+        "CharaBookModel": {
+          "description": "世界书（检索增强条目集）。\n\nAttributes:\n    name: 世界书名称。\n    description: 世界书描述。\n    scan_depth: 扫描深度（最近 N 条消息内检索关键词；None = 不限）。\n    token_budget: 条目 token 预算（超预算时按 insertion_order 截断；\n        None = 不限）。\n    recursive_scanning: 是否递归扫描（条目 content 中的命中词再触发\n        其他条目；默认 False）。\n    entries: 条目列表（按 ``insertion_order`` 升序决定插入次序）。",
+          "properties": {
+            "description": {
+              "default": "",
+              "description": "世界书描述",
+              "title": "Description",
+              "type": "string"
+            },
+            "entries": {
+              "description": "条目列表",
+              "items": {
+                "$ref": "#/$defs/CharaBookEntryModel"
+              },
+              "title": "Entries",
+              "type": "array"
+            },
+            "name": {
+              "default": "",
+              "description": "世界书名称",
+              "title": "Name",
+              "type": "string"
+            },
+            "recursive_scanning": {
+              "default": false,
+              "description": "是否递归扫描",
+              "title": "Recursive Scanning",
+              "type": "boolean"
+            },
+            "scan_depth": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "扫描深度（最近 N 条消息）",
+              "title": "Scan Depth"
+            },
+            "token_budget": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "条目 token 预算",
+              "title": "Token Budget"
+            }
+          },
+          "title": "CharaBookModel",
+          "type": "object"
+        },
+        "CharaBookPosition": {
+          "description": "世界书条目插入位置值域（v2 字符串形态）。\n\n- ``before_char``：插在角色定义之前（背景 / 世界观类信息）；\n- ``after_char``：插在角色定义之后（行为补充 / 语料示例类信息）。",
+          "enum": [
+            "before_char",
+            "after_char"
+          ],
+          "title": "CharaBookPosition",
+          "type": "string"
+        },
+        "CharaCardModel": {
+          "description": "chara card v2 人格卡片——长期身份正典（L 层）。\n\n作为 JSON 文档整体存储在 ``ff_personas.chara_card`` 列；会话运行期\n**不可变**（编辑即管理面操作，经 PUT 端点整体替换或补丁合并）。\n心情 / 关系等可变状态不在此处——见 L/M/S 模型（M/S 层落\n``ff_persona_states``）。\n\nAttributes:\n    name: 人格称呼名（非空——v2 规格核心字段）。\n    description: 人格简介（外观 / 背景 / 身份概述）。\n    personality: 性格描述（语气 / 行为倾向 / 价值观）。\n    scenario: 场景设定（当前处境与关系背景）。\n    first_mes: 开场白（会话首条人格消息）。\n    mes_example: 对话示例（few-shot 语态锚定）。\n    system_prompt: 系统提示覆写（非空时整体覆写默认人格 system 模板）。\n    post_history_instructions: 历史后指令（拼在对话历史之后的强约束）。\n    character_book: 世界书（检索增强条目集；None = 无世界书）。",
+          "properties": {
+            "character_book": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CharaBookModel"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "世界书"
+            },
+            "description": {
+              "default": "",
+              "description": "人格简介",
+              "title": "Description",
+              "type": "string"
+            },
+            "first_mes": {
+              "default": "",
+              "description": "开场白",
+              "title": "First Mes",
+              "type": "string"
+            },
+            "mes_example": {
+              "default": "",
+              "description": "对话示例",
+              "title": "Mes Example",
+              "type": "string"
+            },
+            "name": {
+              "description": "人格称呼名（非空）",
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "personality": {
+              "default": "",
+              "description": "性格描述",
+              "title": "Personality",
+              "type": "string"
+            },
+            "post_history_instructions": {
+              "default": "",
+              "description": "历史后指令",
+              "title": "Post History Instructions",
+              "type": "string"
+            },
+            "scenario": {
+              "default": "",
+              "description": "场景设定",
+              "title": "Scenario",
+              "type": "string"
+            },
+            "system_prompt": {
+              "default": "",
+              "description": "系统提示覆写",
+              "title": "System Prompt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "CharaCardModel",
+          "type": "object"
+        },
+        "PersonaStatus": {
+          "description": "人格管理面状态值域（可用性开关，与单激活位正交）。\n\n- ``active``：可用——允许被激活（activate）为当前人格；\n- ``disabled``：停用——管理面下线，激活守卫拒绝（CONFLICT）；\n  停用切换时若该人格正持有激活位则自动清位（见 service 层约定）。",
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "title": "PersonaStatus",
+          "type": "string"
+        },
+        "VoiceProfileModel": {
+          "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；≤2000\n        字符；提供时随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
+          "properties": {
+            "instruct_text": {
+              "anyOf": [
+                {
+                  "maxLength": 2000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "instruct2 风格指令（None = 普通合成；≤2000 字符）",
+              "title": "Instruct Text"
+            },
+            "speaker": {
+              "description": "发音人（speaker id）",
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Speaker",
+              "type": "string"
+            },
+            "speed": {
+              "default": 1.0,
+              "description": "语速（0.5-2.0）",
+              "maximum": 2.0,
+              "minimum": 0.5,
+              "title": "Speed",
+              "type": "number"
+            }
+          },
+          "required": [
+            "speaker"
+          ],
+          "title": "VoiceProfileModel",
+          "type": "object"
+        }
+      },
+      "description": "人格记录读取 DTO（ORM 行归一）。\n\nAttributes:\n    id: 人格主键（BigInt）。\n    name: 注册名（全局唯一）。\n    display_name: 展示名。\n    status: 可用性状态。\n    is_active: 单激活绑定位。\n    card: 人格卡片（chara card v2 文档）。\n    voice_profile: 人格语音绑定（None = 未绑定）。\n    created_at: 创建时间（epoch 毫秒）。\n    updated_at: 更新时间（epoch 毫秒）。",
+      "properties": {
+        "card": {
+          "$ref": "#/$defs/CharaCardModel",
+          "description": "人格卡片"
+        },
+        "created_at": {
+          "description": "创建时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "display_name": {
+          "description": "展示名",
+          "title": "Display Name",
+          "type": "string"
+        },
+        "id": {
+          "description": "人格主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "is_active": {
+          "description": "单激活绑定位",
+          "title": "Is Active",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "注册名（全局唯一）",
+          "title": "Name",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/PersonaStatus",
+          "description": "可用性状态"
+        },
+        "updated_at": {
+          "description": "更新时间（epoch 毫秒）",
+          "title": "Updated At",
+          "type": "integer"
+        },
+        "voice_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VoiceProfileModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "人格语音绑定（None = 未绑定）"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "status",
+        "is_active",
+        "card",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "PersonaRecordDTO",
+      "type": "object"
+    },
+    "PersonaStateDTO": {
+      "$defs": {
+        "PersonaStateLayer": {
+          "description": "L/M/S 心理状态模型的可变层值域（ff_persona_states.layer）。\n\n- ``M``：中期层——心情 / 关系评价（跨会话演化）；\n- ``S``：短期层——会话内即时状态（话题焦点 / 情绪强度 / 最近意图）。\n\n注：长期层 ``L`` 不入状态表——人格身份正典（personaity / 关系设定 /\n开场白等）以 chara card 字段承载，会话期不可变（见模块 docstring）。",
+          "enum": [
+            "M",
+            "S"
+          ],
+          "title": "PersonaStateLayer",
+          "type": "string"
+        }
+      },
+      "description": "人格状态读取 DTO（ORM 行归一）。\n\nAttributes:\n    persona_id: 所属人格主键。\n    layer: 状态层（M=中期心情/关系；S=短期会话状态）。\n    state: 状态 JSON 文档。\n    created_at: 创建时间（epoch 毫秒）。\n    updated_at: 更新时间（epoch 毫秒）。",
+      "properties": {
+        "created_at": {
+          "description": "创建时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "layer": {
+          "$ref": "#/$defs/PersonaStateLayer",
+          "description": "状态层（M/S）"
+        },
+        "persona_id": {
+          "description": "所属人格主键",
+          "title": "Persona Id",
+          "type": "integer"
+        },
+        "state": {
+          "additionalProperties": true,
+          "description": "状态 JSON 文档",
+          "title": "State",
+          "type": "object"
+        },
+        "updated_at": {
+          "description": "更新时间（epoch 毫秒）",
+          "title": "Updated At",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "persona_id",
+        "layer",
+        "state",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "PersonaStateDTO",
+      "type": "object"
+    },
+    "PersonaStateUpsertDTO": {
+      "description": "人格状态写入 DTO（upsert 面——layer 由路径参数 / 服务参数承载）。\n\nAttributes:\n    state: 状态 JSON 文档（整体替换式更新——非字段级合并）。",
+      "properties": {
+        "state": {
+          "additionalProperties": true,
+          "description": "状态 JSON 文档（整体替换）",
+          "title": "State",
+          "type": "object"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "title": "PersonaStateUpsertDTO",
+      "type": "object"
+    },
+    "PersonaUpdateDTO": {
+      "$defs": {
+        "CharaBookEntryModel": {
+          "description": "世界书条目（单条检索增强设定）。\n\n触发语义：``keys`` 任一命中即插入；``selective=True`` 时进一步要求\n``secondary_keys`` 任一命中（选择性触发——主键定义话题、副键收敛\n语境）；``constant=True`` 恒插入（免触发，世界观保底条目）。\n\nAttributes:\n    keys: 主触发关键词列表（非空——无触发面的条目应为 constant）。\n    secondary_keys: 副触发关键词列表（仅 ``selective=True`` 时有意义）。\n    content: 条目正文（插入提示词的设定文本）。\n    insertion_order: 插入顺序（0-9999，值越大越靠后）。\n    constant: 是否恒插入（默认 False——按关键词触发）。\n    case_sensitive: 关键词匹配是否区分大小写（默认 False）。\n    selective: 是否选择性触发（默认 False——主键命中即插入）。\n    position: 插入位置（默认 ``after_char``——角色定义之后）。",
+          "properties": {
+            "case_sensitive": {
+              "default": false,
+              "description": "关键词匹配是否区分大小写",
+              "title": "Case Sensitive",
+              "type": "boolean"
+            },
+            "constant": {
+              "default": false,
+              "description": "是否恒插入（免触发）",
+              "title": "Constant",
+              "type": "boolean"
+            },
+            "content": {
+              "default": "",
+              "description": "条目正文",
+              "title": "Content",
+              "type": "string"
+            },
+            "insertion_order": {
+              "default": 100,
+              "description": "插入顺序（0-9999，值越大越靠后插入提示词）",
+              "maximum": 9999,
+              "minimum": 0,
+              "title": "Insertion Order",
+              "type": "integer"
+            },
+            "keys": {
+              "description": "主触发关键词列表",
+              "items": {
+                "type": "string"
+              },
+              "title": "Keys",
+              "type": "array"
+            },
+            "position": {
+              "$ref": "#/$defs/CharaBookPosition",
+              "default": "after_char",
+              "description": "插入位置"
+            },
+            "secondary_keys": {
+              "description": "副触发关键词列表（selective=True 时参与收敛）",
+              "items": {
+                "type": "string"
+              },
+              "title": "Secondary Keys",
+              "type": "array"
+            },
+            "selective": {
+              "default": false,
+              "description": "是否选择性触发",
+              "title": "Selective",
+              "type": "boolean"
+            }
+          },
+          "title": "CharaBookEntryModel",
+          "type": "object"
+        },
+        "CharaBookModel": {
+          "description": "世界书（检索增强条目集）。\n\nAttributes:\n    name: 世界书名称。\n    description: 世界书描述。\n    scan_depth: 扫描深度（最近 N 条消息内检索关键词；None = 不限）。\n    token_budget: 条目 token 预算（超预算时按 insertion_order 截断；\n        None = 不限）。\n    recursive_scanning: 是否递归扫描（条目 content 中的命中词再触发\n        其他条目；默认 False）。\n    entries: 条目列表（按 ``insertion_order`` 升序决定插入次序）。",
+          "properties": {
+            "description": {
+              "default": "",
+              "description": "世界书描述",
+              "title": "Description",
+              "type": "string"
+            },
+            "entries": {
+              "description": "条目列表",
+              "items": {
+                "$ref": "#/$defs/CharaBookEntryModel"
+              },
+              "title": "Entries",
+              "type": "array"
+            },
+            "name": {
+              "default": "",
+              "description": "世界书名称",
+              "title": "Name",
+              "type": "string"
+            },
+            "recursive_scanning": {
+              "default": false,
+              "description": "是否递归扫描",
+              "title": "Recursive Scanning",
+              "type": "boolean"
+            },
+            "scan_depth": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "扫描深度（最近 N 条消息）",
+              "title": "Scan Depth"
+            },
+            "token_budget": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "条目 token 预算",
+              "title": "Token Budget"
+            }
+          },
+          "title": "CharaBookModel",
+          "type": "object"
+        },
+        "CharaBookPosition": {
+          "description": "世界书条目插入位置值域（v2 字符串形态）。\n\n- ``before_char``：插在角色定义之前（背景 / 世界观类信息）；\n- ``after_char``：插在角色定义之后（行为补充 / 语料示例类信息）。",
+          "enum": [
+            "before_char",
+            "after_char"
+          ],
+          "title": "CharaBookPosition",
+          "type": "string"
+        },
+        "CharaCardPatchDTO": {
+          "description": "卡片补丁 DTO（部分合并面——仅出现的字段覆写既有卡片）。\n\n与 :class:`CharaCardModel` 字段一一对应但全部可选；合并语义在服务层\n实现（``既有卡片 dump ⊕ 补丁 exclude_unset dump`` 后整体重新校验）。\n``character_book`` 提供时**整体替换**世界书（不做条目级合并）。\n\nAttributes:\n    name: 人格称呼名（提供时须非空——合并校验兜底）。\n    description: 人格简介。\n    personality: 性格描述。\n    scenario: 场景设定。\n    first_mes: 开场白。\n    mes_example: 对话示例。\n    system_prompt: 系统提示覆写。\n    post_history_instructions: 历史后指令。\n    character_book: 世界书（提供时整体替换；显式 null 清除世界书）。",
+          "properties": {
+            "character_book": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CharaBookModel"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "世界书（整体替换）"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "人格简介",
+              "title": "Description"
+            },
+            "first_mes": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "开场白",
+              "title": "First Mes"
+            },
+            "mes_example": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "对话示例",
+              "title": "Mes Example"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "人格称呼名",
+              "title": "Name"
+            },
+            "personality": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "性格描述",
+              "title": "Personality"
+            },
+            "post_history_instructions": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "历史后指令",
+              "title": "Post History Instructions"
+            },
+            "scenario": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "场景设定",
+              "title": "Scenario"
+            },
+            "system_prompt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "系统提示覆写",
+              "title": "System Prompt"
+            }
+          },
+          "title": "CharaCardPatchDTO",
+          "type": "object"
+        },
+        "PersonaStatus": {
+          "description": "人格管理面状态值域（可用性开关，与单激活位正交）。\n\n- ``active``：可用——允许被激活（activate）为当前人格；\n- ``disabled``：停用——管理面下线，激活守卫拒绝（CONFLICT）；\n  停用切换时若该人格正持有激活位则自动清位（见 service 层约定）。",
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "title": "PersonaStatus",
+          "type": "string"
+        },
+        "VoiceProfileModel": {
+          "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；≤2000\n        字符；提供时随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
+          "properties": {
+            "instruct_text": {
+              "anyOf": [
+                {
+                  "maxLength": 2000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "instruct2 风格指令（None = 普通合成；≤2000 字符）",
+              "title": "Instruct Text"
+            },
+            "speaker": {
+              "description": "发音人（speaker id）",
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Speaker",
+              "type": "string"
+            },
+            "speed": {
+              "default": 1.0,
+              "description": "语速（0.5-2.0）",
+              "maximum": 2.0,
+              "minimum": 0.5,
+              "title": "Speed",
+              "type": "number"
+            }
+          },
+          "required": [
+            "speaker"
+          ],
+          "title": "VoiceProfileModel",
+          "type": "object"
+        }
+      },
+      "description": "人格更新 DTO（部分更新面——仅出现的字段生效）。\n\n**不含 ``is_active``**：单激活位是事务性切换不变式，仅经\n``activate`` / ``deactivate`` 操作面管理（绕过会破坏「至多一个激活」\n保证）。status 切到 disabled 时若该人格持有激活位，服务层自动清位\n（停用即下线）。\n\nAttributes:\n    name: 新注册名（重命名；全局唯一校验）。\n    display_name: 新展示名。\n    status: 新可用性状态。\n    card: 卡片补丁（仅出现字段覆写；不提供则卡片原样）。\n    voice_profile: 人格语音绑定（**出现即整体替换**——显式 null 清除\n        绑定；不提供则原样保留；与卡片补丁的 exclude_unset 语义不同：\n        语音绑定是单对象面，无字段级合并）。",
+      "properties": {
+        "card": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CharaCardPatchDTO"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "卡片补丁"
+        },
+        "display_name": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新展示名",
+          "title": "Display Name"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新注册名（重命名）",
+          "title": "Name"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PersonaStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新可用性状态"
+        },
+        "voice_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VoiceProfileModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "语音绑定（出现即替换；显式 null 清除）"
+        }
+      },
+      "title": "PersonaUpdateDTO",
+      "type": "object"
+    },
+    "PlatformActionPayloadModel": {
+      "description": "platform 动作事件载荷（kind=platform 的 content 形态）。\n\nAttributes:\n    action: 动作标识（收到消息 / 发出回复 / 执行指令等）。\n    summary: 动作摘要。\n    metadata: 平台侧附加信息（自由 JSON）。",
+      "properties": {
+        "action": {
+          "default": "",
+          "description": "动作标识",
+          "title": "Action",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "description": "平台附加信息",
+          "title": "Metadata",
+          "type": "object"
+        },
+        "summary": {
+          "default": "",
+          "description": "动作摘要",
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "title": "PlatformActionPayloadModel",
+      "type": "object"
+    },
+    "RegistryStateDTO": {
+      "$defs": {
+        "ModelEntryMaskedDTO": {
+          "description": "模型条目读取面（脱敏）——只携带 ``api_key_env`` 环境变量名，\n**永不携带密钥值**（密钥仅经 .env / 进程环境变量进入，运行时在\nwire 构建点解析）；不含端点健康状态（管理面不探测端点）。\n\nAttributes:\n    name: 条目唯一标识。\n    provider: provider 类型。\n    base_url: API 基础 URL。\n    api_key_env: API Key 环境变量名（空 = 免鉴权端点）。\n    model: 模型名。\n    roles: 条目声明的角色集。\n    resolved_roles: 解析器当前实际解析到本条目的角色集（显式绑定 +\n        声明先注册者胜出的合并结果——解析状态面）。\n    concurrency: 条目并发上限（None = 全局默认）。\n    multimodal: 是否支持多模态输入。",
+          "properties": {
+            "api_key_env": {
+              "description": "API Key 环境变量名（空=免鉴权；永不携带密钥值）",
+              "title": "Api Key Env",
+              "type": "string"
+            },
+            "base_url": {
+              "description": "API 基础 URL",
+              "title": "Base Url",
+              "type": "string"
+            },
+            "concurrency": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "条目并发上限（None=全局默认）",
+              "title": "Concurrency"
+            },
+            "model": {
+              "description": "模型名",
+              "title": "Model",
+              "type": "string"
+            },
+            "multimodal": {
+              "default": false,
+              "description": "是否支持多模态输入",
+              "title": "Multimodal",
+              "type": "boolean"
+            },
+            "name": {
+              "description": "条目唯一标识",
+              "title": "Name",
+              "type": "string"
+            },
+            "provider": {
+              "description": "provider 类型",
+              "title": "Provider",
+              "type": "string"
+            },
+            "resolved_roles": {
+              "description": "解析器当前解析到本条目的角色集",
+              "items": {
+                "type": "string"
+              },
+              "title": "Resolved Roles",
+              "type": "array"
+            },
+            "roles": {
+              "description": "条目声明的角色集",
+              "items": {
+                "type": "string"
+              },
+              "title": "Roles",
+              "type": "array"
+            }
+          },
+          "required": [
+            "name",
+            "provider",
+            "base_url",
+            "api_key_env",
+            "model"
+          ],
+          "title": "ModelEntryMaskedDTO",
+          "type": "object"
+        }
+      },
+      "description": "注册表状态（读取面 + 每次写操作的返回形态）。\n\nAttributes:\n    entries: 当前注册表条目（脱敏，声明顺序）。\n    role_bindings: 显式角色绑定（角色 → 条目名；优先于条目声明）。",
+      "properties": {
+        "entries": {
+          "description": "注册表条目（脱敏）",
+          "items": {
+            "$ref": "#/$defs/ModelEntryMaskedDTO"
+          },
+          "title": "Entries",
+          "type": "array"
+        },
+        "role_bindings": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "显式角色绑定（角色 → 条目名）",
+          "title": "Role Bindings",
+          "type": "object"
+        }
+      },
+      "title": "RegistryStateDTO",
+      "type": "object"
+    },
+    "ResultDTO": {
+      "description": "统一响应封装。\n\n所有 API 端点返回此结构，对应 Java 生态的 ResultDTO。\n前端通过 ``success`` 判断成败，通过 ``code`` 做错误分支，通过 ``data`` 取业务数据。\n\nAttributes:\n    success: 是否成功（True=业务成功，False=业务失败）。\n    code: 状态码字符串（成功恒为 \"200\"；失败见 ErrorCode 常量）。\n    message: 面向用户的提示信息（成功=\"成功\"；失败=错误描述）。\n    data: 业务数据载荷，类型由泛型参数 T 决定。",
+      "properties": {
+        "code": {
+          "default": "200",
+          "title": "Code",
+          "type": "string"
+        },
+        "data": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data"
+        },
+        "message": {
+          "default": "成功",
+          "title": "Message",
+          "type": "string"
+        },
+        "success": {
+          "default": true,
+          "title": "Success",
+          "type": "boolean"
+        }
+      },
+      "title": "ResultDTO",
+      "type": "object"
+    },
+    "RoleBindingDTO": {
+      "description": "角色绑定行（五角色逐一呈现 bound / unbound）。\n\nAttributes:\n    role: 角色名（chat / duty / dream / look_at / embed）。\n    bound: 是否已绑定条目（显式绑定或条目声明任一命中）。\n    entry_name: 绑定的条目名（未绑定为 None）。",
+      "properties": {
+        "bound": {
+          "description": "是否已绑定条目",
+          "title": "Bound",
+          "type": "boolean"
+        },
+        "entry_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "绑定的条目名（未绑定为 None）",
+          "title": "Entry Name"
+        },
+        "role": {
+          "description": "角色名",
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "bound"
+      ],
+      "title": "RoleBindingDTO",
+      "type": "object"
+    },
+    "UsageAggregateDTO": {
+      "description": "用量聚合结果 DTO（单分组行）。\n\nAttributes:\n    group: 分组键——条目名 / 用途值 / 时间桶起点 epoch 毫秒的字符串\n        形态（JSON 键统一字符串化）。\n    bucket_ms: 时间桶起点（epoch 毫秒；仅 ``time_bucket`` 维度非\n        None——数值面供前端排序 / 定位）。\n    input_tokens: 输入 token 求和。\n    output_tokens: 输出 token 求和。\n    total_tokens: 总 token 求和。\n    call_count: 调用次数。\n    avg_latency_ms: 平均时延毫秒（四舍五入取整）。\n    error_count: 失败次数（status=error 计数）。",
+      "properties": {
+        "avg_latency_ms": {
+          "default": 0,
+          "description": "平均时延（毫秒）",
+          "minimum": 0,
+          "title": "Avg Latency Ms",
+          "type": "integer"
+        },
+        "bucket_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "时间桶起点（epoch 毫秒；非时间维度为 None）",
+          "title": "Bucket Ms"
+        },
+        "call_count": {
+          "default": 0,
+          "description": "调用次数",
+          "minimum": 0,
+          "title": "Call Count",
+          "type": "integer"
+        },
+        "error_count": {
+          "default": 0,
+          "description": "失败次数",
+          "minimum": 0,
+          "title": "Error Count",
+          "type": "integer"
+        },
+        "group": {
+          "description": "分组键（条目名 / 用途值 / 桶起点毫秒字符串）",
+          "title": "Group",
+          "type": "string"
+        },
+        "input_tokens": {
+          "default": 0,
+          "description": "输入 token 求和",
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "default": 0,
+          "description": "输出 token 求和",
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "total_tokens": {
+          "default": 0,
+          "description": "总 token 求和",
+          "minimum": 0,
+          "title": "Total Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "group"
+      ],
+      "title": "UsageAggregateDTO",
+      "type": "object"
+    },
+    "UsageAggregateQueryDTO": {
+      "$defs": {
+        "UsageGroupBy": {
+          "description": "聚合维度值域（管理面总览）。\n\n- ``model_entry``：按模型条目聚合（端点成本分布）；\n- ``purpose``：按调用用途聚合（业务面消耗分布）；\n- ``time_bucket``：按时间桶聚合（minute / hour / day 三档桶宽）。",
+          "enum": [
+            "model_entry",
+            "purpose",
+            "time_bucket"
+          ],
+          "title": "UsageGroupBy",
+          "type": "string"
+        },
+        "UsagePurpose": {
+          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排。",
+          "enum": [
+            "chat",
+            "duty",
+            "dream",
+            "look_at",
+            "embed",
+            "tts",
+            "asr",
+            "tool"
+          ],
+          "title": "UsagePurpose",
+          "type": "string"
+        },
+        "UsageStatus": {
+          "description": "调用结果值域。\n\n- ``success``：调用成功（token 数可能为零——端点未回传用量）；\n- ``error``：调用失败（错误码见 error_code 列）。",
+          "enum": [
+            "success",
+            "error"
+          ],
+          "title": "UsageStatus",
+          "type": "string"
+        },
+        "UsageTimeBucket": {
+          "description": "时间桶宽值域（epoch 毫秒对齐取整）。",
+          "enum": [
+            "minute",
+            "hour",
+            "day"
+          ],
+          "title": "UsageTimeBucket",
+          "type": "string"
+        }
+      },
+      "description": "用量聚合查询 DTO（分组维度 + 过滤面）。\n\nAttributes:\n    group_by: 分组维度（model_entry / purpose / time_bucket）。\n    time_bucket: 时间桶宽（``group_by=time_bucket`` 时必填；其余\n        维度忽略）。",
+      "properties": {
+        "end_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "范围终点（epoch 毫秒，不含）",
+          "title": "End Ms"
+        },
+        "group_by": {
+          "$ref": "#/$defs/UsageGroupBy",
+          "description": "分组维度"
+        },
+        "model_entry": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "模型条目名过滤",
+          "title": "Model Entry"
+        },
+        "persona_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "人格 ID 过滤",
+          "title": "Persona Id"
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsagePurpose"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "调用用途过滤"
+        },
+        "start_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "范围起点（epoch 毫秒，含）",
+          "title": "Start Ms"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "调用结果过滤"
+        },
+        "time_bucket": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageTimeBucket"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "时间桶宽（time_bucket 维度必填）"
+        }
+      },
+      "required": [
+        "group_by"
+      ],
+      "title": "UsageAggregateQueryDTO",
+      "type": "object"
+    },
+    "UsageFilterFields": {
+      "$defs": {
+        "UsagePurpose": {
+          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排。",
+          "enum": [
+            "chat",
+            "duty",
+            "dream",
+            "look_at",
+            "embed",
+            "tts",
+            "asr",
+            "tool"
+          ],
+          "title": "UsagePurpose",
+          "type": "string"
+        },
+        "UsageStatus": {
+          "description": "调用结果值域。\n\n- ``success``：调用成功（token 数可能为零——端点未回传用量）；\n- ``error``：调用失败（错误码见 error_code 列）。",
+          "enum": [
+            "success",
+            "error"
+          ],
+          "title": "UsageStatus",
+          "type": "string"
+        }
+      },
+      "description": "用量查询公共过滤面（记录查询与聚合查询共用的过滤字段）。\n\nAttributes:\n    start_ms: 范围起点（epoch 毫秒，含；None = 不限）。\n    end_ms: 范围终点（epoch 毫秒，不含；None = 不限）。\n    persona_id: 人格 ID 过滤（None = 全人格——管理面口径）。\n    model_entry: 模型条目名过滤（None = 全条目）。\n    purpose: 调用用途过滤（None = 全用途）。\n    status: 调用结果过滤（None = 全状态）。",
+      "properties": {
+        "end_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "范围终点（epoch 毫秒，不含）",
+          "title": "End Ms"
+        },
+        "model_entry": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "模型条目名过滤",
+          "title": "Model Entry"
+        },
+        "persona_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "人格 ID 过滤",
+          "title": "Persona Id"
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsagePurpose"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "调用用途过滤"
+        },
+        "start_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "范围起点（epoch 毫秒，含）",
+          "title": "Start Ms"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "调用结果过滤"
+        }
+      },
+      "title": "UsageFilterFields",
+      "type": "object"
+    },
+    "UsageQueryDTO": {
+      "$defs": {
+        "UsagePurpose": {
+          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排。",
+          "enum": [
+            "chat",
+            "duty",
+            "dream",
+            "look_at",
+            "embed",
+            "tts",
+            "asr",
+            "tool"
+          ],
+          "title": "UsagePurpose",
+          "type": "string"
+        },
+        "UsageStatus": {
+          "description": "调用结果值域。\n\n- ``success``：调用成功（token 数可能为零——端点未回传用量）；\n- ``error``：调用失败（错误码见 error_code 列）。",
+          "enum": [
+            "success",
+            "error"
+          ],
+          "title": "UsageStatus",
+          "type": "string"
+        }
+      },
+      "description": "用量记录查询 DTO（游标分页——id 降序，新记录在前）。\n\nAttributes:\n    cursor: 上一页返回的不透明游标（None = 首页）。\n    limit: 页大小（1 - 200）。",
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "分页游标（首页为 None）",
+          "title": "Cursor"
+        },
+        "end_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "范围终点（epoch 毫秒，不含）",
+          "title": "End Ms"
+        },
+        "limit": {
+          "default": 20,
+          "description": "页大小",
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "model_entry": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "模型条目名过滤",
+          "title": "Model Entry"
+        },
+        "persona_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "人格 ID 过滤",
+          "title": "Persona Id"
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsagePurpose"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "调用用途过滤"
+        },
+        "start_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "范围起点（epoch 毫秒，含）",
+          "title": "Start Ms"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "调用结果过滤"
+        }
+      },
+      "title": "UsageQueryDTO",
+      "type": "object"
+    },
+    "UsageRecordDTO": {
+      "$defs": {
+        "UsagePurpose": {
+          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排。",
+          "enum": [
+            "chat",
+            "duty",
+            "dream",
+            "look_at",
+            "embed",
+            "tts",
+            "asr",
+            "tool"
+          ],
+          "title": "UsagePurpose",
+          "type": "string"
+        },
+        "UsageStatus": {
+          "description": "调用结果值域。\n\n- ``success``：调用成功（token 数可能为零——端点未回传用量）；\n- ``error``：调用失败（错误码见 error_code 列）。",
+          "enum": [
+            "success",
+            "error"
+          ],
+          "title": "UsageStatus",
+          "type": "string"
+        }
+      },
+      "description": "用量记录读取 DTO（ORM 行归一）。\n\nAttributes:\n    id: 记录主键。\n    persona_id: 人格 ID（None = 系统调用）。\n    ts_ms: 调用发起时间（epoch 毫秒）。\n    model_entry: 模型条目名。\n    provider: provider 类型。\n    purpose: 调用用途。\n    input_tokens: 输入 token 数。\n    output_tokens: 输出 token 数。\n    total_tokens: 总 token 数。\n    latency_ms: 端到端时延毫秒。\n    status: 调用结果。\n    request_id: 请求追踪 ID。\n    error_code: 失败错误码。\n    created_at: 记录落库时间（epoch 毫秒）。",
+      "properties": {
+        "created_at": {
+          "description": "记录落库时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "失败错误码",
+          "title": "Error Code"
+        },
+        "id": {
+          "description": "记录主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "input_tokens": {
+          "description": "输入 token 数",
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "latency_ms": {
+          "description": "端到端时延（毫秒）",
+          "title": "Latency Ms",
+          "type": "integer"
+        },
+        "model_entry": {
+          "description": "模型条目名",
+          "title": "Model Entry",
+          "type": "string"
+        },
+        "output_tokens": {
+          "description": "输出 token 数",
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "persona_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "人格 ID",
+          "title": "Persona Id"
+        },
+        "provider": {
+          "description": "provider 类型",
+          "title": "Provider",
+          "type": "string"
+        },
+        "purpose": {
+          "$ref": "#/$defs/UsagePurpose",
+          "description": "调用用途"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "请求追踪 ID",
+          "title": "Request Id"
+        },
+        "status": {
+          "$ref": "#/$defs/UsageStatus",
+          "description": "调用结果"
+        },
+        "total_tokens": {
+          "description": "总 token 数",
+          "title": "Total Tokens",
+          "type": "integer"
+        },
+        "ts_ms": {
+          "description": "调用发起时间（epoch 毫秒）",
+          "title": "Ts Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "ts_ms",
+        "model_entry",
+        "provider",
+        "purpose",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "latency_ms",
+        "status",
+        "created_at"
+      ],
+      "title": "UsageRecordDTO",
+      "type": "object"
+    },
+    "UsageSummaryDTO": {
+      "$defs": {
+        "UsageAggregateDTO": {
+          "description": "用量聚合结果 DTO（单分组行）。\n\nAttributes:\n    group: 分组键——条目名 / 用途值 / 时间桶起点 epoch 毫秒的字符串\n        形态（JSON 键统一字符串化）。\n    bucket_ms: 时间桶起点（epoch 毫秒；仅 ``time_bucket`` 维度非\n        None——数值面供前端排序 / 定位）。\n    input_tokens: 输入 token 求和。\n    output_tokens: 输出 token 求和。\n    total_tokens: 总 token 求和。\n    call_count: 调用次数。\n    avg_latency_ms: 平均时延毫秒（四舍五入取整）。\n    error_count: 失败次数（status=error 计数）。",
+          "properties": {
+            "avg_latency_ms": {
+              "default": 0,
+              "description": "平均时延（毫秒）",
+              "minimum": 0,
+              "title": "Avg Latency Ms",
+              "type": "integer"
+            },
+            "bucket_ms": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "时间桶起点（epoch 毫秒；非时间维度为 None）",
+              "title": "Bucket Ms"
+            },
+            "call_count": {
+              "default": 0,
+              "description": "调用次数",
+              "minimum": 0,
+              "title": "Call Count",
+              "type": "integer"
+            },
+            "error_count": {
+              "default": 0,
+              "description": "失败次数",
+              "minimum": 0,
+              "title": "Error Count",
+              "type": "integer"
+            },
+            "group": {
+              "description": "分组键（条目名 / 用途值 / 桶起点毫秒字符串）",
+              "title": "Group",
+              "type": "string"
+            },
+            "input_tokens": {
+              "default": 0,
+              "description": "输入 token 求和",
+              "minimum": 0,
+              "title": "Input Tokens",
+              "type": "integer"
+            },
+            "output_tokens": {
+              "default": 0,
+              "description": "输出 token 求和",
+              "minimum": 0,
+              "title": "Output Tokens",
+              "type": "integer"
+            },
+            "total_tokens": {
+              "default": 0,
+              "description": "总 token 求和",
+              "minimum": 0,
+              "title": "Total Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "group"
+          ],
+          "title": "UsageAggregateDTO",
+          "type": "object"
+        }
+      },
+      "description": "用量总览 DTO（单请求聚合面——时间范围 + 过滤的整体口径）。\n\n整体平均时延按 per-purpose 聚合行均值（已取整）的调用次数加权\n（派生口径，偏差 < 1ms——见模块 docstring）。\n\nAttributes:\n    call_count: 调用总次数。\n    input_tokens: 输入 token 总量。\n    output_tokens: 输出 token 总量。\n    total_tokens: 总 token 总量。\n    avg_latency_ms: 整体平均时延（毫秒，四舍五入取整）。\n    error_count: 失败总次数（status=error）。\n    purposes: per-purpose 聚合明细（总量降序——同聚合口径）。",
+      "properties": {
+        "avg_latency_ms": {
+          "default": 0,
+          "description": "整体平均时延（毫秒）",
+          "minimum": 0,
+          "title": "Avg Latency Ms",
+          "type": "integer"
+        },
+        "call_count": {
+          "default": 0,
+          "description": "调用总次数",
+          "minimum": 0,
+          "title": "Call Count",
+          "type": "integer"
+        },
+        "error_count": {
+          "default": 0,
+          "description": "失败总次数",
+          "minimum": 0,
+          "title": "Error Count",
+          "type": "integer"
+        },
+        "input_tokens": {
+          "default": 0,
+          "description": "输入 token 总量",
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "default": 0,
+          "description": "输出 token 总量",
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "purposes": {
+          "description": "per-purpose 聚合明细（总量降序）",
+          "items": {
+            "$ref": "#/$defs/UsageAggregateDTO"
+          },
+          "title": "Purposes",
+          "type": "array"
+        },
+        "total_tokens": {
+          "default": 0,
+          "description": "总 token 总量",
+          "minimum": 0,
+          "title": "Total Tokens",
+          "type": "integer"
+        }
+      },
+      "title": "UsageSummaryDTO",
+      "type": "object"
+    },
+    "VoiceProfileModel": {
+      "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；≤2000\n        字符；提供时随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
+      "properties": {
+        "instruct_text": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "instruct2 风格指令（None = 普通合成；≤2000 字符）",
+          "title": "Instruct Text"
+        },
+        "speaker": {
+          "description": "发音人（speaker id）",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Speaker",
+          "type": "string"
+        },
+        "speed": {
+          "default": 1.0,
+          "description": "语速（0.5-2.0）",
+          "maximum": 2.0,
+          "minimum": 0.5,
+          "title": "Speed",
+          "type": "number"
+        }
+      },
+      "required": [
+        "speaker"
+      ],
+      "title": "VoiceProfileModel",
+      "type": "object"
+    }
+  }
+}

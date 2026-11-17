@@ -18,8 +18,10 @@ chara card v2 是人格的**长期身份正典（L 层）**：定义「这个人
     - ``name`` 非空（人格必须可称呼）；
     - 世界书条目 ``insertion_order`` 界 ``0 <= insertion_order <= 9999``
       （值越大越靠后插入提示词；上界防无意义巨值挤爆 token 预算）；
-    - ``secondary_keys`` 仅在 ``selective=True``（选择性触发）时有意义——
-      非选择性条目携带非空 ``secondary_keys`` 视为规格错误；
+    - ``secondary_keys`` 仅在 ``selective=True``（选择性触发）时有意义
+      ——非选择性条目携带非空 ``secondary_keys`` 视为规格错误；
+      ``selective=True`` 但无任何非空副键同样拒绝（空副键永不触发
+      ——选择性条目将永远无法注入，静默失效在构造期 fail loud）；
     - ``position`` 取 v2 字符串形态（``before_char`` / ``after_char``）。
 """
 
@@ -88,17 +90,24 @@ class CharaBookEntryModel(BaseModel):
 
     @model_validator(mode="after")
     def _validate_selective_keys(self) -> CharaBookEntryModel:
-        """规格一致性：非选择性条目不得携带副触发键。
+        """规格一致性：副触发键仅在选择性触发语义下且非空时有效。
 
         Returns:
             校验通过的实例。
 
         Raises:
             ValueError: ``selective=False`` 但 ``secondary_keys`` 非空
-                （副键仅在选择触发语义下生效，携带即规格错误）。
+                （副键仅在选择触发语义下生效，携带即规格错误）；
+                ``selective=True`` 但 ``secondary_keys`` 无任何非空键
+                （空副键永不触发——选择性条目将永远无法注入，静默失效
+                形态在构造期拒绝）。
         """
         if not self.selective and self.secondary_keys:
             raise ValueError("secondary_keys 仅在 selective=True（选择性触发）时可携带")
+        if self.selective and not any(self.secondary_keys):
+            raise ValueError(
+                "selective=True 条目必须携带非空 secondary_keys（空副键永不触发——条目将永远无法注入）"
+            )
         return self
 
 

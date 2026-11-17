@@ -7,8 +7,10 @@
 覆盖面：TTS 字节响应契约（audio/wav + X-Latency-Ms 头）+ 人格解析三分支
 （显式 / 激活缺省 / 未绑定）+ 错误映射（404 / 409 / 400 / 503 ResultDTO
 形态）；ASR multipart 解析（file / language 字段 + 字节载荷）+ 形态错误
-400 + disabled 409；另设处理器直调契约面（handler 作为普通 async 可调用
-直接调用——Response / ResultDTO 包装契约）。
+400 + 上传上限字节精确边界（恰等于上限通过 / 超一字节 422——经
+``app.state.settings`` 注入小上限隔离驱动）+ disabled 409；另设处理器
+直调契约面（handler 作为普通 async 可调用直接调用——Response /
+ResultDTO 包装契约）。
 """
 
 from __future__ import annotations
@@ -411,6 +413,48 @@ class TestAsrEndpoint:
         )
         assert response.status_code == 409
         assert response.json()["code"] == "CONFLICT"
+
+    async def test_upload_size_limit_byte_exact(
+        self, voice_app: FastAPI, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """上传上限字节精确边界：请求体恰等于上限通过，超一字节 422。
+
+        上限经 ``app.state.settings`` 注入小值隔离驱动（不依赖全局
+        env 面）；请求体为手工拼装的 multipart envelope——总字节数
+        可精确控制（httpx files= 形态无法保证 envelope 字节数）。
+        """
+        fake = FakeVoiceService()
+        monkeypatch.setattr(voice_api, "voice_service", fake)
+        limit = 1024
+        voice_app.state.settings = build_isolated_settings(
+            voice=VoiceSettings(asr=AsrSettings(max_upload_bytes=limit))
+        )
+        boundary = "byte-exact-boundary"
+        prefix = (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file"; filename="memo.wav"\r\n'
+            "Content-Type: audio/wav\r\n\r\n"
+        ).encode()
+        suffix = f"\r\n--{boundary}--\r\n".encode()
+        headers = {"content-type": f"multipart/form-data; boundary={boundary}"}
+        audio_ok = b"a" * (limit - len(prefix) - len(suffix))
+        assert len(prefix) + len(audio_ok) + len(suffix) == limit
+        response = await client.post(
+            "/api/v1/voice/asr", content=prefix + audio_ok + suffix, headers=headers
+        )
+        assert response.status_code == 200
+        assert fake.asr_calls[0]["audio"] == audio_ok
+        audio_over = b"a" * (limit - len(prefix) - len(suffix) + 1)
+        response = await client.post(
+            "/api/v1/voice/asr", content=prefix + audio_over + suffix, headers=headers
+        )
+        assert response.status_code == 422
+        body = response.json()
+        assert body["success"] is False
+        assert body["code"] == "VALIDATION_ERROR"
+        assert body["data"]["max_upload_bytes"] == limit
+        assert body["data"]["size_bytes"] == limit + 1
+        assert len(fake.asr_calls) == 1
 
 
 # ---------------------------------------------------------------------------

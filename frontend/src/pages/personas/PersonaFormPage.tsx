@@ -11,6 +11,7 @@ import { Alert, AlertDescription } from '@/components/ui/Alert'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { useToast } from '@/components/ui/useToast'
 import { toApiError } from '@/api/client'
+import { apiErrorFieldSuffix } from '@/api/errorDetails'
 import {
   useCreatePersona,
   usePersonaDetail,
@@ -28,6 +29,7 @@ import {
   type CharaCardFormState,
   type PersonaFormErrors,
   type PersonaFormState,
+  type VoiceProfileFormState,
 } from './personaFormModel'
 import { CharacterBookEditor } from './CharacterBookEditor'
 import { PersonaCardJsonPreview } from './PersonaCardJsonPreview'
@@ -63,10 +65,12 @@ function fieldError(errors: PersonaFormErrors, key: string): string | null {
  * 人格创建 / 编辑表单页。
  *
  * - 基础字段：注册名 / 展示名 / 可用性状态；
+ * - 语音绑定：可折叠面板（speaker / instruct_text / speed——空 =
+ *   不绑定，保存时整体替换）；
  * - 卡片字段：chara card v2 全字段（叙事 + 长文本 + 世界书条目编辑器）
  *   + 实时 JSON 预览；
- * - 编辑模式分两次落库：基础字段经 PUT /personas/{id}，卡片经
- *   PUT /personas/{id}/card（整体替换语义）；
+ * - 编辑模式分两次落库：基础字段（含语音绑定）经 PUT /personas/{id}，
+ *   卡片经 PUT /personas/{id}/card（整体替换语义）；
  * - 状态层（M/S）面板仅编辑模式呈现；
  * - 校验与后端契约对齐（长度 / 数值界 / 规格一致性），错误逐字段
  *   内联呈现。
@@ -80,6 +84,7 @@ export default function PersonaFormPage({ mode }: PersonaFormPageProps) {
   const [form, setForm] = useState<PersonaFormState>(createEmptyForm)
   const [errors, setErrors] = useState<PersonaFormErrors>({})
   const [submitted, setSubmitted] = useState(false)
+  const [voiceOpen, setVoiceOpen] = useState(false)
 
   const isEditMode = mode === 'edit'
   const detailQuery = usePersonaDetail(isEditMode && Number.isInteger(parsedId) ? parsedId : 0)
@@ -87,10 +92,11 @@ export default function PersonaFormPage({ mode }: PersonaFormPageProps) {
   const updateMutation = useUpdatePersona()
   const replaceCardMutation = useReplacePersonaCard()
 
-  // 编辑模式：记录落地为表单态（仅首次成功加载）。
+  // 编辑模式：记录落地为表单态（仅首次成功加载）；既有语音绑定时展开面板。
   useEffect(() => {
     if (detailQuery.data !== undefined) {
       setForm(recordToFormState(detailQuery.data))
+      setVoiceOpen(detailQuery.data.voice_profile !== null)
     }
   }, [detailQuery.data])
 
@@ -104,12 +110,25 @@ export default function PersonaFormPage({ mode }: PersonaFormPageProps) {
     setForm((prev) => ({ ...prev, card: { ...prev.card, ...patch } }))
   }
 
+  /** 语音绑定字段更新。 */
+  const updateVoice = (patch: Partial<VoiceProfileFormState>): void => {
+    setForm((prev) => ({ ...prev, voice: { ...prev.voice, ...patch } }))
+  }
+
+  /** 校验未通过时折叠面板内的语音错误自动展开（错误可见性）。 */
+  const revealVoiceErrors = (validation: PersonaFormErrors): void => {
+    if (validation['voice.speaker'] !== undefined || validation['voice.speed'] !== undefined) {
+      setVoiceOpen(true)
+    }
+  }
+
   /** 创建提交。 */
   const handleCreate = (): void => {
     const validation = validatePersonaForm(form)
     setErrors(validation)
     setSubmitted(true)
     if (Object.keys(validation).length > 0) {
+      revealVoiceErrors(validation)
       toast.error('表单校验未通过，请检查标红字段')
       return
     }
@@ -119,7 +138,8 @@ export default function PersonaFormPage({ mode }: PersonaFormPageProps) {
         void navigate('/personas')
       },
       onError: (error) => {
-        toast.error(toApiError(error).message)
+        const apiError = toApiError(error)
+        toast.error(`${apiError.message}${apiErrorFieldSuffix(apiError)}`)
       },
     })
   }
@@ -130,6 +150,7 @@ export default function PersonaFormPage({ mode }: PersonaFormPageProps) {
     setErrors(validation)
     setSubmitted(true)
     if (Object.keys(validation).length > 0) {
+      revealVoiceErrors(validation)
       toast.error('表单校验未通过，请检查标红字段')
       return
     }
@@ -148,13 +169,15 @@ export default function PersonaFormPage({ mode }: PersonaFormPageProps) {
                 void navigate('/personas')
               },
               onError: (error) => {
-                toast.error(`卡片替换失败：${toApiError(error).message}`)
+                const apiError = toApiError(error)
+                toast.error(`卡片替换失败：${apiError.message}${apiErrorFieldSuffix(apiError)}`)
               },
             },
           )
         },
         onError: (error) => {
-          toast.error(toApiError(error).message)
+          const apiError = toApiError(error)
+          toast.error(`${apiError.message}${apiErrorFieldSuffix(apiError)}`)
         },
       },
     )
@@ -267,6 +290,76 @@ export default function PersonaFormPage({ mode }: PersonaFormPageProps) {
             </div>
           </CardContent>
         </Card>
+
+        {/* 语音绑定（可折叠——空 = 不绑定；保存时整体替换） */}
+        <details
+          open={voiceOpen}
+          onToggle={(e) => setVoiceOpen(e.currentTarget.open)}
+          className="rounded-xl border border-[var(--color-border)]"
+          data-testid="voice-profile-section"
+        >
+          <summary className="cursor-pointer select-none px-6 py-4 text-base font-semibold text-[var(--color-text)]">
+            语音绑定（可选——TTS 发音人 / 风格指令 / 语速）
+          </summary>
+          <div className="space-y-4 border-t border-[var(--color-border)] px-6 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label htmlFor="voice-speaker" className="text-sm font-medium">
+                  发音人（speaker）
+                </label>
+                <Input
+                  id="voice-speaker"
+                  value={form.voice.speaker}
+                  onChange={(e) => updateVoice({ speaker: e.target.value })}
+                  placeholder="CosyVoice speaker id（留空 = 不绑定）"
+                  aria-invalid={shouldShowError('voice.speaker')}
+                />
+                {shouldShowError('voice.speaker') && (
+                  <p className="text-xs text-[var(--color-destructive)]" role="alert">
+                    {fieldError(errors, 'voice.speaker')}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <label htmlFor="voice-speed" className="text-sm font-medium">
+                  语速（0.5-2.0）
+                </label>
+                <Input
+                  id="voice-speed"
+                  type="number"
+                  min={0.5}
+                  max={2}
+                  step={0.1}
+                  value={form.voice.speed}
+                  onChange={(e) => updateVoice({ speed: e.target.value })}
+                  placeholder="默认 1.0"
+                  aria-invalid={shouldShowError('voice.speed')}
+                />
+                {shouldShowError('voice.speed') && (
+                  <p className="text-xs text-[var(--color-destructive)]" role="alert">
+                    {fieldError(errors, 'voice.speed')}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="voice-instruct" className="text-sm font-medium">
+                instruct2 风格指令（可空）
+              </label>
+              <Textarea
+                id="voice-instruct"
+                rows={2}
+                value={form.voice.instruct_text}
+                onChange={(e) => updateVoice({ instruct_text: e.target.value })}
+                placeholder="自然语言语气 / 情绪指令（instruct2 模式）"
+              />
+            </div>
+            <p className="text-xs text-[var(--color-text-muted)]">
+              发音人留空 = 不绑定（合成回落全局缺省发音人）；填写后指令 / 语速随绑定生效；
+              保存时语音绑定整体替换（清除发音人即解绑）。
+            </p>
+          </div>
+        </details>
 
         {/* 卡片字段 */}
         <Card>

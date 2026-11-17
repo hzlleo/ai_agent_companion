@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from packages.harness.core.context import current_context, persona_id_var
@@ -111,6 +112,44 @@ async def test_create_duplicate_name_conflict(
     assert exc_info.value.code == ErrorCode.CONFLICT
     assert exc_info.value.details is not None
     assert exc_info.value.details["name"] == "feiyu"
+
+
+async def test_create_integrity_error_maps_conflict(
+    persona_service: PersonaService, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """并发同名竞态落 IntegrityError：归一为 CONFLICT（409 语义）。"""
+    from unittest.mock import AsyncMock
+
+    integrity = IntegrityError(
+        "INSERT INTO ff_personas ...", {}, Exception("UNIQUE constraint failed: ff_personas.name")
+    )
+    monkeypatch.setattr(db_session, "commit", AsyncMock(side_effect=integrity))
+    with pytest.raises(BusinessException) as exc_info:
+        await persona_service.create(db_session, _create_dto(name="race-feiyu"))
+    assert exc_info.value.code == ErrorCode.CONFLICT
+    assert exc_info.value.__cause__ is integrity
+    assert exc_info.value.details is not None
+    assert exc_info.value.details["name"] == "race-feiyu"
+
+
+async def test_update_rename_integrity_error_maps_conflict(
+    persona_service: PersonaService, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """并发重命名竞态落 IntegrityError：归一为 CONFLICT（409 语义）。"""
+    from unittest.mock import AsyncMock
+
+    record = await persona_service.create(db_session, _create_dto(name="rename-race"))
+    integrity = IntegrityError(
+        "UPDATE ff_personas ...", {}, Exception("UNIQUE constraint failed: ff_personas.name")
+    )
+    monkeypatch.setattr(db_session, "commit", AsyncMock(side_effect=integrity))
+    with pytest.raises(BusinessException) as exc_info:
+        await persona_service.update(
+            db_session, record.id, PersonaUpdateDTO(name="rename-target")
+        )
+    assert exc_info.value.code == ErrorCode.CONFLICT
+    assert exc_info.value.details is not None
+    assert exc_info.value.details["name"] == "rename-target"
 
 
 async def test_get_missing_raises_not_found(
@@ -350,6 +389,56 @@ async def test_copy_with_states_deep_copies(
     assert by_layer[PersonaStateLayer.S].state == {"topic": "晚饭", "energy": 0.6}
     # 源状态保留（深拷贝非移动）
     assert len(await persona_service.get_states(db_session, source.id)) == 2
+
+
+async def test_copy_with_states_deep_copies_nested_structures(
+    persona_service: PersonaService, db_session: AsyncSession
+) -> None:
+    """状态深拷贝嵌套结构：副本嵌套对象与源不共享——突变副本不影响源行。"""
+    source = await persona_service.create(db_session, _create_dto())
+    await persona_service.upsert_state(
+        db_session,
+        source.id,
+        PersonaStateLayer.M,
+        PersonaStateUpsertDTO(
+            state={"mood": "开心", "meta": {"tags": ["温柔"], "scores": {"亲密": 80}}}
+        ),
+    )
+    source_state = (
+        (
+            await db_session.execute(
+                select(PersonaStateRow).where(
+                    PersonaStateRow.persona_id == source.id,
+                    PersonaStateRow.layer == PersonaStateLayer.M.value,
+                )
+            )
+        )
+        .scalars()
+        .one()
+    )
+    source_nested = source_state.state["meta"]
+
+    copied = await persona_service.copy(
+        db_session, source.id, PersonaCopyDTO(new_name="feiyu-deep-copy", include_states=True)
+    )
+    copied_state = (
+        (
+            await db_session.execute(
+                select(PersonaStateRow).where(
+                    PersonaStateRow.persona_id == copied.id,
+                    PersonaStateRow.layer == PersonaStateLayer.M.value,
+                )
+            )
+        )
+        .scalars()
+        .one()
+    )
+    copied_nested = copied_state.state["meta"]
+    assert copied_nested is not source_nested
+    copied_nested["tags"].append("突变")
+    copied_nested["scores"]["亲密"] = 1
+    assert source_nested["tags"] == ["温柔"]
+    assert source_nested["scores"]["亲密"] == 80
 
 
 async def test_copy_duplicate_name_conflict(
@@ -600,6 +689,41 @@ async def test_batch_delete_partial_success(
         await persona_service.get(db_session, ok_persona.id)
     kept = await persona_service.get(db_session, active_persona.id)
     assert kept.is_active is True
+
+
+async def test_batch_delete_unknown_exception_partial_success(
+    persona_service: PersonaService,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """单项未知异常：归一 INTERNAL_ERROR 失败项，其余 id 照常删除。"""
+    ok_persona = await persona_service.create(db_session, _create_dto(name="batch-ok"))
+    broken_persona = await persona_service.create(db_session, _create_dto(name="batch-broken"))
+    original_delete = persona_service.delete
+
+    async def delete_with_injected_failure(session: AsyncSession, persona_id: int) -> None:
+        if persona_id == broken_persona.id:
+            raise RuntimeError("模拟单项未知故障（非 BusinessException）")
+        await original_delete(session, persona_id)
+
+    monkeypatch.setattr(persona_service, "delete", delete_with_injected_failure)
+    result = await persona_service.batch_delete(
+        db_session, [ok_persona.id, broken_persona.id]
+    )
+    assert result.total == 2
+    assert result.succeeded == 1
+    assert result.failed == 1
+    by_id = {item.id: item for item in result.items}
+    assert by_id[ok_persona.id].success is True
+    assert by_id[broken_persona.id].success is False
+    assert by_id[broken_persona.id].code == ErrorCode.INTERNAL_ERROR.value
+    assert by_id[broken_persona.id].message == "删除人格时发生内部错误"
+
+    # 未知故障项原样保留；成功项真实删除
+    kept = await persona_service.get(db_session, broken_persona.id)
+    assert kept.name == "batch-broken"
+    with pytest.raises(BusinessException):
+        await persona_service.get(db_session, ok_persona.id)
 
 
 # ---------------------------------------------------------------------------

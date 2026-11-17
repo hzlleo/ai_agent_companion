@@ -1,13 +1,13 @@
 """chat 域 Model Classes——会话回合 / 会话状态 / 消息组装结果（Unit 文件）。
 
-会话状态约定（P1 记忆层落地后）：
+会话状态约定（含可选持久化）：
 
     - **历史内存态 + 可选持久化**：会话回合列表存活于
       :class:`ChatSessionStateModel` 对象内；``ChatService`` 绑定持久化
       服务（``session_id`` 非空）时，reply / stream_reply 的用户与助手
       回合同步落 ``ff_chat_messages``（消息行经 memory 域
       ``ChatSessionService`` 追加）；未绑定时行为与纯内存态一致
-      （P0 兼容——既有测试面零变更）；
+      （既有测试面零变更）；
     - **卡片快照**：会话创建时从人格注册表快照 chara card（运行期管理面
       编辑不热更到在途会话——会话以创建时刻的正典为准，文档化决策；
       resume 恢复时按会话归属人格重取**当前**卡片）；
@@ -39,12 +39,13 @@ class ChatTurnModel(BaseModel):
     """会话回合（单条历史消息的会话内存态记录）。
 
     与 llm 域 :class:`~packages.harness.llm.llm_models.ChatMessageModel` 的
-    分工：回合模型是**会话历史的持久语义面**（携带时间戳，P1 落库时即
-    此形态）；组装请求时由 service 层映射为传输面消息模型（不含时间戳）。
+    分工：回合模型是**会话历史的持久语义面**（携带时间戳，持久化落库
+    时即此形态）；组装请求时由 service 层映射为传输面消息模型（不含
+    时间戳）。
 
     Attributes:
         role: 回合角色（user=用户输入；assistant=人格回复；system=
-            显式系统注入——P0 组装链不落 system 回合，保留值域完备性）。
+            显式系统注入——组装链不落 system 回合，保留值域完备性）。
         content: 回合文本内容（非空）。
         ts_ms: 回合产生时间（epoch 毫秒）。
     """
@@ -55,7 +56,7 @@ class ChatTurnModel(BaseModel):
 
 
 class ChatSessionStateModel(BaseModel):
-    """人格感知聊天会话状态（内存态——每会话对象一份；P1 可选持久化）。
+    """人格感知聊天会话状态（内存态——每会话对象一份；可选持久化）。
 
     Attributes:
         persona_id: 绑定人格主键（人格注册表 ``ff_personas.id``）。

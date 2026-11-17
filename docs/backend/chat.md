@@ -1,6 +1,6 @@
-# chat — 会话循环 / 世界书 / 控制台 CLI（P0-6 交付；P1-1 会话持久化）
+# chat — 会话循环 / 世界书 / 控制台 CLI（含会话持久化）
 
-`backend/src/packages/harness/chat/` 承载人格感知的会话循环：chara card 正典 + 世界书 → LLM 请求消息组装（prompt Unit 文件唯一真源），经 llm 网关（role=chat）非流式 / 流式调用；P1 记忆层 chunk 1 落地**可选会话持久化**（`ff_chat_sessions` / `ff_chat_messages`——回合落库 + 会话恢复，缺省关闭保持 P0 行为）。控制台 REPL（`pixi run chat`）为用户可见交付面；app 层已完成最终装配（`app/main.py` create_app + lifespan + `/api/v1/health` 存活面 + personas / memories 路由）。
+`backend/src/packages/harness/chat/` 承载人格感知的会话循环：chara card 正典 + 世界书 → LLM 请求消息组装（prompt Unit 文件唯一真源），经 llm 网关（role=chat）非流式 / 流式调用；记忆层落地**可选会话持久化**（`ff_chat_sessions` / `ff_chat_messages`——回合落库 + 会话恢复，缺省关闭保持纯内存行为）。控制台 REPL（`pixi run chat`）为用户可见交付面；app 层已完成最终装配（`app/main.py` create_app + lifespan——personas / memories / usage / voice / look_at / models / channels-qq webhooks / health 共八路由）。
 
 ## 模块一览
 
@@ -46,9 +46,9 @@
 | 大小写 | 按条目 `case_sensitive`（默认不区分） |
 | token 预算 | 关键词条目按 `(position, insertion_order)` 升序累计 `estimate_text_tokens`；首条超 `token_budget` 即截断（其后关键词条目不再注入） |
 | 注入次序 | `before_char` 段在人格正典前 / `after_char` 段在后；同段内 `insertion_order` 升序 |
-| `recursive_scanning` | 标志读取但 P0 未启用（P1 记忆层扩展点） |
+| `recursive_scanning` | 标志读取但当前未启用（记忆层扩展点） |
 
-token 近似估算（P0 无 tokenizer 的确定性约定）：CJK 区段字符 1 token/字；其余字符 4 字符 ≈ 1 token。会话结构性上限见下（防 in-memory 历史无限膨胀）。
+token 近似估算（无 tokenizer 的确定性约定）：CJK 区段字符 1 token/字；其余字符 4 字符 ≈ 1 token。会话结构性上限见下（防 in-memory 历史无限膨胀）。
 
 ## 会话流（ChatService）
 
@@ -72,15 +72,15 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 - 流式被消费方提前终止（`GeneratorExit`）→ **不追加助手回合**（半截回复不入历史）；
 - 结构性上限：`max_history_turns`（默认 64，滑动窗口丢最老）+ `max_turn_chars`（默认 2000，单回合截断保护）。
 
-**会话持久化（P1 记忆层——可选绑定，缺省关闭）**：`ChatService` 构造注入 `session_service`（memory 域 `ChatSessionService`）后：
+**会话持久化（记忆层——可选绑定，缺省关闭）**：`ChatService` 构造注入 `session_service`（memory 域 `ChatSessionService`）后：
 
 - `create_session(db_session=..., title=...)` 同步落 `ff_chat_sessions` 行（经 `bind_persona_context` 绑定人格上下文——PersonaMixin 自动注入），状态携带 `session_id`；未给 `db_session` 时纯内存态；
-- `reply / stream_reply` 的用户与助手回合经 `session_scope` 短事务逐条落 `ff_chat_messages`（seq 递增；**开场白不落库**——正典确定性回放，resume 后幂等重现）；网关失败时用户回合保留在库（重试即重新生成）；流式提前终止不落半截助手回合；持久化写入失败原样上抛（append-only 日志不静默丢行）；
-- `resume_session(session_id, db_session=...)` 把持久化会话回放进内存态（全量消息重放进 `turns`；卡片按会话归属人格重取**当前**正典）；调用方须先绑定目标人格上下文（他人格会话 NOT_FOUND）；未绑定持久化服务的 resume → `INTERNAL_ERROR`；
+- `reply / stream_reply` 的用户与助手回合经 `session_scope` 短事务逐条落 `ff_chat_messages`（seq 递增；**开场白不落库**——正典确定性回放，resume 后幂等重现）；网关失败时用户回合保留在库——调用方重试是**完整重发**（用户消息再次进入历史与数据库，append-only；显式「重生成 / 复用上一条用户输入」API 有意推迟至后续 swipes 特性）；流式提前终止不落半截助手回合；持久化写入失败原样上抛（append-only 日志不静默丢行）；
+- `resume_session(session_id, db_session=...)` 全量读取持久化会话、经 `max_history_turns` 窗口截断后回放进内存态 `turns`（保留最新回合；卡片按会话归属人格重取**当前**正典）；调用方须先绑定目标人格上下文（他人格会话 NOT_FOUND）；未绑定持久化服务的 resume → `INTERNAL_ERROR`；
 - 持久化消息不受 `max_history_turns` 滑动窗口约束（全量记录——内存窗口只是上下文组装面）；
-- 未绑定持久化服务（P0 形态）时行为与既有完全一致——`/clear` 仅清内存历史（持久化消息保留）。
+- 未绑定持久化服务（纯内存形态）时行为与既有完全一致——`/clear` 仅清内存历史（持久化消息保留）。
 
-**P0 锁定决策（保持）**：会话创建时快照卡片（运行期管理面编辑不热更到在途会话；resume 按当前正典重取）。
+**锁定决策（保持）**：会话创建时快照卡片（运行期管理面编辑不热更到在途会话；resume 按当前正典重取）。
 
 ## prompt 版本与 byte-lock
 
@@ -111,18 +111,30 @@ REPL 命令面：`/quit`（退出码 0；EOF 等效）/ `/clear`（清空内存�
 ```
 create_app() → FastAPI(title/version/lifespan)
     ├─ register_exception_handlers(app)          共享异常处理器
-    ├─ include_router(personas_router)           /api/v1/personas*
-    ├─ include_router(memories_router)           /api/v1/memories*（P1-1 记忆管理面）
-    └─ include_router(health_router)             /api/v1/health
+    ├─ include_router(personas_router)           /api/v1/personas*（人格管理面）
+    ├─ include_router(memories_router)           /api/v1/memories*（记忆管理面：episodes / curated /
+    │                                             sessions / search / dream）
+    ├─ include_router(usage_router)              /api/v1/usage*（跨人格用量观测面）
+    ├─ include_router(voice_router)              /api/v1/voice*（语音合成 / 识别）
+    ├─ include_router(look_at_router)            /api/v1/look_at（图像理解 multipart 上传）
+    ├─ include_router(models_router)             /api/v1/models*（LLM 注册表管理面）
+    ├─ include_router(qq_channels_router)        /api/v1/channels/qq*（QQ webhook 入站）
+    └─ include_router(health_router)             /api/v1/health（零依赖存活面）
 
-startup_app_state(app, settings[, config_dir])   可独立驱动的纯异步函数对
+startup_app_state(app, settings[, config_dir])   可独立驱动的纯异步函数对（八步启动链）
     setup_logging_from_settings → load_all_config
-    → init_database → pool_manager.start → app.state.gateway = LlmGateway(默认用量接线)
-shutdown_app_state(app)                          LIFO：pool stop → close_database → 线程池幂等兜底
+    → init_database → pool_manager.start
+    → app.state.gateway = LlmGateway(默认用量接线)
+    → app.state.memory_store = build_memory_store(检索 / 梦境 / 调度器共用)
+    → _startup_channels(TELEGRAM / QQ 启用时装配；缺省 no-op)
+    → _startup_scheduler(DUTY / DREAM_SCHEDULE 启用时装配；缺省 no-op)
+shutdown_app_state(app)                          LIFO 六步停机链：scheduler → channels
+                                                  → 后台任务 drain → pool stop
+                                                  → close_database → 线程池幂等兜底
 lifespan                                          上述函数对的 asynccontextmanager 薄封装
 ```
 
-函数对不藏在 lifespan 闭包内——测试无需 ASGI lifespan runner 直调（本工程不引入 asgi-lifespan 依赖）。`app.state.gateway` 为后续 API 消费方预装配；CLI 自建等价栈。persona / usage ORM 在 main.py 导入期注册（fresh SQLite 首启 create_all 即全表；生产 schema 以 Alembic 为准）。
+函数对不藏在 lifespan 闭包内——测试无需 ASGI lifespan runner 直调（本工程不引入 asgi-lifespan 依赖）。`app.state.gateway` 为后续 API 消费方预装配；`app.state.memory_store` 为检索 / 梦境端点与调度器共用存储；CLI 自建等价栈。persona / usage ORM 在 main.py 导入期注册（memory 域经 memories 路由导入链注册——fresh SQLite 首启 create_all 即全表；生产 schema 以 Alembic 为准）。
 
 ### GET /api/v1/health（liveness）
 
@@ -182,7 +194,7 @@ lifespan                                          上述函数对的 asynccontex
 
 - `tests/unit/test_chat_prompts.py`——byte-lock（sha256 摘要锁）+ 渲染契约（覆写 / 空段跳过 / 兜底）；
 - `tests/unit/test_chat_service.py`——假网关记录组装消息：正典字段 / 世界书全语义（constant / scan_depth / selective / 大小写 / 预算截断 / 位置次序）/ PHI 末位 / 参数直通 / 流式聚合与提前终止 / 会话上限 / 查库路径（共享 SQLite）；
-- `tests/unit/test_chat_persistence.py`——持久化集成（P1-1）：落库 / 网关失败保留用户回合 / resume 全链路 / 持久化关闭兼容 P0 / CLI `/new` `/sessions` `/resume` 命令（真实启动栈 + tmp SQLite + 假网关）；
+- `tests/unit/test_chat_persistence.py`——持久化集成：落库 / 网关失败保留用户回合 / resume 全链路 / 持久化关闭兼容纯内存形态 / CLI `/new` `/sessions` `/resume` 命令（真实启动栈 + tmp SQLite + 假网关）；
 - `tests/unit/test_chat_cli.py`——注入式 I/O 驱动全流程（真实启动栈 + tmp SQLite + 假网关，never real stdin）：命令面 / 无激活人格指引（退出码 1）/ 业务异常不崩 REPL / main 入口；
 - `tests/unit/test_app_main.py`——create_app 路由注册 / startup-shutdown 函数对（真实组件 + LIFO 追踪）/ health 与 personas 经 ASGITransport 走真实 app / lifespan 全周期 / 外部引擎治理；
 - 门禁：`harness/chat` ≥80%（实测 99.4%）、`app/main.py` ≥80%（实测 100%）、`app/api` ≥80%（实测 100%）。

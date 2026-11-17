@@ -1,4 +1,4 @@
-# persona — 多人格注册表（P0-5 交付）
+# persona — 多人格注册表
 
 `backend/src/packages/harness/persona/` 承载多人格注册表：chara card v2 人格卡片（L 层正典）+ M/S 心理状态层 + 事务性单激活切换。表名 `ff_personas` / `ff_persona_states`（本工程 `ff_` 前缀约定）。首个 app 层交付面（`app/api/personas.py` 管理 API + `app/middleware/error_handler.py` 共享异常处理器）随本域落地。
 
@@ -26,7 +26,7 @@ L 层不入状态表的理由：身份正典与可变状态的生命周期不同
 
 ## 关键设计决策
 
-1. **注册表是全局管理面数据（非 PersonaMixin）**：admin 需在无人格上下文下跨人格列出 / 切换 / 复制 / 删除人格；PersonaMixin 的请求上下文自动过滤（缺上下文即 fail loud）与该语义直接冲突（人格行自身的 persona_id 无从定义）。P1 记忆表才是 PersonaMixin 消费面（per-persona 逻辑隔离）。
+1. **注册表是全局管理面数据（非 PersonaMixin）**：admin 需在无人格上下文下跨人格列出 / 切换 / 复制 / 删除人格；PersonaMixin 的请求上下文自动过滤（缺上下文即 fail loud）与该语义直接冲突（人格行自身的 persona_id 无从定义）。记忆表才是 PersonaMixin 消费面（per-persona 逻辑隔离）。
 2. **status（可用性）与 is_active（单激活位）正交**：`status=active/disabled` 是管理面可用性开关；`is_active` 是「当前唯一激活人格」绑定位——全表至多一行 `True`。激活要求 `status=active`；status 切 disabled 时自动清激活位（停用即下线，杜绝矛盾态）。
 3. **事务性单激活切换**：`activate` 在单事务内「全表清激活位 → 激活目标」——激活 B 必然去激活 A；任一步失败整体回滚。`deactivate` 允许归零（系统态），幂等。
 4. **删除守卫（本工程锁定语义）**：删除**当前激活人格被禁止**（`CONFLICT`，调用方须先 `deactivate` 显式两步）；删除非激活人格时同事务清理其 M/S 状态行（SQLite 测试方言默认不启用 FK 强制，服务层显式删除保证跨方言一致；DB 级 `ON DELETE CASCADE` 仅作直删 SQL 兜底）。
@@ -42,7 +42,7 @@ L 层不入状态表的理由：身份正典与可变状态的生命周期不同
     ↓ 唯一名校验（CONFLICT fail loud）→ PersonaRow（status 缺省 disabled，is_active=False）
     ↓ 管理面 PUT /{id}（status=active 启用）
     ↓ 管理面 POST /{id}/activate（单事务：全表清位 → 激活目标）
-    ↓ 运行期（P0-6 chat 会话）async with bind_persona_context(persona.id):
+    ↓ 运行期（chat 会话）async with bind_persona_context(persona.id):
     ↓     PersonaMixin 表自动按 str(persona.id) 隔离；llm 网关用量记账携带 persona_id
 ```
 
@@ -76,6 +76,7 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | `status` | VARCHAR(16) | 非空 | 可用性状态（active / disabled） |
 | `is_active` | BOOLEAN | 非空 | 单激活绑定位（全表至多一行 True） |
 | `chara_card` | JSON | 非空 | 人格卡片（chara card v2 文档，L 层正典） |
+| `voice_profile` | JSON | 可空 | 人格语音绑定（`VoiceProfileModel` 序列化形态——speaker / instruct_text / speed；NULL = 未绑定，合成回落 `Settings.voice.tts` 缺省） |
 | `created_at` / `updated_at` | BIGINT | 非空 | epoch 毫秒（TimestampMixin） |
 
 ### ff_persona_states（M/S 状态层）
@@ -88,7 +89,7 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | `state` | JSON | 非空 | 状态 JSON 文档（整体替换式更新） |
 | `created_at` / `updated_at` | BIGINT | 非空 | epoch 毫秒（TimestampMixin） |
 
-迁移：`backend/alembic/versions/000000000003_add_personas.py`（Revision 000000000003，Revises 000000000002——两表 + 索引 + 唯一约束，升级 / 降级均经 SQLite 冒烟验证）。
+迁移链：`backend/alembic/versions/000000000003_add_personas.py`（Revision 000000000003，Revises 000000000002——两表 + 索引 + 唯一约束）→ `000000000006_add_persona_voice_profile.py`（Revision 000000000006，Revises 000000000005——`ff_personas` 增 `voice_profile` JSON 可空列，纯增列、既有行落 NULL；升级 / 降级均经 SQLite 冒烟验证）。
 
 ## 值域
 
@@ -117,7 +118,7 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | 字段 | 类型 | 校验 / 缺省 | 说明 |
 |---|---|---|---|
 | `keys` | list[str] | 缺省 `[]` | 主触发关键词（任一命中即插入） |
-| `secondary_keys` | list[str] | 缺省 `[]`；**仅 `selective=True` 可携带** | 副触发关键词（选择性触发收敛） |
+| `secondary_keys` | list[str] | 缺省 `[]`；**仅 `selective=True` 可携带且须有非空键**（选择性条目空副键永不触发——构造期拒绝） | 副触发关键词（选择性触发收敛） |
 | `content` | str | 缺省 `""` | 条目正文 |
 | `insertion_order` | int | **界 0-9999**，缺省 100 | 插入顺序（值越大越靠后） |
 | `constant` | bool | 缺省 False | 恒插入（免触发） |
@@ -195,11 +196,11 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 
 ```python
 service = PersonaService()                                        # 无状态；Session 逐调用注入
-record = await service.create(session, dto)                       # 创建（唯一名校验；不激活）
+record = await service.create(session, dto)                       # 创建（唯一名校验；不激活；voice_profile 可选绑定）
 record = await service.get(session, persona_id)                   # 读取（NOT_FOUND fail loud）
 page = await service.query(session, PersonaQueryDTO(...))         # 游标分页（id 降序 + status 过滤）
-record = await service.update(session, persona_id, dto)           # 部分更新（重命名 / 状态 / 卡片补丁）
-record = await service.copy(session, persona_id, dto)             # 复制（可选深拷贝 M/S；恒 disabled）
+record = await service.update(session, persona_id, dto)           # 部分更新（重命名 / 状态 / 卡片补丁 / 语音绑定整体替换）
+record = await service.copy(session, persona_id, dto)             # 复制（可选深拷贝 M/S；恒 disabled；语音绑定随行复制）
 await service.delete(session, persona_id)                         # 删除（激活守卫：CONFLICT）
 result = await service.batch_delete(session, ids)                 # 批量删除（部分成功形态）
 record = await service.activate(session, persona_id)              # 激活（事务性单激活切换）
@@ -215,6 +216,8 @@ async with bind_persona_context(persona.id):                      # 运行期任
     ...
 ```
 
+`PersonaRecordDTO` 携带 `voice_profile: VoiceProfileModel | None`（None = 未绑定）——创建 / 更新 / 复制 / 读取全链路透出人格语音绑定，语音合成面（`voice` 域）据此以人格级 speaker / speed 覆盖 settings 缺省（优先级：请求参数 > 人格绑定 > settings 缺省）。
+
 卡片补丁合并语义（`PersonaUpdateDTO.card`）：仅出现字段覆写既有卡片（`exclude_unset` 合并后整体重校验——合并结果违约 `VALIDATION_ERROR` fail loud）；`character_book` 提供时整体替换（不做条目级合并），显式 `null` 清除世界书。
 
 ## 管理 API 面（app/api/personas.py）
@@ -224,12 +227,12 @@ async with bind_persona_context(persona.id):                      # 运行期任
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/v1/personas` | 游标分页列表（`status` 过滤 + `cursor` / `limit`） |
-| POST | `/api/v1/personas` | 创建（name + card 必填） |
+| POST | `/api/v1/personas` | 创建（name + card 必填；`voice_profile` 可选绑定） |
 | POST | `/api/v1/personas/batch-delete` | 批量删除（部分成功：`{total, succeeded, failed, items}`） |
-| GET | `/api/v1/personas/{id}` | 读取 |
-| PUT | `/api/v1/personas/{id}` | 部分更新（重命名 / 展示名 / 状态 / 卡片补丁） |
+| GET | `/api/v1/personas/{id}` | 读取（含 `voice_profile` 绑定态） |
+| PUT | `/api/v1/personas/{id}` | 部分更新（重命名 / 展示名 / 状态 / 卡片补丁 / 语音绑定——`voice_profile` **出现即整体替换**，显式 `null` 清除绑定，无字段级合并） |
 | DELETE | `/api/v1/personas/{id}` | 删除（激活守卫 409） |
-| POST | `/api/v1/personas/{id}/copy` | 复制（`new_name` + `include_states`） |
+| POST | `/api/v1/personas/{id}/copy` | 复制（`new_name` + `include_states`；语音绑定随行复制） |
 | POST | `/api/v1/personas/{id}/activate` | 激活（事务性单激活切换） |
 | POST | `/api/v1/personas/{id}/deactivate` | 停用激活（允许零激活） |
 | GET | `/api/v1/personas/{id}/card` | 卡片读取 |

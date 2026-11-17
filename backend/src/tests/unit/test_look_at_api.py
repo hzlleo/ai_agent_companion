@@ -3,12 +3,12 @@
 
 测试策略：与 test_voice_api.py 同构——本地装配 FastAPI app（look_at 路由 +
 共享异常处理器；共享引擎外部安装）；服务层经 monkeypatch 替换模块级
-``look_at_service``（fake 记录调用）。
+``LookAtService`` 构造面注入 fake（记录调用）。
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import pytest
@@ -64,6 +64,16 @@ class FakeLookAtService:
         return LookAtResultModel(
             description="图中是一只橘猫", model_entry="local-vision", latency_ms=30
         )
+
+
+def _fake_service_factory(fake: FakeLookAtService) -> Callable[..., FakeLookAtService]:
+    """构造假服务工厂（替换模块级 LookAtService 构造面——返回同一 fake）。"""
+
+    def _factory(*args: Any, **kwargs: Any) -> FakeLookAtService:
+        """忽略构造参数，恒返回注入的 fake 实例。"""
+        return fake
+
+    return _factory
 
 
 async def _seed_persona(session: AsyncSession, name: str, *, activate: bool = False) -> int:
@@ -124,7 +134,7 @@ class TestLookAtEndpoint:
     ) -> None:
         """成功契约：multipart image + question → ResultDTO {description, ...}。"""
         fake = FakeLookAtService()
-        monkeypatch.setattr(look_at_api, "look_at_service", fake)
+        monkeypatch.setattr(look_at_api, "LookAtService", _fake_service_factory(fake))
         image = b"\x89PNG\r\n\x1a\n upload-bytes"
         response = await client.post(
             "/api/v1/look_at",
@@ -151,7 +161,7 @@ class TestLookAtEndpoint:
     ) -> None:
         """MIME 解析序：声明 octet-stream + 文件名 .jpg → 扩展名兜底 jpeg。"""
         fake = FakeLookAtService()
-        monkeypatch.setattr(look_at_api, "look_at_service", fake)
+        monkeypatch.setattr(look_at_api, "LookAtService", _fake_service_factory(fake))
         await client.post(
             "/api/v1/look_at",
             files={"image": ("photo.jpg", b"jpeg-bytes", "application/octet-stream")},
@@ -163,7 +173,7 @@ class TestLookAtEndpoint:
     ) -> None:
         """MIME 解析序：允许清单内的声明值优先于扩展名。"""
         fake = FakeLookAtService()
-        monkeypatch.setattr(look_at_api, "look_at_service", fake)
+        monkeypatch.setattr(look_at_api, "LookAtService", _fake_service_factory(fake))
         await client.post(
             "/api/v1/look_at",
             files={"image": ("photo.png", b"bytes", "image/webp")},
@@ -175,7 +185,7 @@ class TestLookAtEndpoint:
     ) -> None:
         """未知 MIME（声明与扩展名均未命中）：VALIDATION_ERROR 422。"""
         fake = FakeLookAtService()
-        monkeypatch.setattr(look_at_api, "look_at_service", fake)
+        monkeypatch.setattr(look_at_api, "LookAtService", _fake_service_factory(fake))
         response = await client.post(
             "/api/v1/look_at",
             files={"image": ("memo.txt", b"text-bytes", "text/plain")},
@@ -188,7 +198,9 @@ class TestLookAtEndpoint:
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """聚焦问题超 200 字符：VALIDATION_ERROR 422。"""
-        monkeypatch.setattr(look_at_api, "look_at_service", FakeLookAtService())
+        monkeypatch.setattr(
+            look_at_api, "LookAtService", _fake_service_factory(FakeLookAtService())
+        )
         response = await client.post(
             "/api/v1/look_at",
             files={"image": ("cat.png", b"bytes", "image/png")},
@@ -201,7 +213,9 @@ class TestLookAtEndpoint:
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """图像超 10MB：VALIDATION_ERROR 422（系统边界先行拒绝）。"""
-        monkeypatch.setattr(look_at_api, "look_at_service", FakeLookAtService())
+        monkeypatch.setattr(
+            look_at_api, "LookAtService", _fake_service_factory(FakeLookAtService())
+        )
         response = await client.post(
             "/api/v1/look_at",
             files={"image": ("big.png", b"x" * (LOOK_AT_IMAGE_MAX_BYTES + 1), "image/png")},
@@ -214,7 +228,7 @@ class TestLookAtEndpoint:
     ) -> None:
         """multipart 缺 image 字段（仅其他字段）：BAD_REQUEST 400。"""
         fake = FakeLookAtService()
-        monkeypatch.setattr(look_at_api, "look_at_service", fake)
+        monkeypatch.setattr(look_at_api, "LookAtService", _fake_service_factory(fake))
         response = await client.post(
             "/api/v1/look_at", files={"picture": ("x.png", b"hi", "image/png")}
         )
@@ -226,7 +240,9 @@ class TestLookAtEndpoint:
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """非 multipart 请求体（JSON）：BAD_REQUEST 400。"""
-        monkeypatch.setattr(look_at_api, "look_at_service", FakeLookAtService())
+        monkeypatch.setattr(
+            look_at_api, "LookAtService", _fake_service_factory(FakeLookAtService())
+        )
         response = await client.post("/api/v1/look_at", json={"image": "x"})
         assert response.status_code == 400
         assert response.json()["code"] == "BAD_REQUEST"
@@ -235,7 +251,9 @@ class TestLookAtEndpoint:
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """multipart 声明 + 空请求体：BAD_REQUEST 400。"""
-        monkeypatch.setattr(look_at_api, "look_at_service", FakeLookAtService())
+        monkeypatch.setattr(
+            look_at_api, "LookAtService", _fake_service_factory(FakeLookAtService())
+        )
         response = await client.post(
             "/api/v1/look_at",
             content=b"",
@@ -251,7 +269,9 @@ class TestLookAtEndpoint:
             code=ErrorCode.LLM_CALL_FAILED, message="look_at 回退链全部条目失败"
         )
         monkeypatch.setattr(
-            look_at_api, "look_at_service", FakeLookAtService(error=failure)
+            look_at_api,
+            "LookAtService",
+            _fake_service_factory(FakeLookAtService(error=failure)),
         )
         response = await client.post(
             "/api/v1/look_at",
@@ -271,7 +291,7 @@ class TestLookAtEndpoint:
         """人格绑定：当前激活人格的 ID 作为 persona_id 传入（用量归属）。"""
         persona_id = await _seed_persona(db_session, "look-at-active", activate=True)
         fake = FakeLookAtService()
-        monkeypatch.setattr(look_at_api, "look_at_service", fake)
+        monkeypatch.setattr(look_at_api, "LookAtService", _fake_service_factory(fake))
         response = await client.post(
             "/api/v1/look_at",
             files={"image": ("cat.png", b"bytes", "image/png")},
@@ -284,7 +304,7 @@ class TestLookAtEndpoint:
     ) -> None:
         """question 空白字段：归一 None（不作为空聚焦透传）。"""
         fake = FakeLookAtService()
-        monkeypatch.setattr(look_at_api, "look_at_service", fake)
+        monkeypatch.setattr(look_at_api, "LookAtService", _fake_service_factory(fake))
         await client.post(
             "/api/v1/look_at",
             files={"image": ("cat.png", b"bytes", "image/png")},

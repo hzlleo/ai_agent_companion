@@ -1,4 +1,4 @@
-# usage — token 用量域（P0-4 交付；P2-1 增管理 API）
+# usage — token 用量域（含管理 API）
 
 `backend/src/packages/harness/usage/` 承载 token 用量记账：LLM / 辅助端点每次调用一行记录（成功 / 失败均落账），管理面多维聚合（按条目 / 用途 / 时间桶）。表名 `ff_usage_records`（本工程 `ff_` 前缀约定）。
 
@@ -22,7 +22,7 @@
 ```
 llm 网关调用（chat_by_role / chat_for_entry / stream_by_role）
     ↓ 成功 / 失败路径均构造 LlmUsageEvent（ts / tokens / latency / status / error_code）
-    ↓ 注入式 UsageRecorder（默认接线 wire_default_usage_recorder——P0-6 app 装配）
+    ↓ 注入式 UsageRecorder（默认接线 wire_default_usage_recorder——app 装配）
     ↓ UsageCreateDTO（purpose/status 枚举化 + total 归一）
     ↓ UsageService.create → UsageRecordRow → session_scope 提交 → ff_usage_records
     ↓ 管理面读取：UsageService.query（游标分页）/ UsageService.aggregate（多维聚合）
@@ -51,10 +51,10 @@ llm 网关调用（chat_by_role / chat_for_entry / stream_by_role）
 
 ## 值域
 
-- `UsagePurpose`：`chat` / `duty` / `dream` / `look_at` / `embed`（与 config.ModelRole 一一对应）+ `tts` / `asr` / `tool`（后续 chunk 语音与工具面预留）；
+- `UsagePurpose`：`chat` / `duty` / `dream` / `look_at` / `embed`（与 config.ModelRole 一一对应）+ `tts` / `asr` / `tool`（语音与工具面已接线——tts / asr 经 voice 域 `wire_default_voice_usage_recorder` 默认接线落账；`tool` 为工具循环调用面的 purpose 值域成员，duty 工具循环当前按 `duty` 用途归账）；
 - `UsageStatus`：`success` / `error`；
 - `UsageGroupBy`：`model_entry` / `purpose` / `time_bucket`；
-- `UsageTimeBucket`：`minute`（60_000ms）/ `hour`（3_600_000ms）/ `day`（86_400_000ms）——桶起点 = `floor(ts_ms / 桶宽) * 桶宽`（跨方言经 `floor` 归一整数除法语义）。
+- `UsageTimeBucket`：`minute`（60_000ms）/ `hour`（3_600_000ms）/ `day`（86_400_000ms）——桶起点 = `floor(ts_ms / 桶宽) * 桶宽`（跨方言经 `floor` 归一整数除法语义）；**时间桶起点按 UTC 对齐**（epoch 毫秒整除口径，`day` 桶边界为 UTC 零点——与本地日界无关；如需按本地日界切桶再议）。
 
 ## UsageService API
 
@@ -128,9 +128,9 @@ rows = await service.aggregate(UsageAggregateQueryDTO(...))  # 多维聚合（�
 | `avg_latency_ms` | int | 平均时延（四舍五入取整） |
 | `error_count` | int | 失败次数（status=error） |
 
-排序：总 token 降序为主序（成本视角），分组键升序为次序（确定性输出）。聚合形态已按管理 API 预塑形（P1+ admin 端点直接包装 `aggregate` 结果）。
+排序：总 token 降序为主序（成本视角），分组键升序为次序（确定性输出）。聚合形态已按管理 API 预塑形（admin 端点直接包装 `aggregate` 结果）。
 
-## 管理 API（P2 chunk 1——`app/api/usage.py`）
+## 管理 API（`app/api/usage.py`）
 
 跨人格观测语义（文档化决策）：用量是管理面 observability 数据——三个端点**均无人格上下文要求**（不解析目标人格、不绑定 persona contextvar、无 PersonaMixin 自动过滤）；人格过滤经 `persona_id` 查询参数显式表达（缺省 = 全人格）。全部响应经 `ResultDTO` 封装；`UsageService` 自持 `session_scope`（会话边界在服务层），路由无 DB 依赖注入。全部时间参数为 epoch 毫秒，范围**左闭右开**（`start_ms <= ts_ms < end_ms`）。
 
@@ -255,7 +255,7 @@ id 降序（新记录在前）；`next_cursor` 非空表示还有更早记录（
 
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_usage_service.py`（服务面）+ `src/tests/unit/test_usage_api.py`（P2 管理 API：ASGI + 处理器直调契约面——分页接续 / 全过滤面 / 三维聚合正确性 / 总览派生 / 错误映射）；
+- 测试位置：`src/tests/unit/test_usage_service.py`（服务面）+ `src/tests/unit/test_usage_api.py`（管理 API：ASGI + 处理器直调契约面——分页接续 / 全过滤面 / 三维聚合正确性 / 总览派生 / 错误映射）；
 - 全部 `async def test_`；引擎经共享会话级 SQLite fixture（StaticPool 单连接 + 每测试自动清表）；服务经 engine holder 槽位**外部安装**（`owner_token=None`——生命周期归共享 fixture，见 database.engine 治理约定）；
 - 聚合正确性锁定：分组求和 / 计数 / 均时延 / 失败计数 / 总量降序 / minute-hour-day 三档桶宽边界对齐（含跨记录归桶与 25 小时独立桶）；
 - 覆盖率（`pixi run coverage-gates` 实测）：harness/usage 组 **99.5%**（service 100% / orm 100% / models 100% / dtos 98%）；app/api 组 96.5%；

@@ -7,13 +7,17 @@
     - 出站投递形状（reply_to 引用 / 兜底不引用）；
     - 单消息错误隔离（LLM 失败 → 短中文兜底；无激活人格 NOT_FOUND →
       业务异常消息透传；兜底回发自身失败不级联）；
-    - 未注册适配器（CHANNEL_DISABLED 静默形态）与纯内存降级形态。
+    - 未注册适配器（CHANNEL_DISABLED 静默形态）与纯内存降级形态；
+    - per-chat 并发串行化（同聊天并发消息恰一次建会话 + 回复严格串行；
+      不同聊天并发互不阻塞——推送式 webhook 并发面回归锚）。
 
-零真实网络 / 零真实配置：全部依赖 fake。
+零真实网络 / 零真实配置：全部依赖 fake；并发等待经 asyncio.Event 门控
+（确定性事件等待——零固定睡眠 / 零轮询）。
 """
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -358,3 +362,119 @@ class TestErrorIsolation:
         assert len(service.create_calls) == 1
         assert len(service.reply_calls) == 1
         assert router.session_count == 1
+
+
+class GatedFakeChatService:
+    """门控 fake ChatService——reply 进入即登记事件并阻塞在释放门。
+
+    并发串行化断言原料：``events`` 按实际发生序记录 create / reply
+    进入 / 退出；``release`` 为一次性释放门（asyncio.Event——确定性
+    事件等待，零固定睡眠）。
+    """
+
+    def __init__(self) -> None:
+        """初始化（释放门关闭态——reply 恒等待显式放行）。"""
+        self.create_calls: int = 0
+        self.events: list[str] = []
+        self.release: asyncio.Event = asyncio.Event()
+        self._entered: dict[str, asyncio.Event] = {}
+
+    def entered_event(self, text: str) -> asyncio.Event:
+        """取指定消息文本的 reply 进入事件（懒建——等待面）。"""
+        return self._entered.setdefault(text, asyncio.Event())
+
+    async def create_session(
+        self,
+        *,
+        persona: object | None = None,
+        db_session: object | None = None,
+        title: str | None = None,
+    ) -> ChatSessionStateModel:
+        """fake 会话创建（记录事件 + 计数——串行化断言原料）。"""
+        self.events.append(f"create:{title}")
+        self.create_calls += 1
+        return ChatSessionStateModel(
+            persona_id=_PERSONA_ID,
+            persona_name="小鱼",
+            card=CharaCardModel(name="小鱼"),
+        )
+
+    async def reply(self, state: ChatSessionStateModel, user_text: str) -> str:
+        """fake 慢回复：登记进入事件 → 等待释放门 → 登记退出事件。"""
+        self.events.append(f"enter:{user_text}")
+        self.entered_event(user_text).set()
+        await self.release.wait()
+        self.events.append(f"exit:{user_text}")
+        return f"echo:{user_text}"
+
+
+class TestPerChatSerialization:
+    """per-chat 串行化回归（QQ 推送式并发入站面——锁语义锚）。"""
+
+    async def test_same_chat_concurrent_first_messages_serialize(self) -> None:
+        """同聊天并发首消息：恰一次建会话 + 回复严格串行（无交错）。
+
+        门控证明：消息一进入 reply（持锁）后，消息二经多个调度槽仍
+        未进入 reply（锁前阻塞——若锁缺失必然立即进入，测试即红）；
+        放行后事件序为「一进出一、二进出二」的完整串行形态。
+        """
+        service = GatedFakeChatService()
+        adapter = FakeAdapter()
+        router = _router(service)  # type: ignore[arg-type]
+        router.register_adapter(ChannelType.TELEGRAM, adapter)
+
+        first = asyncio.create_task(router.handle_inbound(_inbound(text="一", message_id="1")))
+        await asyncio.wait_for(service.entered_event("一").wait(), timeout=5.0)
+        second = asyncio.create_task(router.handle_inbound(_inbound(text="二", message_id="2")))
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        assert service.events == ["create:channel:telegram:10086", "enter:一"]
+        assert "enter:二" not in service.events
+
+        service.release.set()
+        await asyncio.wait_for(first, timeout=5.0)
+        await asyncio.wait_for(second, timeout=5.0)
+
+        assert service.events == [
+            "create:channel:telegram:10086",
+            "enter:一",
+            "exit:一",
+            "enter:二",
+            "exit:二",
+        ]
+        assert service.create_calls == 1
+        assert router.session_count == 1
+        assert len(adapter.sent) == 2
+
+    async def test_distinct_chats_concurrent_no_cross_serialization(self) -> None:
+        """不同聊天并发：互不阻塞（消息二在一未完成时并行进入 reply）。"""
+        service = GatedFakeChatService()
+        adapter = FakeAdapter()
+        router = _router(service)  # type: ignore[arg-type]
+        router.register_adapter(ChannelType.TELEGRAM, adapter)
+
+        first = asyncio.create_task(
+            router.handle_inbound(_inbound(chat_id="10086", text="一", message_id="1"))
+        )
+        await asyncio.wait_for(service.entered_event("一").wait(), timeout=5.0)
+        second = asyncio.create_task(
+            router.handle_inbound(_inbound(chat_id="20000", text="二", message_id="2"))
+        )
+        await asyncio.wait_for(service.entered_event("二").wait(), timeout=5.0)
+
+        assert service.events == [
+            "create:channel:telegram:10086",
+            "enter:一",
+            "create:channel:telegram:20000",
+            "enter:二",
+        ]
+        assert "exit:一" not in service.events
+
+        service.release.set()
+        await asyncio.wait_for(first, timeout=5.0)
+        await asyncio.wait_for(second, timeout=5.0)
+
+        assert service.create_calls == 2
+        assert router.session_count == 2
+        assert len(adapter.sent) == 2

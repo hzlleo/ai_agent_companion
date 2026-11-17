@@ -25,7 +25,8 @@ export interface CharacterBookEditorProps {
  * 条目字段面（与后端 chara card v2 契约一致）：keys / secondary_keys /
  * content / insertion_order / constant / case_sensitive / selective /
  * position。keywords 以逗号分隔编辑；selective 未开启时副触发键
- * 置灰（规格一致性：非选择性条目不得携带副键）。
+ * 置灰（规格一致性：非选择性条目不得携带副键）；开启时副触发键
+ * 必填（空副键永不触发——提交期校验，输入不阻断）。
  */
 export function CharacterBookEditor({ book, onChange, errors }: CharacterBookEditorProps) {
   const updateEntry = (index: number, patch: Partial<BookEntryFormState>): void => {
@@ -141,7 +142,10 @@ export function CharacterBookEditor({ book, onChange, errors }: CharacterBookEdi
                 </div>
                 <div className="space-y-1.5">
                   <label htmlFor={`entry-secondary-keys-${index}`} className="text-sm font-medium">
-                    副触发关键词（需开启选择性触发）
+                    {/* selective 开启时副键为必填（提交期校验——此处仅视觉提示）。 */}
+                    {entry.selective
+                      ? '副触发关键词（必填，逗号分隔）'
+                      : '副触发关键词（需开启选择性触发）'}
                   </label>
                   <Input
                     id={`entry-secondary-keys-${index}`}

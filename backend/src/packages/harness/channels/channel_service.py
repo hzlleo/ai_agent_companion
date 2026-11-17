@@ -4,15 +4,17 @@
 
     InboundMessageModel
         ↓ ① 适配器寻址（未注册通道 = CHANNEL_DISABLED，仅记录）
-        ↓ ② 每聊天会话懒建（会话身份键 ``channel:chat_id``——复用直至
-             进程重启；持久化装配时经注入的 session factory 落库）
-        ↓ ③ 人格绑定（bind_persona_context——PersonaMixin 作用域）
-        ↓ ④ ChatService.reply（组装 → 网关 → 用量记账自动发生）
-        ↓ ⑤ 适配器发送（OutboundMessageModel → 平台 wire）
+        ↓ ② per-chat 串行化锁获取（asyncio.Lock——同聊天消息全程串行，
+              含会话懒建 / 回复 / 兜底回发；不同聊天互不阻塞）
+        ↓ ③ 每聊天会话懒建（会话身份键 ``channel:chat_id``——复用直至
+              进程重启；持久化装配时经注入的 session factory 落库）
+        ↓ ④ 人格绑定（bind_persona_context——PersonaMixin 作用域）
+        ↓ ⑤ ChatService.reply（组装 → 网关 → 用量记账自动发生）
+        ↓ ⑥ 适配器发送（OutboundMessageModel → 平台 wire）
 
-人格语义（P3 锁定决策）：**单一激活人格应答全部通道消息**。会话懒建经
+人格语义（锁定决策）：**单一激活人格应答全部通道消息**。会话懒建经
 ``ChatService.create_session(db_session=...)`` 内部解析当前激活人格（注册
-表事务性单激活不变式的消费面）；按聊天绑定人格随 P4 多通道扩展交付。
+表事务性单激活不变式的消费面）；按聊天绑定人格属后续多通道扩展交付面。
 
 持久化语义：注入 ``session_factory``（app lifespan 装配）时会话创建经
 数据库会话落 ``ff_chat_sessions``（标题 = 会话身份键），其后
@@ -24,10 +26,19 @@ ChatService 将抛 ``INTERNAL_ERROR`` → 走兜底回发；仅测试 / 诊断�
 runner**——``handle_inbound`` 恒不抛异常：逐消息捕获，经适配器回发短中文
 兜底消息，错误细节只进日志。无激活人格（``NOT_FOUND``）为已知确定态，
 回发该业务异常的用户面消息（可操作指引）；其余异常一律回发通用兜底。
+
+并发语义（per-chat 串行化）：QQ 推送式入站（webhook 每 POST 一协程）
+与 Telegram 拉取式入站共用本路由器——``handle_inbound`` 以 per-chat
+``asyncio.Lock`` 串行化同聊天消息的**全链路**（会话懒建 + 回复 + 兜底
+回发）：并发首消息不会重复建会话行，同聊天回复严格按到达序逐条完成
+（无回合交错）；不同聊天互不阻塞（锁粒度 = 会话身份键）。Telegram
+runner 单循环本就串行（锁无竞争零开销）；QQ 并发上报由锁归一到
+等效串行语义。
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from typing import Protocol
@@ -89,6 +100,13 @@ class ChannelAdapterProtocol(Protocol):
 class ChannelRouter:
     """通道路由器（入站消息 → 人格会话循环 → 出站投递；恒不抛异常）。
 
+    并发语义：per-chat ``asyncio.Lock`` 串行化同聊天 ``handle_inbound``
+    全链路（锁生命周期与 :attr:`_sessions` 镜像——该聊天首条消息时懒建
+    入 ``_locks``、复用直至进程重启、无淘汰；增长面 = 互异聊天数，与会话
+    字典同界）。锁对象在事件循环内原子懒建（get/set 之间零 await）——
+    并发首消息必然取到同一把锁，会话懒建的 check-then-create 竞态因此
+    关闭（不会重复落库会话行）。
+
     构造注入（测试 / 装配友好）：ChatService 工厂与数据库会话工厂均可
     显式注入；测试注入 fake 工厂记录调用形状断言契约（零真实网络 /
     零真实配置）。
@@ -112,6 +130,7 @@ class ChannelRouter:
         self._session_factory = session_factory
         self._adapters: dict[ChannelType, ChannelAdapterProtocol] = {}
         self._sessions: dict[str, ChatSessionStateModel] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
 
     # ------------------------------------------------------------------
     # 装配面
@@ -166,6 +185,13 @@ class ChannelRouter:
     async def handle_inbound(self, message: InboundMessageModel) -> ChannelDeliveryResultModel:
         """处理单条入站消息（会话路由 + 人格回复 + 投递；失败兜底回发）。
 
+        并发语义（锁生命周期）：本方法全程持有该聊天的 per-chat
+        ``asyncio.Lock``——**锁获取先于会话查找 / 懒建**（并发首消息
+        串行化，重复建会话行的竞态关闭），覆盖会话创建 + 回复 + 适配器
+        发送 + 兜底回发的完整跨度；锁与 ``_sessions`` 条目同生命周期
+        （首条消息懒建、复用直至进程重启、无淘汰）。不同聊天取不同锁，
+        互不阻塞。
+
         Args:
             message: 入站消息（通道中立形态）。
 
@@ -184,35 +210,59 @@ class ChannelRouter:
             return ChannelDeliveryResultModel(
                 channel=message.channel, chat_id=message.chat_id, message_ids=[]
             )
-        try:
-            state = await self._get_or_create_session(context)
-            async with bind_persona_context(state.persona_id):
-                reply_text = await self._chat_service_factory().reply(state, message.text)
-            return await adapter.send_message(
-                OutboundMessageModel(
-                    chat_id=message.chat_id,
-                    text=reply_text,
-                    reply_to_message_id=message.message_id,
+        async with self._lock_for(self.session_key(context)):
+            try:
+                state = await self._get_or_create_session(context)
+                async with bind_persona_context(state.persona_id):
+                    reply_text = await self._chat_service_factory().reply(state, message.text)
+                return await adapter.send_message(
+                    OutboundMessageModel(
+                        chat_id=message.chat_id,
+                        text=reply_text,
+                        reply_to_message_id=message.message_id,
+                    )
                 )
-            )
-        except Exception as exc:
-            fallback_text = self._fallback_text_for(exc)
-            logger.opt(exception=True).error(
-                "通道消息处理失败（兜底回发）: channel={}, chat_id={}, "
-                "message_id={}, fallback={!r}",
-                message.channel.value,
-                message.chat_id,
-                message.message_id,
-                fallback_text,
-            )
-            return await self._send_fallback(adapter, message, fallback_text)
+            except Exception as exc:
+                fallback_text = self._fallback_text_for(exc)
+                logger.opt(exception=True).error(
+                    "通道消息处理失败（兜底回发）: channel={}, chat_id={}, "
+                    "message_id={}, fallback={!r}",
+                    message.channel.value,
+                    message.chat_id,
+                    message.message_id,
+                    fallback_text,
+                )
+                return await self._send_fallback(adapter, message, fallback_text)
 
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
 
+    def _lock_for(self, key: str) -> asyncio.Lock:
+        """按会话身份键取 per-chat 串行化锁（懒建——事件循环内原子）。
+
+        事件循环单线程语义保证 get/set 之间零 await 即零竞态——并发
+        首消息必然取到同一把锁（与 ``_sessions`` 条目同生命周期：该
+        聊天首条消息时创建、复用直至进程重启、无淘汰）。
+
+        Args:
+            key: 会话身份键（``channel:chat_id``）。
+
+        Returns:
+            该聊天的串行化锁（未持锁态返回；调用方 ``async with`` 全程持有）。
+        """
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[key] = lock
+        return lock
+
     async def _get_or_create_session(self, context: ChannelContextModel) -> ChatSessionStateModel:
         """按会话身份键取在途会话；缺失时懒建（持久化装配时经数据库会话）。
+
+        并发前提：本方法在调用方（``handle_inbound``）持有的 per-chat
+        锁临界段内执行——check-then-create 无并发窗口（并发首消息经
+        锁串行化，恰好一个协程完成懒建与 ``_sessions`` 落位）。
 
         Args:
             context: 通道会话上下文。

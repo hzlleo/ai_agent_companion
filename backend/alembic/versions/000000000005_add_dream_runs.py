@@ -1,4 +1,4 @@
-"""梦境运行日志表迁移——P1 chunk 3 交付（memory 域梦境整理）。
+"""梦境运行日志表迁移（memory 域梦境整理）。
 
 harness/memory 域新增一张表：
 
@@ -10,7 +10,6 @@ INTEGER——rowid 自增）。
 
 Revision ID: 000000000005
 Revises: 000000000004
-Create Date: 2026-11-13
 """
 
 from typing import Sequence, Union

@@ -42,6 +42,10 @@ for _p in (_BACKEND_SRC, str(_SCRIPTS_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, str(_p))
 
+from generate_examples_env import generate_env_example  # noqa: E402 — 依赖上方 sys.path 修复
+from generate_examples_json import generate_extensions_example_json  # noqa: E402 — 同上
+from generate_examples_yaml import generate_config_example_yaml  # noqa: E402 — 同上
+
 # ---------------------------------------------------------------------------
 # 统一入口
 # ---------------------------------------------------------------------------
@@ -58,11 +62,6 @@ def generate_all(*, write: bool = True) -> dict[str, str]:
     Returns:
         ``{相对路径: 文件内容}`` 字典。
     """
-    # 延迟导入（scripts/ 内模块，依赖 sys.path 已修复）
-    from generate_examples_env import generate_env_example
-    from generate_examples_json import generate_extensions_example_json
-    from generate_examples_yaml import generate_config_example_yaml
-
     generators: dict[str, tuple[Path, str]] = {
         "backend/.env.example": (
             _BACKEND_DIR / ".env.example",

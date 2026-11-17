@@ -1,12 +1,12 @@
-# llm — 模型网关域（P0-4 交付；P1-1 扩展 embeddings；P2-1 增注册表管理 API）
+# llm — 模型网关域（含 embeddings 传输面 + 注册表管理 API）
 
-`backend/src/packages/harness/llm/` 承载模型无关的 LLM 网关 TRANSPORT 层：OpenAI 兼容 chat/completions 客户端（手写协议——锁定决策：**不引入 openai SDK**）、角色路由门面、池门控与用量埋点；P1 记忆层 chunk 1 扩展了 embeddings 传输面（`POST /embeddings`——记忆检索的向量化前置）。本 chunk 不含 prompt 组装（chat/ 域持有 prompt Unit 文件）。
+`backend/src/packages/harness/llm/` 承载模型无关的 LLM 网关 TRANSPORT 层：OpenAI 兼容 chat/completions 客户端（手写协议——锁定决策：**不引入 openai SDK**）、角色路由门面、池门控与用量埋点；记忆层扩展了 embeddings 传输面（`POST /embeddings`——记忆检索的向量化前置）。本域不含 prompt 组装（chat/ 域持有 prompt Unit 文件）。
 
 ## 模块一览
 
 | 模块 | 职责 | 关键导出 |
 |---|---|---|
-| `llm_models.py` | 消息 / 参数 / 响应 / embeddings / wire DTO / 用量事件 Model Classes | `ChatMessageModel` / `ChatRequestParams` / `ChatResponseModel` / `ChatStreamChunkModel` / `EmbeddingsResponseModel` / `LlmUsageEvent` |
+| `llm_models.py` | 消息 / 参数 / 响应 / embeddings / wire DTO / 用量事件 Model Classes（含原生工具调用与多模态内容分块契约） | `ChatMessageModel` / `ChatRequestParams` / `ChatResponseModel` / `ChatStreamChunkModel` / `EmbeddingsResponseModel` / `LlmUsageEvent` / `ToolDefinitionModel` / `ToolCallModel` / `TextContentPart` / `ImageContentPart` / `ContentPartModel` / `build_chat_request_body` / `messages_have_content_parts` |
 | `client.py` | OpenAI 兼容客户端（非流式 + SSE 流式 + embeddings + tenacity 重试 + 错误映射） | `LlmHttpClient` / `LlmRetryableError` / `parse_retry_after_seconds` |
 | `gateway.py` | 角色路由门面（wire 构建 → entry_gate → client → 用量发射；chat 与 embed 双面） | `LlmGateway` / `UsageRecorder` / `wire_default_usage_recorder` |
 
@@ -45,7 +45,7 @@ gateway = LlmGateway(
 )
 ```
 
-`wire_default_usage_recorder()` 是 llm → usage 的唯一接线点（函数体内惰性 import——llm 模块导入期零耦合；P0-6 app 装配调用）。
+`wire_default_usage_recorder()` 是 llm → usage 的唯一接线点（函数体内惰性 import——llm 模块导入期零耦合；app 装配调用）。
 
 ## 传输客户端（client.py）
 
@@ -55,7 +55,7 @@ gateway = LlmGateway(
 - **重试（tenacity）**：幂等安全集 = 连接错误（ConnectError / ConnectTimeout）/ HTTP 5xx / 408 / 429；429 尊重 `Retry-After` 头（秒数或 HTTP-date；封顶 `retry_after_max_seconds`），缺失回落指数退避；**流式仅「发起 → 2xx 确认」阶段可重试**（首块产出后重放非幂等）；
 - **超时**：`settings.pools.llm_request_timeout_seconds`（env `POOLS_LLM_REQUEST_TIMEOUT_SECONDS`，默认 120）。
 
-### 错误码映射表（复用既有 LLM_*——本 chunk 零新增）
+### 错误码映射表（复用既有 LLM_*——本域零新增）
 
 | 失败类别 | 错误码 | HTTP | 可重试 |
 |---|---|---|---|
@@ -63,8 +63,11 @@ gateway = LlmGateway(
 | HTTP 5xx / 408 / 429 | `LLM_CALL_FAILED` | 503 | 是（429 尊重 Retry-After） |
 | HTTP 401 / 403（鉴权失败） | `LLM_API_KEY_MISSING` | 500 | 否 |
 | 其余 HTTP 4xx | `LLM_CALL_FAILED` | 503 | 否 |
-| 读 / 写 / 池超时 | `LLM_REQUEST_FAILED` | 503 | 否 |
+| 读 / 写 / 池超时（含流中段 ReadTimeout） | `LLM_REQUEST_FAILED` | 503 | 否 |
+| 流中段传输中断（ReadError / RemoteProtocolError——非超时） | `LLM_CALL_FAILED` | 503 | 否 |
 | 响应 JSON 非法 / choices 空 / SSE 块非法 | `LLM_CALL_FAILED` | 503 | 否 |
+| tool_calls arguments 非法 JSON | `LLM_CALL_FAILED` | 503 | 否 |
+| tool_calls arguments 非 JSON 对象 | `LLM_CALL_FAILED` | 503 | 否 |
 | 条目熔断中（entry_gate 预检） | `LLM_REQUEST_FAILED` | 503 | —（冷却剩余毫秒在 details） |
 | 角色未绑定条目 | `MODEL_NOT_FOUND` | 404 | — |
 
@@ -88,7 +91,34 @@ gateway = LlmGateway(
 }
 ```
 
-流式请求体额外携带 `"stream": true` + `"stream_options": {"include_usage": true}`；未设置的采样参数不进入请求体；`params.extra` 原样并入顶层（provider 特有参数透传）。
+携带原生工具面时（`tools` 非空进入请求体，`tool_choice` 缺省 `auto`）：
+
+```json
+{
+  "model": "glm-5.3",
+  "messages": [
+    {"role": "system", "content": "你是值班助手"},
+    {"role": "user", "content": "现在几点了"}
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_time",
+        "description": "获取当前时间",
+        "parameters": {
+          "type": "object",
+          "properties": {"tz": {"type": "string", "description": "时区名"}},
+          "required": []
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto"
+}
+```
+
+流式请求体额外携带 `"stream": true` + `"stream_options": {"include_usage": true}`（**流式恒 content-only 纯文本**——与 `tools` / 多模态内容分块组合在 `build_chat_request_body` 直接拒绝 `VALIDATION_ERROR`，网关流式面在 entry_gate 之前同语义预检）；未设置的采样参数不进入请求体；`params.extra` 原样并入顶层（provider 特有参数透传）。
 
 非流式响应（wire，`extra="ignore"` 容忍端点附加字段）：
 
@@ -121,7 +151,7 @@ data: {"id":"resp-1","model":"glm-5.3","choices":[],"usage":{"prompt_tokens":52,
 data: [DONE]
 ```
 
-## embeddings 传输面（P1-1——记忆检索的向量化前置）
+## embeddings 传输面（记忆检索的向量化前置）
 
 `gateway.embed_by_role(texts, persona_id=None, request_id=None) -> EmbeddingsResponseModel`：解析 **embed 角色**条目（本地向量化端点为生产形态；测试 MockTransport）→ wire 构建 → `entry_gate`（熔断 + 信号量）→ `client.embeddings(texts)`（`POST {base_url}/embeddings`）→ 用量发射（**purpose 恒 `embed`**——usage 域枚举既有成员；token 计数取响应 `usage.prompt_tokens / total_tokens`，未回传按零用量落账）。
 
@@ -151,13 +181,62 @@ data: [DONE]
 - `EmbeddingsResponseModel`：`model` / `vectors: list[list[float]]` / `usage: TokenUsageModel | None` / `latency_ms`；
 - chat 路径零变更（`embeddings` 为 client 新增方法；`_post_with_retry` 增加 `url` 参数默认回落 chat 端点）。
 
+## 工具调用与多模态内容分块（已落地形态）
+
+**原生工具调用**（非流式 `chat` 面）：请求 `tools` 透传（`ToolDefinitionModel` 列表——wire 包裹为 `{"type": "function", "function": {...}}`）+ `tool_choice`（缺省 `auto`）；响应 `tool_calls` 经 client robust 解析归一为 `ToolCallModel` 列表（`arguments` JSON 字符串 → dict，非法 JSON / 非 JSON 对象 → `LLM_CALL_FAILED`）。工具循环链路顺序（单一真相）：调用方组装 `tools` → `chat_by_role` / `chat_for_entry`（非流式）→ 响应 `tool_calls` 非空 → 调用方执行工具 → 以 `assistant`（携带 `tool_calls` 声明轮）+ `tool`（`tool_call_id` 关联 + content 承载反馈）消息回放历史 → 下一轮 `chat`，直至 `tool_calls` 为空或步数上限。流式传输面恒 content-only——`stream=True` 与 `tools` 组合在请求体构建层拒绝（`VALIDATION_ERROR`）。
+
+工具调用响应 wire 形态（`content` 与 `tool_calls` 可并存——模型边说明边调用）：
+
+```json
+{
+  "id": "resp-2",
+  "model": "glm-5.3",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "get_current_time", "arguments": "{\"tz\":\"Asia/Shanghai\"}"}
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {"prompt_tokens": 61, "completion_tokens": 12, "total_tokens": 73}
+}
+```
+
+**多模态内容分块**（非流式面）：`ChatMessageModel.content` 支持 `list[ContentPartModel]`（`TextContentPart` / `ImageContentPart` 判别联合——user 轮携带 `[image, text]` 视觉理解形态；图片经 data URL 内联，不落盘不外发）。纯字符串形态在全部既有调用面原样有效（wire 序列化保持二键 `{"role", "content"}`）；仅分块列表形态序列化为 parts 数组。流式传输面拒绝分块形态（同上 `VALIDATION_ERROR`——网关 `messages_have_content_parts` 预检 + 请求体构建层守卫双层一致）。
+
+```json
+{
+  "model": "qwen2.5-vl-7b",
+  "messages": [
+    {"role": "system", "content": "你是图像理解助手"},
+    {
+      "role": "user",
+      "content": [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,<载荷>"}},
+        {"type": "text", "text": "图里有什么"}
+      ]
+    }
+  ]
+}
+```
+
 ## Model Classes 字段表
 
-`ChatMessageModel`：`role`（system/user/assistant）/ `content`（文本；多模态内容分块由后续多模态 chunk 扩展）。
+`ChatMessageModel`：`role`（system / user / assistant / **tool**——工具结果回放轮，`tool_call_id` 关联 assistant 声明轮）/ `content`（**纯文本或多模态内容分块列表**——`str | list[ContentPartModel]`，多模态分块已落地；assistant 工具调用轮可为空串）/ `tool_calls`（assistant 轮的工具调用声明）/ `tool_call_id`（tool 轮关联 ID）。
 
 `ChatRequestParams`：`temperature`（0.0-2.0）/ `max_tokens`（≥1）/ `top_p`（0-1.0）/ `extra`（provider 透传 dict）——未设置字段不进 wire 请求体。
 
-`ChatResponseModel`：`content` / `finish_reason` / `model`（端点回显，缺省回落请求名）/ `usage: TokenUsageModel | None` / `latency_ms`（epoch 毫秒差）。
+`ChatResponseModel`：`content` / **`tool_calls`**（`list[ToolCallModel]`——空列表 = 纯文本回复；content 与 tool_calls 可并存，调用方按 tool_calls 非空优先走工具循环）/ `finish_reason` / `model`（端点回显，缺省回落请求名）/ `usage: TokenUsageModel | None` / `latency_ms`（epoch 毫秒差）。
 
 `TokenUsageModel`：`input_tokens` / `output_tokens` / `total_tokens`（未提供时按 input+output 归一）。
 
@@ -184,7 +263,7 @@ data: [DONE]
 - persona_id / request_id 解析序：显式参数 → `core.context` 上下文变量（请求中间件已绑定则自动携带）→ None；
 - 记录器异常**仅告警不阻断主调用**（用量是观测面不是业务面）；未接线（recorder=None）零记录。
 
-## 注册表管理 API（P2 chunk 1——`app/api/models.py` + `harness/config/registry_admin.py`）
+## 注册表管理 API（`app/api/models.py` + `harness/config/registry_admin.py`）
 
 config.yaml 是 LLM 注册表**唯一真源**：`/api/v1/models` 管理面对注册表的全部突变经 harness.config.registry_admin 完成「校验 → 原子持久化 → 热重建 → 失败回滚」链；`.env` 与 `extensions_config.json` 不在该路由触达范围。全局管理面（无人格上下文——注册表是进程级配置真源，非 PersonaMixin 数据）。
 
@@ -269,7 +348,7 @@ config.yaml 是 LLM 注册表**唯一真源**：`/api/v1/models` 管理面对注
 仍承接任一角色的条目禁止删除（409 `CONFLICT`，`details.bound_roles` 为显式绑定 + 条目声明合并的绑定集）。解除路径（两步）：
 
 1. 条目**声明**的角色：`PUT /api/v1/models/entries/{name}` 置 `roles: []`；
-2. **显式 `role_bindings`** 指向的条目：先在 config.yaml 手工移除该绑定（本管理面不提供显式绑定编辑端点——显式绑定编辑属后续 chunk 评审面）。
+2. **显式 `role_bindings`** 指向的条目：先在 config.yaml 手工移除该绑定（本管理面不提供显式绑定编辑端点——显式绑定编辑属后续评审面）。
 
 再执行 `DELETE`。
 

@@ -13,8 +13,9 @@
 设计决策：
 
     - **executor 无关**：注册面只依赖 :data:`ToolExecutor` 契约
-      （``Callable[[dict], Awaitable[dict]]``）——后续 chunk 的 docker
-      沙盒执行器（代理到沙盒进程）以同一契约接入，registry 零改动；
+      （``Callable[[dict], Awaitable[dict]]``）——docker 沙盒执行器
+      （代理到沙盒进程，见 ``tools/sandbox.py``）以同一契约接入，
+      registry 零改动；
     - **list_specs → OpenAI tool 定义**：列举面直接产出
       :class:`ToolDefinitionModel`（llm 域请求 ``tools`` 面——duty 轮
       经 ``gateway.chat_by_role(..., tools=registry.list_specs())`` 透传）；
@@ -26,8 +27,8 @@
           检索服务；**人格作用域经 contextvar 调用时读取**
           （persona_id_var——duty 轮已绑定人格上下文则自动携带）；
           检索服务未注入时不注册（工具面按装配形态收缩）；
-    - **红线**（内置工具本 chunk 边界）：无网络、无文件系统——全部
-      依赖经构造注入；平台写入类工具属 P4 safety 审批面。
+    - **红线**（内置工具边界）：无网络、无文件系统——全部
+      依赖经构造注入；平台写入类工具属 safety 审批面。
 """
 
 from __future__ import annotations

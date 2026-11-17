@@ -62,6 +62,7 @@ export function mockPersona(overrides: Partial<PersonaRecord> = {}): PersonaReco
     status: 'active',
     is_active: true,
     card: { ...mockCard },
+    voice_profile: null,
     created_at: 1731000000000,
     updated_at: 1731000000000,
     ...overrides,

@@ -1,4 +1,4 @@
-"""memory 域梦境整理 DTO——夜间梦境巩固任务的传输契约（Unit 文件，P1 chunk 3）。
+"""memory 域梦境整理 DTO——夜间梦境巩固任务的传输契约（Unit 文件）。
 
 契约分层：
 
@@ -7,9 +7,10 @@
     - :class:`DreamDecisionAction`   —— 逐事件决策动作值域（promoted /
       skipped / merged——语义见 :class:`DreamDecisionModel`）；
     - :class:`DreamJobConfig`        —— 梦境任务构造级参数（窗口 / 衰减
-      半衰期 / 分数门 / 候选上限 / 主题相关度加成 / 日记开关——**构造
-      注入式旋钮**，与 llm 网关 retry 旋钮同模式；本 chunk 不落 config
-      域，迁移到 env 面属后续 chunk——文档化决策）；
+      半衰期 / 分数门 / 候选上限 / 主题相关度加成 / 日记开关 / 孤儿
+      running 收敛阈值 / 已晋升回溯窗 / 单次事件上限——**构造注入式
+      旋钮**，与 llm 网关 retry 旋钮同模式；Settings env 面迁移为已
+      文档化的演进方向）；
     - :class:`DreamRunStatsModel`    —— 运行统计（候选 / 过门 / 晋升 /
       并入 / untrusted 跳过 / 提案丢弃计数——落 DreamRunRow.stats JSON）；
     - :class:`DreamDecisionModel`    —— 逐事件决策记录（落
@@ -53,8 +54,9 @@ __all__ = [
 class DreamRunStatus(StrEnum):
     """梦境运行状态值域（ff_dream_runs.status）。
 
-    - ``running``：运行中（行创建即落库——进程崩溃可能遗留终态缺失行，
-      P3 调度器负责收敛孤儿 running 行，文档化决策）；
+    - ``running``：运行中（行创建即落库——进程崩溃可能遗留终态缺失行；
+      孤儿 running 行由 ``run_dream`` 入口按
+      ``stale_running_threshold_ms`` 阈值批量收敛为 failed）；
     - ``success``：成功（合并 + 日记全部完成或按规则跳过）；
     - ``failed``：失败（LLM 输出不可解析 / 调用失败 / 日记生成失败——
       fail-closed 语义见 dreaming 模块文档）。
@@ -84,9 +86,9 @@ class DreamDecisionAction(StrEnum):
 class DreamJobConfig(BaseModel):
     """梦境任务构造级参数（构造注入旋钮——与 llm 网关 retry 旋钮同模式）。
 
-    本 chunk 不修改 config 域（锁定决策）：全部旋钮经构造函数 / 请求体
-    覆写注入；向 Settings env 面的迁移属后续 chunk（届时本类保留为
-    纯配置形态，与 SeekDBStoreConfig 的装配映射同模式）。
+    全部旋钮经构造函数 / 请求体覆写注入（Settings env 面迁移为已文档化
+    的演进方向；届时本类保留为纯配置形态，与 SeekDBStoreConfig 的装配
+    映射同模式）。
 
     Attributes:
         window_hours: 候选窗口宽度（小时；窗口 ``[now - window_hours,
@@ -101,6 +103,14 @@ class DreamJobConfig(BaseModel):
             ``1 + boost``）。
         diary_enabled: 日记生成开关（关闭则跳过日记阶段）。
         diary_importance: 日记事件的 important 度（kind=dream 落库）。
+        stale_running_threshold_ms: 孤儿 running 行收敛阈值（epoch
+            毫秒）——run_dream 入口将 started_ms 早于
+            ``now - 阈值`` 且无终态的 running 行批量判为进程崩溃遗留。
+        promoted_lookback_ms: 已晋升跳过的回溯窗（epoch 毫秒）——
+            仅统计 finished_ms 落在 ``[now - 窗, now]`` 内的成功运行
+            决策为「既往已晋升」跳过依据。
+        max_episodes: 单次运行窗口事件上限（超出按时间序截断并告警
+            ——防超宽窗口全量入内存 / prompt）。
     """
 
     window_hours: int = Field(default=24, ge=1, le=24 * 30, description="候选窗口宽度（小时）")
@@ -111,6 +121,22 @@ class DreamJobConfig(BaseModel):
     boost: float = Field(default=0.5, ge=0, le=10, description="主题相关度加成系数")
     diary_enabled: bool = Field(default=True, description="日记生成开关")
     diary_importance: int = Field(default=5, ge=1, le=10, description="日记事件重要度")
+    stale_running_threshold_ms: int = Field(
+        default=3_600_000,
+        ge=1,
+        description="孤儿 running 行收敛阈值（epoch 毫秒，默认 1 小时）",
+    )
+    promoted_lookback_ms: int = Field(
+        default=2_592_000_000,
+        ge=1,
+        description="已晋升跳过的回溯窗（epoch 毫秒，默认 30 天）",
+    )
+    max_episodes: int = Field(
+        default=2000,
+        ge=1,
+        le=100_000,
+        description="单次运行窗口事件上限（超出按时间序截断并告警）",
+    )
 
 
 class DreamRunStatsModel(BaseModel):

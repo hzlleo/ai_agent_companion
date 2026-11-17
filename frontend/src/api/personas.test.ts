@@ -92,6 +92,7 @@ describe('personas 端点', () => {
       display_name: null,
       status: 'disabled',
       card: { ...mockCard },
+      voice_profile: null,
     })
     const capturedRequest = captured()
     if (capturedRequest === null) throw new Error('请求未被捕获')
@@ -102,6 +103,7 @@ describe('personas 端点', () => {
       display_name: null,
       status: 'disabled',
       card: mockCard,
+      voice_profile: null,
     })
   })
 
@@ -112,7 +114,13 @@ describe('personas 端点', () => {
       ),
     )
     await expectApiError(
-      createPersona({ name: 'dup', display_name: null, status: 'disabled', card: { ...mockCard } }),
+      createPersona({
+        name: 'dup',
+        display_name: null,
+        status: 'disabled',
+        card: { ...mockCard },
+        voice_profile: null,
+      }),
       '注册名已被占用',
       'CONFLICT',
     )

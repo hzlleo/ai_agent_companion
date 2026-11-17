@@ -1,6 +1,6 @@
 """channels 域 Model Classes——通道中立消息 / 上下文 / 投递结果（Unit 文件）。
 
-通道分层（P3 chunk 1，链路顺序文档化于 docs/backend/channels.md）::
+通道分层（链路顺序文档化于 docs/backend/channels.md）::
 
     平台 runner（telegram/tg_runner）        平台 wire → 通道中立模型
         ↓ InboundMessageModel
@@ -16,8 +16,8 @@
       形态），通道层统一 ``str`` 承载（平台适配器负责双向归一）；
     - **时间一律 epoch 毫秒**（``core.time_utils.now_ms``——Telegram wire
       层的 epoch 秒在 runner 映射时 ×1000 归一）；
-    - ``ChannelType`` 为 StrEnum 值域（P3 = telegram；P4 多通道扩展在此
-      追加成员——QQ 已于 P4 chunk 4 加入，B站等后续通道同点追加）。
+    - ``ChannelType`` 为 StrEnum 值域（初始为 telegram；多通道扩展在此
+      追加成员——QQ 已加入，B站等后续通道同点追加）。
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ __all__ = [
 
 
 class ChannelType(StrEnum):
-    """通道类型值域（P3 = telegram；P4 chunk 4 增 qq；后续通道同点追加）。
+    """通道类型值域（telegram / qq；后续通道同点追加）。
 
     继承 ``StrEnum`` 保证与字符串比较兼容——``ChannelType.TELEGRAM ==
     "telegram"`` 为 ``True``（与 core ``ErrorCode`` 同约定）。

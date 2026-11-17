@@ -1,13 +1,11 @@
-"""Settings 访问面——全局单例访问 + 测试隔离构造助手。
+"""Settings 隔离构造助手——测试 / 工具场景的确定性构造入口。
 
-物理定义位置说明：``Settings`` 聚合器与全部子配置 Model Class 定义在
-:mod:`packages.harness.config.models`（models 与 logic 分离约定）；本
-模块承载：
-
-    - 全局单例 ``settings`` 的 re-export（调用方 ``from ... import settings``
-      的稳定导入面）；
-    - :func:`build_isolated_settings`——测试 / 工具场景的隔离构造入口
-      （显式值构造，零 .env 文件依赖）。
+物理定义位置说明：``Settings`` 聚合器、全部子配置 Model Class 与全局
+单例 ``settings`` 均定义在 :mod:`packages.harness.config.models`（models
+与 logic 分离约定；全局单例消费方直接从该模块导入）。本模块只承载
+:func:`build_isolated_settings`——显式值构造隔离 ``Settings`` 实例
+（零 .env 文件 / 零全局单例依赖）；签名中引用的子配置类型是参数
+注解与默认值构造的使用（非再导出）。
 
 依赖方向：config 域内部（settings → models），合法。
 """
@@ -28,26 +26,9 @@ from packages.harness.config.models import (
     Settings,
     ToolsSandboxSettings,
     VoiceSettings,
-    settings,
 )
 
-__all__ = [
-    "ServerConfig",
-    "DatabaseConfig",
-    "LogConfig",
-    "PoolsConfig",
-    "LlmEndpointConfig",
-    "SeekDBSettings",
-    "ChannelsSettings",
-    "DutySettings",
-    "DreamScheduleSettings",
-    "SchedulerSettings",
-    "ToolsSandboxSettings",
-    "VoiceSettings",
-    "Settings",
-    "settings",
-    "build_isolated_settings",
-]
+__all__ = ["build_isolated_settings"]
 
 
 def build_isolated_settings(

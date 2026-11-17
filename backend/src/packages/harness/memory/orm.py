@@ -1,4 +1,4 @@
-"""memory 域 ORM——三层记忆四表（P1 chunk 1 交付）。
+"""memory 域 ORM——三层记忆四表。
 
 表清单：
 
@@ -29,12 +29,22 @@ append-only 语义（ff_memory_episodes）：
 supersede 语义（ff_curated_memory）：
 
     - 同 (persona_id, kind, topic) 至多一条 ``status=active`` 行——由
-      服务层在单事务内保证（先查 active 行 → 标记 superseded + 链接
-      新行 → 插入新 active 行）；
+      DB 唯一键 ``uq_ff_curated_active (persona_id, kind, topic,
+      active_marker)`` 强制（active 行 ``active_marker='active'``，
+      superseded 行 NULL——MySQL / SQLite 唯一键均忽略 NULL，多代
+      superseded 行共存不冲突）；服务层在单事务内完成「新行落库 →
+      旧行标记 superseded + 链接」（语句序保证腾位），并发双写由
+      唯一键拒绝 + 服务层重试收敛；
     - ``superseded_by_id`` 自引用 FK 指向取代者（旧行 → 新行方向；
       active 行为 NULL）；``version`` 随链递增（首版 1）；
     - 删除 active 行后该 topic 无 active 行，下次 upsert 重新起链
       （version 从 1 重新计数——文档化决策）。
+
+会话消息序号（ff_chat_messages）：
+
+    - ``(session_id, seq)`` 唯一键 ``uq_ff_chat_messages_seq``——会话内
+      seq 至多一条（DB 级兜底；服务层经会话行锁串行化计数，见
+      ``ChatSessionService.append_message``）。
 
 列约定：时间全部 epoch 毫秒（BigInteger）；枚举值以字符串落库（值域
 由 memory.models 枚举在 DTO 边界校验）；importance 1-10。
@@ -52,6 +62,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -105,6 +116,10 @@ class MemoryEpisodeRow(Base, BigIntIdMixin, TimestampMixin, PersonaMixin):
 class CuratedMemoryRow(Base, BigIntIdMixin, TimestampMixin, PersonaMixin):
     """策展层蒸馏记忆行（supersede 语义——同 (persona, kind, topic) 单 active）。
 
+    单 active 不变式由 ``uq_ff_curated_active`` 唯键在 DB 层强制：active
+    行 ``active_marker='active'``、superseded 行 NULL（两方言唯一键均忽略
+    NULL——多代 superseded 行共存）。
+
     Attributes:
         kind: 策展类型（memory/user_note/relationship）。
         topic: 主题键（同 (persona, kind, topic) 至多一条 active 行）。
@@ -115,6 +130,8 @@ class CuratedMemoryRow(Base, BigIntIdMixin, TimestampMixin, PersonaMixin):
         status: 状态（active/superseded）。
         superseded_by_id: 取代者行主键（自引用 FK；active 行为 NULL）。
         version: 链内版本号（首版 1，supersede 递增）。
+        active_marker: 单 active 守卫标记（active 行恒 ``'active'`` /
+            superseded 行恒 NULL——唯一键忽略 NULL 使多代共存）。
     """
 
     __tablename__ = "ff_curated_memory"
@@ -122,6 +139,13 @@ class CuratedMemoryRow(Base, BigIntIdMixin, TimestampMixin, PersonaMixin):
         Index("ix_ff_curated_memory_kind", "kind"),
         Index("ix_ff_curated_memory_topic", "topic"),
         Index("ix_ff_curated_memory_status", "status"),
+        UniqueConstraint(
+            "persona_id",
+            "kind",
+            "topic",
+            "active_marker",
+            name="uq_ff_curated_active",
+        ),
     )
 
     kind: Mapped[str] = mapped_column(String(16), comment="策展类型（memory/user_note/relationship）")
@@ -138,6 +162,10 @@ class CuratedMemoryRow(Base, BigIntIdMixin, TimestampMixin, PersonaMixin):
         comment="取代者行主键（自引用；active 行为 NULL）",
     )
     version: Mapped[int] = mapped_column(Integer, comment="链内版本号（首版 1）")
+    active_marker: Mapped[str | None] = mapped_column(
+        String(16),
+        comment="单 active 守卫标记（active 行 'active' / superseded 行 NULL——唯一键忽略 NULL，多代共存）",
+    )
 
 
 class ChatSessionRow(Base, BigIntIdMixin, TimestampMixin, PersonaMixin):
@@ -168,13 +196,17 @@ class ChatMessageRow(Base, BigIntIdMixin, TimestampMixin):
 
     Attributes:
         session_id: 所属会话主键（FK ff_chat_sessions.id，级联删除）。
-        seq: 会话内序号（从 1 递增——append_message 维护）。
+        seq: 会话内序号（从 1 递增——append_message 维护；(session_id,
+            seq) 唯一键 DB 级兜底）。
         role: 消息角色（user/assistant/system）。
         content: 消息文本。
         ts_ms: 消息时间（epoch 毫秒——回合产生时刻）。
     """
 
     __tablename__ = "ff_chat_messages"
+    __table_args__ = (
+        UniqueConstraint("session_id", "seq", name="uq_ff_chat_messages_seq"),
+    )
 
     session_id: Mapped[int] = mapped_column(
         BigInteger().with_variant(Integer, "sqlite"),

@@ -34,9 +34,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # 冻结基线（新工程零起点——只减不增，严禁上调；确需新增抑制须评审后
 # 经用户显式豁免并在此留痕）。
+# scripts 剖面基线 7（两处结构性豁免，逐项列明）：
+#   - check_chinese_comments.py ×4：NodeVisitor 访问器命名（visit_Raise
+#     等）遵循 ast 模块契约、非本工程命名约定（N802）；
+#   - generate_examples.py ×3：generate_examples_* 导入必须晚于模块顶
+#     部的 sys.path 修复块（E402）。
 BASELINES: dict[str, int] = {
     "backend": 0,
     "tool-sandbox": 0,
+    "scripts": 7,
     "frontend-eslint-disable": 0,
 }
 
@@ -95,6 +101,21 @@ def measure_tool_sandbox() -> int:
     )
 
 
+def measure_scripts() -> int:
+    """根 scripts 树 noqa 计数（豁免本文件——其常量定义含标记字符串原文，
+    自计数属量尺量自己）。
+
+    Returns:
+        scripts 树命中行数（check_chinese_comments 的 4 处 N802 结构性
+        豁免 + generate_examples 的 3 处 E402）。
+    """
+    return sum(
+        _count_real_noqa(p)
+        for p in _iter_py_files(REPO_ROOT / "scripts")
+        if p.name != Path(__file__).name
+    )
+
+
 def measure_frontend() -> int:
     """frontend 生产面 eslint-disable 计数（排测试文件）。
 
@@ -124,9 +145,10 @@ def main() -> int:
     measured = {
         "backend": measure_backend(),
         "tool-sandbox": measure_tool_sandbox(),
+        "scripts": measure_scripts(),
         "frontend-eslint-disable": measure_frontend(),
     }
-    print("== noqa / type:ignore 冻结门禁（S8 拍板 A）==")
+    print("== noqa / type:ignore 冻结门禁 ==")
     for surface, count in measured.items():
         baseline = BASELINES[surface]
         if count > baseline:

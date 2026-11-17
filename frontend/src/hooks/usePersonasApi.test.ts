@@ -66,7 +66,13 @@ describe('personas mutations', () => {
     const { wrapper, invalidateSpy } = createQueryClientWrapperWithSpy()
     const { result } = renderHook(() => useCreatePersona(), { wrapper })
     act(() => {
-      result.current.mutate({ name: 'new-one', display_name: null, status: 'disabled', card: { ...mockCard } })
+      result.current.mutate({
+        name: 'new-one',
+        display_name: null,
+        status: 'disabled',
+        card: { ...mockCard },
+        voice_profile: null,
+      })
       })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(result.current.data?.name).toBe('new-one')

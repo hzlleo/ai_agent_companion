@@ -91,8 +91,9 @@ indent-style = "space"
 # ---------------------------------------------------------------------------
 # Pytest: asyncio auto mode（全量原生异步——与后端子项目同约定）
 # ---------------------------------------------------------------------------
-# 覆盖率阈值（--cov-fail-under=80）由 pixi tests-unit 任务携带；逐模块读数
-# 经 term-missing 报告人工核对（本树不依赖仓库根 scripts——独立运行时）。
+# 覆盖率阈值（--cov-fail-under=80）由 pixi tests-unit 任务携带；逐模块 ≥80
+# 由 pixi coverage-gates 任务机器门禁（根 scripts/check_coverage_per_module.py
+# tool-sandbox 剖面——工程门禁面，非运行时依赖：本树运行时零仓库根依赖）。
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_test_loop_scope = "function"
