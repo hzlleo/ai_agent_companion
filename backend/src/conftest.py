@@ -52,6 +52,11 @@ from pathlib import Path
 os.environ["SERVER_HOST"] = "127.0.0.1"
 os.environ["SERVER_PORT"] = "8000"
 os.environ["SERVER_WORKERS"] = "1"
+# 管理面 owner token（admin_token_env 默认指向的变量）——硬置空 = 测试
+# 默认鉴权关闭（既有路由测试全量不受影响，S3 硬覆盖——开发者 shell
+# 导出的真实 ADMIN_AUTH_TOKEN 不得泄入测试；鉴权矩阵测试按需
+# monkeypatch 本变量）
+os.environ["ADMIN_AUTH_TOKEN"] = ""
 
 # --- 数据库（DATABASE_ 前缀 → DatabaseConfig；MySQL 8 权威 / 测试 sqlite） ---
 os.environ["DATABASE_TYPE"] = "sqlite"

@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { describe, expect, it, beforeEach } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { http, HttpResponse } from 'msw'
 import App from './App'
+import { BACKEND_ORIGIN, errorResult, server } from '@/test/server'
 
 /** 渲染完整应用（browser router + QueryClient + Toast，RTL 自动清理）。 */
 function renderApp(): void {
@@ -16,6 +18,10 @@ function renderApp(): void {
 }
 
 describe('App', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
   it('根路由重定向 /personas：壳导航 + 列表渲染', async () => {
     window.history.replaceState({}, '', '/')
     renderApp()
@@ -47,5 +53,51 @@ describe('App', () => {
     window.history.replaceState({}, '', '/not-exist')
     renderApp()
     await waitFor(() => expect(window.location.pathname).toBe('/personas'))
+  })
+})
+
+describe('App 管理面鉴权门', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('首个 401 → 令牌门替换应用壳（事件驱动挂载）', async () => {
+    window.history.replaceState({}, '', '/')
+    server.use(
+      http.get(`${BACKEND_ORIGIN}/personas`, () =>
+        HttpResponse.json(
+          errorResult('管理面鉴权失败：Authorization Bearer token 缺失或不匹配', 'UNAUTHORIZED'),
+          { status: 401 },
+        ),
+      ),
+    )
+    renderApp()
+    expect(await screen.findByText('管理访问令牌')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存并进入' })).toBeInTheDocument()
+    expect(screen.queryByText('AI 陪伴伙伴 · 管理台')).not.toBeInTheDocument()
+  })
+
+  it('非 401 错误照常呈现页面错误面（不误挂令牌门）', async () => {
+    window.history.replaceState({}, '', '/')
+    server.use(
+      http.get(`${BACKEND_ORIGIN}/personas`, () =>
+        HttpResponse.json(errorResult('服务暂不可用', 'SERVICE_UNAVAILABLE'), { status: 503 }),
+      ),
+    )
+    renderApp()
+    expect(await screen.findByText('AI 陪伴伙伴 · 管理台')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.queryByText('管理访问令牌')).not.toBeInTheDocument(),
+    )
+  })
+
+  it('侧栏「注销」：清除本地 token + 回到令牌门', async () => {
+    localStorage.setItem('aac_admin_token', 'stale-token')
+    window.history.replaceState({}, '', '/')
+    renderApp()
+    expect(await screen.findByText('AI 陪伴伙伴 · 管理台')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '注销' }))
+    expect(await screen.findByText('管理访问令牌')).toBeInTheDocument()
+    expect(localStorage.getItem('aac_admin_token')).toBeNull()
   })
 })

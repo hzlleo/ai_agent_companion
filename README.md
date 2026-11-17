@@ -55,6 +55,12 @@ pixi run dev                # 前端开发服务器（5173，连本机后端 800
 配置 example 三件套（`.env.example` / `config.example.yaml` / `extensions_config.example.json`）由
 `pixi run gen-examples` 从 Pydantic 配置类自动生成；真实配置经 `pixi run setup` 交互式向导生成，全部配置项均受管理。
 
+管理后台的 owner-token 鉴权：运维在部署侧设置 `ADMIN_AUTH_TOKEN` 环境变量（非空 =
+启用鉴权，全部管理路由要求 `Authorization: Bearer <token>`；留空 = 鉴权关闭，仅限
+本机 / 可信内网——公网暴露必须配置）。变量名可经 `SERVER_ADMIN_TOKEN_ENV` 调整；
+前端在首次收到 401 时弹出令牌输入页（详见 `frontend/README.md` 认证一节与
+`docs/backend/README.md` 认证契约）。
+
 ## 工程约束
 
 全异步（CPU/IO 阻塞仅经 `run_blocking_ops`）、公共池复用、Model Class 优先（Unit 文件分离）、

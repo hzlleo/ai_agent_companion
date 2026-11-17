@@ -4,7 +4,9 @@
 
     - :func:`create_app` —— FastAPI 工厂（共享异常处理器 + personas /
       memories / usage / voice / look_at / models / channels-qq / health
-      共八路由 + CORS + lifespan）；
+      共八路由 + 管理面 owner-token 鉴权（六管理路由统一挂接，health /
+      qq webhook 豁免——豁免契约见 :func:`_include_routers`）+ CORS +
+      lifespan）；
     - :func:`startup_app_state` / :func:`shutdown_app_state` —— **可独立
       驱动的纯异步函数对**（不藏在 lifespan 闭包内——测试无需 ASGI
       lifespan runner 即可直调，本工程不引入 asgi-lifespan 依赖）；
@@ -74,7 +76,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import cast
 
-from fastapi import FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
@@ -89,6 +91,10 @@ from app.api.models import router as models_router
 from app.api.personas import router as personas_router
 from app.api.usage import router as usage_router
 from app.api.voice import router as voice_router
+from app.middleware.admin_auth import (
+    log_admin_auth_startup_notice,
+    require_admin_token,
+)
 from app.middleware.error_handler import register_exception_handlers
 from packages.harness.channels.channel_models import ChannelType
 from packages.harness.channels.channel_service import ChannelRouter
@@ -169,6 +175,9 @@ async def startup_app_state(
     """
     setup_logging_from_settings(settings)
     load_all_config(config_dir=config_dir)
+    # 管理面鉴权模式通告（ONE info——日志先行步骤之后、组件装配之前；
+    # 鉴权依赖本体在 create_app 静态装配期挂接，此处只落启动日志）。
+    log_admin_auth_startup_notice(settings)
     await init_database(settings.database)
     manager = init_pool_manager(settings)
     await manager.start()
@@ -626,13 +635,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     register_exception_handlers(app)
     _install_cors(app, effective_settings)
-    app.include_router(personas_router)
-    app.include_router(memories_router)
-    app.include_router(usage_router)
-    app.include_router(voice_router)
-    app.include_router(look_at_router)
-    app.include_router(models_router)
-    app.include_router(qq_channels_router)
-    app.include_router(health_router)
+    _include_routers(app)
     app.state.settings = effective_settings
     return app
+
+
+def _include_routers(app: FastAPI) -> None:
+    """注册全部路由（管理面鉴权单点挂接 + 豁免面显式清单）。
+
+    挂载契约（R2 审计放行条件——新端点不得扩张无鉴权面）：
+
+        - **受保护路由集**：personas / memories / usage / voice /
+          look_at / models 六个管理路由统一挂 ``require_admin_token``
+          依赖——经单一 ``APIRouter(dependencies=[...])`` 包装路由**一次
+          注册**（依赖定义在 ``app/middleware/admin_auth``；token 经
+          ``ServerConfig.admin_token_env`` env 间接，空 = 鉴权关闭）；
+        - **豁免路由**（显式清单——每项豁免理由如下，增删须同步
+          docs/backend/README.md 认证一节的豁免契约表）：
+
+          1. ``health``——零依赖存活面（health.py docstring 契约：存活
+             探针不触 DB / 池 / LLM，同理不得因鉴权配置拒答——liveness
+             与鉴权正交）；
+          2. ``channels qq webhook``——自鉴权面（NapCat 事件上报经自身
+             ``webhook_token_env`` Bearer 校验，见 channels_qq 模块；
+             再叠 admin token 会要求 NapCat 侧持有管理凭据——双重鉴权
+             破坏上报链路且管理面 token 会暴露给部署机配置）。
+
+    Args:
+        app: 待挂路由的 FastAPI 应用。
+    """
+    admin_api = APIRouter(dependencies=[Depends(require_admin_token)])
+    admin_api.include_router(personas_router)
+    admin_api.include_router(memories_router)
+    admin_api.include_router(usage_router)
+    admin_api.include_router(voice_router)
+    admin_api.include_router(look_at_router)
+    admin_api.include_router(models_router)
+    app.include_router(admin_api)
+    # 豁免面（见本函数 docstring 豁免契约——不挂 require_admin_token）。
+    app.include_router(qq_channels_router)
+    app.include_router(health_router)

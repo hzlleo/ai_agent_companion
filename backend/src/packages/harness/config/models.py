@@ -107,6 +107,15 @@ def _validate_daily_at_shape(value: str) -> str:
 class ServerConfig(BaseSettings):
     """Web 服务配置（env_prefix=``SERVER_``）。
 
+    管理面 owner-token 鉴权（R2 审计放行条件——新端点不得扩张无鉴权
+    面）：``admin_token_env`` 经环境变量间接（与 telegram ``bot_token_env``
+    / 沙盒 ``token_env`` 同模式——**token 本值永不落 yaml / 配置树**），
+    本配置只持有变量名；实际 token 由 ``app/middleware/admin_auth``
+    鉴权依赖按请求从该变量读取。变量非空 = 管理路由要求
+    ``Authorization: Bearer <token>``；为空 = 鉴权关闭（开发 / 内网形
+    态——公网暴露必须配置；R3 将补齐强制启用，见 docs/backend/README.md
+    认证一节）。
+
     Attributes:
         host: 服务监听地址（默认仅绑定回环——本机开发安全默认；容器部署
             由编排层显式设置 ``SERVER_HOST=0.0.0.0`` 对外暴露）。
@@ -117,6 +126,8 @@ class ServerConfig(BaseSettings):
             = CORS 关闭（不挂 CORSMiddleware——同源部署形态）。env 覆写
             形态为 JSON 数组字符串（pydantic-settings 复杂类型 JSON 解析）：
             ``SERVER_CORS_ORIGINS='["http://localhost:5173"]'``。
+        admin_token_env: 管理面 owner-token 鉴权的环境变量名（实际 token
+            从该变量读取；变量为空 = 鉴权关闭——见类 docstring 取舍）。
     """
 
     host: str = Field(default="127.0.0.1", description="服务监听地址")
@@ -128,6 +139,11 @@ class ServerConfig(BaseSettings):
             "http://127.0.0.1:5173",
         ],
         description="CORS 允许来源（默认 Vite dev server；空列表 = 关闭 CORS）",
+    )
+    admin_token_env: str = Field(
+        default="ADMIN_AUTH_TOKEN",
+        min_length=1,
+        description="管理面 owner-token 鉴权环境变量名（空 = 鉴权关闭；公网暴露必须配置）",
     )
 
     model_config = SettingsConfigDict(

@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { Bot, Brain, Gauge, Sparkles } from 'lucide-react'
+import { Bot, Brain, Gauge, LogOut, Sparkles } from 'lucide-react'
+import { clearAdminToken, notifyAuthRequired } from '@/api/auth'
 import { cn } from '@/lib/utils'
 
 /** 侧边导航项。 */
@@ -23,9 +24,16 @@ const NAV_ITEMS: NavItem[] = [
  * 管理台应用壳：左侧导航 + 主内容区。
  *
  * 导航面（本工程约定）：人格 / 记忆 / 用量 / 模型四个管理模块入口，
- * 各自挂真实路由页面（模块落地情况见 App.tsx 路由表）。
+ * 各自挂真实路由页面（模块落地情况见 App.tsx 路由表）；侧栏底部
+ * 「注销」清除本地 owner token 并回到令牌门（经鉴权需求事件——与
+ * 401 门同一承接面，见 AdminTokenScreen）。
  */
 export function AppShell() {
+  const handleLogout = () => {
+    clearAdminToken()
+    notifyAuthRequired()
+  }
+
   return (
     <div className="flex min-h-screen">
       <aside className="flex w-56 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-sidebar)]">
@@ -54,6 +62,16 @@ export function AppShell() {
             </NavLink>
           ))}
         </nav>
+        <div className="border-t border-[var(--color-border)] p-3">
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-[var(--color-sidebar-text)] transition-colors hover:bg-[var(--color-sidebar-hover)]"
+          >
+            <LogOut className="h-4 w-4" aria-hidden="true" />
+            注销
+          </button>
+        </div>
       </aside>
       <main className="min-w-0 flex-1 bg-[var(--color-surface)]">
         <Outlet />
