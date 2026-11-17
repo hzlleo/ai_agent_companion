@@ -133,6 +133,12 @@ from packages.harness.pools.manager import get_pool_manager, init_pool_manager
 from packages.harness.scheduler import Scheduler, build_dream_trigger_job
 from packages.harness.search.search_service import SearchService
 from packages.harness.search.tool import build_web_search_tool, register_web_search_tool
+from packages.harness.tools.browser import (
+    build_browser_sidecar_client,
+    build_browser_specs,
+    register_browser_sidecar_tools,
+)
+from packages.harness.tools.browser_models import BROWSER_TOOL_NAMES
 from packages.harness.tools.registry import ToolRegistry, register_builtin_tools
 from packages.harness.tools.sandbox import (
     build_sandbox_client,
@@ -200,6 +206,7 @@ async def startup_app_state(
     )
     app.state.memory_store = build_memory_store(settings)
     await _startup_search(app, settings, config_dir=config_dir)
+    await _startup_browser_sidecar(app, settings)
     await _startup_channels(app, settings)
     await _startup_scheduler(app, settings)
 
@@ -232,6 +239,11 @@ async def shutdown_app_state(app: FastAPI) -> None:
     app.state.search_service = None
     app.state.search_tool_registry = None
     app.state.search_tool_specs = None
+    # 浏览器 sidecar 槽位复位（客户端无自有资源——共享池 client 生命周期
+    # 归 pools；chat 注册表内的代理执行器随槽位一同丢弃）。
+    app.state.browser_sidecar_client = None
+    app.state.browser_tool_registry = None
+    app.state.browser_tool_specs = None
 
 
 async def _startup_search(
@@ -311,6 +323,83 @@ async def _startup_search(
     logger.info("web_search 工具已注册（duty 注册表在调度器装配时追加；chat 工具循环经通道工厂消费）")
 
 
+async def _startup_browser_sidecar(app: FastAPI, settings: Settings) -> None:
+    """装配浏览器 sidecar 工具面（enabled + token 就绪 + /health 探测成功时
+    构建客户端 + chat 工具注册）。
+
+    可选组件 warn-and-continue 语义（与工具沙盒同降级语义——锁定决策）：
+    token 未配置 / 探测失败 → 跳过浏览器工具注册并告警，工具面回落到
+    既有工具集（内置 / 沙盒 / look_at / web_search）。探测经共享 httpx 池
+    （bounded 超时 = ``request_timeout_seconds``）。
+
+    chat 注册表接线（镜像 web_search 的双注册形态——文档化决策）：
+    搜索装配已建 chat 注册表（``search_tool_registry``）时浏览器七工具
+    **并入该注册表**（规格追加到 ``search_tool_specs``——单一 chat 工具
+    注册表面）；否则独立建 browser 槽位（``browser_tool_registry`` /
+    ``browser_tool_specs``——通道工厂按「搜索槽位优先、浏览器槽位兜底」
+    消费）。duty 注册表在调度器装配时经 ``_register_browser_sidecar_tools``
+    追加（复用本函数构建的客户端——零二次探测）。
+
+    Args:
+        app: 待装配的 FastAPI 应用（client / chat 注册表槽位上挂
+            ``app.state``）。
+        settings: 生效 Settings（``settings.tools_browser_sidecar`` 分节）。
+
+    Raises:
+        BusinessException: 公共池未启动（``INTERNAL_ERROR``——调用顺序
+            契约破坏面；与搜索 / 通道装配同前置检查）。
+    """
+    app.state.browser_sidecar_client = None
+    app.state.browser_tool_registry = None
+    app.state.browser_tool_specs = None
+    sidecar = settings.tools_browser_sidecar
+    if not sidecar.enabled:
+        logger.info("浏览器 sidecar 未启用（TOOLS_BROWSER_SIDECAR_ENABLED=false）——跳过装配")
+        return
+    manager = get_pool_manager()
+    if manager is None or not manager.started:
+        raise BusinessException(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="浏览器 sidecar 装配前置失败：公共池未启动（lifespan 装配顺序破坏）",
+        )
+    client = build_browser_sidecar_client(manager.get_http_client(), sidecar)
+    if not client.has_token:
+        logger.warning(
+            "浏览器 sidecar token 未配置（环境变量 {} 为空）——跳过浏览器工具注册，"
+            "工具面回落到既有工具集",
+            sidecar.token_env,
+        )
+        return
+    if not await client.probe_health():
+        logger.warning(
+            "浏览器 sidecar 健康探测失败（{}，超时 {}s 上限）——跳过浏览器工具注册，"
+            "工具面回落到既有工具集",
+            sidecar.base_url,
+            sidecar.request_timeout_seconds,
+        )
+        return
+    app.state.browser_sidecar_client = client
+    browser_specs = list(build_browser_specs())
+    chat_registry = getattr(app.state, "search_tool_registry", None)
+    if chat_registry is not None:
+        register_browser_sidecar_tools(chat_registry, client)
+        search_specs = getattr(app.state, "search_tool_specs", None) or []
+        app.state.search_tool_specs = [*search_specs, *browser_specs]
+        logger.info(
+            "浏览器 sidecar 工具已并入搜索 chat 注册表: tools=[{}]（duty 注册表在调度器装配时追加）",
+            ", ".join(BROWSER_TOOL_NAMES),
+        )
+        return
+    browser_registry = ToolRegistry()
+    register_browser_sidecar_tools(browser_registry, client)
+    app.state.browser_tool_registry = browser_registry
+    app.state.browser_tool_specs = browser_specs
+    logger.info(
+        "浏览器 sidecar 工具已注册（独立 chat 注册表）: tools=[{}]（duty 注册表在调度器装配时追加）",
+        ", ".join(BROWSER_TOOL_NAMES),
+    )
+
+
 async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     """装配通道层（``TELEGRAM_ENABLED`` 长轮询 runner + ``QQ_ENABLED`` 适配器）。
 
@@ -360,7 +449,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
 
     def _chat_service_factory() -> ChatService:
         """逐消息 ChatService 工厂（工具面按当前装配态收缩——搜索工具
-        注册表 + 规格列表就绪时绑定 chat 工具循环，否则零工具形态）。"""
+        注册表 + 规格列表就绪时绑定 chat 工具循环；浏览器槽位兜底；
+        两者皆无时零工具形态）。"""
         tool_specs = getattr(app.state, "search_tool_specs", None)
         tool_registry = getattr(app.state, "search_tool_registry", None)
         if tool_specs and tool_registry is not None:
@@ -369,6 +459,15 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
                 session_service=ChatSessionService(),
                 tools=tool_specs,
                 tool_executor=tool_registry,
+            )
+        browser_specs = getattr(app.state, "browser_tool_specs", None)
+        browser_registry = getattr(app.state, "browser_tool_registry", None)
+        if browser_specs and browser_registry is not None:
+            return ChatService(
+                gateway=gateway,
+                session_service=ChatSessionService(),
+                tools=browser_specs,
+                tool_executor=browser_registry,
             )
         return ChatService(gateway=gateway, session_service=ChatSessionService())
 
@@ -529,6 +628,10 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
             ),
         )
         await _register_sandbox_tools(app, settings, registry)
+        # 浏览器 sidecar 工具（JS 渲染回退面——duty 工具循环消费面）：
+        # 在内置 + 沙盒工具后注册（复用启动期构建并通过探测的客户端；
+        # 未启用 / 探测失败时槽位为 None——零注册，duty 工具面不受影响）。
+        await _register_browser_sidecar_tools(app, settings, registry)
         # look_at 工具（图像理解——duty 工具循环消费面）：经装配网关
         # 构建服务（用量随网关发射），在内置 + 沙盒工具后注册。
         register_look_at_tool(registry, LookAtService(gateway=app.state.gateway))
@@ -639,6 +742,32 @@ async def _register_sandbox_tools(app: FastAPI, settings: Settings, registry: To
         "工具沙盒工具已注册: tools=[{}]",
         ", ".join((HTTP_FETCH_TOOL_NAME, *BILI_TOOL_NAMES)),
     )
+
+
+async def _register_browser_sidecar_tools(
+    app: FastAPI, settings: Settings, registry: ToolRegistry
+) -> None:
+    """装配浏览器 sidecar 工具面到 duty 注册表（复用启动期客户端——镜像
+    ``_register_sandbox_tools`` 的 warn-and-continue 语义）。
+
+    客户端由 :func:`_startup_browser_sidecar` 构建并通过探测后上挂
+    ``app.state.browser_sidecar_client``；本函数仅在 duty 启用时被调用
+    （浏览器工具的 duty 消费面）——槽位为 None（未启用 / token 缺失 /
+    探测失败）时零注册（告警已在启动期落日志，此处不重复）。
+
+    Args:
+        app: 待装配的 FastAPI 应用（读取 ``browser_sidecar_client`` 槽位）。
+        settings: 生效 Settings（``settings.tools_browser_sidecar`` 分节）。
+        registry: duty 工具注册表（浏览器七工具追加装配目标）。
+    """
+    client = getattr(app.state, "browser_sidecar_client", None)
+    if client is None:
+        if settings.tools_browser_sidecar.enabled:
+            logger.info(
+                "浏览器 sidecar 客户端未就绪（启动期跳过）——duty 工具面不含浏览器工具"
+            )
+        return
+    register_browser_sidecar_tools(registry, client)
 
 
 async def _shutdown_scheduler(app: FastAPI) -> None:

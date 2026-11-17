@@ -48,6 +48,35 @@
 # ——http_fetch 需要受控出站 egress（真正的出站管控面是
 # SANDBOX_HTTP_ALLOWLIST 域名允许清单 + Dockerfile 抓取语义），
 # internal:true 会同时阻断工具出站，使沙盒丧失职能。
+#
+# ─── 浏览器 sidecar（browser-sidecar——JS 渲染回退面） ─────────────────────
+#
+# 子资源允许清单权衡（文档化决策——sidecar 树 policy.py 路由拦截语义）：
+#   - sidecar 在 context 创建期经 page.route("**/*") 拦截**全部**请求，
+#     宿主不在 BROWSER_SIDECAR_ALLOWLIST 的子资源（第三方脚本 / 字体 /
+#     图片）一律静默 abort——页面仍渲染允许清单内来源的内容；
+#   - 代价：跨域 CDN 默认全断（多数现代站点会渲染残缺）。需要跨域资源
+#     的站点由运维向允许清单追加后缀（如 cdn.jsdelivr.net）——默认面
+#     宁可渲染残缺，不放行未知宿主；
+#   - 允许清单同时管导航与重定向逐跳（navigate 先行校验 + 路由拦截
+#     复检——belt and suspenders）；私网 IP 字面量无论清单一律拒绝。
+#
+# 加固面（与 Dockerfile 内加固共同构成 sidecar 边界；cap_drop 注意事项）：
+#   - 端口仅回环暴露（127.0.0.1:8766:8766——后端本机消费）；
+#   - shm_size 1g（chromium 渲染需要大 /dev/shm——容器默认 64MB 不足；
+#     进程侧已叠加 --disable-dev-shm-usage 双保险）；
+#   - mem_limit 2g / cpus 1.0（浏览器风暴隔离面——chromium 多进程树
+#     的保守下限；部署机按实测收紧）；
+#   - cap_drop: ALL 为 **best-effort 落位**（Playwright 注意事项）：
+#     chromium 沙盒在容器内以 --no-sandbox 运行（非 root + 资源限额 +
+#     网络允许清单收敛该面），若部署机上 cap_drop ALL 与 headless shell
+#     的系统调用面冲突（seccomp / namespace 需求），首退为按需保留
+#     SYS_ADMIN 等最小集——与 tool-sandbox 的全量弃权相比是文档化的
+#     有意差异，部署验证后固化；
+#   - no-new-privileges（进程树不可提权）；
+#   - **不设 read_only**（profiles 卷需要写——持久登录态是职能面；
+#     写面收敛到命名卷，不挂宿主路径）；
+#   - restart: unless-stopped（宿主机重启后自动恢复）。
 
 services:
   tool-sandbox-agent:
@@ -75,6 +104,46 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    restart: unless-stopped
+    networks:
+      - tool-sandbox
+
+  # ─── 浏览器 sidecar：JS 渲染回退面（playwright chromium，独立隔离树） ──────
+  # 后端经 http://127.0.0.1:8766 消费 /invoke（wire 契约 REST 同构沙盒；
+  # 见 backend harness/tools/browser.py 与 docs/backend/tools-browser.md）。
+  browser-sidecar:
+    build:
+      context: ./browser-sidecar
+      dockerfile: Dockerfile
+    image: browser-sidecar:0.1.0
+    container_name: browser-sidecar
+    environment:
+      # 鉴权 token（必填——${VAR:?} 形态缺失即拒绝启动；值不落 compose 文件）。
+      BROWSER_SIDECAR_TOKEN: ${BROWSER_SIDECAR_TOKEN:?BROWSER_SIDECAR_TOKEN 未设置——导出后再启动（见 docs/backend/tools-browser.md）}
+      # 导航 / 子资源域名允许清单（逗号分隔域名后缀；空 / 未设 = navigate
+      # 拒绝一切·默认拒绝——子资源权衡见文件头「浏览器 sidecar」注释块）。
+      BROWSER_SIDECAR_ALLOWLIST: ${BROWSER_SIDECAR_ALLOWLIST:-}
+      # 导航超时秒数（1-120；缺省 20）。
+      BROWSER_SIDECAR_NAV_TIMEOUT_SECONDS: ${BROWSER_SIDECAR_NAV_TIMEOUT_SECONDS:-20}
+      # 生效 profile 名（context-per-profile 注册表键——持久登录态卷内目录）。
+      BROWSER_SIDECAR_PROFILE: ${BROWSER_SIDECAR_PROFILE:-default}
+    ports:
+      # 仅回环暴露：后端本机消费（127.0.0.1:8766 → 容器 8766）。
+      - "127.0.0.1:8766:8766"
+    volumes:
+      # 持久登录态（cookies / localStorage 跨重启留存——写面收敛到命名卷）。
+      - browser-sidecar-profiles:/app/profiles
+    # chromium 渲染需要大 /dev/shm（容器默认 64MB 不足；进程侧叠加
+    # --disable-dev-shm-usage 双保险）。
+    shm_size: 1g
+    # 资源限额（浏览器风暴隔离——chromium 多进程树的保守下限）。
+    mem_limit: 2g
+    cpus: 1.0
+    # 运行期加固（cap_drop best-effort 注意事项见文件头注释块）。
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     networks:
       - tool-sandbox
@@ -127,6 +196,11 @@ services:
   #   OpenAI 兼容 /v1/audio/transcriptions；后端 Settings.voice.asr.base_url。
 
 networks:
-  # compose 项目内专用桥接网络（沙盒服务独占；见文件头「网络语义」注释）。
+  # compose 项目内专用桥接网络（沙盒 / sidecar 服务共用；见文件头「网络语义」注释）。
   tool-sandbox:
     driver: bridge
+
+volumes:
+  # 浏览器 sidecar 持久登录态（profiles/<name>——cookies / localStorage
+  # 跨重启留存；写面收敛到命名卷，不挂宿主路径）。
+  browser-sidecar-profiles:

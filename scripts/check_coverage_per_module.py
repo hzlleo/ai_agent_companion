@@ -8,7 +8,10 @@
       app 层按 ``main.py`` / ``api/`` / ``middleware/`` 分组；
     - **tool-sandbox 剖面**：``docker/tool-sandbox-agent`` 树——树根
       ``server.py`` 单文件一组 + ``src/tool_sandbox/<module>.py`` 逐模块
-      一组（与 backend 逐模块同口径的机器门禁）。
+      一组（与 backend 逐模块同口径的机器门禁）；
+    - **browser-sidecar 剖面**：``docker/browser-sidecar`` 树——树根
+      ``server.py`` 单文件一组 + ``src/browser_sidecar/<module>.py`` 逐
+      模块一组（同 tool-sandbox 口径）。
 
 聚合口径：组内 ``num_statements`` / ``covered_lines`` **求和**后计算百分比
 （不是对单文件百分比求均值——避免零覆盖小文件被高覆盖大文件平均掉）。
@@ -23,7 +26,8 @@
 
 Args（CLI）:
     coverage_json: coverage.json 路径（相对 CWD 或绝对路径）。
-    --profile: ``auto``（按文件路径自动识别）/ ``backend`` / ``tool-sandbox``。
+    --profile: ``auto``（按文件路径自动识别）/ ``backend`` / ``tool-sandbox``
+        / ``browser-sidecar``。
     --threshold: 门禁阈值百分比，默认 80。
     --enforce: 强制模式（缺省为 report 模式）。
 
@@ -47,6 +51,10 @@ _APP_PREFIX = "src/app/"
 #: 沙盒树包前缀（pixi 项目根 = docker/tool-sandbox-agent；coverage.json
 #: 以该根为 CWD 生成——键形如 ``src/tool_sandbox/<module>.py``）。
 _SANDBOX_PKG_PREFIX = "src/tool_sandbox/"
+
+#: 浏览器 sidecar 树包前缀（pixi 项目根 = docker/browser-sidecar；
+#: coverage.json 键形如 ``src/browser_sidecar/<module>.py``）。
+_BROWSER_PKG_PREFIX = "src/browser_sidecar/"
 
 #: 不参与分组计数的路径片段。
 _SKIP_SEGMENTS = frozenset({"tests", "__pycache__"})
@@ -114,10 +122,32 @@ def _classify_tool_sandbox(rel_path: PurePosixPath) -> str | None:
     return None
 
 
-#: 剖面 → 分组函数（backend / tool-sandbox 两树）。
+def _classify_browser_sidecar(rel_path: PurePosixPath) -> str | None:
+    """browser-sidecar 剖面分组规则：server.py 单文件一组 + 包内逐模块一组。
+
+    Args:
+        rel_path: 相对浏览器 sidecar 树 pixi 项目根的路径。
+
+    Returns:
+        组名（如 ``server.py`` / ``browser_sidecar/browser.py``）；不属于
+        任何组返回 None。
+    """
+    posix = rel_path.as_posix()
+    if posix == "server.py":
+        return "server.py"
+    if posix.startswith(_BROWSER_PKG_PREFIX):
+        rest = rel_path.parts[2:]  # src/browser_sidecar 之后
+        if rest:
+            # 逐模块分组（与 tool-sandbox 剖面同口径——扁平模块）。
+            return f"browser_sidecar/{rest[0]}"
+    return None
+
+
+#: 剖面 → 分组函数（backend / tool-sandbox / browser-sidecar 三树）。
 _PROFILES: dict[str, Callable[[PurePosixPath], str | None]] = {
     "backend": _classify_backend,
     "tool-sandbox": _classify_tool_sandbox,
+    "browser-sidecar": _classify_browser_sidecar,
 }
 
 
@@ -128,7 +158,7 @@ def detect_profile(file_keys: list[str]) -> str:
         file_keys: coverage.json ``files`` 的键列表。
 
     Returns:
-        ``"backend"`` 或 ``"tool-sandbox"``。
+        ``"backend"`` / ``"tool-sandbox"`` / ``"browser-sidecar"``。
 
     Raises:
         SystemExit: 无法识别（退出码 2）。
@@ -139,9 +169,12 @@ def detect_profile(file_keys: list[str]) -> str:
     for key in file_keys:
         if key.startswith(_SANDBOX_PKG_PREFIX) or key == "server.py":
             return "tool-sandbox"
+    for key in file_keys:
+        if key.startswith(_BROWSER_PKG_PREFIX):
+            return "browser-sidecar"
     print(
         "[check_coverage_per_module] 无法从 coverage.json 识别剖面"
-        "（无 backend / tool-sandbox 路径），请检查 --cov 范围",
+        "（无 backend / tool-sandbox / browser-sidecar 路径），请检查 --cov 范围",
         file=sys.stderr,
     )
     raise SystemExit(2)
@@ -191,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("coverage_json", type=Path, help="coverage.json 路径")
     parser.add_argument(
         "--profile",
-        choices=("auto", "backend", "tool-sandbox"),
+        choices=("auto", "backend", "tool-sandbox", "browser-sidecar"),
         default="auto",
         help="分组剖面（默认 auto 自动识别）",
     )

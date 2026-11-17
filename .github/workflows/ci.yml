@@ -184,3 +184,34 @@ jobs:
       # HEALTHCHECK / 非 root 等加固步骤不经测试任务覆盖，构建是唯一验证面）。
       - name: Docker build (tool-sandbox-agent image)
         run: docker build -t tool-sandbox-agent:ci docker/tool-sandbox-agent/
+
+  # ─── Browser sidecar: docker 隔离树（独立 pixi 工程） ───────────────────────
+  # 与 tool-sandbox job 同形（pixi 安装 + 测试 + lint + typecheck），但
+  # **不构建镜像**：playwright 基底镜像（mcr.microsoft.com/playwright/
+  # python）约 2GB——CI 拉取 / 存储与时长成本远超价值，且镜像正确性的
+  # 关键面（playwright 驱动 ↔ 基底浏览器构建的版本对齐、真实浏览器行为）
+  # 本就不经构建验证，须在部署机实测（见 docker/browser-sidecar/README.md
+  # 「部署验证」）。树内逻辑面（策略链 / 执行器 / wire 契约）由本 job 的
+  # hermetic 测试全覆盖。
+  browser-sidecar:
+    name: Browser sidecar (tests + lint + typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pixi (single install of the env, lock-keyed cache)
+        uses: prefix-dev/setup-pixi@v0.11.3
+        with:
+          pixi-version: v0.82.0
+          manifest-path: docker/browser-sidecar/pixi.toml
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+
+      - name: Tests (pytest, coverage >= 80% enforced, hermetic fake faces)
+        run: cd docker/browser-sidecar && pixi run tests-unit
+
+      - name: Lint (ruff)
+        run: cd docker/browser-sidecar && pixi run lint
+
+      - name: Typecheck (mypy)
+        run: cd docker/browser-sidecar && pixi run typecheck

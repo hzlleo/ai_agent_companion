@@ -1,0 +1,143 @@
+# 浏览器自动化 sidecar — Python 项目元数据 + 运行时依赖 + 工具链配置（ruff / pytest / mypy）
+#
+# 本树独立约定（与后端子项目零代码共享——唯一的耦合是人为镜像的 wire 契约
+# Model Classes 与工具名 / 部署契约常量，契约漂移由仓库根漂移门禁看护）：
+#   - pixi 仅管理 Python 解释器 + 系统工具（见本目录 pixi.toml）；
+#   - 全部 Python 包依赖（运行时 + dev extras）在此声明；
+#   - 运行时依赖面：fastapi / uvicorn / pydantic / playwright（playwright
+#     钉版对齐 Dockerfile 基镜像的内置浏览器构建——驱动与浏览器版本错配
+#     是部署期唯一致命形态，故取精确钉版而非下限约束）。
+#
+# 布局约定（文档化决策——镜像 tool-sandbox 树）：
+#   - ``browser_sidecar`` 为常规包（含 ``__init__.py``）：本树是独立分发单元，
+#     无多项目命名空间拼接需求，取最简单正确形态；
+#   - ``server.py`` 在树根：ASGI 入口薄层（app 工厂 + uvicorn main）；
+#   - 测试位于 ``src/tests/unit/``（镜像后端测试布局——全部 async def test_）。
+
+[project]
+name = "browser-sidecar"
+version = "0.1.0"
+description = "浏览器自动化 sidecar——JS 渲染回退执行面（docker 部署面，与后端零代码共享）"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.10",
+    "playwright==1.53.0",
+]
+
+# dev 工具：pixi default 环境（feature.dev）经 editable install extras=["dev"] 读取。
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=4.0",
+    "ruff>=0.15",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["browser_sidecar*"]
+# 常规包（browser_sidecar/__init__.py 存在）；src/tests 不入分发面（include 过滤）。
+
+# ---------------------------------------------------------------------------
+# Ruff: 静态检查 + 格式化（规则集与后端 / tool-sandbox 子项目同约定——本工程统一风格）
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "."]
+
+[tool.ruff.lint]
+# 规则集：
+#   E  - pycodestyle errors
+#   F  - pyflakes
+#   W  - pycodestyle warnings
+#   I  - isort
+#   N  - pep8-naming
+#   UP - pyupgrade
+#   B  - flake8-bugbear
+#   A  - flake8-builtins
+#   C4 - flake8-comprehensions
+#   SIM - flake8-simplify
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM"]
+ignore = [
+    "E501",   # 行长度由 formatter 统一控制
+    "N818",   # 异常命名沿用 Error 后缀约定（BrowserSidecarError 天然合规；保留豁免与全工程一致）
+    "UP046",  # PEP 695 type params 是风格偏好，Generic[T] 仍完全正确
+    "UP047",  # 同上，泛型函数风格偏好
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI 的 Depends/Query/Body 等在默认参数中调用是官方推荐模式（B008 豁免）。
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.params.Depends",
+    "fastapi.Query",
+    "fastapi.Body",
+    "fastapi.Path",
+    "fastapi.File",
+    "fastapi.Header",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ---------------------------------------------------------------------------
+# Pytest: asyncio auto mode（全量原生异步——与后端 / tool-sandbox 子项目同约定）
+# ---------------------------------------------------------------------------
+# 覆盖率阈值（--cov-fail-under=80）由 pixi tests-unit 任务携带；逐模块 ≥80
+# 由 pixi coverage-gates 任务机器门禁（根 scripts/check_coverage_per_module.py
+# browser-sidecar 剖面——工程门禁面，非运行时依赖：本树运行时零仓库根依赖）。
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_test_loop_scope = "function"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = [
+    "src/tests",
+]
+# src（browser_sidecar 包）+ .（树根 server.py）——测试导入面双根。
+pythonpath = ["src", "."]
+
+# ---------------------------------------------------------------------------
+# Coverage: 运行时面（browser_sidecar + server）全覆盖；阈值 80（镜像后端约定）
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["browser_sidecar", "server"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+
+# ---------------------------------------------------------------------------
+# Mypy: 静态类型检查（严格模式——与后端 / tool-sandbox 子项目同约定）
+# ---------------------------------------------------------------------------
+# 测试代码不纳入 mypy 严格门：类型门聚焦生产面（server.py + src/browser_sidecar），
+# 测试质量由 pytest + 覆盖率阈值保障。
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = false  # FastAPI decorators
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+show_error_codes = true
+explicit_package_bases = true
+mypy_path = "src"
+exclude = [
+    'src/tests/',
+]

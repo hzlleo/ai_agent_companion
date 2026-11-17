@@ -57,6 +57,7 @@ _STEP_DEFINITIONS: list[tuple[str, list[str]]] = [
     ("梦境调度配置", ["DREAM_SCHEDULE_"]),
     ("中央调度器配置", ["SCHEDULER_"]),
     ("工具沙盒配置", ["TOOLS_SANDBOX_"]),
+    ("浏览器 sidecar 配置", ["TOOLS_BROWSER_SIDECAR_"]),
     ("语音合成配置", ["VOICE_TTS_"]),
     ("语音识别配置", ["VOICE_ASR_"]),
     ("联网搜索配置", ["SEARCH_"]),

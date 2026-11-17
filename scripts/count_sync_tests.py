@@ -53,6 +53,7 @@ DEFAULT_BASELINE = Path(__file__).resolve().parent / ".sync_test_baseline.json"
 DEFAULT_TREES: tuple[str, ...] = (
     "backend",
     "docker/tool-sandbox-agent",
+    "docker/browser-sidecar",
 )
 
 #: 扫描时跳过的目录名（pixi 环境 / 构建产物 / 依赖树 / 隐藏目录在遍历中另行过滤）。

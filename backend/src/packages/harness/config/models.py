@@ -31,6 +31,9 @@
       env_prefix=``SCHEDULER_``）
     - ``ToolsSandboxSettings`` —— 工具沙盒分节（``Settings.tools_sandbox``；
       env_prefix=``TOOLS_SANDBOX_``——tools 域）
+    - ``ToolsBrowserSidecarSettings`` —— 浏览器 sidecar 分节
+      （``Settings.tools_browser_sidecar``；env_prefix=
+      ``TOOLS_BROWSER_SIDECAR_``——tools 域）
     - ``TtsSettings`` / ``AsrSettings`` / ``VoiceSettings`` —— 语音域分节
       （``Settings.voice``；子模型 env_prefix=``VOICE_TTS_`` /
       ``VOICE_ASR_``——voice 域）
@@ -74,6 +77,7 @@ __all__ = [
     "DreamScheduleSettings",
     "SchedulerSettings",
     "ToolsSandboxSettings",
+    "ToolsBrowserSidecarSettings",
     "TtsSettings",
     "AsrSettings",
     "VoiceSettings",
@@ -578,6 +582,50 @@ class ToolsSandboxSettings(BaseSettings):
     )
 
 
+class ToolsBrowserSidecarSettings(BaseSettings):
+    """浏览器自动化 sidecar 配置（env_prefix=``TOOLS_BROWSER_SIDECAR_``——
+    tools 域浏览器运行时）。
+
+    锁定决策：``enabled=False``（默认）——浏览器 sidecar 是**可选运行时**
+    （JS 渲染回退面）：全工程无 sidecar 照常运行（duty / chat 工具面回落
+    到既有工具集）；``enabled=True`` 时 app lifespan 在搜索装配后经
+    ``/health`` 探测（bounded 超时）——探测失败 / token 未配置 → 跳过
+    浏览器工具注册并告警（warn-and-continue，与工具沙盒同降级语义，
+    见 docs/backend/tools-browser.md）。
+
+    鉴权 token 经环境变量间接（与沙盒 ``SANDBOX_TOKEN`` / llm 条目
+    ``api_key_env`` 同模式——**密钥永不落 yaml / 配置树**）：本配置只
+    持有变量名 ``token_env``，实际 token 由 tools 域 sidecar 客户端在
+    构造期从该变量读取。
+
+    Attributes:
+        enabled: 是否启用浏览器 sidecar（False = 不探测 / 不注册浏览器
+            工具）。
+        base_url: sidecar 服务基础 URL（compose 形态 127.0.0.1:8766）。
+        token_env: 鉴权 token 环境变量名（实际 token 从该变量读取）。
+        request_timeout_seconds: 单次请求超时秒数（invoke / 健康探测
+            共用——浏览器操作长于纯 HTTP 工具，缺省 30s）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用浏览器 sidecar")
+    base_url: str = Field(
+        default="http://127.0.0.1:8766", min_length=1, description="sidecar 服务基础 URL"
+    )
+    token_env: str = Field(
+        default="BROWSER_SIDECAR_TOKEN", min_length=1, description="鉴权 token 环境变量名"
+    )
+    request_timeout_seconds: float = Field(
+        default=30.0, gt=0, description="单次请求超时（invoke / 健康探测共用）"
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="TOOLS_BROWSER_SIDECAR_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class TelegramSettings(BaseSettings):
     """Telegram 通道配置（env_prefix=``TELEGRAM_``——channels 域）。
 
@@ -933,6 +981,9 @@ class Settings(BaseSettings):
         scheduler: 中央调度器配置（tick 间隔）。
         tools_sandbox: 工具沙盒配置（默认关闭；沙盒为可选
             运行时，duty 工具面在沙盒不可达时回落到内置工具）。
+        tools_browser_sidecar: 浏览器 sidecar 配置（默认关闭；sidecar
+            为可选运行时——JS 渲染回退面，duty / chat 工具面在 sidecar
+            不可达时回落到既有工具集）。
         voice: 语音域配置（TTS / ASR 默认关闭；外部本地
             模型服务经 HTTP 契约消费，部署接线属部署侧事务）。
         search: 联网搜索运营配置（开关 / 工具面 / 预算 / 冷却——
@@ -952,6 +1003,7 @@ class Settings(BaseSettings):
     dream_schedule: DreamScheduleSettings = DreamScheduleSettings()
     scheduler: SchedulerSettings = SchedulerSettings()
     tools_sandbox: ToolsSandboxSettings = ToolsSandboxSettings()
+    tools_browser_sidecar: ToolsBrowserSidecarSettings = ToolsBrowserSidecarSettings()
     voice: VoiceSettings = VoiceSettings()
     search: WebSearchSettings = WebSearchSettings()
     env: str = Field(default="local", description="运行环境标识（local / dev / prod）")

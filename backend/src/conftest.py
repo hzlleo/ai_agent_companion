@@ -187,6 +187,19 @@ os.environ["TOOLS_SANDBOX_REQUEST_TIMEOUT_SECONDS"] = "15"
 os.environ["SANDBOX_TEST_TOKEN"] = "test-only-sandbox-token"
 os.environ["SANDBOX_TOKEN"] = "test-only-sandbox-token"
 
+# --- 浏览器 sidecar（TOOLS_BROWSER_SIDECAR_ 前缀 → ToolsBrowserSidecarSettings；
+#     默认关闭 → 测试零 sidecar 探测 / 零真实连接；S3 硬覆盖模式——开发者
+#     shell 导出的同名真实配置不得泄入测试。token 经
+#     BROWSER_SIDECAR_TEST_TOKEN 间接——测试专用值，不可触达真实 sidecar；
+#     单测经 MockTransport / fake 消费，永不真实连接） ---
+os.environ["TOOLS_BROWSER_SIDECAR_ENABLED"] = "false"
+os.environ["TOOLS_BROWSER_SIDECAR_BASE_URL"] = "http://127.0.0.1:8766"
+os.environ["TOOLS_BROWSER_SIDECAR_TOKEN_ENV"] = "BROWSER_SIDECAR_TEST_TOKEN"
+os.environ["TOOLS_BROWSER_SIDECAR_REQUEST_TIMEOUT_SECONDS"] = "30"
+# token 本值（token_env 指向的变量 + 默认变量名——测试专用值）
+os.environ["BROWSER_SIDECAR_TEST_TOKEN"] = "test-only-browser-sidecar-token"
+os.environ["BROWSER_SIDECAR_TOKEN"] = "test-only-browser-sidecar-token"
+
 # --- 语音域（VOICE_TTS_ / VOICE_ASR_ 前缀 → TtsSettings / AsrSettings；
 #     默认关闭 → 测试零真实连接（voice 服务为部署机外部本地进程）；
 #     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试；

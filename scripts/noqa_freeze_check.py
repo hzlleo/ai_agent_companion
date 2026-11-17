@@ -42,6 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BASELINES: dict[str, int] = {
     "backend": 0,
     "tool-sandbox": 0,
+    "browser-sidecar": 0,
     "scripts": 7,
     "frontend-eslint-disable": 0,
 }
@@ -101,6 +102,21 @@ def measure_tool_sandbox() -> int:
     )
 
 
+def measure_browser_sidecar() -> int:
+    """browser-sidecar 生产面 noqa / type:ignore 计数。
+
+    Returns:
+        浏览器 sidecar 树生产面命中行数（src + server.py）。
+    """
+    return sum(
+        _count_real_noqa(p)
+        for p in _iter_py_files(
+            REPO_ROOT / "docker" / "browser-sidecar" / "src",
+            (REPO_ROOT / "docker" / "browser-sidecar" / "server.py",),
+        )
+    )
+
+
 def measure_scripts() -> int:
     """根 scripts 树 noqa 计数（豁免本文件——其常量定义含标记字符串原文，
     自计数属量尺量自己）。
@@ -145,6 +161,7 @@ def main() -> int:
     measured = {
         "backend": measure_backend(),
         "tool-sandbox": measure_tool_sandbox(),
+        "browser-sidecar": measure_browser_sidecar(),
         "scripts": measure_scripts(),
         "frontend-eslint-disable": measure_frontend(),
     }
