@@ -23,6 +23,18 @@ chara card v2 是人格的**长期身份正典（L 层）**：定义「这个人
       ``selective=True`` 但无任何非空副键同样拒绝（空副键永不触发
       ——选择性条目将永远无法注入，静默失效在构造期 fail loud）；
     - ``position`` 取 v2 字符串形态（``before_char`` / ``after_char``）。
+
+R2b 高级触发扩展（全部加性字段、带缺省——既有卡片零改动保持合法，
+缺省值域 = 既有行为；筛选算法链见 chat 域 ``world_book`` 模块）：
+
+    - ``depth``：条目在渲染段内的深度槽位（0-20，缺省 4）；
+    - ``recursive``：条目正文参与递归扫描面（须书级
+      ``recursive_scanning=True`` 总开关——错配在构造期 fail loud）；
+    - ``include_group``：互斥分组名（同组命中条目一次组装只注入优先级
+      最高者；``constant`` 条目无视分组恒注入）；
+    - ``trigger_probability``：触发概率门（0.0-1.0，缺省 1.0 恒过门）；
+    - ``cooldown_turns``：注入后冷却回合数（0-50，缺省 0 不冷却；
+      会话作用域追踪——重启即复位，无持久化）。
 """
 
 from __future__ import annotations
@@ -55,7 +67,22 @@ class CharaBookEntryModel(BaseModel):
 
     触发语义：``keys`` 任一命中即插入；``selective=True`` 时进一步要求
     ``secondary_keys`` 任一命中（选择性触发——主键定义话题、副键收敛
-    语境）；``constant=True`` 恒插入（免触发，世界观保底条目）。
+    语境）；``constant=True`` 恒插入（免触发，世界观保底条目——恒插入
+    条目无视分组互斥 / 概率门 / 冷却门，直接进入候选集）。
+
+    R2b 高级字段（全部缺省即既有行为）：
+
+        - ``depth`` 声明条目距对话末尾的近因深度（0 = 最贴近末尾），
+          在渲染段内落位为深度槽（越小越靠段尾——段尾紧邻对话历史）；
+        - ``recursive`` 声明本条目正文可否在递归扫描面再触发其他条目
+          （书级 ``recursive_scanning`` 为总开关——本字段为逐条目收窄）；
+        - ``include_group`` 声明互斥分组（同组非 constant 命中条目一次
+          组装只注入优先级最高者：``insertion_order`` 升序、同值按条目
+          索引升序——确定性文档化）；
+        - ``trigger_probability`` 声明概率门（仅非 constant 命中条目过
+          门；缺省 1.0 = 恒过门不消耗随机数）；
+        - ``cooldown_turns`` 声明注入后冷却（仅非 constant 命中条目过
+          门；会话作用域内存追踪，重启即复位——无持久化，诚实文档化）。
 
     Attributes:
         keys: 主触发关键词列表（非空——无触发面的条目应为 constant）。
@@ -66,6 +93,15 @@ class CharaBookEntryModel(BaseModel):
         case_sensitive: 关键词匹配是否区分大小写（默认 False）。
         selective: 是否选择性触发（默认 False——主键命中即插入）。
         position: 插入位置（默认 ``after_char``——角色定义之后）。
+        depth: 深度槽位（0-20，默认 4；段内排序首选键——值越大越靠段
+            首、越远离对话末尾，0 为段尾槽；同槽回退 insertion_order）。
+        recursive: 条目正文是否参与递归扫描面（默认 False；须书级
+            ``recursive_scanning=True``，否则构造期拒绝）。
+        include_group: 互斥分组名（默认 None = 不分组；空白串归一为
+            None；同组一次组装只注入优先级最高的命中成员）。
+        trigger_probability: 触发概率（0.0-1.0，默认 1.0 恒注入）。
+        cooldown_turns: 注入后冷却回合数（0-50，默认 0 不冷却；回合
+            计数为组装调用次数，会话作用域内存追踪）。
     """
 
     model_config = ConfigDict(protected_namespaces=())
@@ -87,10 +123,41 @@ class CharaBookEntryModel(BaseModel):
     position: CharaBookPosition = Field(
         default=CharaBookPosition.AFTER_CHAR, description="插入位置"
     )
+    depth: int = Field(
+        default=4,
+        ge=0,
+        le=20,
+        description="深度槽位（0-20；段内越大越靠段首，0 为段尾槽——同槽按 insertion_order）",
+    )
+    recursive: bool = Field(
+        default=False,
+        description="条目正文参与递归扫描面（须书级 recursive_scanning=True）",
+    )
+    include_group: str | None = Field(
+        default=None,
+        max_length=64,
+        description="互斥分组名（None = 不分组；同组命中条目一次组装只注入最高优先级者）",
+    )
+    trigger_probability: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="触发概率（非 constant 命中条目的概率门；1.0 恒过门）",
+    )
+    cooldown_turns: int = Field(
+        default=0,
+        ge=0,
+        le=50,
+        description="注入后冷却回合数（回合 = 组装调用；会话作用域内存追踪）",
+    )
 
     @model_validator(mode="after")
     def _validate_selective_keys(self) -> CharaBookEntryModel:
         """规格一致性：副触发键仅在选择性触发语义下且非空时有效。
+
+        兼任 ``include_group`` 归一化：空白分组名归一为 ``None``（前端
+        空输入直通本字段时的形态收敛——空串与 None 同义，构造期归一
+        而非运行期分支）。
 
         Returns:
             校验通过的实例。
@@ -108,6 +175,9 @@ class CharaBookEntryModel(BaseModel):
             raise ValueError(
                 "selective=True 条目必须携带非空 secondary_keys（空副键永不触发——条目将永远无法注入）"
             )
+        if self.include_group is not None and not self.include_group.strip():
+            # 空白分组名归一 None（与「未分组」同义——避免空串成为事实分组键）。
+            self.include_group = None
         return self
 
 
@@ -118,11 +188,16 @@ class CharaBookModel(BaseModel):
         name: 世界书名称。
         description: 世界书描述。
         scan_depth: 扫描深度（最近 N 条消息内检索关键词；None = 不限）。
-        token_budget: 条目 token 预算（超预算时按 insertion_order 截断；
-            None = 不限）。
-        recursive_scanning: 是否递归扫描（条目 content 中的命中词再触发
-            其他条目；默认 False）。
+        token_budget: 条目 token 预算（超预算时按渲染序截断；None = 不限）。
+        recursive_scanning: 递归扫描总开关（条目 content 中的命中词再触发
+            其他条目；逐条目收窄经条目级 ``recursive``——两级同时开启
+            才生效；默认 False）。
         entries: 条目列表（按 ``insertion_order`` 升序决定插入次序）。
+
+    Raises:
+        ValueError: 条目携带 ``recursive=True`` 但书级
+            ``recursive_scanning=False``（逐条目递归须总开关放行——
+            静默失效形态在构造期 fail loud）。
     """
 
     model_config = ConfigDict(protected_namespaces=())
@@ -131,8 +206,26 @@ class CharaBookModel(BaseModel):
     description: str = Field(default="", description="世界书描述")
     scan_depth: int | None = Field(default=None, ge=1, description="扫描深度（最近 N 条消息）")
     token_budget: int | None = Field(default=None, ge=1, description="条目 token 预算")
-    recursive_scanning: bool = Field(default=False, description="是否递归扫描")
+    recursive_scanning: bool = Field(default=False, description="递归扫描总开关")
     entries: list[CharaBookEntryModel] = Field(default_factory=list, description="条目列表")
+
+    @model_validator(mode="after")
+    def _validate_recursive_needs_book_switch(self) -> CharaBookModel:
+        """规格一致性：逐条目递归须书级总开关放行。
+
+        Returns:
+            校验通过的实例。
+
+        Raises:
+            ValueError: 任一条目 ``recursive=True`` 但书级
+                ``recursive_scanning=False``（总开关关闭时逐条目递归
+                声明将静默失效——构造期拒绝）。
+        """
+        if not self.recursive_scanning and any(entry.recursive for entry in self.entries):
+            raise ValueError(
+                "条目 recursive=True 须书级 recursive_scanning=True 总开关放行（否则递归声明静默失效）"
+            )
+        return self
 
 
 class CharaCardModel(BaseModel):

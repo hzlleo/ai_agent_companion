@@ -10,17 +10,24 @@
         ↓ ⑤ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合）
         ↓ ⑥ prompts.render_post_history_message(card)      历史后再注入（末块）
 
-世界书筛选语义（chara card v2 规格）：
+世界书筛选语义（chara card v2 规格 + R2b 高级触发——算法链全文见
+``world_book`` 模块文档，此处为消费面摘要）：
 
-    - ``constant=True`` 条目恒注入（世界观保底——**不占 token 预算**）；
+    - ``constant=True`` 条目恒注入（世界观保底——**不占 token 预算**、
+      无视分组互斥 / 概率门 / 冷却门）；
     - 关键词条目对「最近 ``scan_depth`` 条回合」做关键词匹配
       （``keys`` 任一命中；``selective`` 再要求 ``secondary_keys`` 任一
       命中；大小写按条目 ``case_sensitive``）；
-    - 关键词条目按 ``(position, insertion_order)`` 升序累计
-      ``estimate_text_tokens``，超出 ``token_budget`` 即截断（其后关键
-      字条目不再注入——预算耗尽语义）；
-    - ``recursive_scanning`` 标志为卡片模型保留字段——筛选恒单轮扫描，
-      未实现条目内容命中后的递归再触发。
+    - 递归扩展（书级 ``recursive_scanning`` 总开关 × 条目级
+      ``recursive`` 收窄，2 跳上限 + visited 集合环安全）；
+    - 互斥分组（``include_group`` 同组非 constant 命中条目只注入
+      优先级最高者）→ 概率门（``trigger_probability``，rng 可注入）→
+      冷却门（``cooldown_turns``，会话作用域回合状态——功能式传递，
+      组装结果携带推进态由本服务回存）→ token 预算装箱（既有截止
+      语义）；
+    - 渲染序：``position`` 决定段位（既有）；段内 ``(depth 降序,
+      insertion_order 升序, 索引升序)``——缺省 depth=4 同槽退化为既有
+      纯 insertion_order 序（兼容证明：既有测试零变更）。
 
 调用链（网关面）：``chat_by_role / stream_by_role``，role=chat、
 purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；显式参数
@@ -83,6 +90,7 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
 from __future__ import annotations
 
 import json
+import random
 from collections.abc import AsyncIterator, Sequence
 from typing import Final, Protocol
 
@@ -102,6 +110,11 @@ from packages.harness.chat.prompts import (
     render_post_history_message,
     render_world_book_block,
 )
+from packages.harness.chat.world_book import (
+    WorldBookSelectionResult,
+    estimate_text_tokens,
+    select_world_book_entries,
+)
 from packages.harness.config.model_entry import ModelRole
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.database.session import session_scope
@@ -116,9 +129,7 @@ from packages.harness.llm.llm_models import (
 from packages.harness.memory.service import ChatSessionService
 from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
-    CharaBookModel,
     CharaBookPosition,
-    CharaCardModel,
 )
 from packages.harness.persona.dtos import PersonaRecordDTO
 from packages.harness.persona.service import PersonaService, bind_persona_context
@@ -153,50 +164,6 @@ _TOOL_LOOP_FINAL_INSTRUCTION: Final[str] = (
 
 
 # ---------------------------------------------------------------------------
-# token 近似估算（无 tokenizer——结构性预算的确定性估算）
-# ---------------------------------------------------------------------------
-
-
-def _is_cjk_char(ch: str) -> bool:
-    """判断字符是否属于 CJK 表意 / 注音 / 全角区段（1 字 ≈ 1 token）。
-
-    Args:
-        ch: 单字符。
-
-    Returns:
-        属于 CJK 相关区段返回 True。
-    """
-    code = ord(ch)
-    return (
-        0x3000 <= code <= 0x30FF  # CJK 标点 + 假名
-        or 0x3400 <= code <= 0x4DBF  # CJK 扩展 A
-        or 0x4E00 <= code <= 0x9FFF  # CJK 统一表意
-        or 0xF900 <= code <= 0xFAFF  # CJK 兼容表意
-        or 0xFF00 <= code <= 0xFFEF  # 全角形式
-    )
-
-
-def estimate_text_tokens(text: str) -> int:
-    """粗估文本 token 数（无 tokenizer 的确定性近似）。
-
-    估算规则（本工程约定）：CJK 区段字符按 1 token/字计；其余字符按
-    4 字符 ≈ 1 token 计（拉丁 BPE 经验值）。世界书 ``token_budget``
-    与组装结果观测均消费本估算——同一文本恒同值（无随机性）。
-
-    Args:
-        text: 待估文本。
-
-    Returns:
-        近似 token 数（非空文本至少 1）。
-    """
-    if not text:
-        return 0
-    cjk = sum(1 for ch in text if _is_cjk_char(ch))
-    other = len(text) - cjk
-    return cjk + (other + 3) // 4
-
-
-# ---------------------------------------------------------------------------
 # 工具结果反馈渲染（chat 本地——duty render_tool_result 的 chat 侧对应物）
 # ---------------------------------------------------------------------------
 
@@ -222,112 +189,35 @@ def _render_tool_result_content(result: ToolResultModel) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 世界书筛选（纯函数）
-# ---------------------------------------------------------------------------
-
-
-def _build_scan_text(book: CharaBookModel, turns: Sequence[ChatTurnModel]) -> str:
-    """构建关键词扫描文本（最近 ``scan_depth`` 条回合的内容拼接）。
-
-    Args:
-        book: 世界书（``scan_depth`` 为 None 时扫描全部回合）。
-        turns: 会话回合序列（时间序）。
-
-    Returns:
-        扫描文本（回合内容以换行拼接；空历史为空串）。
-    """
-    window = turns if book.scan_depth is None else turns[-book.scan_depth :]
-    return "\n".join(turn.content for turn in window)
-
-
-def _entry_matches(entry: CharaBookEntryModel, scan_text: str) -> bool:
-    """单条目关键词触发判定（primary + selective secondary）。
-
-    Args:
-        entry: 世界书条目（大小写敏感性按条目声明）。
-        scan_text: 扫描文本。
-
-    Returns:
-        是否触发（``keys`` 任一命中；selective 条目再要求
-        ``secondary_keys`` 任一命中）。
-    """
-    haystack = scan_text if entry.case_sensitive else scan_text.lower()
-    primary_hit = any(
-        (key if entry.case_sensitive else key.lower()) in haystack for key in entry.keys if key
-    )
-    if not primary_hit:
-        return False
-    if entry.selective:
-        return any(
-            (key if entry.case_sensitive else key.lower()) in haystack
-            for key in entry.secondary_keys
-            if key
-        )
-    return True
-
-
-def _select_world_book_entries(
-    card: CharaCardModel, turns: Sequence[ChatTurnModel]
-) -> tuple[list[CharaBookEntryModel], list[CharaBookEntryModel], int]:
-    """筛选应注入的世界书条目（constant 恒注入 + 关键词触发 + 预算截断）。
-
-    Args:
-        card: 人格卡片（无世界书时返回空二元组）。
-        turns: 会话回合序列（关键词扫描窗口原料）。
-
-    Returns:
-        ``(before_char 条目, after_char 条目, 注入总数)`` 三元组（条目按
-        ``(position, insertion_order)`` 升序稳定排列）。
-    """
-    book = card.character_book
-    if book is None or not book.entries:
-        return [], [], 0
-
-    scan_text = _build_scan_text(book, turns)
-    # 注入次序：before_char 段在前（背景 / 世界观），after_char 段在后
-    # （行为补充）；同段内 insertion_order 升序（值越大越靠后）。
-    ordered = sorted(
-        book.entries,
-        key=lambda entry: (
-            0 if entry.position == CharaBookPosition.BEFORE_CHAR else 1,
-            entry.insertion_order,
-        ),
-    )
-
-    before: list[CharaBookEntryModel] = []
-    after: list[CharaBookEntryModel] = []
-    included = 0
-    remaining = book.token_budget
-    budget_exhausted = False
-    for entry in ordered:
-        if entry.constant:
-            # 恒注入条目不占 token 预算（世界观保底——预算只约束触发条目）
-            target = before if entry.position == CharaBookPosition.BEFORE_CHAR else after
-            target.append(entry)
-            included += 1
-            continue
-        if budget_exhausted or not _entry_matches(entry, scan_text):
-            continue
-        cost = estimate_text_tokens(entry.content)
-        if remaining is not None and cost > remaining:
-            # 预算截断：首条超预算条目即截止，其后关键词条目不再注入
-            budget_exhausted = True
-            continue
-        if remaining is not None:
-            remaining -= cost
-        target = before if entry.position == CharaBookPosition.BEFORE_CHAR else after
-        target.append(entry)
-        included += 1
-    return before, after, included
-
-
-# ---------------------------------------------------------------------------
 # 消息组装（纯函数——测试直调面）
 # ---------------------------------------------------------------------------
 
 
-def compose_messages(state: ChatSessionStateModel) -> MessageCompositionResult:
-    """组装完整请求消息序列（纯函数——无 I/O / 无网关调用）。
+def _split_sections(
+    book_entries: Sequence[CharaBookEntryModel], selection: WorldBookSelectionResult
+) -> tuple[list[CharaBookEntryModel], list[CharaBookEntryModel]]:
+    """选择结果 → before/after 两段条目模型列表（按入选索引回查）。
+
+    Args:
+        book_entries: 世界书条目列表（索引回查源——卡片快照会话期
+            不可变，索引即稳定身份）。
+        selection: 选择结果（渲染序平铺列表）。
+
+    Returns:
+        ``(before_char 段, after_char 段)`` 二元组（各自保持渲染序）。
+    """
+    before: list[CharaBookEntryModel] = []
+    after: list[CharaBookEntryModel] = []
+    for selected in selection.entries:
+        target = before if selected.section == CharaBookPosition.BEFORE_CHAR else after
+        target.append(book_entries[selected.index])
+    return before, after
+
+
+def compose_messages(
+    state: ChatSessionStateModel, *, rng: random.Random | None = None
+) -> MessageCompositionResult:
+    """组装完整请求消息序列（纯函数——无 I/O / 无网关调用 / 无会话回写）。
 
     消息序列结构::
 
@@ -336,13 +226,30 @@ def compose_messages(state: ChatSessionStateModel) -> MessageCompositionResult:
         [system]  历史后再注入（卡片声明 post_history_instructions 时；
                   位于**最后一条历史回合之后**——deep anti-drift 位置）
 
+    世界书选择经 ``world_book.select_world_book_entries``（算法链与
+    渲染序裁定见该模块文档）；推进后的回合状态（冷却时钟 + 注入
+    追踪）随结果携带——**本函数不回写会话态**（功能式：调用方
+    ``ChatService`` 回存；直调测试忽略即丢弃）。
+
     Args:
-        state: 会话状态（卡片快照 + 回合列表）。
+        state: 会话状态（卡片快照 + 回合列表 + 世界书回合状态）。
+        rng: 概率门随机源（None = 现场构造非种子实例；仅卡片声明
+            ``trigger_probability < 1.0`` 时消耗——缺省卡片零随机性）。
 
     Returns:
-        组装结果（消息序列 + 观测元数据）。
+        组装结果（消息序列 + 观测元数据 + 推进后的世界书回合状态）。
     """
-    before_entries, after_entries, included = _select_world_book_entries(state.card, state.turns)
+    selection = select_world_book_entries(
+        state.card,
+        [turn.content for turn in state.turns],
+        rng=rng,
+        turn_state=state.world_book_state,
+    )
+    book = state.card.character_book
+    before_entries: list[CharaBookEntryModel] = []
+    after_entries: list[CharaBookEntryModel] = []
+    if book is not None:
+        before_entries, after_entries = _split_sections(book.entries, selection)
     system_parts: list[str] = [render_charter()]
     before_block = render_world_book_block(before_entries)
     if before_block:
@@ -365,8 +272,9 @@ def compose_messages(state: ChatSessionStateModel) -> MessageCompositionResult:
         messages=messages,
         system_prompt=system_prompt,
         post_history_message=post_history_message,
-        included_book_entries=included,
+        included_book_entries=selection.included,
         estimated_system_tokens=estimate_text_tokens(system_prompt),
+        world_book_state=selection.turn_state,
     )
 
 
@@ -693,6 +601,10 @@ class ChatService:
         user_turn = self._append_user_turn(state, user_text)
         await self._persist_turn(state, user_turn)
         result = compose_messages(state)
+        # 功能式回合状态回存：组装纯函数不回写会话态，冷却时钟推进由
+        # 本服务消费后落回（快径路径不组装、不推进——时钟只度量真实
+        # 组装回合）。
+        state.world_book_state = result.world_book_state
         if self._tools_binding is not None:
             content = await self._tool_loop(result.messages, state, self._tools_binding)
         else:
@@ -740,6 +652,8 @@ class ChatService:
         user_turn = self._append_user_turn(state, user_text)
         await self._persist_turn(state, user_turn)
         result = compose_messages(state)
+        # 功能式回合状态回存（与 reply 同构——冷却时钟只度量真实组装回合）。
+        state.world_book_state = result.world_book_state
         parts: list[str] = []
         async for chunk in self._gateway.stream_by_role(
             ModelRole.CHAT,

@@ -114,7 +114,7 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | `post_history_instructions` | str | 缺省 `""` | 历史后指令 |
 | `character_book` | CharaBookModel \| None | 缺省 `null` | 世界书（检索增强条目集） |
 
-**世界书（CharaBookModel）**：`name` / `description`（str）、`scan_depth`（int ≥ 1，最近 N 条消息内检索）、`token_budget`（int ≥ 1，超预算按 insertion_order 截断）、`recursive_scanning`（bool）、`entries`（条目列表）。
+**世界书（CharaBookModel）**：`name` / `description`（str）、`scan_depth`（int ≥ 1，最近 N 条消息内检索——**书级**扫描窗口，条目级不设窗口）、`token_budget`（int ≥ 1，超预算按渲染序截断）、`recursive_scanning`（bool——递归扫描**总开关**：条目级 `recursive=True` 须本开关放行，错配构造期拒绝）、`entries`（条目列表）。
 
 **世界书条目（CharaBookEntryModel）**：
 
@@ -124,10 +124,44 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | `secondary_keys` | list[str] | 缺省 `[]`；**仅 `selective=True` 可携带且须有非空键**（选择性条目空副键永不触发——构造期拒绝） | 副触发关键词（选择性触发收敛） |
 | `content` | str | 缺省 `""` | 条目正文 |
 | `insertion_order` | int | **界 0-9999**，缺省 100 | 插入顺序（值越大越靠后） |
-| `constant` | bool | 缺省 False | 恒插入（免触发） |
+| `constant` | bool | 缺省 False | 恒插入（免触发；无视分组 / 概率 / 冷却门，不占 token 预算） |
 | `case_sensitive` | bool | 缺省 False | 关键词匹配区分大小写 |
 | `selective` | bool | 缺省 False | 选择性触发（主键 + 副键双命中） |
-| `position` | CharaBookPosition | 缺省 `after_char` | 插入位置 |
+| `position` | CharaBookPosition | 缺省 `after_char` | 插入位置（决定渲染段位） |
+| `depth` | int | **界 0-20**，缺省 4 | 深度槽位：段内值越大越靠段首（远离对话末尾），0 为段尾槽（最贴近末条消息一侧）；同槽按 `insertion_order` |
+| `recursive` | bool | 缺省 False；**须书级 `recursive_scanning=True`**（错配构造期拒绝） | 条目正文参与递归扫描面（其内容可再触发其他条目） |
+| `include_group` | str \| None | 缺省 None；空白归一 None；≤64 字符 | 互斥分组名（同组非 constant 命中条目一次组装只注入优先级最高者） |
+| `trigger_probability` | float | **界 0.0-1.0**，缺省 1.0 | 触发概率门（命中后按概率注入；1.0 恒过门且零随机数消耗） |
+| `cooldown_turns` | int | **界 0-50**，缺省 0 | 注入后冷却回合数（回合 = 组装调用；会话作用域内存追踪） |
+
+### 世界书高级触发语义（R2b）
+
+选择算法链（chat 域 `world_book.select_world_book_entries` 纯函数——顺序锁定，逐候选按链序过门）：
+
+```
+① constant 恒注入      constant 条目直接进候选集（免触发；无视分组 /
+                        概率 / 冷却门；不占 token 预算）
+② 关键词匹配            最近 scan_depth 条回合文本拼接扫描面：keys 任一
+                        命中；selective 再要求 secondary_keys 任一命中；
+                        大小写按条目声明
+③ 递归扩展（2 跳上限）   书级 recursive_scanning 总开关 × 条目级 recursive
+                        收窄：已入选条目正文追加进扫描面再触发新条目；
+                        跳 1 → 跳 2 → 停（跳 2 入选者正文不再入面）；
+                        visited 集合保证环不可能（条目至多入选一次）
+④ 互斥分组剪枝          非 constant 候选同 include_group 只留优先级最高
+                        者（insertion_order 升序、同值按条目索引升序
+                        ——确定性）；constant 无视分组（不参与不排斥）
+⑤ 概率门（rng）          非 constant 候选 trigger_probability < 1.0 时
+                        消耗一次 rng.random() < p 判定；消耗序 = 渲染序
+⑥ 冷却门（回合状态）     上次注入第 F 回合、当前第 C 回合时
+                        1 <= C - F <= cooldown_turns 即拒（第 N+1 回合解禁）
+⑦ token 预算装箱        渲染序累计 estimate_text_tokens；首条超预算即
+                        截止（其后非 constant 候选不再评估）
+```
+
+渲染序（精确裁定）：条目恒渲染在 `position` 决定的段内（`before_char` 段在人格正典前 / `after_char` 段在后——段位语义不变，prompt 模板字节零改动）；段内按 **`(depth 降序, insertion_order 升序, 条目索引升序)`**。`depth` 语义是「距对话末尾的近因深度」（0 = 最贴近末条消息）：世界书条目渲染于角色定义段，故 depth 落位为段内深度槽——0 为段尾槽（紧邻其后渲染的对话历史一侧），值越大越靠段首。**兼容保证**：既有卡片全部条目缺省 `depth=4`（同槽）→ 段内退化为纯 `insertion_order` 升序 = 既有行为逐字节一致。
+
+冷却的会话作用域（诚实文档化）：`cooldown_turns` 的回合计数与注入追踪存于 `ChatSessionStateModel.world_book_state`（组装调用计数 + `{条目索引: 注入回合号}`），**纯内存态、无持久化 schema**——进程重启即复位（冷却全部解除）；条目索引在会话内稳定（卡片快照会话期不可变）。
 
 **卡片 JSON 示例**：
 
@@ -146,7 +180,7 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
     "description": "大肥鱼的世界观设定",
     "scan_depth": 4,
     "token_budget": 800,
-    "recursive_scanning": false,
+    "recursive_scanning": true,
     "entries": [
       {
         "keys": ["鱼缸", "书房"],
@@ -156,7 +190,12 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
         "constant": false,
         "case_sensitive": false,
         "selective": false,
-        "position": "after_char"
+        "position": "after_char",
+        "depth": 4,
+        "recursive": false,
+        "include_group": null,
+        "trigger_probability": 1.0,
+        "cooldown_turns": 0
       },
       {
         "keys": ["晚饭"],
@@ -166,7 +205,27 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
         "constant": false,
         "case_sensitive": true,
         "selective": true,
-        "position": "before_char"
+        "position": "before_char",
+        "depth": 4,
+        "recursive": false,
+        "include_group": null,
+        "trigger_probability": 1.0,
+        "cooldown_turns": 0
+      },
+      {
+        "keys": ["晚安", "睡觉"],
+        "secondary_keys": [],
+        "content": "睡前语态：大肥鱼会压低声音说晚安。",
+        "insertion_order": 30,
+        "constant": false,
+        "case_sensitive": false,
+        "selective": false,
+        "position": "after_char",
+        "depth": 0,
+        "recursive": false,
+        "include_group": "night-greeting",
+        "trigger_probability": 0.8,
+        "cooldown_turns": 2
       }
     ]
   }
@@ -249,7 +308,7 @@ async with bind_persona_context(persona.id):                      # 运行期任
 
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；
+- 测试位置：`src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元：v2 基础校验 + R2b 高级字段界校验 / include_group 归一 / recursive 总开关规格一致性 / 加性字段 JSON 往返）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；世界书选择算法链的运行语义测试在 chat 域 `test_chat_world_book.py`（见 chat.md）；
 - 全部 `async def test_`；引擎经共享会话级 SQLite fixture（StaticPool 单连接 + 每测试自动清表）；HTTP 面零真实网络（ASGITransport 本地装配 app）；
 - 覆盖率（scoped 实测）：harness/persona **100%**、app/api **100%**、app/middleware **100%**；
 - 运行：`cd backend && pixi run tests-unit`。

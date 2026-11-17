@@ -5,10 +5,14 @@
 走真实 PersonaService。组装断言覆盖：正典字段 / 世界书（constant 恒注 /
 关键词触发 + scan_depth 窗口 / selective / 大小写 / token 预算截断）/
 历史后再注入位置 / purpose 与 persona_id 直通 / 流式聚合与提前终止。
+R2b 增补：世界书回合状态功能式推进（compose 携带 + 服务回存闭环）、
+种子 rng 概率门、冷却阻塞-解禁会话循环（算法链纯函数面见
+test_chat_world_book.py）。
 """
 
 from __future__ import annotations
 
+import random
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
@@ -565,3 +569,85 @@ async def test_message_composition_result_contract() -> None:
     assert result.included_book_entries == 1
     assert result.estimated_system_tokens > 0
     assert all(isinstance(turn, ChatTurnModel) for turn in state.turns)
+
+
+# ---------------------------------------------------------------------------
+# R2b 世界书高级触发——组装 / 会话循环集成（算法链纯函数面见
+# test_chat_world_book.py；此处锁定 compose 消费与 ChatService 回存）
+# ---------------------------------------------------------------------------
+
+
+async def test_compose_advances_world_book_turn_state_functionally() -> None:
+    """组装功能式推进：结果携带 +1 回合状态与注入记录；入参态不变更。"""
+    state = await _make_state(
+        character_book=_book(
+            entries=[CharaBookEntryModel(keys=["问候"], content="问候条目", cooldown_turns=2)]
+        )
+    )
+    state.append_turn(ChatMessageRole.USER, "打个问候")
+    before_state = state.world_book_state.model_copy(deep=True)
+    result = compose_messages(state)
+    assert "问候条目" in result.system_prompt
+    assert result.world_book_state.compose_turn == 1
+    assert result.world_book_state.injected_turns == {0: 1}
+    # 纯函数契约：compose 不回写会话态（ChatService 消费后回存）。
+    assert state.world_book_state == before_state
+    # 连续组装（直调不回存）：同一入参态再次组装仍以该态判定（幂等面）。
+    second = compose_messages(state)
+    assert second.world_book_state.compose_turn == 1
+    assert "问候条目" in second.system_prompt
+
+
+async def test_compose_seeded_rng_probability_gate() -> None:
+    """组装概率门：rng 可注入——种子 1 首抽 0.134 过门、种子 2 首抽
+    0.956 被拒、概率 0 恒拒。"""
+    entries = [
+        CharaBookEntryModel(
+            keys=["天气"], content="天气条目", trigger_probability=0.5
+        ),
+    ]
+    passing = await _make_state(character_book=_book(entries=entries))
+    passing.append_turn(ChatMessageRole.USER, "今天天气如何")
+    assert "天气条目" in compose_messages(passing, rng=random.Random(1)).system_prompt
+
+    rejecting = await _make_state(character_book=_book(entries=entries))
+    rejecting.append_turn(ChatMessageRole.USER, "今天天气如何")
+    assert "天气条目" not in compose_messages(rejecting, rng=random.Random(2)).system_prompt
+
+    zero_state = await _make_state(
+        character_book=_book(
+            entries=[
+                CharaBookEntryModel(
+                    keys=["天气"], content="天气条目", trigger_probability=0.0
+                )
+            ]
+        )
+    )
+    zero_state.append_turn(ChatMessageRole.USER, "今天天气如何")
+    assert "天气条目" not in compose_messages(zero_state).system_prompt
+
+
+async def test_reply_loop_respects_cooldown_and_re_allows() -> None:
+    """会话回存闭环：冷却 2——第 1 轮注入 → 2/3 轮缺席 → 第 4 轮回归。"""
+    gateway = FakeGateway()
+    service = ChatService(gateway=gateway)
+    state = await service.create_session(
+        persona=_record(
+            character_book=_book(
+                entries=[
+                    CharaBookEntryModel(
+                        keys=["问候"], content="问候条目", cooldown_turns=2
+                    )
+                ]
+            )
+        )
+    )
+    prompts = ["打个问候", "再问候", "又问候", "还问候"]
+    injected_flags: list[bool] = []
+    for prompt in prompts:
+        await service.reply(state, prompt)
+        system = gateway.chat_calls[-1]["messages"][0].content
+        injected_flags.append("问候条目" in system)
+    assert injected_flags == [True, False, False, True]
+    assert state.world_book_state.compose_turn == 4
+    assert state.world_book_state.injected_turns == {0: 4}

@@ -7,15 +7,16 @@
 | 模块 | 职责 | 关键导出 |
 |---|---|---|
 | `prompts.py` | **全部 LLM 提示词文本的唯一存放地**（Unit 文件）：模板 + 逐模板版本常量 + 纯渲染函数 | `CHARTER_TEMPLATE` / `PERSONA_*_SECTION_TEMPLATE` / `WORLD_BOOK_ENTRY_TEMPLATE` / `POST_HISTORY_TEMPLATE` / `FIRST_GREETING_FALLBACK_TEMPLATE` / `render_*` |
-| `chat_models.py` | 会话回合 / 会话状态 / 组装结果 Model Classes（Unit 文件） | `ChatTurnModel` / `ChatSessionStateModel` / `MessageCompositionResult` |
-| `service.py` | 消息组装（世界书筛选 / token 近似估算）+ `ChatService` 会话循环 | `compose_messages` / `estimate_text_tokens` / `ChatService` |
+| `chat_models.py` | 会话回合 / 会话状态 / 组装结果 Model Classes（Unit 文件；含世界书回合状态——冷却追踪） | `ChatTurnModel` / `ChatSessionStateModel` / `MessageCompositionResult` |
+| `world_book.py` | 世界书高级选择算法链（R2b——纯函数 Unit 文件；rng / 回合状态可注入）+ token 近似估算 | `select_world_book_entries` / `SelectedEntryModel` / `WorldBookTurnStateModel` / `WorldBookSelectionResult` / `RECURSION_HOP_CAP` / `estimate_text_tokens` |
+| `service.py` | 消息组装（消费选择结果）+ `ChatService` 会话循环（回合状态回存） | `compose_messages` / `ChatService` |
 | `cli.py` | 控制台 REPL（启动 / 停机序列 + 命令面 + 流式直写） | `run_chat_cli` / `main` |
 
-依赖方向：chat → persona（chara card / PersonaRecordDTO / PersonaService）+ llm（LlmGateway / 消息模型）+ config / database / pools（CLI 启动栈）+ core（errors / time_utils）。prompt 文本与逻辑分离（模板全在 prompts.py；service / cli 禁止内联 prompt 字符串）。
+依赖方向：chat → persona（chara card / PersonaRecordDTO / PersonaService）+ llm（LlmGateway / 消息模型）+ config / database / pools（CLI 启动栈）+ core（errors / time_utils）。prompt 文本与逻辑分离（模板全在 prompts.py；service / cli 禁止内联 prompt 字符串）。`world_book` 只依赖 persona 卡片模型（不导入 chat 其他 Unit——依赖无环；`service` 再导出 `estimate_text_tokens` 供既有测试面）。
 
 ## 提示词组装链（单一真相）
 
-`compose_messages(state)` 纯函数（无 I/O——测试直调面）：
+`compose_messages(state, rng=None)` 纯函数（无 I/O——测试直调面；世界书选择经 `world_book.select_world_book_entries`，rng 可注入——仅 `trigger_probability < 1.0` 卡片消耗随机数；推进后的回合状态随结果携带，由 `ChatService` 回存）：
 
 ```
 [system 首块]
@@ -36,17 +37,32 @@
 
 各块以 `\n\n` 连接；⑥ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
 
-### 世界书筛选语义
+### 世界书筛选语义（R2b 高级触发——`world_book.select_world_book_entries` 纯函数）
+
+选择算法链（顺序锁定，逐候选按链序过门；字段规格见 persona.md 世界书高级触发语义一节）：
+
+```
+① constant 恒注入 → ② 关键词匹配（scan_depth 窗口） → ③ 递归扩展
+（书级总开关 × 条目级收窄，2 跳上限 + visited 环安全） → ④ 互斥分组
+剪枝（确定性优先级） → ⑤ 概率门（rng 可注入，消耗序 = 渲染序） →
+⑥ 冷却门（回合状态——功能式传递） → ⑦ token 预算装箱（渲染序累计，
+首条超预算即截止）
+```
 
 | 规则 | 行为 |
 |---|---|
-| `constant=True` | 恒注入（世界观保底——**不占 token 预算**） |
+| `constant=True` | 恒注入（世界观保底——**不占 token 预算**、无视分组 / 概率 / 冷却门） |
 | 关键词触发 | `keys` 任一命中扫描文本；`selective=True` 再要求 `secondary_keys` 任一命中 |
-| 扫描窗口 | 最近 `scan_depth` 条回合内容拼接（`None` = 全部历史） |
+| 扫描窗口 | 最近 `scan_depth` 条回合内容拼接（`None` = 全部历史；**书级**——条目级扫描面只有递归正文） |
 | 大小写 | 按条目 `case_sensitive`（默认不区分） |
-| token 预算 | 关键词条目按 `(position, insertion_order)` 升序累计 `estimate_text_tokens`；首条超 `token_budget` 即截断（其后关键词条目不再注入） |
-| 注入次序 | `before_char` 段在人格正典前 / `after_char` 段在后；同段内 `insertion_order` 升序 |
-| `recursive_scanning` | 标志读取但当前未启用（记忆层扩展点） |
+| 递归扩展 | 书级 `recursive_scanning` 总开关 + 条目级 `recursive` 收窄；2 跳上限（跳 2 入选者正文不再入面）；visited 集合保证环不可能 |
+| 互斥分组 | 同 `include_group` 非 constant 命中条目只注入 `(insertion_order, 条目索引)` 升序最高优先级者；constant 无视分组 |
+| 概率门 | `trigger_probability < 1.0` 时消耗 `rng.random() < p`；=1.0 恒过门零消耗（既有卡片零随机性） |
+| 冷却门 | 注入后 `cooldown_turns` 个组装回合内拒绝（第 N+1 回合解禁）；回合状态功能式传递（选择函数不变更入参，推进态经结果返回由 `ChatService` 回存） |
+| token 预算 | 候选按渲染序累计 `estimate_text_tokens`；首条超 `token_budget` 即截断（其后非 constant 候选不再评估） |
+| 注入次序（渲染序） | `before_char` 段在人格正典前 / `after_char` 段在后；**段内 `(depth 降序, insertion_order 升序, 索引升序)`**——depth 0 为段尾槽（最贴近对话末尾一侧）；缺省 depth=4 同槽退化为既有纯 insertion_order 序（兼容证明：既有测试零变更） |
+
+冷却的会话作用域（诚实文档化）：回合计数与注入追踪存于 `ChatSessionStateModel.world_book_state`（组装调用计数 + `{条目索引: 注入回合号}`）——**纯内存态、无持久化**，进程重启即复位；`reply / stream_reply` 每次组装后回存推进态（快径回复不组装、不推进时钟）。
 
 token 近似估算（无 tokenizer 的确定性约定）：CJK 区段字符 1 token/字；其余字符 4 字符 ≈ 1 token。会话结构性上限见下（防 in-memory 历史无限膨胀）。
 
@@ -59,6 +75,7 @@ opening(state)                       首条人格消息（first_mes 优先，空
     → 追加为首个 assistant 回合（幂等：已有 assistant 回合则返回其内容）
 reply(state, user_text)              非流式：追加用户回合 → compose → chat_by_role
 stream_reply(state, user_text)       流式：追加用户回合 → compose → stream_by_role
+    （compose 含世界书选择 + 回合状态回存——冷却时钟每次组装 +1）
     → 逐块 yield 增量；流自然结束后聚合全文追加 assistant 回合
 clear_history(state) / history(state)   /clear 与 /history 命令面
 ```
@@ -193,7 +210,8 @@ lifespan                                          上述函数对的 asynccontex
 ## 测试与门禁
 
 - `tests/unit/test_chat_prompts.py`——byte-lock（sha256 摘要锁）+ 渲染契约（覆写 / 空段跳过 / 兜底）；
-- `tests/unit/test_chat_service.py`——假网关记录组装消息：正典字段 / 世界书全语义（constant / scan_depth / selective / 大小写 / 预算截断 / 位置次序）/ PHI 末位 / 参数直通 / 流式聚合与提前终止 / 会话上限 / 查库路径（共享 SQLite）；
+- `tests/unit/test_chat_world_book.py`——R2b 选择算法链纯函数面：constant 恒注入 / 关键词窗口 / selective 副键 / 递归 2 跳上限与环安全 / 互斥分组确定性（含平局索引裁定）/ 概率门三态（种子 rng 按渲染序消耗）/ 冷却阻塞-解禁 / 功能式状态传递（入参不变更）/ token 预算截止（截断不记冷却）/ 深度槽渲染序 / 缺省字段 = 既有行为（兼容证明）；
+- `tests/unit/test_chat_service.py`——假网关记录组装消息：正典字段 / 世界书全语义（constant / scan_depth / selective / 大小写 / 预算截断 / 位置次序）/ PHI 末位 / 参数直通 / 流式聚合与提前终止 / 会话上限 / 查库路径（共享 SQLite）；R2b 增补：组装回合状态功能式推进 / 种子 rng 概率门 / 冷却会话循环闭环（第 1 轮注入 → 2/3 轮缺席 → 第 4 轮回归）；
 - `tests/unit/test_chat_persistence.py`——持久化集成：落库 / 网关失败保留用户回合 / resume 全链路 / 持久化关闭兼容纯内存形态 / CLI `/new` `/sessions` `/resume` 命令（真实启动栈 + tmp SQLite + 假网关）；
 - `tests/unit/test_chat_cli.py`——注入式 I/O 驱动全流程（真实启动栈 + tmp SQLite + 假网关，never real stdin）：命令面 / 无主人格指引（退出码 1）/ 业务异常不崩 REPL / main 入口；
 - `tests/unit/test_app_main.py`——create_app 路由注册 / startup-shutdown 函数对（真实组件 + LIFO 追踪）/ health 与 personas 经 ASGITransport 走真实 app / lifespan 全周期 / 外部引擎治理；

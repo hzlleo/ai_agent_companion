@@ -60,6 +60,16 @@ export interface CharaBookEntry {
   selective: boolean
   /** 插入位置。 */
   position: CharaBookPosition
+  /** 深度槽位（0-20，默认 4；段内值越大越靠段首，0 为段尾槽——最贴近对话末尾；同槽按 insertion_order）。 */
+  depth: number
+  /** 条目正文是否参与递归扫描面（默认 false；须书级 recursive_scanning=true）。 */
+  recursive: boolean
+  /** 互斥分组名（null = 不分组；同组命中条目一次组装只注入最高优先级者）。 */
+  include_group: string | null
+  /** 触发概率（0.0-1.0，默认 1.0 恒注入；非 constant 条目的概率门）。 */
+  trigger_probability: number
+  /** 注入后冷却回合数（0-50，默认 0 不冷却；会话作用域——重启即复位）。 */
+  cooldown_turns: number
 }
 
 /** 世界书（检索增强条目集）。 */
