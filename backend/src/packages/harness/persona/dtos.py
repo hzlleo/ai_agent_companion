@@ -1,5 +1,5 @@
 """persona 域 DTO——创建 / 更新 / 复制 / 记录 / 卡片 / 状态 / 查询 / 批量
-删除的传输契约（Unit 文件）。
+删除 / 导入 / 特质库的传输契约（Unit 文件）。
 
 契约分层：
 
@@ -21,17 +21,34 @@
     - :class:`PersonaQueryDTO`            —— 列表查询（status 过滤 + 游标
       分页）；
     - :class:`PersonaBatchDeleteRequest` / :class:`PersonaBatchDeleteItemDTO`
-      / :class:`PersonaBatchDeleteResponseDTO` —— 批量删除（部分成功形态）。
+      / :class:`PersonaBatchDeleteResponseDTO` —— 批量删除（部分成功形态）；
+    - :class:`PersonaImportRequestDTO` / :class:`PersonaImportResultModel`
+      —— 导入面（JSON 请求：官方预设 id 或用户卡片文档 + 冲突策略）；
+    - :class:`PersonaImportBatchFileDTO`  —— 批量导入的内部装配面
+      （multipart 逐文件解析产物——非前端 wire 类型）；
+    - :class:`PersonaImportBatchItemDTO` / :class:`PersonaImportBatchResultDTO`
+      —— 批量导入结果（部分成功形态）；
+    - :class:`TraitLibraryDTO`            —— 特质库读取面（官方预设 +
+      组件注册表的画廊载荷）。
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from packages.harness.persona.chara_card import CharaBookModel, CharaCardModel
-from packages.harness.persona.models import PersonaStateLayer, PersonaStatus
+from packages.harness.persona.models import (
+    PersonaImportConflictStrategy,
+    PersonaImportReason,
+    PersonaStateLayer,
+    PersonaStatus,
+)
+from packages.harness.persona.trait_library import (
+    TraitComponentModel,
+    TraitPresetModel,
+)
 from packages.harness.voice.voice_models import VoiceProfileModel
 
 __all__ = [
@@ -47,6 +64,12 @@ __all__ = [
     "PersonaBatchDeleteRequest",
     "PersonaBatchDeleteItemDTO",
     "PersonaBatchDeleteResponseDTO",
+    "PersonaImportRequestDTO",
+    "PersonaImportResultModel",
+    "PersonaImportBatchFileDTO",
+    "PersonaImportBatchItemDTO",
+    "PersonaImportBatchResultDTO",
+    "TraitLibraryDTO",
 ]
 
 
@@ -292,3 +315,158 @@ class PersonaBatchDeleteResponseDTO(BaseModel):
     succeeded: int = Field(description="成功数量")
     failed: int = Field(description="失败数量")
     items: list[PersonaBatchDeleteItemDTO] = Field(default_factory=list, description="逐 id 结果")
+
+
+class PersonaImportRequestDTO(BaseModel):
+    """人格导入请求 DTO（JSON 面——multipart 面经同一模型归一）。
+
+    载荷三选一（模型校验强制恰一）：``preset_id``（官方预设导入——
+    服务端确定性生成卡片）或 ``card``（用户自有卡片文档导入）；
+    冲突策略与期望名对两种载荷通用。multipart 面由 API 层解析后经
+    本模型归一（``preset_id`` 恒 None——文件导入即卡片载荷）。
+
+    Attributes:
+        preset_id: 官方预设 id（与 ``card`` 恰一提供；提供时服务端按
+            预设 + 组件库生成卡片）。
+        card: 用户自有 chara card v2 卡片文档（与 ``preset_id`` 恰一
+            提供）。
+        conflict_strategy: 名称冲突策略（缺省 skip——内容同卡恒幂等，
+            策略不适用）。
+        desired_name: 期望注册名（None = 卡片名 / 预设名；1-128 字符）。
+
+    Raises:
+        ValueError: ``preset_id`` 与 ``card`` 同时提供或均未提供（载荷
+            恰一约束）。
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    preset_id: str | None = Field(
+        default=None, min_length=2, max_length=64, description="官方预设 id"
+    )
+    card: CharaCardModel | None = Field(default=None, description="用户自有卡片文档")
+    conflict_strategy: PersonaImportConflictStrategy = Field(
+        default=PersonaImportConflictStrategy.SKIP, description="名称冲突策略（缺省 skip）"
+    )
+    desired_name: str | None = Field(
+        default=None, min_length=1, max_length=128, description="期望注册名（None = 卡片名）"
+    )
+
+    @model_validator(mode="after")
+    def _validate_payload_exclusivity(self) -> PersonaImportRequestDTO:
+        """载荷恰一约束：preset_id 与 card 须恰提供一个。
+
+        Returns:
+            校验通过的实例。
+
+        Raises:
+            ValueError: 两者同时提供（载荷歧义）或均未提供（空导入）。
+        """
+        if self.preset_id is not None and self.card is not None:
+            raise ValueError("preset_id 与 card 须恰提供一个（同时提供载荷歧义）")
+        if self.preset_id is None and self.card is None:
+            raise ValueError("preset_id 与 card 须恰提供一个（空导入无意义）")
+        return self
+
+
+class PersonaImportResultModel(BaseModel):
+    """人格导入结果（单发面——含幂等 / 冲突未导入形态）。
+
+    Attributes:
+        imported: 是否实际落库（False = 幂等跳过或名称冲突未导入）。
+        persona_id: 关联人格主键（导入成功 = 新行 / 覆盖行；幂等 =
+            同卡既有人格；名称冲突 skip = 占用名人格；None = 未关联）。
+        reason: 未导入原因（None = 已导入；identical_content = 内容
+            同卡幂等；name_conflict = 名称冲突被跳过）。
+        warnings: 生成警告文案列表（预设导入的组件冲突软警告等；
+            空列表 = 无）。
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    imported: bool = Field(description="是否实际落库")
+    persona_id: int | None = Field(
+        default=None, description="关联人格主键（新行 / 覆盖行 / 既有行）"
+    )
+    reason: PersonaImportReason | None = Field(
+        default=None, description="未导入原因（None = 已导入）"
+    )
+    warnings: list[str] = Field(default_factory=list, description="生成警告文案列表")
+
+
+class PersonaImportBatchFileDTO(BaseModel):
+    """批量导入单文件装配面（multipart 解析产物——内部形态非 wire）。
+
+    Attributes:
+        filename: 文件名（结果呈现与定位用）。
+        card: 解析成功的卡片文档（None = 解析失败——见 ``error_message``）。
+        error_message: 解析失败原因（成功为 None）。
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    filename: str = Field(description="文件名")
+    card: CharaCardModel | None = Field(default=None, description="解析成功的卡片文档")
+    error_message: str | None = Field(default=None, description="解析失败原因")
+
+
+class PersonaImportBatchItemDTO(BaseModel):
+    """批量导入结果单条目（部分成功形态——逐文件）。
+
+    Attributes:
+        filename: 文件名（与提交顺序一致）。
+        success: 请求是否处理成功（解析 / 落库无异常；冲突跳过与幂等
+            属合法结果——success 仍为 True）。
+        imported: 是否实际导入（False + success=True = 幂等 / 冲突跳过）。
+        persona_id: 关联人格主键（None = 未关联）。
+        reason: 未导入原因（None = 已导入或处理失败）。
+        code: 失败错误码（success=True 时为 None）。
+        message: 面向用户的提示信息。
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    filename: str = Field(description="文件名")
+    success: bool = Field(description="请求是否处理成功")
+    imported: bool = Field(default=False, description="是否实际导入")
+    persona_id: int | None = Field(default=None, description="关联人格主键")
+    reason: PersonaImportReason | None = Field(default=None, description="未导入原因")
+    code: str | None = Field(default=None, description="失败错误码（成功为 None）")
+    message: str = Field(default="", description="提示信息")
+
+
+class PersonaImportBatchResultDTO(BaseModel):
+    """批量导入结果（部分成功形态——逐文件独立事务）。
+
+    Attributes:
+        total: 提交文件总数。
+        succeeded: 处理成功数（含幂等 / 冲突跳过的合法结果）。
+        failed: 处理失败数（解析失败 / 内部错误）。
+        imported_count: 实际新导入数（succeeded 中 imported=True 的数量）。
+        items: 逐文件结果列表（与提交顺序一致）。
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    total: int = Field(description="提交文件总数")
+    succeeded: int = Field(description="处理成功数（含合法跳过）")
+    failed: int = Field(description="处理失败数")
+    imported_count: int = Field(description="实际新导入数")
+    items: list[PersonaImportBatchItemDTO] = Field(
+        default_factory=list, description="逐文件结果"
+    )
+
+
+class TraitLibraryDTO(BaseModel):
+    """特质库读取面（画廊载荷——官方预设 + 组件注册表）。
+
+    Attributes:
+        presets: 官方预设列表（数据文件声明序）。
+        components: 全量官方组件列表（数据文件声明序；前端按 id 建
+            映射解析预设的组件芯片）。
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    presets: list[TraitPresetModel] = Field(description="官方预设列表")
+    components: list[TraitComponentModel] = Field(description="全量官方组件列表")

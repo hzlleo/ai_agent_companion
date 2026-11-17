@@ -1,4 +1,4 @@
-"""persona 域值域 Model Classes——人格状态 / L-M-S 状态层枚举。
+"""persona 域值域 Model Classes——人格状态 / L-M-S 状态层 / 导入冲突枚举。
 
 值域（本工程人格注册表契约——多激活可寻址模型）：
 
@@ -16,13 +16,23 @@
           评价文档（JSON state）；
         - ``S``（short-term，短期会话状态）：单会话内的即时状态（话题
           焦点 / 情绪强度 / 最近意图等，JSON state）。
+
+    - :class:`PersonaImportConflictStrategy` —— 导入冲突策略（skip 跳过 /
+      rename 改名 / overwrite 覆盖；仅名称冲突时生效——内容同卡恒幂等）；
+    - :class:`PersonaImportReason` —— 导入未落库原因（identical_content
+      内容同卡 / name_conflict 名称冲突）。
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
 
-__all__ = ["PersonaStatus", "PersonaStateLayer"]
+__all__ = [
+    "PersonaStatus",
+    "PersonaStateLayer",
+    "PersonaImportConflictStrategy",
+    "PersonaImportReason",
+]
 
 
 class PersonaStatus(StrEnum):
@@ -50,3 +60,31 @@ class PersonaStateLayer(StrEnum):
 
     M = "M"
     S = "S"
+
+
+class PersonaImportConflictStrategy(StrEnum):
+    """导入冲突策略值域（仅名称冲突时生效——内容同卡恒幂等跳过）。
+
+    - ``skip``：跳过（缺省）——不落库，返回 ``name_conflict`` 未导入
+      结果（温和策略，调用方决定下一步）；
+    - ``rename``：改名——用 ``desired_name``（提供且可用时）或自动
+      后缀 ``名字-2`` 起寻找空闲名落库；
+    - ``overwrite``：覆盖——整体替换同名人格的卡片（保留 M/S 状态 /
+      status / 主人格标记 / 语音绑定——仅卡片文档替换）。
+    """
+
+    SKIP = "skip"
+    RENAME = "rename"
+    OVERWRITE = "overwrite"
+
+
+class PersonaImportReason(StrEnum):
+    """导入未落库原因值域（``imported=False`` 时的机器可读原因）。
+
+    - ``identical_content``：内容同卡——导入卡片与既有人格卡片的内容
+      哈希一致（幂等响应，与冲突策略无关）；
+    - ``name_conflict``：名称冲突——目标注册名被占用且策略为 skip。
+    """
+
+    IDENTICAL_CONTENT = "identical_content"
+    NAME_CONFLICT = "name_conflict"

@@ -15,6 +15,9 @@ import type { ResultDTO } from '@/types/common'
 import type {
   PersonaRecord,
   PersonaState,
+  TraitComponent,
+  TraitLibrary,
+  TraitPreset,
 } from '@/types/persona'
 import type {
   ChatSessionDetail,
@@ -29,6 +32,11 @@ import type { ModelEntryMasked, RegistryState, RoleBinding } from '@/types/model
 
 /** 后端 URL 前缀（handlers 统一经此拼接，与 api client 同源）。 */
 export const BACKEND_ORIGIN = `${API_BASE_URL}${API_PREFIX}`
+
+/** msw formData 部件 → 文件项判定（duck-typing——msw 重建的 File 与测试域全局 File 非同构造器，instanceof 不可靠）。 */
+export function isFileEntry(entry: FormDataEntryValue | null): entry is File {
+  return typeof entry === 'object' && entry !== null && 'name' in entry && 'text' in entry
+}
 
 /** 构造成功 ResultDTO。 */
 export function okResult<T>(data: T, message = '成功'): ResultDTO<T> {
@@ -78,6 +86,100 @@ export function mockState(overrides: Partial<PersonaState> = {}): PersonaState {
     created_at: 1731000000000,
     updated_at: 1731000000000,
     ...overrides,
+  }
+}
+
+/** 测试用特质组件（wire 形态）。 */
+export function mockTraitComponent(overrides: Partial<TraitComponent> = {}): TraitComponent {
+  return {
+    id: 'warm-hearted',
+    name_zh: '温情底色',
+    description_zh: '待人有一种天然的暖意，会默默惦记对方的冷暖',
+    category: 'temperament',
+    tone_directives: ['语气里带着藏不住的关切'],
+    sample_speech: '今天降温了，出门记得把外套穿上。',
+    conflicts: [],
+    ...overrides,
+  }
+}
+
+/** 测试用特质预设（wire 形态；傲娇组合）。 */
+export function mockTraitPreset(overrides: Partial<TraitPreset> = {}): TraitPreset {
+  return {
+    id: 'tsundere',
+    name_zh: '傲娇',
+    tagline_zh: '嘴上全是拒绝，行动全是真心',
+    description_zh: '口是心非的别扭鬼，好话反着说、关心藏着给',
+    components: ['duplicitous-mouth', 'soft-heart-hard-mouth'],
+    base_card_overrides: {
+      name_suffix: null,
+      personality: null,
+      mes_example: null,
+      system_prompt_fragment: null,
+    },
+    suggested_voice: null,
+    suggested_book: [],
+    ...overrides,
+  }
+}
+
+/** 测试用特质库（画廊载荷：2 预设 + 组件注册表）。 */
+export function mockTraitLibrary(): TraitLibrary {
+  return {
+    presets: [
+      mockTraitPreset(),
+      mockTraitPreset({
+        id: 'genki-girl',
+        name_zh: '元气少女',
+        tagline_zh: '人形小太阳，电量永远 100%',
+        description_zh: '元气满格的活泼少女，一句话能把阴天聊出太阳',
+        components: ['energetic-sunny', 'pun-enthusiast'],
+        base_card_overrides: {
+          name_suffix: '-酱',
+          personality: null,
+          mes_example: null,
+          system_prompt_fragment: null,
+        },
+      }),
+    ],
+    components: [
+      mockTraitComponent(),
+      mockTraitComponent({
+        id: 'duplicitous-mouth',
+        name_zh: '口是心非',
+        description_zh: '想要偏说不要，喜欢偏说讨厌',
+        category: 'speech',
+        tone_directives: ['想法与说出口的话刻意相反'],
+        sample_speech: '谁想和你多待一会儿啊，我只是刚好顺路。',
+      }),
+      mockTraitComponent({
+        id: 'soft-heart-hard-mouth',
+        name_zh: '嘴硬心软',
+        description_zh: '嘴上不饶人，落在行动里却诚实得很',
+        category: 'temperament',
+        tone_directives: [],
+        sample_speech: null,
+        conflicts: [],
+      }),
+      mockTraitComponent({
+        id: 'energetic-sunny',
+        name_zh: '元气满满',
+        description_zh: '情绪高昂有干劲，是身边的晴天',
+        category: 'temperament',
+        tone_directives: ['语气轻快上扬'],
+        sample_speech: '走走走！出去兜一圈！',
+        conflicts: [],
+      }),
+      mockTraitComponent({
+        id: 'pun-enthusiast',
+        name_zh: '谐音梗爱好者',
+        description_zh: '谐音梗十级学者，逮着机会就要抖一个',
+        category: 'humor',
+        tone_directives: [],
+        sample_speech: null,
+        conflicts: [],
+      }),
+    ],
   }
 }
 
@@ -146,6 +248,140 @@ export const personaHandlers = [  // 游标分页列表：首页 2 条 + next_cu
   http.get(`${BACKEND_ORIGIN}/personas/primary`, () =>
     HttpResponse.json(okResult(mockPersona({ id: 1, is_primary: true }))),
   ),
+  // 官方特质预设库（画廊载荷）。
+  http.get(`${BACKEND_ORIGIN}/personas/presets`, () =>
+    HttpResponse.json(okResult(mockTraitLibrary())),
+  ),
+  // 单发导入：JSON 面（官方预设生成 / 用户卡片）——同名「傲娇」与
+  // desired_name=companion-1 触发冲突形态，其余成功导入。
+  http.post(`${BACKEND_ORIGIN}/personas/import`, async ({ request }) => {
+    const contentType = request.headers.get('content-type') ?? ''
+    let presetId: string | null = null
+    let cardName = ''
+    let desiredName: string | null = null
+    let strategy = 'skip'
+    if (contentType.includes('multipart/form-data')) {
+      const form = await request.formData()
+      presetId = null
+      const file = form.get('file')
+      if (isFileEntry(file)) {
+        try {
+          cardName = (JSON.parse(await file.text()) as { name?: string }).name ?? ''
+        } catch {
+          return HttpResponse.json(
+            errorResult('导入卡片文件解析失败（须为 chara card v2 JSON 文档）', 'VALIDATION_ERROR'),
+            { status: 422 },
+          )
+        }
+      }
+      const strategyField = form.get('conflict_strategy')
+      if (typeof strategyField === 'string' && strategyField !== '') {
+        strategy = strategyField
+      }
+      const desiredField = form.get('desired_name')
+      if (typeof desiredField === 'string' && desiredField !== '') {
+        desiredName = desiredField
+      }
+    } else {
+      const body = (await request.json()) as {
+        preset_id?: string | null
+        card?: { name?: string } | null
+        conflict_strategy?: string
+        desired_name?: string | null
+      }
+      presetId = body.preset_id ?? null
+      cardName = body.card?.name ?? ''
+      desiredName = body.desired_name ?? null
+      strategy = body.conflict_strategy ?? 'skip'
+    }
+    if (presetId !== null && presetId !== 'tsundere' && presetId !== 'genki-girl') {
+      return HttpResponse.json(errorResult('官方预设不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    const targetName = desiredName ?? (presetId !== null ? '傲娇' : cardName)
+    if (strategy === 'skip' && targetName === 'companion-1') {
+      return HttpResponse.json(
+        okResult(
+          {
+            imported: false,
+            persona_id: 1,
+            reason: 'name_conflict',
+            warnings: [],
+          },
+          '注册名已存在，按跳过策略未导入',
+        ),
+      )
+    }
+    if (strategy === 'rename' && targetName === 'companion-1') {
+      return HttpResponse.json(
+        okResult(
+          { imported: true, persona_id: 11, reason: null, warnings: [] },
+          '人格已导入',
+        ),
+      )
+    }
+    return HttpResponse.json(
+      okResult(
+        { imported: true, persona_id: presetId !== null ? 11 : 12, reason: null, warnings: [] },
+        '人格已导入',
+      ),
+    )
+  }),
+  // 批量导入（multipart 多文件，部分成功形态：非法 JSON 失败 + companion-1 冲突跳过）。
+  http.post(`${BACKEND_ORIGIN}/personas/import/batch`, async ({ request }) => {
+    const form = await request.formData()
+    const files = form.getAll('files').filter(isFileEntry)
+    const results = await Promise.all(
+      files.map(async (file) => {
+        try {
+          const cardName = (JSON.parse(await file.text()) as { name?: string }).name ?? ''
+          if (cardName === 'companion-1') {
+            return {
+              filename: file.name,
+              success: true,
+              imported: false,
+              persona_id: 1,
+              reason: 'name_conflict',
+              code: null,
+              message: '注册名已存在，按跳过策略未导入',
+            }
+          }
+          return {
+            filename: file.name,
+            success: true,
+            imported: true,
+            persona_id: 20,
+            reason: null,
+            code: null,
+            message: '已导入',
+          }
+        } catch {
+          return {
+            filename: file.name,
+            success: false,
+            imported: false,
+            persona_id: null,
+            reason: null,
+            code: 'VALIDATION_ERROR',
+            message: '卡片文件解析失败（须为 chara card v2 JSON）: invalid',
+          }
+        }
+      }),
+    )
+    const succeeded = results.filter((item) => item.success).length
+    const importedCount = results.filter((item) => item.imported).length
+    return HttpResponse.json(
+      okResult(
+        {
+          total: results.length,
+          succeeded,
+          failed: results.length - succeeded,
+          imported_count: importedCount,
+          items: results,
+        },
+        `批量导入完成（成功 ${succeeded} / 失败 ${results.length - succeeded} / 新导入 ${importedCount}）`,
+      ),
+    )
+  }),
   // 读取。
   http.get(`${BACKEND_ORIGIN}/personas/:personaId`, ({ params }) => {
     const id = Number(params.personaId)

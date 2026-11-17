@@ -102,11 +102,20 @@ from packages.harness.persona.dtos import (
     PersonaCardDTO,
     PersonaCopyDTO,
     PersonaCreateDTO,
+    PersonaImportBatchItemDTO,
+    PersonaImportBatchResultDTO,
+    PersonaImportRequestDTO,
+    PersonaImportResultModel,
     PersonaQueryDTO,
     PersonaRecordDTO,
     PersonaStateDTO,
     PersonaStateUpsertDTO,
     PersonaUpdateDTO,
+    TraitLibraryDTO,
+)
+from packages.harness.persona.trait_library import (
+    TraitComponentModel,
+    TraitPresetModel,
 )
 from packages.harness.usage.dtos import (
     UsageAggregateDTO,
@@ -198,6 +207,14 @@ def build_manifest() -> list[SchemaExportEntry]:
         SchemaExportEntry("CharaBookEntryModel", CharaBookEntryModel, "CharaBookEntry", _FRONTEND_PERSONA),
         SchemaExportEntry("CharaCardPatchDTO", CharaCardPatchDTO, "CharaCardPatch", _FRONTEND_PERSONA),
         SchemaExportEntry("VoiceProfileModel", VoiceProfileModel, "VoiceProfile", _FRONTEND_PERSONA),
+        # persona 域——特质组件库与导入面（R2b-2）。
+        SchemaExportEntry("TraitComponentModel", TraitComponentModel, "TraitComponent", _FRONTEND_PERSONA),
+        SchemaExportEntry("TraitPresetModel", TraitPresetModel, "TraitPreset", _FRONTEND_PERSONA),
+        SchemaExportEntry("TraitLibraryDTO", TraitLibraryDTO, "TraitLibrary", _FRONTEND_PERSONA),
+        SchemaExportEntry("PersonaImportRequestDTO", PersonaImportRequestDTO, "PersonaImportRequest", _FRONTEND_PERSONA),
+        SchemaExportEntry("PersonaImportResultModel", PersonaImportResultModel, "PersonaImportResult", _FRONTEND_PERSONA),
+        SchemaExportEntry("PersonaImportBatchItemDTO", PersonaImportBatchItemDTO, "PersonaImportBatchItem", _FRONTEND_PERSONA),
+        SchemaExportEntry("PersonaImportBatchResultDTO", PersonaImportBatchResultDTO, "PersonaImportBatchResult", _FRONTEND_PERSONA),
         # memory 域——情景事件。
         SchemaExportEntry("EpisodeCreateDTO", EpisodeCreateDTO, "EpisodeCreateRequest", _FRONTEND_MEMORY),
         SchemaExportEntry("EpisodeRecordDTO", EpisodeRecordDTO, "EpisodeRecord", _FRONTEND_MEMORY),

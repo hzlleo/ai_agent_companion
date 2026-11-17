@@ -94,6 +94,41 @@
         "schema_key": "VoiceProfileModel"
       },
       {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "TraitComponent",
+        "schema_key": "TraitComponentModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "TraitPreset",
+        "schema_key": "TraitPresetModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "TraitLibrary",
+        "schema_key": "TraitLibraryDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "PersonaImportRequest",
+        "schema_key": "PersonaImportRequestDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "PersonaImportResult",
+        "schema_key": "PersonaImportResultModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "PersonaImportBatchItem",
+        "schema_key": "PersonaImportBatchItemDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "PersonaImportBatchResult",
+        "schema_key": "PersonaImportBatchResultDTO"
+      },
+      {
         "frontend_file": "frontend/src/types/memory.ts",
         "frontend_type": "EpisodeCreateRequest",
         "schema_key": "EpisodeCreateDTO"
@@ -4018,6 +4053,581 @@
       "title": "PersonaCreateDTO",
       "type": "object"
     },
+    "PersonaImportBatchItemDTO": {
+      "$defs": {
+        "PersonaImportReason": {
+          "description": "导入未落库原因值域（``imported=False`` 时的机器可读原因）。\n\n- ``identical_content``：内容同卡——导入卡片与既有人格卡片的内容\n  哈希一致（幂等响应，与冲突策略无关）；\n- ``name_conflict``：名称冲突——目标注册名被占用且策略为 skip。",
+          "enum": [
+            "identical_content",
+            "name_conflict"
+          ],
+          "title": "PersonaImportReason",
+          "type": "string"
+        }
+      },
+      "description": "批量导入结果单条目（部分成功形态——逐文件）。\n\nAttributes:\n    filename: 文件名（与提交顺序一致）。\n    success: 请求是否处理成功（解析 / 落库无异常；冲突跳过与幂等\n        属合法结果——success 仍为 True）。\n    imported: 是否实际导入（False + success=True = 幂等 / 冲突跳过）。\n    persona_id: 关联人格主键（None = 未关联）。\n    reason: 未导入原因（None = 已导入或处理失败）。\n    code: 失败错误码（success=True 时为 None）。\n    message: 面向用户的提示信息。",
+      "properties": {
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "失败错误码（成功为 None）",
+          "title": "Code"
+        },
+        "filename": {
+          "description": "文件名",
+          "title": "Filename",
+          "type": "string"
+        },
+        "imported": {
+          "default": false,
+          "description": "是否实际导入",
+          "title": "Imported",
+          "type": "boolean"
+        },
+        "message": {
+          "default": "",
+          "description": "提示信息",
+          "title": "Message",
+          "type": "string"
+        },
+        "persona_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "关联人格主键",
+          "title": "Persona Id"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PersonaImportReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "未导入原因"
+        },
+        "success": {
+          "description": "请求是否处理成功",
+          "title": "Success",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "filename",
+        "success"
+      ],
+      "title": "PersonaImportBatchItemDTO",
+      "type": "object"
+    },
+    "PersonaImportBatchResultDTO": {
+      "$defs": {
+        "PersonaImportBatchItemDTO": {
+          "description": "批量导入结果单条目（部分成功形态——逐文件）。\n\nAttributes:\n    filename: 文件名（与提交顺序一致）。\n    success: 请求是否处理成功（解析 / 落库无异常；冲突跳过与幂等\n        属合法结果——success 仍为 True）。\n    imported: 是否实际导入（False + success=True = 幂等 / 冲突跳过）。\n    persona_id: 关联人格主键（None = 未关联）。\n    reason: 未导入原因（None = 已导入或处理失败）。\n    code: 失败错误码（success=True 时为 None）。\n    message: 面向用户的提示信息。",
+          "properties": {
+            "code": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "失败错误码（成功为 None）",
+              "title": "Code"
+            },
+            "filename": {
+              "description": "文件名",
+              "title": "Filename",
+              "type": "string"
+            },
+            "imported": {
+              "default": false,
+              "description": "是否实际导入",
+              "title": "Imported",
+              "type": "boolean"
+            },
+            "message": {
+              "default": "",
+              "description": "提示信息",
+              "title": "Message",
+              "type": "string"
+            },
+            "persona_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "关联人格主键",
+              "title": "Persona Id"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PersonaImportReason"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "未导入原因"
+            },
+            "success": {
+              "description": "请求是否处理成功",
+              "title": "Success",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "filename",
+            "success"
+          ],
+          "title": "PersonaImportBatchItemDTO",
+          "type": "object"
+        },
+        "PersonaImportReason": {
+          "description": "导入未落库原因值域（``imported=False`` 时的机器可读原因）。\n\n- ``identical_content``：内容同卡——导入卡片与既有人格卡片的内容\n  哈希一致（幂等响应，与冲突策略无关）；\n- ``name_conflict``：名称冲突——目标注册名被占用且策略为 skip。",
+          "enum": [
+            "identical_content",
+            "name_conflict"
+          ],
+          "title": "PersonaImportReason",
+          "type": "string"
+        }
+      },
+      "description": "批量导入结果（部分成功形态——逐文件独立事务）。\n\nAttributes:\n    total: 提交文件总数。\n    succeeded: 处理成功数（含幂等 / 冲突跳过的合法结果）。\n    failed: 处理失败数（解析失败 / 内部错误）。\n    imported_count: 实际新导入数（succeeded 中 imported=True 的数量）。\n    items: 逐文件结果列表（与提交顺序一致）。",
+      "properties": {
+        "failed": {
+          "description": "处理失败数",
+          "title": "Failed",
+          "type": "integer"
+        },
+        "imported_count": {
+          "description": "实际新导入数",
+          "title": "Imported Count",
+          "type": "integer"
+        },
+        "items": {
+          "description": "逐文件结果",
+          "items": {
+            "$ref": "#/$defs/PersonaImportBatchItemDTO"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "succeeded": {
+          "description": "处理成功数（含合法跳过）",
+          "title": "Succeeded",
+          "type": "integer"
+        },
+        "total": {
+          "description": "提交文件总数",
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "succeeded",
+        "failed",
+        "imported_count"
+      ],
+      "title": "PersonaImportBatchResultDTO",
+      "type": "object"
+    },
+    "PersonaImportRequestDTO": {
+      "$defs": {
+        "CharaBookEntryModel": {
+          "description": "世界书条目（单条检索增强设定）。\n\n触发语义：``keys`` 任一命中即插入；``selective=True`` 时进一步要求\n``secondary_keys`` 任一命中（选择性触发——主键定义话题、副键收敛\n语境）；``constant=True`` 恒插入（免触发，世界观保底条目——恒插入\n条目无视分组互斥 / 概率门 / 冷却门，直接进入候选集）。\n\nR2b 高级字段（全部缺省即既有行为）：\n\n    - ``depth`` 声明条目距对话末尾的近因深度（0 = 最贴近末尾），\n      在渲染段内落位为深度槽（越小越靠段尾——段尾紧邻对话历史）；\n    - ``recursive`` 声明本条目正文可否在递归扫描面再触发其他条目\n      （书级 ``recursive_scanning`` 为总开关——本字段为逐条目收窄）；\n    - ``include_group`` 声明互斥分组（同组非 constant 命中条目一次\n      组装只注入优先级最高者：``insertion_order`` 升序、同值按条目\n      索引升序——确定性文档化）；\n    - ``trigger_probability`` 声明概率门（仅非 constant 命中条目过\n      门；缺省 1.0 = 恒过门不消耗随机数）；\n    - ``cooldown_turns`` 声明注入后冷却（仅非 constant 命中条目过\n      门；会话作用域内存追踪，重启即复位——无持久化，诚实文档化）。\n\nAttributes:\n    keys: 主触发关键词列表（非空——无触发面的条目应为 constant）。\n    secondary_keys: 副触发关键词列表（仅 ``selective=True`` 时有意义）。\n    content: 条目正文（插入提示词的设定文本）。\n    insertion_order: 插入顺序（0-9999，值越大越靠后）。\n    constant: 是否恒插入（默认 False——按关键词触发）。\n    case_sensitive: 关键词匹配是否区分大小写（默认 False）。\n    selective: 是否选择性触发（默认 False——主键命中即插入）。\n    position: 插入位置（默认 ``after_char``——角色定义之后）。\n    depth: 深度槽位（0-20，默认 4；段内排序首选键——值越大越靠段\n        首、越远离对话末尾，0 为段尾槽；同槽回退 insertion_order）。\n    recursive: 条目正文是否参与递归扫描面（默认 False；须书级\n        ``recursive_scanning=True``，否则构造期拒绝）。\n    include_group: 互斥分组名（默认 None = 不分组；空白串归一为\n        None；同组一次组装只注入优先级最高的命中成员）。\n    trigger_probability: 触发概率（0.0-1.0，默认 1.0 恒注入）。\n    cooldown_turns: 注入后冷却回合数（0-50，默认 0 不冷却；回合\n        计数为组装调用次数，会话作用域内存追踪）。",
+          "properties": {
+            "case_sensitive": {
+              "default": false,
+              "description": "关键词匹配是否区分大小写",
+              "title": "Case Sensitive",
+              "type": "boolean"
+            },
+            "constant": {
+              "default": false,
+              "description": "是否恒插入（免触发）",
+              "title": "Constant",
+              "type": "boolean"
+            },
+            "content": {
+              "default": "",
+              "description": "条目正文",
+              "title": "Content",
+              "type": "string"
+            },
+            "cooldown_turns": {
+              "default": 0,
+              "description": "注入后冷却回合数（回合 = 组装调用；会话作用域内存追踪）",
+              "maximum": 50,
+              "minimum": 0,
+              "title": "Cooldown Turns",
+              "type": "integer"
+            },
+            "depth": {
+              "default": 4,
+              "description": "深度槽位（0-20；段内越大越靠段首，0 为段尾槽——同槽按 insertion_order）",
+              "maximum": 20,
+              "minimum": 0,
+              "title": "Depth",
+              "type": "integer"
+            },
+            "include_group": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "互斥分组名（None = 不分组；同组命中条目一次组装只注入最高优先级者）",
+              "title": "Include Group"
+            },
+            "insertion_order": {
+              "default": 100,
+              "description": "插入顺序（0-9999，值越大越靠后插入提示词）",
+              "maximum": 9999,
+              "minimum": 0,
+              "title": "Insertion Order",
+              "type": "integer"
+            },
+            "keys": {
+              "description": "主触发关键词列表",
+              "items": {
+                "type": "string"
+              },
+              "title": "Keys",
+              "type": "array"
+            },
+            "position": {
+              "$ref": "#/$defs/CharaBookPosition",
+              "default": "after_char",
+              "description": "插入位置"
+            },
+            "recursive": {
+              "default": false,
+              "description": "条目正文参与递归扫描面（须书级 recursive_scanning=True）",
+              "title": "Recursive",
+              "type": "boolean"
+            },
+            "secondary_keys": {
+              "description": "副触发关键词列表（selective=True 时参与收敛）",
+              "items": {
+                "type": "string"
+              },
+              "title": "Secondary Keys",
+              "type": "array"
+            },
+            "selective": {
+              "default": false,
+              "description": "是否选择性触发",
+              "title": "Selective",
+              "type": "boolean"
+            },
+            "trigger_probability": {
+              "default": 1.0,
+              "description": "触发概率（非 constant 命中条目的概率门；1.0 恒过门）",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Trigger Probability",
+              "type": "number"
+            }
+          },
+          "title": "CharaBookEntryModel",
+          "type": "object"
+        },
+        "CharaBookModel": {
+          "description": "世界书（检索增强条目集）。\n\nAttributes:\n    name: 世界书名称。\n    description: 世界书描述。\n    scan_depth: 扫描深度（最近 N 条消息内检索关键词；None = 不限）。\n    token_budget: 条目 token 预算（超预算时按渲染序截断；None = 不限）。\n    recursive_scanning: 递归扫描总开关（条目 content 中的命中词再触发\n        其他条目；逐条目收窄经条目级 ``recursive``——两级同时开启\n        才生效；默认 False）。\n    entries: 条目列表（按 ``insertion_order`` 升序决定插入次序）。\n\nRaises:\n    ValueError: 条目携带 ``recursive=True`` 但书级\n        ``recursive_scanning=False``（逐条目递归须总开关放行——\n        静默失效形态在构造期 fail loud）。",
+          "properties": {
+            "description": {
+              "default": "",
+              "description": "世界书描述",
+              "title": "Description",
+              "type": "string"
+            },
+            "entries": {
+              "description": "条目列表",
+              "items": {
+                "$ref": "#/$defs/CharaBookEntryModel"
+              },
+              "title": "Entries",
+              "type": "array"
+            },
+            "name": {
+              "default": "",
+              "description": "世界书名称",
+              "title": "Name",
+              "type": "string"
+            },
+            "recursive_scanning": {
+              "default": false,
+              "description": "递归扫描总开关",
+              "title": "Recursive Scanning",
+              "type": "boolean"
+            },
+            "scan_depth": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "扫描深度（最近 N 条消息）",
+              "title": "Scan Depth"
+            },
+            "token_budget": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "条目 token 预算",
+              "title": "Token Budget"
+            }
+          },
+          "title": "CharaBookModel",
+          "type": "object"
+        },
+        "CharaBookPosition": {
+          "description": "世界书条目插入位置值域（v2 字符串形态）。\n\n- ``before_char``：插在角色定义之前（背景 / 世界观类信息）；\n- ``after_char``：插在角色定义之后（行为补充 / 语料示例类信息）。",
+          "enum": [
+            "before_char",
+            "after_char"
+          ],
+          "title": "CharaBookPosition",
+          "type": "string"
+        },
+        "CharaCardModel": {
+          "description": "chara card v2 人格卡片——长期身份正典（L 层）。\n\n作为 JSON 文档整体存储在 ``ff_personas.chara_card`` 列；会话运行期\n**不可变**（编辑即管理面操作，经 PUT 端点整体替换或补丁合并）。\n心情 / 关系等可变状态不在此处——见 L/M/S 模型（M/S 层落\n``ff_persona_states``）。\n\nAttributes:\n    name: 人格称呼名（非空——v2 规格核心字段）。\n    description: 人格简介（外观 / 背景 / 身份概述）。\n    personality: 性格描述（语气 / 行为倾向 / 价值观）。\n    scenario: 场景设定（当前处境与关系背景）。\n    first_mes: 开场白（会话首条人格消息）。\n    mes_example: 对话示例（few-shot 语态锚定）。\n    system_prompt: 系统提示覆写（非空时整体覆写默认人格 system 模板）。\n    post_history_instructions: 历史后指令（拼在对话历史之后的强约束）。\n    character_book: 世界书（检索增强条目集；None = 无世界书）。",
+          "properties": {
+            "character_book": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CharaBookModel"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "世界书"
+            },
+            "description": {
+              "default": "",
+              "description": "人格简介",
+              "title": "Description",
+              "type": "string"
+            },
+            "first_mes": {
+              "default": "",
+              "description": "开场白",
+              "title": "First Mes",
+              "type": "string"
+            },
+            "mes_example": {
+              "default": "",
+              "description": "对话示例",
+              "title": "Mes Example",
+              "type": "string"
+            },
+            "name": {
+              "description": "人格称呼名（非空）",
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "personality": {
+              "default": "",
+              "description": "性格描述",
+              "title": "Personality",
+              "type": "string"
+            },
+            "post_history_instructions": {
+              "default": "",
+              "description": "历史后指令",
+              "title": "Post History Instructions",
+              "type": "string"
+            },
+            "scenario": {
+              "default": "",
+              "description": "场景设定",
+              "title": "Scenario",
+              "type": "string"
+            },
+            "system_prompt": {
+              "default": "",
+              "description": "系统提示覆写",
+              "title": "System Prompt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "CharaCardModel",
+          "type": "object"
+        },
+        "PersonaImportConflictStrategy": {
+          "description": "导入冲突策略值域（仅名称冲突时生效——内容同卡恒幂等跳过）。\n\n- ``skip``：跳过（缺省）——不落库，返回 ``name_conflict`` 未导入\n  结果（温和策略，调用方决定下一步）；\n- ``rename``：改名——用 ``desired_name``（提供且可用时）或自动\n  后缀 ``名字-2`` 起寻找空闲名落库；\n- ``overwrite``：覆盖——整体替换同名人格的卡片（保留 M/S 状态 /\n  status / 主人格标记 / 语音绑定——仅卡片文档替换）。",
+          "enum": [
+            "skip",
+            "rename",
+            "overwrite"
+          ],
+          "title": "PersonaImportConflictStrategy",
+          "type": "string"
+        }
+      },
+      "description": "人格导入请求 DTO（JSON 面——multipart 面经同一模型归一）。\n\n载荷三选一（模型校验强制恰一）：``preset_id``（官方预设导入——\n服务端确定性生成卡片）或 ``card``（用户自有卡片文档导入）；\n冲突策略与期望名对两种载荷通用。multipart 面由 API 层解析后经\n本模型归一（``preset_id`` 恒 None——文件导入即卡片载荷）。\n\nAttributes:\n    preset_id: 官方预设 id（与 ``card`` 恰一提供；提供时服务端按\n        预设 + 组件库生成卡片）。\n    card: 用户自有 chara card v2 卡片文档（与 ``preset_id`` 恰一\n        提供）。\n    conflict_strategy: 名称冲突策略（缺省 skip——内容同卡恒幂等，\n        策略不适用）。\n    desired_name: 期望注册名（None = 卡片名 / 预设名；1-128 字符）。\n\nRaises:\n    ValueError: ``preset_id`` 与 ``card`` 同时提供或均未提供（载荷\n        恰一约束）。",
+      "properties": {
+        "card": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CharaCardModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "用户自有卡片文档"
+        },
+        "conflict_strategy": {
+          "$ref": "#/$defs/PersonaImportConflictStrategy",
+          "default": "skip",
+          "description": "名称冲突策略（缺省 skip）"
+        },
+        "desired_name": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "期望注册名（None = 卡片名）",
+          "title": "Desired Name"
+        },
+        "preset_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 2,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "官方预设 id",
+          "title": "Preset Id"
+        }
+      },
+      "title": "PersonaImportRequestDTO",
+      "type": "object"
+    },
+    "PersonaImportResultModel": {
+      "$defs": {
+        "PersonaImportReason": {
+          "description": "导入未落库原因值域（``imported=False`` 时的机器可读原因）。\n\n- ``identical_content``：内容同卡——导入卡片与既有人格卡片的内容\n  哈希一致（幂等响应，与冲突策略无关）；\n- ``name_conflict``：名称冲突——目标注册名被占用且策略为 skip。",
+          "enum": [
+            "identical_content",
+            "name_conflict"
+          ],
+          "title": "PersonaImportReason",
+          "type": "string"
+        }
+      },
+      "description": "人格导入结果（单发面——含幂等 / 冲突未导入形态）。\n\nAttributes:\n    imported: 是否实际落库（False = 幂等跳过或名称冲突未导入）。\n    persona_id: 关联人格主键（导入成功 = 新行 / 覆盖行；幂等 =\n        同卡既有人格；名称冲突 skip = 占用名人格；None = 未关联）。\n    reason: 未导入原因（None = 已导入；identical_content = 内容\n        同卡幂等；name_conflict = 名称冲突被跳过）。\n    warnings: 生成警告文案列表（预设导入的组件冲突软警告等；\n        空列表 = 无）。",
+      "properties": {
+        "imported": {
+          "description": "是否实际落库",
+          "title": "Imported",
+          "type": "boolean"
+        },
+        "persona_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "关联人格主键（新行 / 覆盖行 / 既有行）",
+          "title": "Persona Id"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PersonaImportReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "未导入原因（None = 已导入）"
+        },
+        "warnings": {
+          "description": "生成警告文案列表",
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "imported"
+      ],
+      "title": "PersonaImportResultModel",
+      "type": "object"
+    },
     "PersonaQueryDTO": {
       "$defs": {
         "PersonaStatus": {
@@ -5107,6 +5717,785 @@
         "bound"
       ],
       "title": "RoleBindingDTO",
+      "type": "object"
+    },
+    "TraitComponentModel": {
+      "$defs": {
+        "TraitComponentCategory": {
+          "description": "特质组件分类值域（六类——覆盖人格表达的主要维度）。\n\n- ``temperament``：温性（情绪基调与待人温度）；\n- ``speech``：言语风格（说话方式与措辞习惯）；\n- ``quirks``：习惯癖性（标志性小动作与反应模式）；\n- ``values``：价值取向（在意什么 / 如何衡量对错）；\n- ``sociality``：社交风格（与人相处时的姿态）；\n- ``humor``：幽默感（逗趣与自嘲的方式）。",
+          "enum": [
+            "temperament",
+            "speech",
+            "quirks",
+            "values",
+            "sociality",
+            "humor"
+          ],
+          "title": "TraitComponentCategory",
+          "type": "string"
+        }
+      },
+      "description": "特质组件（最小可复用人格碎片——预设的组合原子）。\n\n``description_zh`` 是**落入卡片的碎片**（组合时拼接进\n``personality``）；``tone_directives`` 是进入 system 提示的短指令行；\n``sample_speech`` 是一条示例台词（组合时拼进 ``mes_example``）。\n\nAttributes:\n    id: 组件 id（kebab-case，库内唯一）。\n    name_zh: 组件中文名（画廊芯片展示）。\n    description_zh: 特质描述碎片（落入卡片 personality 的短句）。\n    category: 分类（六类值域）。\n    tone_directives: 语气指令行（零或多条——拼入 system 提示碎片）。\n    sample_speech: 示例台词（None = 无；一条最能体现该特质的台词）。\n    conflicts: 冲突组件 id 列表（同组组合时软警告——不拒绝）。",
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/TraitComponentCategory",
+          "description": "分类（六类值域）"
+        },
+        "conflicts": {
+          "description": "冲突组件 id 列表（同组组合软警告）",
+          "items": {
+            "type": "string"
+          },
+          "title": "Conflicts",
+          "type": "array"
+        },
+        "description_zh": {
+          "description": "特质描述碎片",
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Description Zh",
+          "type": "string"
+        },
+        "id": {
+          "description": "组件 id（kebab-case）",
+          "maxLength": 64,
+          "minLength": 2,
+          "title": "Id",
+          "type": "string"
+        },
+        "name_zh": {
+          "description": "组件中文名",
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Name Zh",
+          "type": "string"
+        },
+        "sample_speech": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "示例台词（None = 无）",
+          "title": "Sample Speech"
+        },
+        "tone_directives": {
+          "description": "语气指令行（拼入 system 提示碎片）",
+          "items": {
+            "type": "string"
+          },
+          "title": "Tone Directives",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name_zh",
+        "description_zh",
+        "category"
+      ],
+      "title": "TraitComponentModel",
+      "type": "object"
+    },
+    "TraitLibraryDTO": {
+      "$defs": {
+        "CharaBookEntryModel": {
+          "description": "世界书条目（单条检索增强设定）。\n\n触发语义：``keys`` 任一命中即插入；``selective=True`` 时进一步要求\n``secondary_keys`` 任一命中（选择性触发——主键定义话题、副键收敛\n语境）；``constant=True`` 恒插入（免触发，世界观保底条目——恒插入\n条目无视分组互斥 / 概率门 / 冷却门，直接进入候选集）。\n\nR2b 高级字段（全部缺省即既有行为）：\n\n    - ``depth`` 声明条目距对话末尾的近因深度（0 = 最贴近末尾），\n      在渲染段内落位为深度槽（越小越靠段尾——段尾紧邻对话历史）；\n    - ``recursive`` 声明本条目正文可否在递归扫描面再触发其他条目\n      （书级 ``recursive_scanning`` 为总开关——本字段为逐条目收窄）；\n    - ``include_group`` 声明互斥分组（同组非 constant 命中条目一次\n      组装只注入优先级最高者：``insertion_order`` 升序、同值按条目\n      索引升序——确定性文档化）；\n    - ``trigger_probability`` 声明概率门（仅非 constant 命中条目过\n      门；缺省 1.0 = 恒过门不消耗随机数）；\n    - ``cooldown_turns`` 声明注入后冷却（仅非 constant 命中条目过\n      门；会话作用域内存追踪，重启即复位——无持久化，诚实文档化）。\n\nAttributes:\n    keys: 主触发关键词列表（非空——无触发面的条目应为 constant）。\n    secondary_keys: 副触发关键词列表（仅 ``selective=True`` 时有意义）。\n    content: 条目正文（插入提示词的设定文本）。\n    insertion_order: 插入顺序（0-9999，值越大越靠后）。\n    constant: 是否恒插入（默认 False——按关键词触发）。\n    case_sensitive: 关键词匹配是否区分大小写（默认 False）。\n    selective: 是否选择性触发（默认 False——主键命中即插入）。\n    position: 插入位置（默认 ``after_char``——角色定义之后）。\n    depth: 深度槽位（0-20，默认 4；段内排序首选键——值越大越靠段\n        首、越远离对话末尾，0 为段尾槽；同槽回退 insertion_order）。\n    recursive: 条目正文是否参与递归扫描面（默认 False；须书级\n        ``recursive_scanning=True``，否则构造期拒绝）。\n    include_group: 互斥分组名（默认 None = 不分组；空白串归一为\n        None；同组一次组装只注入优先级最高的命中成员）。\n    trigger_probability: 触发概率（0.0-1.0，默认 1.0 恒注入）。\n    cooldown_turns: 注入后冷却回合数（0-50，默认 0 不冷却；回合\n        计数为组装调用次数，会话作用域内存追踪）。",
+          "properties": {
+            "case_sensitive": {
+              "default": false,
+              "description": "关键词匹配是否区分大小写",
+              "title": "Case Sensitive",
+              "type": "boolean"
+            },
+            "constant": {
+              "default": false,
+              "description": "是否恒插入（免触发）",
+              "title": "Constant",
+              "type": "boolean"
+            },
+            "content": {
+              "default": "",
+              "description": "条目正文",
+              "title": "Content",
+              "type": "string"
+            },
+            "cooldown_turns": {
+              "default": 0,
+              "description": "注入后冷却回合数（回合 = 组装调用；会话作用域内存追踪）",
+              "maximum": 50,
+              "minimum": 0,
+              "title": "Cooldown Turns",
+              "type": "integer"
+            },
+            "depth": {
+              "default": 4,
+              "description": "深度槽位（0-20；段内越大越靠段首，0 为段尾槽——同槽按 insertion_order）",
+              "maximum": 20,
+              "minimum": 0,
+              "title": "Depth",
+              "type": "integer"
+            },
+            "include_group": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "互斥分组名（None = 不分组；同组命中条目一次组装只注入最高优先级者）",
+              "title": "Include Group"
+            },
+            "insertion_order": {
+              "default": 100,
+              "description": "插入顺序（0-9999，值越大越靠后插入提示词）",
+              "maximum": 9999,
+              "minimum": 0,
+              "title": "Insertion Order",
+              "type": "integer"
+            },
+            "keys": {
+              "description": "主触发关键词列表",
+              "items": {
+                "type": "string"
+              },
+              "title": "Keys",
+              "type": "array"
+            },
+            "position": {
+              "$ref": "#/$defs/CharaBookPosition",
+              "default": "after_char",
+              "description": "插入位置"
+            },
+            "recursive": {
+              "default": false,
+              "description": "条目正文参与递归扫描面（须书级 recursive_scanning=True）",
+              "title": "Recursive",
+              "type": "boolean"
+            },
+            "secondary_keys": {
+              "description": "副触发关键词列表（selective=True 时参与收敛）",
+              "items": {
+                "type": "string"
+              },
+              "title": "Secondary Keys",
+              "type": "array"
+            },
+            "selective": {
+              "default": false,
+              "description": "是否选择性触发",
+              "title": "Selective",
+              "type": "boolean"
+            },
+            "trigger_probability": {
+              "default": 1.0,
+              "description": "触发概率（非 constant 命中条目的概率门；1.0 恒过门）",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Trigger Probability",
+              "type": "number"
+            }
+          },
+          "title": "CharaBookEntryModel",
+          "type": "object"
+        },
+        "CharaBookPosition": {
+          "description": "世界书条目插入位置值域（v2 字符串形态）。\n\n- ``before_char``：插在角色定义之前（背景 / 世界观类信息）；\n- ``after_char``：插在角色定义之后（行为补充 / 语料示例类信息）。",
+          "enum": [
+            "before_char",
+            "after_char"
+          ],
+          "title": "CharaBookPosition",
+          "type": "string"
+        },
+        "PresetCardOverridesModel": {
+          "description": "预设级卡片覆写片段（全部可选——生成时的部分合并面）。\n\nAttributes:\n    name_suffix: 名字后缀建议（拼在基础名之后——如「-酱」；\n        None = 不加后缀）。\n    personality: 预设级性格补充文本（拼在组件碎片之前）。\n    mes_example: 预设级对话示例补充（拼在组件示例台词之前）。\n    system_prompt_fragment: 预设级 system 提示补充行（拼在组件\n        语气指令之后）。",
+          "properties": {
+            "mes_example": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "预设级对话示例补充",
+              "title": "Mes Example"
+            },
+            "name_suffix": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "名字后缀建议",
+              "title": "Name Suffix"
+            },
+            "personality": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "预设级性格补充文本",
+              "title": "Personality"
+            },
+            "system_prompt_fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "预设级 system 提示补充行",
+              "title": "System Prompt Fragment"
+            }
+          },
+          "title": "PresetCardOverridesModel",
+          "type": "object"
+        },
+        "TraitComponentCategory": {
+          "description": "特质组件分类值域（六类——覆盖人格表达的主要维度）。\n\n- ``temperament``：温性（情绪基调与待人温度）；\n- ``speech``：言语风格（说话方式与措辞习惯）；\n- ``quirks``：习惯癖性（标志性小动作与反应模式）；\n- ``values``：价值取向（在意什么 / 如何衡量对错）；\n- ``sociality``：社交风格（与人相处时的姿态）；\n- ``humor``：幽默感（逗趣与自嘲的方式）。",
+          "enum": [
+            "temperament",
+            "speech",
+            "quirks",
+            "values",
+            "sociality",
+            "humor"
+          ],
+          "title": "TraitComponentCategory",
+          "type": "string"
+        },
+        "TraitComponentModel": {
+          "description": "特质组件（最小可复用人格碎片——预设的组合原子）。\n\n``description_zh`` 是**落入卡片的碎片**（组合时拼接进\n``personality``）；``tone_directives`` 是进入 system 提示的短指令行；\n``sample_speech`` 是一条示例台词（组合时拼进 ``mes_example``）。\n\nAttributes:\n    id: 组件 id（kebab-case，库内唯一）。\n    name_zh: 组件中文名（画廊芯片展示）。\n    description_zh: 特质描述碎片（落入卡片 personality 的短句）。\n    category: 分类（六类值域）。\n    tone_directives: 语气指令行（零或多条——拼入 system 提示碎片）。\n    sample_speech: 示例台词（None = 无；一条最能体现该特质的台词）。\n    conflicts: 冲突组件 id 列表（同组组合时软警告——不拒绝）。",
+          "properties": {
+            "category": {
+              "$ref": "#/$defs/TraitComponentCategory",
+              "description": "分类（六类值域）"
+            },
+            "conflicts": {
+              "description": "冲突组件 id 列表（同组组合软警告）",
+              "items": {
+                "type": "string"
+              },
+              "title": "Conflicts",
+              "type": "array"
+            },
+            "description_zh": {
+              "description": "特质描述碎片",
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Description Zh",
+              "type": "string"
+            },
+            "id": {
+              "description": "组件 id（kebab-case）",
+              "maxLength": 64,
+              "minLength": 2,
+              "title": "Id",
+              "type": "string"
+            },
+            "name_zh": {
+              "description": "组件中文名",
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Name Zh",
+              "type": "string"
+            },
+            "sample_speech": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "示例台词（None = 无）",
+              "title": "Sample Speech"
+            },
+            "tone_directives": {
+              "description": "语气指令行（拼入 system 提示碎片）",
+              "items": {
+                "type": "string"
+              },
+              "title": "Tone Directives",
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "name_zh",
+            "description_zh",
+            "category"
+          ],
+          "title": "TraitComponentModel",
+          "type": "object"
+        },
+        "TraitPresetModel": {
+          "description": "特质预设（组件 id 组合集 + 可选生成覆写——官方库的发行单元）。\n\nAttributes:\n    id: 预设 id（kebab-case，库内唯一）。\n    name_zh: 预设中文名（画廊标题；缺省基础名来源）。\n    tagline_zh: 一句话标语（画廊副标题）。\n    description_zh: 预设描述（组合时作为 personality 的首段碎片）。\n    components: 组件 id 组合集（至少一个——空组合的预设无意义）。\n    base_card_overrides: 卡片覆写片段（全部可选）。\n    suggested_voice: 建议语音绑定（None = 无建议；导入时随人格落库）。\n    suggested_book: 建议世界书条目（生成时并入卡片世界书）。",
+          "properties": {
+            "base_card_overrides": {
+              "$ref": "#/$defs/PresetCardOverridesModel",
+              "description": "卡片覆写片段"
+            },
+            "components": {
+              "description": "组件 id 组合集（1-16 个）",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "title": "Components",
+              "type": "array"
+            },
+            "description_zh": {
+              "description": "预设描述",
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Description Zh",
+              "type": "string"
+            },
+            "id": {
+              "description": "预设 id（kebab-case）",
+              "maxLength": 64,
+              "minLength": 2,
+              "title": "Id",
+              "type": "string"
+            },
+            "name_zh": {
+              "description": "预设中文名",
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Name Zh",
+              "type": "string"
+            },
+            "suggested_book": {
+              "description": "建议世界书条目",
+              "items": {
+                "$ref": "#/$defs/CharaBookEntryModel"
+              },
+              "title": "Suggested Book",
+              "type": "array"
+            },
+            "suggested_voice": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VoiceProfileModel"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "建议语音绑定（None = 无建议）"
+            },
+            "tagline_zh": {
+              "description": "一句话标语",
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Tagline Zh",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name_zh",
+            "tagline_zh",
+            "description_zh",
+            "components"
+          ],
+          "title": "TraitPresetModel",
+          "type": "object"
+        },
+        "VoiceProfileModel": {
+          "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；≤2000\n        字符；提供时随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
+          "properties": {
+            "instruct_text": {
+              "anyOf": [
+                {
+                  "maxLength": 2000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "instruct2 风格指令（None = 普通合成；≤2000 字符）",
+              "title": "Instruct Text"
+            },
+            "speaker": {
+              "description": "发音人（speaker id）",
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Speaker",
+              "type": "string"
+            },
+            "speed": {
+              "default": 1.0,
+              "description": "语速（0.5-2.0）",
+              "maximum": 2.0,
+              "minimum": 0.5,
+              "title": "Speed",
+              "type": "number"
+            }
+          },
+          "required": [
+            "speaker"
+          ],
+          "title": "VoiceProfileModel",
+          "type": "object"
+        }
+      },
+      "description": "特质库读取面（画廊载荷——官方预设 + 组件注册表）。\n\nAttributes:\n    presets: 官方预设列表（数据文件声明序）。\n    components: 全量官方组件列表（数据文件声明序；前端按 id 建\n        映射解析预设的组件芯片）。",
+      "properties": {
+        "components": {
+          "description": "全量官方组件列表",
+          "items": {
+            "$ref": "#/$defs/TraitComponentModel"
+          },
+          "title": "Components",
+          "type": "array"
+        },
+        "presets": {
+          "description": "官方预设列表",
+          "items": {
+            "$ref": "#/$defs/TraitPresetModel"
+          },
+          "title": "Presets",
+          "type": "array"
+        }
+      },
+      "required": [
+        "presets",
+        "components"
+      ],
+      "title": "TraitLibraryDTO",
+      "type": "object"
+    },
+    "TraitPresetModel": {
+      "$defs": {
+        "CharaBookEntryModel": {
+          "description": "世界书条目（单条检索增强设定）。\n\n触发语义：``keys`` 任一命中即插入；``selective=True`` 时进一步要求\n``secondary_keys`` 任一命中（选择性触发——主键定义话题、副键收敛\n语境）；``constant=True`` 恒插入（免触发，世界观保底条目——恒插入\n条目无视分组互斥 / 概率门 / 冷却门，直接进入候选集）。\n\nR2b 高级字段（全部缺省即既有行为）：\n\n    - ``depth`` 声明条目距对话末尾的近因深度（0 = 最贴近末尾），\n      在渲染段内落位为深度槽（越小越靠段尾——段尾紧邻对话历史）；\n    - ``recursive`` 声明本条目正文可否在递归扫描面再触发其他条目\n      （书级 ``recursive_scanning`` 为总开关——本字段为逐条目收窄）；\n    - ``include_group`` 声明互斥分组（同组非 constant 命中条目一次\n      组装只注入优先级最高者：``insertion_order`` 升序、同值按条目\n      索引升序——确定性文档化）；\n    - ``trigger_probability`` 声明概率门（仅非 constant 命中条目过\n      门；缺省 1.0 = 恒过门不消耗随机数）；\n    - ``cooldown_turns`` 声明注入后冷却（仅非 constant 命中条目过\n      门；会话作用域内存追踪，重启即复位——无持久化，诚实文档化）。\n\nAttributes:\n    keys: 主触发关键词列表（非空——无触发面的条目应为 constant）。\n    secondary_keys: 副触发关键词列表（仅 ``selective=True`` 时有意义）。\n    content: 条目正文（插入提示词的设定文本）。\n    insertion_order: 插入顺序（0-9999，值越大越靠后）。\n    constant: 是否恒插入（默认 False——按关键词触发）。\n    case_sensitive: 关键词匹配是否区分大小写（默认 False）。\n    selective: 是否选择性触发（默认 False——主键命中即插入）。\n    position: 插入位置（默认 ``after_char``——角色定义之后）。\n    depth: 深度槽位（0-20，默认 4；段内排序首选键——值越大越靠段\n        首、越远离对话末尾，0 为段尾槽；同槽回退 insertion_order）。\n    recursive: 条目正文是否参与递归扫描面（默认 False；须书级\n        ``recursive_scanning=True``，否则构造期拒绝）。\n    include_group: 互斥分组名（默认 None = 不分组；空白串归一为\n        None；同组一次组装只注入优先级最高的命中成员）。\n    trigger_probability: 触发概率（0.0-1.0，默认 1.0 恒注入）。\n    cooldown_turns: 注入后冷却回合数（0-50，默认 0 不冷却；回合\n        计数为组装调用次数，会话作用域内存追踪）。",
+          "properties": {
+            "case_sensitive": {
+              "default": false,
+              "description": "关键词匹配是否区分大小写",
+              "title": "Case Sensitive",
+              "type": "boolean"
+            },
+            "constant": {
+              "default": false,
+              "description": "是否恒插入（免触发）",
+              "title": "Constant",
+              "type": "boolean"
+            },
+            "content": {
+              "default": "",
+              "description": "条目正文",
+              "title": "Content",
+              "type": "string"
+            },
+            "cooldown_turns": {
+              "default": 0,
+              "description": "注入后冷却回合数（回合 = 组装调用；会话作用域内存追踪）",
+              "maximum": 50,
+              "minimum": 0,
+              "title": "Cooldown Turns",
+              "type": "integer"
+            },
+            "depth": {
+              "default": 4,
+              "description": "深度槽位（0-20；段内越大越靠段首，0 为段尾槽——同槽按 insertion_order）",
+              "maximum": 20,
+              "minimum": 0,
+              "title": "Depth",
+              "type": "integer"
+            },
+            "include_group": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "互斥分组名（None = 不分组；同组命中条目一次组装只注入最高优先级者）",
+              "title": "Include Group"
+            },
+            "insertion_order": {
+              "default": 100,
+              "description": "插入顺序（0-9999，值越大越靠后插入提示词）",
+              "maximum": 9999,
+              "minimum": 0,
+              "title": "Insertion Order",
+              "type": "integer"
+            },
+            "keys": {
+              "description": "主触发关键词列表",
+              "items": {
+                "type": "string"
+              },
+              "title": "Keys",
+              "type": "array"
+            },
+            "position": {
+              "$ref": "#/$defs/CharaBookPosition",
+              "default": "after_char",
+              "description": "插入位置"
+            },
+            "recursive": {
+              "default": false,
+              "description": "条目正文参与递归扫描面（须书级 recursive_scanning=True）",
+              "title": "Recursive",
+              "type": "boolean"
+            },
+            "secondary_keys": {
+              "description": "副触发关键词列表（selective=True 时参与收敛）",
+              "items": {
+                "type": "string"
+              },
+              "title": "Secondary Keys",
+              "type": "array"
+            },
+            "selective": {
+              "default": false,
+              "description": "是否选择性触发",
+              "title": "Selective",
+              "type": "boolean"
+            },
+            "trigger_probability": {
+              "default": 1.0,
+              "description": "触发概率（非 constant 命中条目的概率门；1.0 恒过门）",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Trigger Probability",
+              "type": "number"
+            }
+          },
+          "title": "CharaBookEntryModel",
+          "type": "object"
+        },
+        "CharaBookPosition": {
+          "description": "世界书条目插入位置值域（v2 字符串形态）。\n\n- ``before_char``：插在角色定义之前（背景 / 世界观类信息）；\n- ``after_char``：插在角色定义之后（行为补充 / 语料示例类信息）。",
+          "enum": [
+            "before_char",
+            "after_char"
+          ],
+          "title": "CharaBookPosition",
+          "type": "string"
+        },
+        "PresetCardOverridesModel": {
+          "description": "预设级卡片覆写片段（全部可选——生成时的部分合并面）。\n\nAttributes:\n    name_suffix: 名字后缀建议（拼在基础名之后——如「-酱」；\n        None = 不加后缀）。\n    personality: 预设级性格补充文本（拼在组件碎片之前）。\n    mes_example: 预设级对话示例补充（拼在组件示例台词之前）。\n    system_prompt_fragment: 预设级 system 提示补充行（拼在组件\n        语气指令之后）。",
+          "properties": {
+            "mes_example": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "预设级对话示例补充",
+              "title": "Mes Example"
+            },
+            "name_suffix": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "名字后缀建议",
+              "title": "Name Suffix"
+            },
+            "personality": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "预设级性格补充文本",
+              "title": "Personality"
+            },
+            "system_prompt_fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "预设级 system 提示补充行",
+              "title": "System Prompt Fragment"
+            }
+          },
+          "title": "PresetCardOverridesModel",
+          "type": "object"
+        },
+        "VoiceProfileModel": {
+          "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；≤2000\n        字符；提供时随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
+          "properties": {
+            "instruct_text": {
+              "anyOf": [
+                {
+                  "maxLength": 2000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "instruct2 风格指令（None = 普通合成；≤2000 字符）",
+              "title": "Instruct Text"
+            },
+            "speaker": {
+              "description": "发音人（speaker id）",
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Speaker",
+              "type": "string"
+            },
+            "speed": {
+              "default": 1.0,
+              "description": "语速（0.5-2.0）",
+              "maximum": 2.0,
+              "minimum": 0.5,
+              "title": "Speed",
+              "type": "number"
+            }
+          },
+          "required": [
+            "speaker"
+          ],
+          "title": "VoiceProfileModel",
+          "type": "object"
+        }
+      },
+      "description": "特质预设（组件 id 组合集 + 可选生成覆写——官方库的发行单元）。\n\nAttributes:\n    id: 预设 id（kebab-case，库内唯一）。\n    name_zh: 预设中文名（画廊标题；缺省基础名来源）。\n    tagline_zh: 一句话标语（画廊副标题）。\n    description_zh: 预设描述（组合时作为 personality 的首段碎片）。\n    components: 组件 id 组合集（至少一个——空组合的预设无意义）。\n    base_card_overrides: 卡片覆写片段（全部可选）。\n    suggested_voice: 建议语音绑定（None = 无建议；导入时随人格落库）。\n    suggested_book: 建议世界书条目（生成时并入卡片世界书）。",
+      "properties": {
+        "base_card_overrides": {
+          "$ref": "#/$defs/PresetCardOverridesModel",
+          "description": "卡片覆写片段"
+        },
+        "components": {
+          "description": "组件 id 组合集（1-16 个）",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Components",
+          "type": "array"
+        },
+        "description_zh": {
+          "description": "预设描述",
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Description Zh",
+          "type": "string"
+        },
+        "id": {
+          "description": "预设 id（kebab-case）",
+          "maxLength": 64,
+          "minLength": 2,
+          "title": "Id",
+          "type": "string"
+        },
+        "name_zh": {
+          "description": "预设中文名",
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Name Zh",
+          "type": "string"
+        },
+        "suggested_book": {
+          "description": "建议世界书条目",
+          "items": {
+            "$ref": "#/$defs/CharaBookEntryModel"
+          },
+          "title": "Suggested Book",
+          "type": "array"
+        },
+        "suggested_voice": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VoiceProfileModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "建议语音绑定（None = 无建议）"
+        },
+        "tagline_zh": {
+          "description": "一句话标语",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Tagline Zh",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name_zh",
+        "tagline_zh",
+        "description_zh",
+        "components"
+      ],
+      "title": "TraitPresetModel",
       "type": "object"
     },
     "UsageAggregateDTO": {
