@@ -21,17 +21,18 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.api.personas import (
-    activate_persona,
     batch_delete_personas,
     copy_persona,
     create_persona,
-    deactivate_persona,
     delete_persona,
+    disable_persona,
     get_persona,
     get_persona_card,
+    get_primary_persona,
     list_persona_states,
     list_personas,
     replace_persona_card,
+    set_persona_primary,
     update_persona,
     upsert_persona_state,
 )
@@ -122,7 +123,7 @@ async def test_create_and_get_roundtrip(client: AsyncClient) -> None:
     assert created["name"] == "feiyu"
     assert created["display_name"] == "大肥鱼"
     assert created["status"] == "disabled"
-    assert created["is_active"] is False
+    assert created["is_primary"] is False
     assert created["card"]["first_mes"] == "你回来啦！"
     persona_id = created["id"]
     assert isinstance(persona_id, int)
@@ -221,7 +222,7 @@ async def test_update_rename_conflict_409(client: AsyncClient) -> None:
 
 
 async def test_delete_flow_and_guard(client: AsyncClient) -> None:
-    """删除：非激活可删（再读 404）；激活人格删除被拒 409。"""
+    """删除：非主人格可删（再读 404）；主人格删除被拒 409。"""
     created = await _create_persona(client, name="del-target")
     response = await client.delete(f"/api/v1/personas/{created['id']}")
     assert response.status_code == 200
@@ -230,9 +231,9 @@ async def test_delete_flow_and_guard(client: AsyncClient) -> None:
     missing = await client.get(f"/api/v1/personas/{created['id']}")
     assert missing.status_code == 404
 
-    active_persona = await _create_persona(client, name="active-one", status="active")
-    await client.post(f"/api/v1/personas/{active_persona['id']}/activate")
-    guarded = await client.delete(f"/api/v1/personas/{active_persona['id']}")
+    primary_persona = await _create_persona(client, name="primary-one", status="active")
+    await client.post(f"/api/v1/personas/{primary_persona['id']}/set-primary")
+    guarded = await client.delete(f"/api/v1/personas/{primary_persona['id']}")
     assert guarded.status_code == 409
     assert guarded.json()["code"] == "CONFLICT"
 
@@ -263,39 +264,64 @@ async def test_copy_endpoint(client: AsyncClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 激活 / 停用
+# 主人格切换 / 停用 / 读取
 # ---------------------------------------------------------------------------
 
 
-async def test_activate_deactivate_flow(client: AsyncClient) -> None:
-    """激活流：停用人格激活 409 → 启用后激活成功 → 停用归零。"""
+async def test_set_primary_disable_flow(client: AsyncClient) -> None:
+    """主人格流：停用人格设主 409 → 启用后设主成功 → 非主人格停用成功。"""
     created = await _create_persona(client, name="switcher")
 
-    rejected = await client.post(f"/api/v1/personas/{created['id']}/activate")
+    rejected = await client.post(f"/api/v1/personas/{created['id']}/set-primary")
     assert rejected.status_code == 409
     assert rejected.json()["code"] == "CONFLICT"
 
     await client.put(f"/api/v1/personas/{created['id']}", json={"status": "active"})
-    activated = await client.post(f"/api/v1/personas/{created['id']}/activate")
-    assert activated.status_code == 200
-    assert activated.json()["data"]["is_active"] is True
+    promoted = await client.post(f"/api/v1/personas/{created['id']}/set-primary")
+    assert promoted.status_code == 200
+    assert promoted.json()["data"]["is_primary"] is True
 
-    deactivated = await client.post(f"/api/v1/personas/{created['id']}/deactivate")
-    assert deactivated.status_code == 200
-    assert deactivated.json()["data"]["is_active"] is False
+    other = await _create_persona(client, name="other", status="active")
+    disabled = await client.post(f"/api/v1/personas/{other['id']}/disable")
+    assert disabled.status_code == 200
+    assert disabled.json()["data"]["is_primary"] is False
+
+    # 主人格停用被拒（409——先另设主人格）
+    primary_guard = await client.post(f"/api/v1/personas/{created['id']}/disable")
+    assert primary_guard.status_code == 409
+    assert primary_guard.json()["code"] == "CONFLICT"
+    assert "set-primary" in str(primary_guard.json()["data"].get("fix", ""))
 
 
-async def test_activate_switches_single_active(client: AsyncClient) -> None:
-    """激活切换不变式：激活 B 后 A 去激活（经 API 面）。"""
+async def test_set_primary_switches_single_primary(client: AsyncClient) -> None:
+    """主人格切换不变式：设 B 为主后 A 解除（经 API 面）。"""
     a = await _create_persona(client, name="sw-a", status="active")
     b = await _create_persona(client, name="sw-b", status="active")
-    await client.post(f"/api/v1/personas/{a['id']}/activate")
-    await client.post(f"/api/v1/personas/{b['id']}/activate")
+    await client.post(f"/api/v1/personas/{a['id']}/set-primary")
+    await client.post(f"/api/v1/personas/{b['id']}/set-primary")
 
     a_after = await client.get(f"/api/v1/personas/{a['id']}")
     b_after = await client.get(f"/api/v1/personas/{b['id']}")
-    assert a_after.json()["data"]["is_active"] is False
-    assert b_after.json()["data"]["is_active"] is True
+    assert a_after.json()["data"]["is_primary"] is False
+    assert b_after.json()["data"]["is_primary"] is True
+
+
+async def test_get_primary_endpoint(client: AsyncClient) -> None:
+    """GET /primary：无主人格 404（清晰中文错误）→ 设主后 200 返回记录。"""
+    missing = await client.get("/api/v1/personas/primary")
+    assert missing.status_code == 404
+    missing_body = missing.json()
+    assert missing_body["code"] == "NOT_FOUND"
+    assert "主人格" in missing_body["message"]
+
+    created = await _create_persona(client, name="primary-target", status="active")
+    await client.post(f"/api/v1/personas/{created['id']}/set-primary")
+    found = await client.get("/api/v1/personas/primary")
+    assert found.status_code == 200
+    found_body = found.json()
+    assert found_body["success"] is True
+    assert found_body["data"]["id"] == created["id"]
+    assert found_body["data"]["is_primary"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -394,12 +420,12 @@ async def test_invalid_query_param_400(client: AsyncClient) -> None:
 async def test_batch_delete_partial_success(client: AsyncClient) -> None:
     """批量删除：成功 + 激活守卫失败 + 缺失失败并存（HTTP 200 包裹部分成功）。"""
     ok_persona = await _create_persona(client, name="batch-ok")
-    active_persona = await _create_persona(client, name="batch-active", status="active")
-    await client.post(f"/api/v1/personas/{active_persona['id']}/activate")
+    primary_persona = await _create_persona(client, name="batch-primary", status="active")
+    await client.post(f"/api/v1/personas/{primary_persona['id']}/set-primary")
 
     response = await client.post(
         "/api/v1/personas/batch-delete",
-        json={"ids": [ok_persona["id"], active_persona["id"], 999]},
+        json={"ids": [ok_persona["id"], primary_persona["id"], 999]},
     )
     assert response.status_code == 200
     body = response.json()
@@ -410,13 +436,13 @@ async def test_batch_delete_partial_success(client: AsyncClient) -> None:
     assert data["failed"] == 2
     by_id = {item["id"]: item for item in data["items"]}
     assert by_id[ok_persona["id"]]["success"] is True
-    assert by_id[active_persona["id"]]["code"] == "CONFLICT"
+    assert by_id[primary_persona["id"]]["code"] == "CONFLICT"
     assert by_id[999]["code"] == "NOT_FOUND"
 
     missing = await client.get(f"/api/v1/personas/{ok_persona['id']}")
     assert missing.status_code == 404
-    kept = await client.get(f"/api/v1/personas/{active_persona['id']}")
-    assert kept.json()["data"]["is_active"] is True
+    kept = await client.get(f"/api/v1/personas/{primary_persona['id']}")
+    assert kept.json()["data"]["is_primary"] is True
 
 
 async def test_batch_delete_empty_ids_400(client: AsyncClient) -> None:
@@ -476,23 +502,35 @@ async def test_direct_handlers_registry_contract(db_session: AsyncSession) -> No
 
 
 async def test_direct_handlers_switching_contract(db_session: AsyncSession) -> None:
-    """激活切换面直调：activate / deactivate 的 ResultDTO 契约。"""
+    """主人格切换面直调：set-primary / disable / get-primary 的 ResultDTO 契约。"""
     record = await create_persona(
         PersonaCreateDTO.model_validate(_create_payload("direct-switch", status="active")),
         db_session,
     )
     assert record.data is not None
 
-    activated = await activate_persona(record.data.id, db_session)
-    assert activated.success is True
-    assert activated.message == "人格已激活（单激活切换）"
-    assert activated.data is not None
-    assert activated.data.is_active is True
+    promoted = await set_persona_primary(record.data.id, db_session)
+    assert promoted.success is True
+    assert promoted.message == "人格已设为主人格（事务性切换）"
+    assert promoted.data is not None
+    assert promoted.data.is_primary is True
 
-    deactivated = await deactivate_persona(record.data.id, db_session)
-    assert deactivated.success is True
-    assert deactivated.data is not None
-    assert deactivated.data.is_active is False
+    primary = await get_primary_persona(db_session)
+    assert primary.success is True
+    assert primary.data is not None
+    assert primary.data.id == record.data.id
+
+    other = await create_persona(
+        PersonaCreateDTO.model_validate(_create_payload("direct-other", status="active")),
+        db_session,
+    )
+    assert other.data is not None
+    disabled = await disable_persona(other.data.id, db_session)
+    assert disabled.success is True
+    assert disabled.message == "人格已停用"
+    assert disabled.data is not None
+    assert disabled.data.is_primary is False
+    assert disabled.data.status == "disabled"
 
 
 async def test_direct_handlers_card_states_batch_contract(

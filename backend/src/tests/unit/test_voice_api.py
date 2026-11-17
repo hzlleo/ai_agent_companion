@@ -115,14 +115,14 @@ def _disabled_service() -> VoiceService:
 
 
 async def _seed_persona(
-    session: AsyncSession, name: str, *, activate: bool = False
+    session: AsyncSession, name: str, *, set_primary: bool = False
 ) -> int:
-    """铺底人格（经服务创建；可选激活）。
+    """铺底人格（经服务创建；可选设为主人格）。
 
     Args:
         session: 注入的异步 Session。
         name: 注册名。
-        activate: 是否激活（单激活位）。
+        set_primary: 是否设为主人格（主人格标记位）。
 
     Returns:
         新人格主键。
@@ -132,11 +132,11 @@ async def _seed_persona(
         "name": name,
         "card": {"name": "大肥鱼", "first_mes": "你回来啦！"},
     }
-    if activate:
+    if set_primary:
         payload["status"] = "active"
     created = await service.create(session, PersonaCreateDTO.model_validate(payload))
-    if activate:
-        await service.activate(session, created.id)
+    if set_primary:
+        await service.set_primary(session, created.id)
     return created.id
 
 
@@ -215,7 +215,7 @@ class TestTtsEndpoint:
         self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """人格解析缺省分支：persona_id 未提供 → 当前激活人格绑定。"""
-        persona_id = await _seed_persona(db_session, "voice-active", activate=True)
+        persona_id = await _seed_persona(db_session, "voice-active", set_primary=True)
         fake = FakeVoiceService()
         monkeypatch.setattr(voice_api, "voice_service", fake)
         response = await client.post("/api/v1/voice/tts", json={"text": "你好"})

@@ -7,11 +7,12 @@
     - :class:`CharaCardPatchDTO`          —— 卡片补丁（部分合并面——仅
       出现的字段覆写既有卡片，其余原样保留）；
     - :class:`PersonaUpdateDTO`           —— 更新面（重命名 / 展示名 /
-      状态 / 卡片补丁；**不含 is_active**——单激活位仅经 activate /
-      deactivate 事务性操作）；
+      状态 / 卡片补丁；**不含主人格标记**——主人格仅经 set-primary /
+      事务性切换操作）；
     - :class:`PersonaCopyDTO`             —— 复制面（新注册名 + 是否深拷贝
-      M/S 状态；新人格恒 disabled）；
-    - :class:`PersonaRecordDTO`           —— 读取面（ORM 行 → DTO）；
+      M/S 状态；新人格恒 disabled + 非主人格）；
+    - :class:`PersonaRecordDTO`           —— 读取面（ORM 行 → DTO；
+      ``is_primary`` 为主人格归一布尔位）；
     - :class:`PersonaCardDTO`             —— 卡片端点读取面（GET / PUT
       ``/{id}/card`` 的响应包裹）；
     - :class:`PersonaStateUpsertDTO`      —— 状态写入面（layer 由服务参数
@@ -109,15 +110,15 @@ class CharaCardPatchDTO(BaseModel):
 class PersonaUpdateDTO(BaseModel):
     """人格更新 DTO（部分更新面——仅出现的字段生效）。
 
-    **不含 ``is_active``**：单激活位是事务性切换不变式，仅经
-    ``activate`` / ``deactivate`` 操作面管理（绕过会破坏「至多一个激活」
-    保证）。status 切到 disabled 时若该人格持有激活位，服务层自动清位
-    （停用即下线）。
+    **不含主人格标记**：主人格是事务性切换不变式（DB 唯一键强制至多
+    一个），仅经 ``set-primary`` 操作面管理（绕过会破坏「至多一个主人格」
+    保证）。status 切到 disabled 时若该人格是当前主人格，服务层守卫
+    拒绝（先另设主人格再停用——两步显式）。
 
     Attributes:
         name: 新注册名（重命名；全局唯一校验）。
         display_name: 新展示名。
-        status: 新可用性状态。
+        status: 新可用性状态（切 disabled 时主人格守卫拒绝）。
         card: 卡片补丁（仅出现字段覆写；不提供则卡片原样）。
         voice_profile: 人格语音绑定（**出现即整体替换**——显式 null 清除
             绑定；不提供则原样保留；与卡片补丁的 exclude_unset 语义不同：
@@ -161,8 +162,8 @@ class PersonaRecordDTO(BaseModel):
         id: 人格主键（BigInt）。
         name: 注册名（全局唯一）。
         display_name: 展示名。
-        status: 可用性状态。
-        is_active: 单激活绑定位。
+        status: 可用性状态（enabled 人格构成可寻址集）。
+        is_primary: 是否为主人格（全表至多一个 True——DB 唯一键强制）。
         card: 人格卡片（chara card v2 文档）。
         voice_profile: 人格语音绑定（None = 未绑定）。
         created_at: 创建时间（epoch 毫秒）。
@@ -175,7 +176,7 @@ class PersonaRecordDTO(BaseModel):
     name: str = Field(description="注册名（全局唯一）")
     display_name: str = Field(description="展示名")
     status: PersonaStatus = Field(description="可用性状态")
-    is_active: bool = Field(description="单激活绑定位")
+    is_primary: bool = Field(description="是否为主人格（至多一个 True）")
     card: CharaCardModel = Field(
         validation_alias=AliasChoices("card", "chara_card"),
         description="人格卡片",
@@ -250,8 +251,8 @@ class PersonaBatchDeleteRequest(BaseModel):
     """批量删除人格请求（部分成功形态——逐 id 独立事务）。
 
     Attributes:
-        ids: 待删除人格主键列表（1 - 100 个；含当前激活人格的 id 会导致
-            该项失败——激活人格删除守卫见服务层）。
+        ids: 待删除人格主键列表（1 - 100 个；含当前主人格的 id 会导致
+            该项失败——主人格删除守卫见服务层）。
     """
 
     ids: list[int] = Field(

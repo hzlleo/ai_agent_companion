@@ -63,7 +63,7 @@ TELEGRAM_ENABLED=false 且 QQ_ENABLED=false（缺省）：no-op——零通道�
 
 ## 人格语义（锁定决策）
 
-**单一激活人格应答全部通道消息**：会话懒建经 `ChatService.create_session(db_session=...)` 内部解析当前激活人格（persona 域注册表的事务性单激活不变式消费面）；每聊天按会话身份绑定人格属后续多通道扩展交付面。`reply` 全程经 `bind_persona_context(state.persona_id)` 绑定人格上下文（PersonaMixin 表作用域——与 chat 域会话持久化同语义）。
+**主人格应答缺省通道会话（多激活可寻址模型）**：会话懒建经 `ChatService.create_session(db_session=...)` 内部解析当前主人格（persona 域注册表的事务性切换不变式消费面）；已建会话按 `persona_id` 保持在位（会话级寻址——通道消息不因主人格切换而换人格）；按聊天绑定人格 / 多人格路由属后续多通道扩展交付面。`reply` 全程经 `bind_persona_context(state.persona_id)` 绑定人格上下文（PersonaMixin 表作用域——与 chat 域会话持久化同语义）。
 
 ## 会话语义（每聊天懒建 + 持久化）
 
@@ -79,7 +79,7 @@ TELEGRAM_ENABLED=false 且 QQ_ENABLED=false（缺省）：no-op——零通道�
 | 失败类别 | 用户面行为 | 错误细节 |
 |---|---|---|
 | LLM / 网关 / 持久化 / 未知异常 | 回发短中文兜底：`我这边出了点问题，稍后再试`（不引用原消息） | 只进日志（`logger.opt(exception=True)`） |
-| 无激活人格（`NOT_FOUND`——已知确定态） | 回发业务异常的用户面消息（含创建 / 激活指引） | 只进日志 |
+| 无主人格（`NOT_FOUND`——已知确定态） | 回发业务异常的用户面消息（含创建 / 设主指引） | 只进日志 |
 | 兜底回发自身失败 | 放弃该消息（空投递结果返回）——不级联 | 只进日志 |
 | 未注册适配器（`CHANNEL_DISABLED`） | 静默空结果（无适配器可回发） | 只进日志 |
 

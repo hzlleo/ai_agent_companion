@@ -6,7 +6,7 @@ import { CopyPersonaDialog } from './CopyPersonaDialog'
 import { BACKEND_ORIGIN, errorResult, mockPersona, okResult, server } from '@/test/server'
 import { renderWithProviders } from '@/test/utils'
 
-const source = mockPersona({ id: 3, name: 'companion-3', is_active: false })
+const source = mockPersona({ id: 3, name: 'companion-3', is_primary: false })
 
 describe('CopyPersonaDialog', () => {
   it('打开时预填默认新注册名（源名-copy）', () => {

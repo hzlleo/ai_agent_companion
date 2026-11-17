@@ -3,7 +3,7 @@
 覆盖面：happy path（脚本化工具调用序列 → registry 隔离执行 → 最终报告
 + duty 事件落库形态 + 消息序列形状：assistant 工具调用轮 / tool 结果轮）；
 步数上限强制收尾（末次调用不携带工具面 + 收尾指令在场）；网关风暴 →
-status=error + error 事件落库 + 恒不抛；空最终报告 → failed；无激活人格
+status=error + error 事件落库 + 恒不抛；空最终报告 → failed；无主人格
 → error 零副作用；属主投递矩阵（sent / failed / no-channel（路由器缺失
 与适配器未注册两形态）/ no-owner / disabled）；落库失败不阻断返回。
 
@@ -21,6 +21,7 @@ from packages.harness.channels.channel_models import (
     OutboundMessageModel,
 )
 from packages.harness.channels.channel_service import ChannelRouter
+from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.duty.duty_models import (
     DutyOwnerDelivery,
     DutyRunConfigModel,
@@ -38,7 +39,7 @@ NOW = 1_760_000_000_000
 
 
 class FakePersonaRecord:
-    """fake 激活人格记录（id / display_name 消费面）。"""
+    """fake 主人格记录（id / display_name 消费面）。"""
 
     def __init__(self, persona_id: int = 701, display_name: str = "大肥鱼") -> None:
         """初始化。"""
@@ -46,19 +47,24 @@ class FakePersonaRecord:
         self.display_name = display_name
 
 
-#: 缺省激活人格（模块级单例——B008 参数默认值约束）。
-_DEFAULT_ACTIVE_PERSONA = FakePersonaRecord()
+#: 缺省主人格（模块级单例——B008 参数默认值约束）。
+_DEFAULT_PRIMARY_PERSONA = FakePersonaRecord()
 
 
 class FakePersonaService:
-    """fake 人格服务（激活人格可配置——None = 无激活）。"""
+    """fake 人格服务（主人格可配置——None = 无主人格）。"""
 
-    def __init__(self, record: FakePersonaRecord | None = _DEFAULT_ACTIVE_PERSONA) -> None:
-        """初始化（缺省 = 模块级单例激活人格；显式 None = 无激活）。"""
+    def __init__(self, record: FakePersonaRecord | None = _DEFAULT_PRIMARY_PERSONA) -> None:
+        """初始化（缺省 = 模块级单例主人格；显式 None = 无主人格）。"""
         self.record = record
 
-    async def get_active_persona(self, session: Any) -> FakePersonaRecord | None:
-        """返回配置的激活人格。"""
+    async def get_primary_persona(self, session: Any) -> FakePersonaRecord:
+        """返回配置的主人格（无主人格抛 NOT_FOUND——对齐真实服务语义）。"""
+        if self.record is None:
+            raise BusinessException(
+                code=ErrorCode.NOT_FOUND,
+                message="当前没有主人格，请先创建并启用一个人格，再将其设为主人格",
+            )
         return self.record
 
 
@@ -347,7 +353,7 @@ async def test_round_step_bound_with_still_tool_calls_counts_as_steps() -> None:
 
 
 # ---------------------------------------------------------------------------
-# fail-closed：风暴 / 空报告 / 无激活人格
+# fail-closed：风暴 / 空报告 / 无主人格
 # ---------------------------------------------------------------------------
 
 
@@ -387,7 +393,7 @@ async def test_round_empty_final_report_marks_failed() -> None:
 
 
 async def test_round_no_active_persona_error_without_side_effects() -> None:
-    """无激活人格：error 报告返回——零落库 / 零投递 / 恒不抛。"""
+    """无主人格：error 报告返回——零落库 / 零投递 / 恒不抛。"""
     gateway = ScriptedGateway([_final_response()])
     registry, _ = _registry_with_recorder()
     memory = FakeMemoryService()
@@ -402,7 +408,7 @@ async def test_round_no_active_persona_error_without_side_effects() -> None:
     )
     report = await service.run_duty_round(_Session(), now_ms=NOW)
     assert report.status is DutyStatus.ERROR
-    assert "无激活人格" in (report.error or "")
+    assert "无主人格" in (report.error or "")
     assert report.persona == ""
     assert memory.appended == []
     assert adapter.sent == []

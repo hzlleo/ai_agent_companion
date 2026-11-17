@@ -132,7 +132,7 @@ async def persist_env(
 ) -> AsyncIterator[
     tuple[FakeGateway, ChatService, ChatSessionService, PersonaRecordDTO, AsyncSession]
 ]:
-    """持久化集成环境（共享引擎外部安装到 holder；激活人格铺底）。
+    """持久化集成环境（共享引擎外部安装到 holder；主人格铺底）。
 
     Yields:
         ``(gateway, chat_service, session_service, persona_record, db_session)``
@@ -384,7 +384,7 @@ class RecordingOutput:
 
 
 async def _seed_active_persona(db_path: Path) -> int:
-    """在 tmp SQLite 中预置激活人格（CLI 启动前铺底）。"""
+    """在 tmp SQLite 中预置主人格（CLI 启动前铺底）。"""
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{db_path}",
         poolclass=StaticPool,
@@ -410,7 +410,7 @@ async def _seed_active_persona(db_path: Path) -> int:
                 }
             ),
         )
-        await service.activate(session, created.id)
+        await service.set_primary(session, created.id)
         persona_id = created.id
     await engine.dispose()
     return persona_id

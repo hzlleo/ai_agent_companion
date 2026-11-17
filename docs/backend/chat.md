@@ -53,7 +53,7 @@ token 近似估算（无 tokenizer 的确定性约定）：CJK 区段字符 1 to
 ## 会话流（ChatService）
 
 ```
-create_session(persona=记录 | db_session=查激活人格)
+create_session(persona=记录 | db_session=解析主人格)
     → ChatSessionStateModel（卡片快照 + 空回合列表 + 结构性上限）
 opening(state)                       首条人格消息（first_mes 优先，空则兜底模板）
     → 追加为首个 assistant 回合（幂等：已有 assistant 回合则返回其内容）
@@ -94,13 +94,13 @@ prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本）+ 逐�
 settings → setup_logging_from_settings → load_all_config
     → PoolManager start → init_database
     → LlmGateway(usage_recorder=wire_default_usage_recorder())
-    → PersonaService.get_active_persona（session_scope）
+    → PersonaService.get_primary_persona（session_scope）
     → ChatService(session_service=ChatSessionService())   恒绑定持久化
     → create_session(persona, db_session)                 会话行落库
 ```
 
-- **无激活人格**：打印中文三步指引（POST 创建 → PUT 启用 → POST activate 激活），LIFO 收尾后退出码 1；
-- **有激活人格**：横幅 + 开场白 → REPL；**每次启动即开新持久化会话**（空会话直接退场无害，管理面可删除——文档化决策）。
+- **无主人格**：打印中文三步指引（POST 创建 → PUT 启用 → POST set-primary 设主），LIFO 收尾后退出码 1；
+- **有主人格**：横幅 + 开场白 → REPL；**每次启动即开新持久化会话**（空会话直接退场无害，管理面可删除——文档化决策）。
 
 REPL 命令面：`/quit`（退出码 0；EOF 等效）/ `/clear`（清空内存历史，人格绑定与持久化消息保留）/ `/history`（回合列表，含时间戳）/ `/new`（新建持久化会话，重新开场）/ `/sessions`（最近 10 个持久化会话——id / 消息数 / 标题 / 最后活跃）/ `/resume <id>`（恢复历史会话续聊——回放回合进上下文，开场白幂等重现：有 assistant 回合返回末条，否则正典开场）/ `/help`；空行跳过；网关与持久化 `BusinessException` 上屏不崩循环。
 
@@ -195,6 +195,6 @@ lifespan                                          上述函数对的 asynccontex
 - `tests/unit/test_chat_prompts.py`——byte-lock（sha256 摘要锁）+ 渲染契约（覆写 / 空段跳过 / 兜底）；
 - `tests/unit/test_chat_service.py`——假网关记录组装消息：正典字段 / 世界书全语义（constant / scan_depth / selective / 大小写 / 预算截断 / 位置次序）/ PHI 末位 / 参数直通 / 流式聚合与提前终止 / 会话上限 / 查库路径（共享 SQLite）；
 - `tests/unit/test_chat_persistence.py`——持久化集成：落库 / 网关失败保留用户回合 / resume 全链路 / 持久化关闭兼容纯内存形态 / CLI `/new` `/sessions` `/resume` 命令（真实启动栈 + tmp SQLite + 假网关）；
-- `tests/unit/test_chat_cli.py`——注入式 I/O 驱动全流程（真实启动栈 + tmp SQLite + 假网关，never real stdin）：命令面 / 无激活人格指引（退出码 1）/ 业务异常不崩 REPL / main 入口；
+- `tests/unit/test_chat_cli.py`——注入式 I/O 驱动全流程（真实启动栈 + tmp SQLite + 假网关，never real stdin）：命令面 / 无主人格指引（退出码 1）/ 业务异常不崩 REPL / main 入口；
 - `tests/unit/test_app_main.py`——create_app 路由注册 / startup-shutdown 函数对（真实组件 + LIFO 追踪）/ health 与 personas 经 ASGITransport 走真实 app / lifespan 全周期 / 外部引擎治理；
 - 门禁：`harness/chat` ≥80%（实测 99.4%）、`app/main.py` ≥80%（实测 100%）、`app/api` ≥80%（实测 100%）。

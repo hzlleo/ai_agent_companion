@@ -2,8 +2,8 @@
 
 测试策略：本地装配 FastAPI app（memories router + 共享异常处理器——同
 test_memories_api.py 模式；DB 经共享会话级 SQLite fixture 外部安装）。
-覆盖面：keyword 模式往返（回退存储命中）/ 人格解析（缺省激活 / 显式
-persona_id / 无激活 404 / 不存在 404）/ dense 模式在回退存储上 422
+覆盖面：keyword 模式往返（回退存储命中）/ 人格解析（缺省主人格 / 显式
+persona_id / 无主人格 404 / 不存在 404）/ dense 模式在回退存储上 422
 （清晰「回退存储不支持向量检索」——app.state.gateway 挂桩嵌入器）/
 请求校验 422（空 query / limit 越界 / 非法 mode）/ 处理器直调契约面
 （ResultDTO 包装 + 人格谓词透传）。
@@ -28,6 +28,7 @@ from packages.harness.llm.llm_models import EmbeddingsResponseModel
 from packages.harness.memory.retrieval_models import MemoryIndexEntryDTO
 from packages.harness.memory.sqlite_store import SQLiteFallbackStore
 from packages.harness.persona.dtos import PersonaCreateDTO
+from packages.harness.persona.orm import PersonaRow
 from packages.harness.persona.service import PersonaService
 
 
@@ -98,10 +99,10 @@ async def client(search_app: FastAPI) -> AsyncIterator[AsyncClient]:
 
 
 @pytest.fixture
-async def active_persona_id(client: AsyncClient, db_session: AsyncSession) -> AsyncIterator[int]:
-    """铺底一个激活人格（返回主键）。"""
-    persona_id = await _create_persona(db_session, "search-active", active=True)
-    await PersonaService().activate(db_session, persona_id)
+async def primary_persona_id(client: AsyncClient, db_session: AsyncSession) -> AsyncIterator[int]:
+    """铺底一个主人格（返回主键）。"""
+    persona_id = await _create_persona(db_session, "search-primary", active=True)
+    await PersonaService().set_primary(db_session, persona_id)
     yield persona_id
 
 
@@ -149,9 +150,9 @@ def _search_payload(**overrides: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-async def test_search_keyword_round_trip(client: AsyncClient, active_persona_id: int) -> None:
+async def test_search_keyword_round_trip(client: AsyncClient, primary_persona_id: int) -> None:
     """keyword 模式：命中回退存储索引行（ResultDTO 形态 + score 降序）。"""
-    await _index_entries(active_persona_id)
+    await _index_entries(primary_persona_id)
 
     response = await client.post("/api/v1/memories/search", json=_search_payload())
     assert response.status_code == 200
@@ -168,10 +169,10 @@ async def test_search_keyword_round_trip(client: AsyncClient, active_persona_id:
 
 
 async def test_search_persona_resolution(
-    client: AsyncClient, db_session: AsyncSession, active_persona_id: int
+    client: AsyncClient, db_session: AsyncSession, primary_persona_id: int
 ) -> None:
-    """人格解析：缺省激活 / 显式 persona_id / 不存在 404 / 无激活 404。"""
-    await _index_entries(active_persona_id)
+    """人格解析：缺省主人格 / 显式 persona_id / 不存在 404 / 无主人格 404。"""
+    await _index_entries(primary_persona_id)
     other_id = await _create_persona(db_session, "search-other")
 
     # 显式他人格：隔离（无命中——索引谓词过滤）
@@ -181,7 +182,7 @@ async def test_search_persona_resolution(
     assert explicit.status_code == 200
     assert explicit.json()["data"] == []
 
-    # 缺省 = 激活人格（命中）
+    # 缺省 = 主人格（命中）
     default = await client.post("/api/v1/memories/search", json=_search_payload())
     assert len(default.json()["data"]) == 2
 
@@ -189,15 +190,19 @@ async def test_search_persona_resolution(
     missing = await client.post("/api/v1/memories/search", json=_search_payload(persona_id=9999))
     assert missing.status_code == 404
 
-    # 停用激活人格后缺省检索：404（无激活 fail loud）
-    await PersonaService().deactivate(db_session, active_persona_id)
-    no_active = await client.post("/api/v1/memories/search", json=_search_payload())
-    assert no_active.status_code == 404
+    # 直清主人格标记后缺省检索：404（无主人格 fail loud——服务面无
+    # 「解除主人格」操作，主人格须恒在位）
+    row = await db_session.get(PersonaRow, primary_persona_id)
+    assert row is not None
+    row.is_primary_marker = None
+    await db_session.commit()
+    no_primary = await client.post("/api/v1/memories/search", json=_search_payload())
+    assert no_primary.status_code == 404
 
 
-async def test_search_filters_passthrough(client: AsyncClient, active_persona_id: int) -> None:
+async def test_search_filters_passthrough(client: AsyncClient, primary_persona_id: int) -> None:
     """过滤透传：kinds / provenance / 时间范围（闭区间）作用于检索面。"""
-    await _index_entries(active_persona_id)
+    await _index_entries(primary_persona_id)
 
     curated_only = await client.post(
         "/api/v1/memories/search", json=_search_payload(kinds=["memory"])
@@ -223,10 +228,10 @@ async def test_search_filters_passthrough(client: AsyncClient, active_persona_id
 
 
 async def test_search_dense_on_fallback_store_rejected(
-    client: AsyncClient, active_persona_id: int
+    client: AsyncClient, primary_persona_id: int
 ) -> None:
     """dense 模式 + 回退存储：422 VALIDATION_ERROR（嵌入先行、存储拒收）。"""
-    await _index_entries(active_persona_id)
+    await _index_entries(primary_persona_id)
 
     response = await client.post("/api/v1/memories/search", json=_search_payload(mode="dense"))
     assert response.status_code == 422
@@ -237,16 +242,16 @@ async def test_search_dense_on_fallback_store_rejected(
 
 
 async def test_search_hybrid_on_fallback_store_rejected(
-    client: AsyncClient, active_persona_id: int
+    client: AsyncClient, primary_persona_id: int
 ) -> None:
     """hybrid 模式 + 回退存储：同 422（向量模式族一致拒收）。"""
-    await _index_entries(active_persona_id)
+    await _index_entries(primary_persona_id)
     response = await client.post("/api/v1/memories/search", json=_search_payload(mode="hybrid"))
     assert response.status_code == 422
     assert response.json()["code"] == "VALIDATION_ERROR"
 
 
-async def test_search_request_validation_400(client: AsyncClient, active_persona_id: int) -> None:
+async def test_search_request_validation_400(client: AsyncClient, primary_persona_id: int) -> None:
     """请求校验：空 query / limit 越界 / 非法 mode 均 400（DTO 边界——处理器
     将 RequestValidationError 统一映射 BAD_REQUEST，与既有端点一致）。"""
     empty_query = await client.post("/api/v1/memories/search", json=_search_payload(query=""))
@@ -263,7 +268,7 @@ async def test_search_request_validation_400(client: AsyncClient, active_persona
 
 
 async def test_search_embed_failure_maps_to_error(
-    client: AsyncClient, search_app: FastAPI, active_persona_id: int
+    client: AsyncClient, search_app: FastAPI, primary_persona_id: int
 ) -> None:
     """嵌入失败透传：embed 角色未绑定 → MODEL_NOT_FOUND（404 错误码面）。"""
     search_app.state.gateway = StubGateway(fail=True)
@@ -278,16 +283,16 @@ async def test_search_embed_failure_maps_to_error(
 
 
 async def test_search_handler_direct_contract(
-    search_app: FastAPI, db_session: AsyncSession, active_persona_id: int
+    search_app: FastAPI, db_session: AsyncSession, primary_persona_id: int
 ) -> None:
     """处理器直调：ResultDTO 包装契约 + persona 谓词透传（keyword 路径）。"""
-    await _index_entries(active_persona_id)
+    await _index_entries(primary_persona_id)
     request = Request(scope={"type": "http", "app": search_app})
 
     from packages.harness.memory.retrieval_models import MemorySearchRequestDTO
 
     req = MemorySearchRequestDTO.model_validate(
-        {"query": "小鱼干", "mode": "keyword", "persona_id": active_persona_id}
+        {"query": "小鱼干", "mode": "keyword", "persona_id": primary_persona_id}
     )
     result = await search_memories(req, request, db=db_session)
 

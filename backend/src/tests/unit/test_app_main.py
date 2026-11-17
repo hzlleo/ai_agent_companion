@@ -46,7 +46,7 @@ async def test_create_app_registers_routes() -> None:
     paths = set(app.openapi()["paths"].keys())
     assert "/api/v1/personas" in paths
     assert "/api/v1/personas/{persona_id}" in paths
-    assert "/api/v1/personas/{persona_id}/activate" in paths
+    assert "/api/v1/personas/{persona_id}/set-primary" in paths
     assert "/api/v1/health" in paths
     assert app.title == "ai_agent_companion"
     assert app.version == APP_VERSION

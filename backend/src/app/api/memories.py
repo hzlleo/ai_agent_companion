@@ -21,11 +21,11 @@
     - GET    /api/v1/memories/dream/runs/{id}             —— 运行详情（含逐事件决策）
 
 人格作用域约定：三张 PersonaMixin 表的记忆数据按人格逻辑隔离——全部
-端点先解析目标人格（``persona_id`` 查询参数显式指定；缺省 = 当前激活
-人格，无激活人格则 ``NOT_FOUND`` fail loud），再经 ``bind_persona_context``
+端点先解析目标人格（``persona_id`` 查询参数显式指定；缺省 = 当前主人
+人格，无主人格则 ``NOT_FOUND`` fail loud），再经 ``bind_persona_context``
 绑定上下文后调用服务（自动注入 / 自动过滤）。指定人格不存在 → 404；
 他人格的资源对本作用域不可见（同样 404——隔离语义）。检索端点同构：
-请求体 ``persona_id`` 可选（缺省激活人格），解析后作为检索查询的
+请求体 ``persona_id`` 可选（缺省主人格），解析后作为检索查询的
 必带隔离谓词（索引表无 PersonaMixin——显式 persona_id 列过滤）。
 
 全部响应经 ``ResultDTO`` 封装；分页经 ``PageResponse``；DB Session 经
@@ -144,30 +144,34 @@ def _resolve_request_gateway(request: Request) -> LlmGateway:
 async def _resolve_target_persona(
     db: AsyncSession, persona_id: int | None
 ) -> PersonaRecordDTO:
-    """解析目标人格（显式 persona_id 优先；缺省当前激活人格）。
+    """解析目标人格（显式 persona_id 优先；缺省当前主人格）。
 
     Args:
         db: 注入的异步 Session。
-        persona_id: 显式人格主键（None = 激活人格）。
+        persona_id: 显式人格主键（None = 主人格）。
 
     Returns:
         目标人格记录 DTO。
 
     Raises:
         BusinessException: 指定人格不存在（``NOT_FOUND``）；未指定且
-            当前无激活人格（``NOT_FOUND``——fail loud，记忆面无人格
+            当前无主人格（``NOT_FOUND``——fail loud，记忆面无人格
             上下文不可操作）。
     """
     if persona_id is not None:
         return await persona_service.get(db, persona_id)
-    record = await persona_service.get_active_persona(db)
-    if record is None:
+    try:
+        return await persona_service.get_primary_persona(db)
+    except BusinessException as exc:
+        # 无主人格翻译为记忆面错误形态（携带 fix 指引）；其余业务异常
+        # 原样上抛。
+        if exc.code != ErrorCode.NOT_FOUND:
+            raise
         raise BusinessException(
             code=ErrorCode.NOT_FOUND,
-            message="当前没有激活人格，请先创建并激活一个人格再操作记忆面",
-            details={"fix": "显式传入 persona_id 查询参数，或先激活一个人格"},
-        )
-    return record
+            message="当前没有主人格，请先设置一个人格为主人格再操作记忆面",
+            details={"fix": "显式传入 persona_id 查询参数，或先将一个人格设为主人格"},
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +187,7 @@ async def list_episodes(
     end_ms: int | None = Query(None, ge=0, description="范围终点（epoch 毫秒，不含）"),
     cursor: str | None = Query(None, description="分页游标（首页为 None）"),
     limit: int = Query(20, ge=1, le=200, description="页大小（1-200）"),
-    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[PageResponse[EpisodeRecordDTO]]:
     """情景事件游标分页列表（id 降序；kind / provenance / 时间范围过滤）。
@@ -195,7 +199,7 @@ async def list_episodes(
         end_ms: 时间范围终点（epoch 毫秒，不含）。
         cursor: 上一页返回的不透明游标（None = 首页）。
         limit: 页大小（1-200）。
-        persona_id: 目标人格主键（None = 当前激活人格）。
+        persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
 
     Returns:
@@ -220,7 +224,7 @@ async def list_episodes(
 @router.post("/episodes", response_model=ResultDTO[EpisodeRecordDTO])
 async def create_episode(
     req: EpisodeCreateDTO,
-    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[EpisodeRecordDTO]:
     """手工注入情景事件（管理面；provenance 缺省 owner）。
@@ -228,7 +232,7 @@ async def create_episode(
     Args:
         req: 创建请求（kind / source / content 载荷 / importance /
             provenance / ts_ms）。
-        persona_id: 目标人格主键（None = 当前激活人格）。
+        persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
 
     Returns:
@@ -247,14 +251,14 @@ async def create_episode(
 @router.post("/episodes/batch-delete", response_model=ResultDTO[EpisodeBatchDeleteResponseDTO])
 async def batch_delete_episodes(
     req: EpisodeBatchDeleteRequest,
-    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[EpisodeBatchDeleteResponseDTO]:
     """批量删除情景事件（部分成功形态——逐 id 独立事务）。
 
     Args:
         req: 批量删除请求（ids 1-100 个）。
-        persona_id: 目标人格主键（None = 当前激活人格）。
+        persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
 
     Returns:
@@ -272,14 +276,14 @@ async def batch_delete_episodes(
 @router.get("/episodes/{episode_id}", response_model=ResultDTO[EpisodeRecordDTO])
 async def get_episode(
     episode_id: int,
-    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[EpisodeRecordDTO]:
     """按主键读取情景事件（人格作用域外 / 缺失均 404）。
 
     Args:
         episode_id: 事件主键。
-        persona_id: 目标人格主键（None = 当前激活人格）。
+        persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
 
     Returns:
@@ -297,14 +301,14 @@ async def get_episode(
 @router.delete("/episodes/{episode_id}", response_model=ResultDTO[None])
 async def delete_episode(
     episode_id: int,
-    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[None]:
     """删除单条情景事件（append-only 的管理面显式出口）。
 
     Args:
         episode_id: 事件主键。
-        persona_id: 目标人格主键（None = 当前激活人格）。
+        persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
 
     Returns:
@@ -331,7 +335,7 @@ async def list_curated(
     status: CuratedStatus | None = Query(None, description="状态过滤（None = 全部）"),
     cursor: str | None = Query(None, description="分页游标（首页为 None）"),
     limit: int = Query(20, ge=1, le=200, description="页大小（1-200）"),
-    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[PageResponse[CuratedRecordDTO]]:
     """策展记忆游标分页列表（id 降序；kind / topic / status 过滤）。
@@ -342,7 +346,7 @@ async def list_curated(
         status: 状态过滤（None = 全部；active = 现行版本面）。
         cursor: 上一页返回的不透明游标（None = 首页）。
         limit: 页大小（1-200）。
-        persona_id: 目标人格主键（None = 当前激活人格）。
+        persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
 
     Returns:
@@ -362,14 +366,14 @@ async def list_curated(
 @router.post("/curated/upsert", response_model=ResultDTO[CuratedRecordDTO])
 async def upsert_curated(
     req: CuratedUpsertDTO,
-    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[CuratedRecordDTO]:
     """策展记忆 upsert（supersede 语义——同 (persona, kind, topic) 单 active）。
 
     Args:
         req: upsert 请求（kind / topic / content / importance / provenance）。
-        persona_id: 目标人格主键（None = 当前激活人格）。
+        persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
 
     Returns:
@@ -388,14 +392,14 @@ async def upsert_curated(
 @router.get("/curated/{memory_id}/history", response_model=ResultDTO[list[CuratedRecordDTO]])
 async def get_curated_history(
     memory_id: int,
-    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[list[CuratedRecordDTO]]:
     """读取策展记忆历史链（supersede 链全量——版本升序）。
 
     Args:
         memory_id: 链内任一记忆主键（锚点）。
-        persona_id: 目标人格主键（None = 当前激活人格）。
+        persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
 
     Returns:
@@ -413,14 +417,14 @@ async def get_curated_history(
 @router.delete("/curated/{memory_id}", response_model=ResultDTO[None])
 async def delete_curated(
     memory_id: int,
-    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[None]:
     """删除单条策展记忆（管理面显式动作）。
 
     Args:
         memory_id: 记忆主键。
-        persona_id: 目标人格主键（None = 当前激活人格）。
+        persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
 
     Returns:
@@ -444,7 +448,7 @@ async def delete_curated(
 async def list_sessions(
     cursor: str | None = Query(None, description="分页游标（首页为 None）"),
     limit: int = Query(20, ge=1, le=200, description="页大小（1-200）"),
-    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[PageResponse[ChatSessionSummaryDTO]]:
     """会话游标分页列表（id 降序——新会话在前）。
@@ -452,7 +456,7 @@ async def list_sessions(
     Args:
         cursor: 上一页返回的不透明游标（None = 首页）。
         limit: 页大小（1-200）。
-        persona_id: 目标人格主键（None = 当前激活人格）。
+        persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
 
     Returns:
@@ -469,14 +473,14 @@ async def list_sessions(
 @router.get("/sessions/{session_id}", response_model=ResultDTO[ChatSessionDetailDTO])
 async def get_session(
     session_id: int,
-    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[ChatSessionDetailDTO]:
     """读取会话详情（摘要 + 全量消息 seq 升序）。
 
     Args:
         session_id: 会话主键。
-        persona_id: 目标人格主键（None = 当前激活人格）。
+        persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
 
     Returns:
@@ -494,14 +498,14 @@ async def get_session(
 @router.delete("/sessions/{session_id}", response_model=ResultDTO[None])
 async def delete_session(
     session_id: int,
-    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[None]:
     """删除会话（消息同事务清理）。
 
     Args:
         session_id: 会话主键。
-        persona_id: 目标人格主键（None = 当前激活人格）。
+        persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
 
     Returns:
@@ -529,7 +533,7 @@ async def search_memories(
 ) -> ResultDTO[list[MemorySearchResultDTO]]:
     """记忆检索（dense / keyword / hybrid 三模式——索引面混合检索）。
 
-    链路：解析目标人格（请求体 ``persona_id`` 可选——缺省激活人格）→
+    链路：解析目标人格（请求体 ``persona_id`` 可选——缺省主人格）→
     ``bind_persona_context``（供嵌入用量归属）→ ``MemorySearchService``
     （dense / hybrid 先经网关 embed 角色向量化查询文本）→ 存储检索
     （SeekDB 混合 / SQLite 回退 keyword）。
@@ -583,7 +587,7 @@ async def trigger_dream(
 ) -> ResultDTO[DreamRunRecordDTO]:
     """手工触发一次夜间梦境整理（同步运行——admin 触发语义）。
 
-    链路：解析目标人格（请求体 ``persona_id`` 可选——缺省激活人格）→
+    链路：解析目标人格（请求体 ``persona_id`` 可选——缺省主人格）→
     ``bind_persona_context``（DreamService 全链人格作用域）→
     ``DreamService.run_dream``（网关 / 检索存储注入：网关经
     ``app.state.gateway`` 优先——与检索端点同一解析面；存储经
@@ -634,7 +638,7 @@ async def trigger_dream(
 async def list_dream_runs(
     cursor: str | None = Query(None, description="分页游标（首页为 None）"),
     limit: int = Query(20, ge=1, le=200, description="页大小（1-200）"),
-    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[PageResponse[DreamRunRecordDTO]]:
     """梦境运行日志游标分页（id 降序——新运行在前；人格作用域自动过滤）。
@@ -642,7 +646,7 @@ async def list_dream_runs(
     Args:
         cursor: 上一页返回的不透明游标（None = 首页）。
         limit: 页大小（1-200）。
-        persona_id: 目标人格主键（None = 当前激活人格）。
+        persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
 
     Returns:
@@ -657,14 +661,14 @@ async def list_dream_runs(
 @router.get("/dream/runs/{run_id}", response_model=ResultDTO[DreamRunRecordDTO])
 async def get_dream_run(
     run_id: int,
-    persona_id: int | None = Query(None, description="目标人格主键（None = 当前激活人格）"),
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[DreamRunRecordDTO]:
     """按主键读取梦境运行详情（含逐事件决策明细）。
 
     Args:
         run_id: 运行主键。
-        persona_id: 目标人格主键（None = 当前激活人格）。
+        persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
 
     Returns:

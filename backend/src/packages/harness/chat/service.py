@@ -308,7 +308,7 @@ class ChatService:
 
         Args:
             gateway: LLM 网关（chat 角色调用面）。
-            persona_service: 人格注册表服务（激活人格查找；None = 现场
+            persona_service: 人格注册表服务（主人格解析；None = 现场
                 构造无状态默认实例）。
             session_service: 会话持久化服务（None = 纯内存态——兼容既有
                 形态；绑定后 create_session(db_session=...) 落库、reply /
@@ -337,8 +337,8 @@ class ChatService:
 
         Args:
             persona: 显式人格记录（CLI / 测试直供形态；优先于查库）。
-            db_session: 数据库会话（``persona`` 未给时用于查找当前激活
-                人格；持久化服务绑定时兼作会话落库通道）。
+            db_session: 数据库会话（``persona`` 未给时用于解析当前
+                主人格；持久化服务绑定时兼作会话落库通道）。
             title: 持久化会话标题（None / 空 = 缺省「未命名会话」）。
 
         Returns:
@@ -347,7 +347,8 @@ class ChatService:
 
         Raises:
             BusinessException: 既未提供人格也未提供数据库会话
-                （``INTERNAL_ERROR``）；当前无激活人格（``NOT_FOUND``）。
+                （``INTERNAL_ERROR``）；当前无主人格（``NOT_FOUND``——
+                服务层清晰中文错误直传，指引先 set-primary）。
         """
         record = persona
         if record is None:
@@ -356,12 +357,7 @@ class ChatService:
                     code=ErrorCode.INTERNAL_ERROR,
                     message="创建聊天会话需要显式人格或数据库会话（二者至少其一）",
                 )
-            record = await self._persona_service.get_active_persona(db_session)
-            if record is None:
-                raise BusinessException(
-                    code=ErrorCode.NOT_FOUND,
-                    message="当前没有激活人格，请先创建并激活一个人格再开始对话",
-                )
+            record = await self._persona_service.get_primary_persona(db_session)
         state = ChatSessionStateModel(
             persona_id=record.id,
             persona_name=record.name,

@@ -1,14 +1,15 @@
-"""人格管理 admin 路由——多人格注册表全操作面。
+"""人格管理 admin 路由——多人格注册表全操作面（多激活可寻址模型）。
 
     - GET    /api/v1/personas                        —— 游标分页列表（status 过滤）
     - POST   /api/v1/personas                        —— 创建
     - POST   /api/v1/personas/batch-delete           —— 批量删除（部分成功形态）
+    - GET    /api/v1/personas/primary                —— 读取当前主人格（无主人格 404）
     - GET    /api/v1/personas/{id}                   —— 读取
     - PUT    /api/v1/personas/{id}                   —— 部分更新（重命名 / 状态 / 卡片补丁）
-    - DELETE /api/v1/personas/{id}                   —— 删除（激活守卫见服务层）
+    - DELETE /api/v1/personas/{id}                   —— 删除（主人格守卫见服务层）
     - POST   /api/v1/personas/{id}/copy              —— 复制（可选深拷贝 M/S 状态）
-    - POST   /api/v1/personas/{id}/activate          —— 激活（事务性单激活切换）
-    - POST   /api/v1/personas/{id}/deactivate        —— 停用激活（允许零激活）
+    - POST   /api/v1/personas/{id}/set-primary       —— 设为主人格（事务性切换）
+    - POST   /api/v1/personas/{id}/disable           —— 停用（生命周期；主人格守卫拒绝）
     - GET    /api/v1/personas/{id}/card              —— 读取卡片
     - PUT    /api/v1/personas/{id}/card              —— 整体替换卡片
     - GET    /api/v1/personas/{id}/states            —— 读取已写状态层
@@ -18,7 +19,8 @@
 ``database.session.get_async_db`` 依赖注入（事务边界归服务层）；全部
 参数与请求体为类型化 Model Classes（无裸 dict 出入口）。注册表是全局
 管理面数据（无人格上下文自动过滤——非 PersonaMixin 决策见
-harness.persona.orm）。
+harness.persona.orm）。``/primary`` 字面路由先于 ``/{persona_id}``
+注册（FastAPI 顺序匹配——字面路由须前置防路径参数吞并）。
 """
 
 from __future__ import annotations
@@ -79,7 +81,7 @@ async def create_persona(
     req: PersonaCreateDTO,
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[PersonaRecordDTO]:
-    """创建人格（注册名唯一校验；status 缺省 disabled；不激活）。
+    """创建人格（注册名唯一校验；status 缺省 disabled；非主人格）。
 
     Args:
         req: 创建请求（注册名 + 卡片必填）。
@@ -107,13 +109,33 @@ async def batch_delete_personas(
         db: 注入的异步 Session。
 
     Returns:
-        批量结果（total / succeeded / failed / 逐 id 结果——激活人格项
+        批量结果（total / succeeded / failed / 逐 id 结果——主人格项
         记 CONFLICT 失败，缺失项记 NOT_FOUND 失败）。
     """
     result = await persona_service.batch_delete(db, req.ids)
     return ResultDTO.ok(
         data=result, message=f"批量删除完成（成功 {result.succeeded} / 失败 {result.failed}）"
     )
+
+
+@router.get("/primary", response_model=ResultDTO[PersonaRecordDTO])
+async def get_primary_persona(
+    db: AsyncSession = Depends(get_async_db),
+) -> ResultDTO[PersonaRecordDTO]:
+    """读取当前主人格（无主人格 fail loud）。
+
+    Args:
+        db: 注入的异步 Session。
+
+    Returns:
+        当前主人格记录 DTO。
+
+    Raises:
+        BusinessException: 当前无主人格（``NOT_FOUND`` → 404——清晰
+            中文错误指引先 set-primary）。
+    """
+    record = await persona_service.get_primary_persona(db)
+    return ResultDTO.ok(data=record)
 
 
 @router.get("/{persona_id}", response_model=ResultDTO[PersonaRecordDTO])
@@ -143,7 +165,7 @@ async def update_persona(
     req: PersonaUpdateDTO,
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[PersonaRecordDTO]:
-    """部分更新人格（仅出现字段生效；不含 is_active——单激活位经 activate/deactivate）。
+    """部分更新人格（仅出现字段生效；不含主人格标记——主人格经 set-primary）。
 
     Args:
         persona_id: 人格主键。
@@ -155,7 +177,8 @@ async def update_persona(
 
     Raises:
         BusinessException: 人格不存在（``NOT_FOUND``）；注册名被占用
-            （``CONFLICT``）；卡片合并校验失败（``VALIDATION_ERROR``）。
+            （``CONFLICT``）；停用当前主人格（``CONFLICT``——两步守卫）；
+            卡片合并校验失败（``VALIDATION_ERROR``）。
     """
     record = await persona_service.update(db, persona_id, req)
     return ResultDTO.ok(data=record, message="人格已更新")
@@ -166,7 +189,7 @@ async def delete_persona(
     persona_id: int,
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[None]:
-    """删除人格（激活守卫：当前激活人格禁止删除——先 deactivate）。
+    """删除人格（主人格守卫：当前主人格禁止删除——先另设主人格）。
 
     Args:
         persona_id: 人格主键。
@@ -176,7 +199,7 @@ async def delete_persona(
         空 data 成功响应。
 
     Raises:
-        BusinessException: 人格不存在（``NOT_FOUND``）；当前激活人格禁止
+        BusinessException: 人格不存在（``NOT_FOUND``）；当前主人格禁止
             删除（``CONFLICT``）。
     """
     await persona_service.delete(db, persona_id)
@@ -189,7 +212,7 @@ async def copy_persona(
     req: PersonaCopyDTO,
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[PersonaRecordDTO]:
-    """复制人格（新注册名；可选深拷贝 M/S 状态；产物恒 disabled）。
+    """复制人格（新注册名；可选深拷贝 M/S 状态；产物恒 disabled + 非主人格）。
 
     Args:
         persona_id: 源人格主键。
@@ -207,34 +230,37 @@ async def copy_persona(
     return ResultDTO.ok(data=record, message="人格已复制")
 
 
-@router.post("/{persona_id}/activate", response_model=ResultDTO[PersonaRecordDTO])
-async def activate_persona(
+@router.post("/{persona_id}/set-primary", response_model=ResultDTO[PersonaRecordDTO])
+async def set_persona_primary(
     persona_id: int,
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[PersonaRecordDTO]:
-    """激活人格（事务性单激活切换——激活 B 必然去激活 A）。
+    """设为主人格（事务性切换——设 B 为主必然解除 A；DB 唯一键强制）。
 
     Args:
         persona_id: 人格主键。
         db: 注入的异步 Session。
 
     Returns:
-        激活后的记录 DTO。
+        设为主人格后的记录 DTO。
 
     Raises:
         BusinessException: 人格不存在（``NOT_FOUND``）；停用状态的人格
-            不可激活（``CONFLICT``）。
+            不可设为主人格（``CONFLICT``）；并发切换重试后仍冲突
+            （``INTERNAL_ERROR``）。
     """
-    record = await persona_service.activate(db, persona_id)
-    return ResultDTO.ok(data=record, message="人格已激活（单激活切换）")
+    record = await persona_service.set_primary(db, persona_id)
+    return ResultDTO.ok(data=record, message="人格已设为主人格（事务性切换）")
 
 
-@router.post("/{persona_id}/deactivate", response_model=ResultDTO[PersonaRecordDTO])
-async def deactivate_persona(
+@router.post("/{persona_id}/disable", response_model=ResultDTO[PersonaRecordDTO])
+async def disable_persona(
     persona_id: int,
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[PersonaRecordDTO]:
-    """停用激活（清激活位；允许零激活人格——系统态）。
+    """停用人格（纯生命周期操作——status 切 disabled；幂等）。
+
+    主人格守卫：停用当前主人格被拒绝（``CONFLICT``——先另设主人格）。
 
     Args:
         persona_id: 人格主键。
@@ -244,10 +270,11 @@ async def deactivate_persona(
         停用后的记录 DTO。
 
     Raises:
-        BusinessException: 人格不存在（``NOT_FOUND``）。
+        BusinessException: 人格不存在（``NOT_FOUND``）；停用当前主人格
+            （``CONFLICT``）。
     """
-    record = await persona_service.deactivate(db, persona_id)
-    return ResultDTO.ok(data=record, message="人格激活位已停用")
+    record = await persona_service.disable(db, persona_id)
+    return ResultDTO.ok(data=record, message="人格已停用")
 
 
 @router.get("/{persona_id}/card", response_model=ResultDTO[PersonaCardDTO])

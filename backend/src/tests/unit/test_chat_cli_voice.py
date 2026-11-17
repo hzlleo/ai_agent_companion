@@ -128,14 +128,14 @@ class RecordingOutput:
 async def _seed_active_persona(
     db_path: Path, profile: VoiceProfileModel | None = None
 ) -> int:
-    """在 tmp SQLite 文件中预置一个激活人格（可选语音绑定）。
+    """在 tmp SQLite 文件中预置一个主人格（可选语音绑定）。
 
     Args:
         db_path: SQLite 库文件路径。
         profile: 语音绑定（None = 不绑定）。
 
     Returns:
-        已激活人格的主键。
+        已设为主人格的人格主键。
     """
     engine: AsyncEngine = create_async_engine(
         f"sqlite+aiosqlite:///{db_path}",
@@ -161,7 +161,7 @@ async def _seed_active_persona(
         if profile is not None:
             payload["voice_profile"] = profile.model_dump()
         created = await service.create(session, PersonaCreateDTO.model_validate(payload))
-        await service.activate(session, created.id)
+        await service.set_primary(session, created.id)
         persona_id = created.id
     await engine.dispose()
     return persona_id

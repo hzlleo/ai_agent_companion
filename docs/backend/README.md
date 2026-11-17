@@ -10,7 +10,7 @@
 | pools（manager/http/llm/seekdb 共享池 + 熔断） | [pools.md](pools.md) | 已交付（含 SeekDB 检索池） |
 | llm（模型网关：多 provider / roles 路由 / 用量埋点；含注册表管理 API：models 路由 + 原子持久化 / 热重建 / 回滚） | [llm.md](llm.md) | 已交付（含注册表管理面） |
 | usage（token 用量记录与多维聚合；含用量观测 API：records / aggregates / summary 路由——跨人格口径） | [usage.md](usage.md) | 已交付（含管理 API） |
-| persona（chara card / 注册表 / 切换复制 / L-M-S 状态；含人格语音绑定 voice_profile） | [persona.md](persona.md) | 已交付（含首个 app 层：personas 管理 API + 共享异常处理器；语音绑定增列见 [voice.md](voice.md)） |
+| persona（chara card / 注册表 / 主人格切换与可寻址集 / 切换复制 / L-M-S 状态；含人格语音绑定 voice_profile） | [persona.md](persona.md) | 已交付（多激活可寻址模型——多人格同时可用、主人格唯一（DB 唯一键强制）；含首个 app 层：personas 管理 API + 共享异常处理器；语音绑定增列见 [voice.md](voice.md)） |
 | chat（会话循环 / prompt 组装 / 世界书 / 控制台 CLI / 会话持久化） | [chat.md](chat.md) | 已交付（含持久化与恢复） |
 | app 装配（create_app + lifespan + health 存活面 + CORS（ServerConfig.cors_origins 驱动，Vite dev 默认来源）+ 管理面 owner-token 鉴权（见下方「认证」一节）） | [chat.md](chat.md#app-装配appmainpy--appapihealthpy) | 已交付（随 chat 域文档建档；含 memories / usage / models 路由 + CORS + owner-token 鉴权） |
 | memory（三层记忆：情景 / 策展 / 工作层存储 + 管理 API + 检索层 + 夜间梦境） | [memory.md](memory.md) | 已交付（存储 / 持久化 / API；检索层：MemoryStore + SeekDB / SQLite 回退 + 索引管道 + search API；夜间梦境：巩固合并 + 日记 + 运行日志 + 手工触发 API） |

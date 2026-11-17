@@ -67,8 +67,8 @@ app lifespan 装配为全量形态（检索服务经 `build_memory_store(setting
 
 ```
 run_duty_round(session, cfg=?, now_ms=?)
-    ↓ ① 激活人格解析（PersonaService.get_active_persona）
-    ↓     无激活 → status=error 报告返回（零落库 / 零投递 / 恒不抛）
+    ↓ ① 主人格解析（PersonaService.get_primary_persona）
+    ↓     无主人格 → status=error 报告返回（零落库 / 零投递 / 恒不抛）
     ↓ ② bind_persona_context(record.id)
     ↓     （PersonaMixin 落库作用域 + 工具 persona contextvar + 网关用量归属三合一）
     ↓ ③ system 首块 = 值班任务书（charter——人格名 / 步数上限替换；charter_text 覆写优先）
@@ -101,7 +101,7 @@ run_duty_round(session, cfg=?, now_ms=?)
 |---|---|---|---|
 | 网关 / 工具风暴（异常） | `status=error` + 中止文案 | error 事件落库 | 零异常（run_duty_round **恒不抛**） |
 | 轮次完成但报告为空 | `status=failed`（error="最终报告为空"） | failed 事件落库 | 零异常 |
-| 无激活人格 | `status=error`（零副作用） | 不落库（无作用域） | 零异常 |
+| 无主人格 | `status=error`（零副作用） | 不落库（无作用域） | 零异常 |
 | 报告落库失败 | 轮次状态不变 | 失败仅日志 | 零异常（结果仍返回） |
 | 属主投递失败 | 轮次状态不变（`owner_delivery=failed`） | 已落库 | 零异常 |
 
@@ -174,9 +174,9 @@ request_stop() → 循环退出（停机延迟 ≤ tick）
 ### 梦境触发作业（`build_dream_trigger_job`）
 
 ```
-注入会话（session_scope）→ get_active_persona
-    ├─ 无激活 → 日志跳过（正常路径——零模型调用）
-    └─ 激活 → bind_persona_context → DreamService.run_dream（dream 角色复用——as-is）
+注入会话（session_scope）→ get_primary_persona
+    ├─ 无主人格 → 日志跳过（正常路径——零模型调用）
+    └─ 有主人格 → bind_persona_context → DreamService.run_dream（dream 角色复用——as-is）
         （store 注入共享 build_memory_store 产出；fail-closed 返回终态记录）
 ```
 

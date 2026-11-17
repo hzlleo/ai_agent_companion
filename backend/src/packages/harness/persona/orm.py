@@ -10,13 +10,19 @@
     真源不入 PersonaMixin）。memory 域记忆表才是 PersonaMixin 的消费面
     （per-persona 逻辑隔离）。
 
-列与不变式约定：
+列与不变式约定（多激活可寻址模型——多人格同时可用，主人格唯一）：
 
     - ``ff_personas``：
         - ``name`` 全局唯一（注册键——重命名同样受唯一约束）；
-        - ``status``（active/disabled）是**可用性开关**；``is_active`` 是
-          **单激活绑定位**——全表至多一行 ``is_active=True``（激活即
-          事务性单激活切换，见 service 层）；激活要求 status=active；
+        - ``status``（active/disabled）是**可用性开关**（生命周期管理面；
+          enabled 人格构成可寻址集——见 service 层 ``list_addressable``）；
+        - ``is_primary_marker`` 可空 String(16) 是**主人格标记**：主人格
+          行恒 ``'primary'``、其余行恒 NULL——唯一键
+          ``uq_ff_personas_primary (is_primary_marker)`` 对 NULL 不生效
+          （MySQL / SQLite 同语义），**全表至多一个主人格由 DB 强制**
+          （并发 set_primary 双写由唯一键拒绝 + 服务层重试收敛——与
+          策展记忆 active_marker 同模式）；设为主人格要求 status=active；
+          停用 / 删除当前主人格被服务层守卫拒绝（先另设主人格）；
         - ``chara_card`` JSON 列整体存储 :class:`CharaCardModel` 文档
           （L 层正典——会话期不可变）；
         - ``voice_profile`` JSON 可空列存储人格语音绑定
@@ -40,7 +46,6 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     BigInteger,
-    Boolean,
     ForeignKey,
     Integer,
     String,
@@ -54,7 +59,10 @@ from packages.harness.database.base import (
     TimestampMixin,
 )
 
-__all__ = ["PersonaRow", "PersonaStateRow"]
+__all__ = ["PERSONA_PRIMARY_MARKER", "PersonaRow", "PersonaStateRow"]
+
+#: 主人格标记常量（主人格行 is_primary_marker 列的恒定取值；其余行 NULL）。
+PERSONA_PRIMARY_MARKER: str = "primary"
 
 
 class PersonaRow(Base, BigIntIdMixin, TimestampMixin):
@@ -63,23 +71,27 @@ class PersonaRow(Base, BigIntIdMixin, TimestampMixin):
     Attributes:
         name: 注册名（全局唯一——标识与引用键）。
         display_name: 展示名（管理面显示用；缺省回落 card.name）。
-        status: 可用性状态（active / disabled；与 is_active 正交）。
-        is_active: 单激活绑定位（全表至多一行为 True；激活事务性切换）。
+        status: 可用性状态（active / disabled；enabled 人格构成可寻址集）。
+        is_primary_marker: 主人格标记（主人格行恒 ``'primary'``、其余行
+            NULL；唯一键忽略 NULL——DB 强制全表至多一个主人格）。
         chara_card: 人格卡片 JSON 文档（CharaCardModel 序列化形态）。
         voice_profile: 人格语音绑定 JSON（VoiceProfileModel 序列化形态；
             NULL = 未绑定——合成回落 settings 缺省）。
     """
 
     __tablename__ = "ff_personas"
-    __table_args__ = (UniqueConstraint("name", name="uq_ff_personas_name"),)
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_ff_personas_name"),
+        UniqueConstraint("is_primary_marker", name="uq_ff_personas_primary"),
+    )
 
     name: Mapped[str] = mapped_column(String(128), comment="注册名（全局唯一）")
     display_name: Mapped[str] = mapped_column(String(128), comment="展示名")
     status: Mapped[str] = mapped_column(String(16), comment="可用性状态（active/disabled）")
-    is_active: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        comment="单激活绑定位（全表至多一行 True；事务性切换）",
+    is_primary_marker: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+        comment="主人格标记（主人格行 'primary' / 其余 NULL——唯一键忽略 NULL，DB 强制至多一个主人格）",
     )
     chara_card: Mapped[dict[str, Any]] = mapped_column(
         JSON, comment="人格卡片 JSON（chara card v2 文档）"
@@ -89,6 +101,15 @@ class PersonaRow(Base, BigIntIdMixin, TimestampMixin):
         nullable=True,
         comment="人格语音绑定 JSON（VoiceProfileModel 形态；未绑定为 NULL）",
     )
+
+    @property
+    def is_primary(self) -> bool:
+        """是否为主人格（``is_primary_marker=='primary'`` 的归一布尔面）。
+
+        读取面 DTO（``PersonaRecordDTO.is_primary``）经 from_attributes
+        消费本属性；标记字符串形态是存储实现细节，不外泄。
+        """
+        return self.is_primary_marker == PERSONA_PRIMARY_MARKER
 
 
 class PersonaStateRow(Base, BigIntIdMixin, TimestampMixin):

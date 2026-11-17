@@ -97,7 +97,7 @@ pixi run alembic upgrade head                        # 应用迁移
 ```
 
 - `alembic/env.py`：异步引擎（`run_sync` 桥接）+ `sqlalchemy.url` 由 `settings.database.async_sqlalchemy_url` 动态注入（alembic.ini 留空）+ `sys.path` 注入 backend/src；
-- `versions/000000000001_initial.py`：空基线（版本链锚点）；域表迁移链：`0002_add_usage_records`（用量）→ `0003_add_personas`（人格注册表 + 状态）→ `0004_add_memory_tables`（记忆四表）→ `0005_add_dream_runs`（梦境运行日志）→ `0006_add_persona_voice_profile`（人格音色绑定）→ `0007_memory_concurrency_constraints`（策展单 active 唯一键 + 会话消息 seq 唯一键——memory 域并发不变式）；
+- `versions/000000000001_initial.py`：空基线（版本链锚点）；域表迁移链：`0002_add_usage_records`（用量）→ `0003_add_personas`（人格注册表 + 状态）→ `0004_add_memory_tables`（记忆四表）→ `0005_add_dream_runs`（梦境运行日志）→ `0006_add_persona_voice_profile`（人格音色绑定）→ `0007_memory_concurrency_constraints`（策展单 active 唯一键 + 会话消息 seq 唯一键——memory 域并发不变式）→ `0008_persona_primary_marker`（persona 域多激活可寻址模型：`ff_personas` 增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active` 单激活位退役——旧激活行回填 `'primary'` 后删列，降级逆向重建；与 0007 同「NULL 共存唯一键」模式）；
 - `target_metadata = Base.metadata`（autogenerate 对比基准）。
 
 ## 测试与门禁

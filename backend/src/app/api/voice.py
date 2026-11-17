@@ -13,7 +13,7 @@
       ``ResultDTO`` error 形态（HTTP 状态按 ErrorCode 映射——TTS 未启用
       409 / 人格缺失 404 / 请求校验 400）；
     - **人格解析**：``persona_id`` 显式给定（缺失 → 404）；缺省取当前
-      激活人格；两者皆无 → 未绑定形态（settings 缺省参数 + 用量
+      主人格；两者皆无 → 未绑定形态（settings 缺省参数 + 用量
       persona_id 为空——语音是可选叠加面，不因无人格而拒绝）；
     - **inbound multipart 零新增依赖**（锁定决策）：FastAPI ``File`` /
       ``Form`` 参数面需要 ``python-multipart`` 运行时——本工程不引入该
@@ -64,14 +64,14 @@ voice_service = VoiceService(usage_recorder=wire_default_voice_usage_recorder())
 async def _resolve_persona(
     db: AsyncSession, persona_id: int | None
 ) -> PersonaRecordDTO | None:
-    """解析合成绑定人格（显式 ID 优先；缺省当前激活人格；皆无 → None）。
+    """解析合成绑定人格（显式 ID 优先；缺省当前主人格；皆无 → None）。
 
     Args:
         db: 注入的异步 Session。
-        persona_id: 显式人格主键（None = 当前激活人格）。
+        persona_id: 显式人格主键（None = 当前主人格）。
 
     Returns:
-        绑定人格记录；显式 ID 缺失时抛 ``NOT_FOUND``，无激活人格时
+        绑定人格记录；显式 ID 缺失时抛 ``NOT_FOUND``，无主人格时
         返回 None（未绑定形态——不拒绝合成）。
 
     Raises:
@@ -79,7 +79,13 @@ async def _resolve_persona(
     """
     if persona_id is not None:
         return await persona_service.get(db, persona_id)
-    return await persona_service.get_active_persona(db)
+    try:
+        return await persona_service.get_primary_persona(db)
+    except BusinessException as exc:
+        # 无主人格 = 未绑定形态（不拒绝合成）；其余业务异常原样上抛。
+        if exc.code != ErrorCode.NOT_FOUND:
+            raise
+        return None
 
 
 async def _parse_multipart_upload(request: Request) -> tuple[bytes, str, str | None]:
@@ -216,7 +222,7 @@ async def transcribe_audio(
     request: Request,
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[AsrResultModel]:
-    """音频文件 → 转写文本（multipart file 上传；用量绑定当前激活人格）。
+    """音频文件 → 转写文本（multipart file 上传；用量绑定当前主人格）。
 
     Args:
         request: 原始 ASGI 请求（multipart/form-data：``file`` 音频字段 +
@@ -232,7 +238,13 @@ async def transcribe_audio(
             语义非法（``VALIDATION_ERROR`` → 422）。
     """
     audio, filename, language = await _parse_multipart_upload(request)
-    persona = await persona_service.get_active_persona(db)
+    try:
+        persona = await persona_service.get_primary_persona(db)
+    except BusinessException as exc:
+        # 无主人格 = 未绑定形态（persona None——不拒绝转写）。
+        if exc.code != ErrorCode.NOT_FOUND:
+            raise
+        persona = None
     result = await voice_service.transcribe(
         audio, filename, persona=persona, language=language
     )

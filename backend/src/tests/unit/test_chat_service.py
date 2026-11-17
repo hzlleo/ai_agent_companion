@@ -138,7 +138,7 @@ def _record(**card_overrides: Any) -> PersonaRecordDTO:
         name="feiyu",
         display_name="大肥鱼",
         status="active",
-        is_active=True,
+        is_primary=True,
         card=_card(**card_overrides),
         created_at=1700000000000,
         updated_at=1700000000000,
@@ -516,17 +516,17 @@ async def test_create_session_requires_persona_or_db() -> None:
     assert exc_info.value.code == "INTERNAL_ERROR"
 
 
-async def test_create_session_no_active_persona(db_session: AsyncSession) -> None:
-    """查库路径无激活人格：NOT_FOUND（空库真实路径）。"""
+async def test_create_session_no_primary_persona(db_session: AsyncSession) -> None:
+    """查库路径无主人格：NOT_FOUND（空库真实路径——服务层清晰中文错误）。"""
     service = ChatService(gateway=FakeGateway(), persona_service=PersonaService())
     with pytest.raises(BusinessException) as exc_info:
         await service.create_session(db_session=db_session)
     assert exc_info.value.code == "NOT_FOUND"
-    assert "激活" in exc_info.value.message
+    assert "主人格" in exc_info.value.message
 
 
-async def test_create_session_from_active_persona(db_session: AsyncSession) -> None:
-    """查库路径：激活人格 → 会话绑定其正典快照。"""
+async def test_create_session_from_primary_persona(db_session: AsyncSession) -> None:
+    """查库路径：主人格 → 会话绑定其正典快照。"""
     persona_service = PersonaService()
     created = await persona_service.create(
         db_session,
@@ -543,7 +543,7 @@ async def test_create_session_from_active_persona(db_session: AsyncSession) -> N
             }
         ),
     )
-    await persona_service.activate(db_session, created.id)
+    await persona_service.set_primary(db_session, created.id)
 
     service = ChatService(gateway=FakeGateway(), persona_service=persona_service)
     state = await service.create_session(db_session=db_session)

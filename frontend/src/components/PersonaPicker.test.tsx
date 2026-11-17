@@ -18,15 +18,15 @@ function pageOfPersonas() {
 }
 
 describe('PersonaPicker', () => {
-  it('渲染默认项 + 候选人格（展示名 + 注册名 + 激活提示）', async () => {
+  it('渲染默认项 + 候选人格（展示名 + 注册名 + 主人格提示）', async () => {
     renderWithProviders(<PersonaPicker id="picker" value="" onChange={() => undefined} />)
     const select = await screen.findByLabelText('人格')
     await waitFor(() =>
       expect(within(select).getByRole('option', { name: /companion-1/ })).toBeInTheDocument(),
     )
-    expect(within(select).getByRole('option', { name: '当前激活人格（缺省）' })).toBeInTheDocument()
+    expect(within(select).getByRole('option', { name: '当前主人格（缺省）' })).toBeInTheDocument()
     expect(
-      within(select).getByRole('option', { name: /companion-1.*当前激活/ }),
+      within(select).getByRole('option', { name: /companion-1.*主人格/ }),
     ).toBeInTheDocument()
   })
 
@@ -53,7 +53,7 @@ describe('PersonaPicker', () => {
     renderWithProviders(<PersonaPicker id="picker" value="" onChange={() => undefined} />)
     const select = await screen.findByLabelText('人格')
     await waitFor(() => expect(select).toBeEnabled())
-    expect(within(select).getByRole('option', { name: '当前激活人格（缺省）' })).toBeInTheDocument()
+    expect(within(select).getByRole('option', { name: '当前主人格（缺省）' })).toBeInTheDocument()
   })
 
   it('超过一页时提供「加载更多」并追加候选', async () => {
@@ -75,7 +75,7 @@ describe('PersonaPicker', () => {
                 name: 'extra-persona',
                 display_name: '追加人格',
                 status: 'disabled',
-                is_active: false,
+                is_primary: false,
                 card: {
                   name: '追加',
                   description: '',

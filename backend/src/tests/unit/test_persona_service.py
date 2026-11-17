@@ -1,5 +1,6 @@
-"""harness/persona service 测试——注册 CRUD / 事务性单激活切换 / 复制 /
-状态层 / 删除守卫 / 批量删除 / 游标分页 / 上下文绑定。
+"""harness/persona service 测试——注册 CRUD / 事务性主人格切换 / 复制 /
+状态层 / 删除守卫 / 批量删除 / 游标分页 / 上下文绑定 / 可寻址集 /
+主人格并发收敛。
 
 引擎经共享会话级 SQLite fixture（StaticPool 单连接）；Session 由
 ``db_session`` fixture 注入（服务层事务边界——显式 commit / 异常
@@ -9,16 +10,24 @@ rollback），engine holder 槽位外部安装（owner_token=None，生命周期
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.pool import StaticPool
 
 from packages.harness.core.context import current_context, persona_id_var
 from packages.harness.core.dtos import PageResponse
 from packages.harness.core.errors import BusinessException, ErrorCode
+from packages.harness.database.base import Base
 from packages.harness.database.engine import db_engine_holder
 from packages.harness.persona.chara_card import CharaCardModel
 from packages.harness.persona.dtos import (
@@ -31,7 +40,7 @@ from packages.harness.persona.dtos import (
     PersonaUpdateDTO,
 )
 from packages.harness.persona.models import PersonaStateLayer, PersonaStatus
-from packages.harness.persona.orm import PersonaRow, PersonaStateRow
+from packages.harness.persona.orm import PERSONA_PRIMARY_MARKER, PersonaRow, PersonaStateRow
 from packages.harness.persona.service import PersonaService, bind_persona_context
 
 
@@ -85,7 +94,7 @@ async def test_create_returns_record_with_defaults(
     assert record.name == "feiyu"
     assert record.display_name == "大肥鱼"  # 缺省回落卡片名
     assert record.status == PersonaStatus.DISABLED
-    assert record.is_active is False
+    assert record.is_primary is False
     assert record.card.first_mes == "你回来啦！"
     assert record.created_at > 0
 
@@ -258,81 +267,335 @@ async def test_update_card_patch_invalid_merged_card(
 
 
 # ---------------------------------------------------------------------------
-# 事务性单激活切换
+# 事务性主人格切换 + 可寻址集 + 主人格读取
 # ---------------------------------------------------------------------------
 
 
-async def test_activate_switches_single_active(
+async def test_set_primary_switches_single_primary(
     persona_service: PersonaService, db_session: AsyncSession
 ) -> None:
-    """激活事务性：激活 B 必然去激活 A（至多一个激活不变式）。"""
+    """事务性切换：设 B 为主人格必然解除 A（至多一个主人格不变式）。"""
     a = await persona_service.create(db_session, _create_dto(name="a", status=PersonaStatus.ACTIVE))
     b = await persona_service.create(db_session, _create_dto(name="b", status=PersonaStatus.ACTIVE))
 
-    await persona_service.activate(db_session, a.id)
-    active = await persona_service.get_active_persona(db_session)
-    assert active is not None
-    assert active.id == a.id
+    await persona_service.set_primary(db_session, a.id)
+    primary = await persona_service.get_primary_persona(db_session)
+    assert primary.id == a.id
 
-    await persona_service.activate(db_session, b.id)
-    active_after = await persona_service.get_active_persona(db_session)
-    assert active_after is not None
-    assert active_after.id == b.id
+    await persona_service.set_primary(db_session, b.id)
+    primary_after = await persona_service.get_primary_persona(db_session)
+    assert primary_after.id == b.id
     record_a = await persona_service.get(db_session, a.id)
-    assert record_a.is_active is False
+    assert record_a.is_primary is False
     record_b = await persona_service.get(db_session, b.id)
-    assert record_b.is_active is True
+    assert record_b.is_primary is True
 
 
-async def test_activate_disabled_persona_conflict(
+async def test_set_primary_disabled_persona_conflict(
     persona_service: PersonaService, db_session: AsyncSession
 ) -> None:
-    """停用状态人格激活被拒：CONFLICT。"""
+    """停用状态人格不可设为主人格：CONFLICT。"""
     record = await persona_service.create(db_session, _create_dto())  # 默认 disabled
     with pytest.raises(BusinessException) as exc_info:
-        await persona_service.activate(db_session, record.id)
+        await persona_service.set_primary(db_session, record.id)
     assert exc_info.value.code == ErrorCode.CONFLICT
 
 
-async def test_activate_idempotent(
+async def test_set_primary_idempotent(
     persona_service: PersonaService, db_session: AsyncSession
 ) -> None:
-    """重复激活当前激活人格：幂等 no-op（仍为唯一激活）。"""
+    """重复设置当前主人格：幂等 no-op（仍为唯一主人格）。"""
     record = await persona_service.create(db_session, _create_dto(status=PersonaStatus.ACTIVE))
-    await persona_service.activate(db_session, record.id)
-    await persona_service.activate(db_session, record.id)
-    active = await persona_service.get_active_persona(db_session)
-    assert active is not None
-    assert active.id == record.id
+    await persona_service.set_primary(db_session, record.id)
+    await persona_service.set_primary(db_session, record.id)
+    primary = await persona_service.get_primary_persona(db_session)
+    assert primary.id == record.id
 
 
-async def test_deactivate_leaves_zero_active(
+async def test_disable_persona_lifecycle_only(
     persona_service: PersonaService, db_session: AsyncSession
 ) -> None:
-    """停用激活：零激活合法（系统态）；未激活人格停用幂等。"""
-    record = await persona_service.create(db_session, _create_dto(status=PersonaStatus.ACTIVE))
-    await persona_service.activate(db_session, record.id)
-    deactivated = await persona_service.deactivate(db_session, record.id)
-    assert deactivated.is_active is False
-    assert await persona_service.get_active_persona(db_session) is None
-
-    # 幂等：再次停用不激活人格
-    again = await persona_service.deactivate(db_session, record.id)
-    assert again.is_active is False
-
-
-async def test_update_status_disabled_clears_active_flag(
-    persona_service: PersonaService, db_session: AsyncSession
-) -> None:
-    """停用即下线：status 切 disabled 时自动清激活位。"""
-    record = await persona_service.create(db_session, _create_dto(status=PersonaStatus.ACTIVE))
-    await persona_service.activate(db_session, record.id)
-    updated = await persona_service.update(
-        db_session, record.id, PersonaUpdateDTO(status=PersonaStatus.DISABLED)
+    """停用是纯生命周期操作：status 切 disabled，不触碰主人格标记位持有者。"""
+    primary = await persona_service.create(
+        db_session, _create_dto(name="primary", status=PersonaStatus.ACTIVE)
     )
-    assert updated.status == PersonaStatus.DISABLED
-    assert updated.is_active is False
-    assert await persona_service.get_active_persona(db_session) is None
+    other = await persona_service.create(
+        db_session, _create_dto(name="other", status=PersonaStatus.ACTIVE)
+    )
+    await persona_service.set_primary(db_session, primary.id)
+
+    disabled = await persona_service.disable(db_session, other.id)
+    assert disabled.status == PersonaStatus.DISABLED
+    assert disabled.is_primary is False
+    # 主人格原样在位（停用他人不动主人格）
+    primary_after = await persona_service.get_primary_persona(db_session)
+    assert primary_after.id == primary.id
+
+    # 幂等：已停用人格重复停用为 no-op
+    again = await persona_service.disable(db_session, other.id)
+    assert again.status == PersonaStatus.DISABLED
+
+
+async def test_disable_primary_rejected(
+    persona_service: PersonaService, db_session: AsyncSession
+) -> None:
+    """停用守卫：停用当前主人格被拒（CONFLICT，指引先另设主人格）。"""
+    record = await persona_service.create(db_session, _create_dto(status=PersonaStatus.ACTIVE))
+    await persona_service.set_primary(db_session, record.id)
+    with pytest.raises(BusinessException) as exc_info:
+        await persona_service.disable(db_session, record.id)
+    assert exc_info.value.code == ErrorCode.CONFLICT
+    assert exc_info.value.details is not None
+    assert "set-primary" in str(exc_info.value.details.get("fix", ""))
+    # 两步后可停用：另设主人格 → 停用原主人格
+    other = await persona_service.create(
+        db_session, _create_dto(name="other", status=PersonaStatus.ACTIVE)
+    )
+    await persona_service.set_primary(db_session, other.id)
+    disabled = await persona_service.disable(db_session, record.id)
+    assert disabled.status == PersonaStatus.DISABLED
+    assert disabled.is_primary is False
+
+
+async def test_update_status_disabled_on_primary_rejected(
+    persona_service: PersonaService, db_session: AsyncSession
+) -> None:
+    """更新面停用守卫：update(status=disabled) 命中当前主人格同样拒绝。"""
+    record = await persona_service.create(db_session, _create_dto(status=PersonaStatus.ACTIVE))
+    await persona_service.set_primary(db_session, record.id)
+    with pytest.raises(BusinessException) as exc_info:
+        await persona_service.update(
+            db_session, record.id, PersonaUpdateDTO(status=PersonaStatus.DISABLED)
+        )
+    assert exc_info.value.code == ErrorCode.CONFLICT
+    # 主人格原样在位（拒绝即零副作用）
+    primary = await persona_service.get_primary_persona(db_session)
+    assert primary.id == record.id
+
+
+async def test_get_primary_no_primary_raises_clear_error(
+    persona_service: PersonaService, db_session: AsyncSession
+) -> None:
+    """无主人格（全新库）：NOT_FOUND fail loud（清晰中文错误 + fix 指引）。"""
+    with pytest.raises(BusinessException) as exc_info:
+        await persona_service.get_primary_persona(db_session)
+    assert exc_info.value.code == ErrorCode.NOT_FOUND
+    assert "主人格" in exc_info.value.message
+    assert exc_info.value.details is not None
+    assert "set-primary" in str(exc_info.value.details.get("fix", ""))
+
+
+async def test_list_addressable_returns_enabled_only(
+    persona_service: PersonaService, db_session: AsyncSession
+) -> None:
+    """可寻址集：仅 enabled 人格（id 升序）；disabled 排除；主人格含于其中。"""
+    first = await persona_service.create(
+        db_session, _create_dto(name="first", status=PersonaStatus.ACTIVE)
+    )
+    await persona_service.create(db_session, _create_dto(name="off", status=PersonaStatus.DISABLED))
+    second = await persona_service.create(
+        db_session, _create_dto(name="second", status=PersonaStatus.ACTIVE)
+    )
+    await persona_service.set_primary(db_session, second.id)
+
+    addressable = await persona_service.list_addressable(db_session)
+    assert [record.id for record in addressable] == [first.id, second.id]
+    assert all(record.status == PersonaStatus.ACTIVE for record in addressable)
+    # 主人格也在可寻址集中（主人格是缺省目标，非唯一可用者）
+    assert {record.id for record in addressable if record.is_primary} == {second.id}
+
+
+# ---------------------------------------------------------------------------
+# 主人格并发不变式（DB 唯一键 + 冲突重试收敛——镜像策展记忆回归模式）
+# ---------------------------------------------------------------------------
+
+
+async def test_primary_marker_unique_db_constraint(db_session: AsyncSession) -> None:
+    """DB 级主人格唯一键：双 ``'primary'`` 标记行撞键；NULL 标记行共存。"""
+    db_session.add(
+        PersonaRow(
+            name="marker-a",
+            display_name="A",
+            status="active",
+            is_primary_marker=PERSONA_PRIMARY_MARKER,
+            chara_card={"name": "A", "first_mes": "hi"},
+        )
+    )
+    await db_session.commit()
+    db_session.add(
+        PersonaRow(
+            name="marker-b",
+            display_name="B",
+            status="active",
+            is_primary_marker=PERSONA_PRIMARY_MARKER,
+            chara_card={"name": "B", "first_mes": "hi"},
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+    await db_session.rollback()
+
+    # NULL 标记行数量不限：多行共存不撞唯一键（NULL 被忽略）
+    for name in ("plain-1", "plain-2", "plain-3"):
+        db_session.add(
+            PersonaRow(
+                name=name,
+                display_name=name,
+                status="active",
+                is_primary_marker=None,
+                chara_card={"name": name, "first_mes": "hi"},
+            )
+        )
+    await db_session.commit()
+    marker_rows = list(
+        (
+            await db_session.execute(
+                select(PersonaRow).where(PersonaRow.is_primary_marker.is_not(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(marker_rows) == 1  # 首行标记原样；撞键行未落库
+    assert len(list((await db_session.execute(select(PersonaRow))).scalars().all())) == 4
+
+
+async def test_set_primary_conflict_retry_converges(
+    persona_service: PersonaService, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """并发冲突重试：首次尝试撞主人格唯一键 → 回滚后重试收敛（镜像策展 upsert 模式）。"""
+    a = await persona_service.create(db_session, _create_dto(name="a", status=PersonaStatus.ACTIVE))
+    b = await persona_service.create(db_session, _create_dto(name="b", status=PersonaStatus.ACTIVE))
+    await persona_service.set_primary(db_session, a.id)
+
+    calls: list[int] = []
+    original_once = PersonaService._set_primary_once
+
+    async def conflicting_then_real(
+        inner_self: PersonaService, session: AsyncSession, persona_id: int
+    ) -> PersonaRecordDTO:
+        """首次尝试：真实完成切换后模拟并发赢家抢先占位抛唯一键冲突。"""
+        if not calls:
+            calls.append(1)
+            await original_once(inner_self, session, persona_id)
+            raise IntegrityError(
+                "UPDATE ff_personas ...",
+                {},
+                Exception("UNIQUE constraint failed: uq_ff_personas_primary"),
+            )
+        return await original_once(inner_self, session, persona_id)
+
+    monkeypatch.setattr(PersonaService, "_set_primary_once", conflicting_then_real)
+    record = await persona_service.set_primary(db_session, b.id)
+    assert calls == [1]  # 首次尝试确实撞了冲突
+    assert record.id == b.id
+    assert record.is_primary is True
+
+    # 重试收敛后全表恰一个主人格（a 被解除，b 在位）
+    primary = await persona_service.get_primary_persona(db_session)
+    assert primary.id == b.id
+    record_a = await persona_service.get(db_session, a.id)
+    assert record_a.is_primary is False
+    marker_count = len(
+        list(
+            (
+                await db_session.execute(
+                    select(PersonaRow).where(
+                        PersonaRow.is_primary_marker == PERSONA_PRIMARY_MARKER
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    )
+    assert marker_count == 1
+
+
+async def test_set_primary_retry_exhaustion_maps_internal_error(
+    persona_service: PersonaService, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """重试后仍冲突：归一 INTERNAL_ERROR（清晰中文消息——与策展同口径）。"""
+    a = await persona_service.create(db_session, _create_dto(name="a", status=PersonaStatus.ACTIVE))
+
+    async def always_conflict(
+        inner_self: PersonaService, session: AsyncSession, persona_id: int
+    ) -> PersonaRecordDTO:
+        raise IntegrityError(
+            "UPDATE ff_personas ...",
+            {},
+            Exception("UNIQUE constraint failed: uq_ff_personas_primary"),
+        )
+
+    monkeypatch.setattr(PersonaService, "_set_primary_once", always_conflict)
+    with pytest.raises(BusinessException) as exc_info:
+        await persona_service.set_primary(db_session, a.id)
+    assert exc_info.value.code == ErrorCode.INTERNAL_ERROR
+    assert exc_info.value.__cause__ is not None
+
+
+async def test_set_primary_concurrent_exactly_one_primary(
+    persona_service: PersonaService, db_session: AsyncSession
+) -> None:
+    """并发切换收敛：两个人格并发 set_primary → 收束后全表恰一个主人格。
+
+    私有引擎隔离（StaticPool 单连接 + 每任务独立 Session——AsyncSession
+    非并发安全，单连接使写入串行化）：共享会话级引擎的连接携前序测试
+    事件循环的内部锁（跨 loop 不可重入），并发面须在测试自有连接上
+    运行；唯一键 + 服务层重试保证任意交错后不变式收敛。
+    """
+    a = await persona_service.create(db_session, _create_dto(name="a", status=PersonaStatus.ACTIVE))
+    b = await persona_service.create(db_session, _create_dto(name="b", status=PersonaStatus.ACTIVE))
+
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+
+        async def _seed(record: PersonaRecordDTO) -> None:
+            async with factory() as session:
+                session.add(
+                    PersonaRow(
+                        name=record.name,
+                        display_name=record.display_name,
+                        status=record.status.value,
+                        is_primary_marker=None,
+                        chara_card=record.card.model_dump(),
+                    )
+                )
+                await session.commit()
+
+        await asyncio.gather(_seed(a), _seed(b))
+
+        async def _set_primary(persona_id: int) -> None:
+            async with factory() as session:
+                await persona_service.set_primary(session, persona_id)
+
+        await asyncio.gather(_set_primary(a.id), _set_primary(b.id))
+
+        async with factory() as session:
+            marker_rows = list(
+                (
+                    await session.execute(
+                        select(PersonaRow).where(
+                            PersonaRow.is_primary_marker == PERSONA_PRIMARY_MARKER
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(marker_rows) == 1
+            primary = await persona_service.get_primary_persona(session)
+            assert primary.id in {a.id, b.id}
+            assert marker_rows[0].id == primary.id
+    finally:
+        await engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +620,7 @@ async def test_copy_without_states(
     assert copied.id != source.id
     assert copied.name == "feiyu-copy"
     assert copied.status == PersonaStatus.DISABLED
-    assert copied.is_active is False
+    assert copied.is_primary is False
     assert copied.card == source.card
     assert await persona_service.get_states(db_session, copied.id) == []
 
@@ -466,17 +729,20 @@ async def test_copy_missing_source_not_found(
 # ---------------------------------------------------------------------------
 
 
-async def test_delete_active_persona_forbidden(
+async def test_delete_primary_persona_forbidden(
     persona_service: PersonaService, db_session: AsyncSession
 ) -> None:
-    """删除守卫（本工程锁定语义）：激活人格删除 CONFLICT，先 deactivate 后可删。"""
+    """删除守卫（本工程锁定语义）：主人格删除 CONFLICT，先另设主人格后可删。"""
     record = await persona_service.create(db_session, _create_dto(status=PersonaStatus.ACTIVE))
-    await persona_service.activate(db_session, record.id)
+    await persona_service.set_primary(db_session, record.id)
     with pytest.raises(BusinessException) as exc_info:
         await persona_service.delete(db_session, record.id)
     assert exc_info.value.code == ErrorCode.CONFLICT
 
-    await persona_service.deactivate(db_session, record.id)
+    other = await persona_service.create(
+        db_session, _create_dto(name="other", status=PersonaStatus.ACTIVE)
+    )
+    await persona_service.set_primary(db_session, other.id)
     await persona_service.delete(db_session, record.id)  # 两步后可删
     with pytest.raises(BusinessException):
         await persona_service.get(db_session, record.id)
@@ -666,29 +932,29 @@ async def test_query_malformed_cursor_first_page(
 async def test_batch_delete_partial_success(
     persona_service: PersonaService, db_session: AsyncSession
 ) -> None:
-    """批量删除部分成功：成功项 / NOT_FOUND 项 / 激活守卫 CONFLICT 项并存。"""
+    """批量删除部分成功：成功项 / NOT_FOUND 项 / 主人格守卫 CONFLICT 项并存。"""
     ok_persona = await persona_service.create(db_session, _create_dto(name="ok"))
-    active_persona = await persona_service.create(
-        db_session, _create_dto(name="active", status=PersonaStatus.ACTIVE)
+    primary_persona = await persona_service.create(
+        db_session, _create_dto(name="primary", status=PersonaStatus.ACTIVE)
     )
-    await persona_service.activate(db_session, active_persona.id)
+    await persona_service.set_primary(db_session, primary_persona.id)
 
-    result = await persona_service.batch_delete(db_session, [ok_persona.id, active_persona.id, 999])
+    result = await persona_service.batch_delete(db_session, [ok_persona.id, primary_persona.id, 999])
     assert result.total == 3
     assert result.succeeded == 1
     assert result.failed == 2
     by_id = {item.id: item for item in result.items}
     assert by_id[ok_persona.id].success is True
-    assert by_id[active_persona.id].success is False
-    assert by_id[active_persona.id].code == ErrorCode.CONFLICT.value
+    assert by_id[primary_persona.id].success is False
+    assert by_id[primary_persona.id].code == ErrorCode.CONFLICT.value
     assert by_id[999].success is False
     assert by_id[999].code == ErrorCode.NOT_FOUND.value
 
-    # 成功项真实删除；失败项（激活人格）原样保留
+    # 成功项真实删除；失败项（主人格）原样保留且在位
     with pytest.raises(BusinessException):
         await persona_service.get(db_session, ok_persona.id)
-    kept = await persona_service.get(db_session, active_persona.id)
-    assert kept.is_active is True
+    kept = await persona_service.get(db_session, primary_persona.id)
+    assert kept.is_primary is True
 
 
 async def test_batch_delete_unknown_exception_partial_success(

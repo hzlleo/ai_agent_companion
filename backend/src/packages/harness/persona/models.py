@@ -1,10 +1,12 @@
 """persona 域值域 Model Classes——人格状态 / L-M-S 状态层枚举。
 
-值域（本工程人格注册表契约）：
+值域（本工程人格注册表契约——多激活可寻址模型）：
 
     - :class:`PersonaStatus`     —— 人格管理面状态（active 可用 / disabled
-      停用）；与单激活位 ``PersonaRow.is_active`` 正交——status 是可用性
-      开关，is_active 是「当前唯一激活人格」绑定位（至多一个为 True）；
+      停用）；与主人格标记 ``PersonaRow.is_primary_marker`` 正交——
+      status 是可用性开关（enabled 人格构成可寻址集，可同时被多个
+      上下文寻址绑定），主人格标记是「缺省解析目标」绑定位（DB 唯一
+      键强制全表至多一个）；
     - :class:`PersonaStateLayer` —— L/M/S 心理状态模型的可变层：
 
         - ``L``（long-term，长期身份）：**不存在于状态表**——不可变的
@@ -24,11 +26,12 @@ __all__ = ["PersonaStatus", "PersonaStateLayer"]
 
 
 class PersonaStatus(StrEnum):
-    """人格管理面状态值域（可用性开关，与单激活位正交）。
+    """人格管理面状态值域（可用性开关，与主人格标记正交）。
 
-    - ``active``：可用——允许被激活（activate）为当前人格；
-    - ``disabled``：停用——管理面下线，激活守卫拒绝（CONFLICT）；
-      停用切换时若该人格正持有激活位则自动清位（见 service 层约定）。
+    - ``active``：可用——进入可寻址集（允许被通道 / 心流 / 多会话按
+      上下文绑定），且允许被设为主人格（set-primary）；
+    - ``disabled``：停用——管理面下线（退出可寻址集），设为主人格
+      守卫拒绝（CONFLICT）；停用当前主人格被守卫拒绝（先另设主人格）。
     """
 
     ACTIVE = "active"

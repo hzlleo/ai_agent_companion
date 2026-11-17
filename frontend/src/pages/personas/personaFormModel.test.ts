@@ -24,7 +24,7 @@ function sampleRecord(): PersonaRecord {
     name: 'companion-1',
     display_name: '小助手',
     status: 'active',
-    is_active: true,
+    is_primary: true,
     card: {
       name: '小助手',
       description: '描述',

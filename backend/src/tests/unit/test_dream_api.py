@@ -4,7 +4,7 @@
 test_memories_api.py 模式；DB 经共享会话级 SQLite fixture 外部安装；网关
 挂桩 app.state.gateway）。覆盖面：触发 happy path（合并 + 日记落库）/
 cfg 参数覆写（窗口）/ 失败运行仍 200 返回记录（业务结果语义）/ 运行
-日志分页 + 详情 / 人格解析（缺省激活 / 无激活 404 / 他人格隔离 404）/
+日志分页 + 详情 / 人格解析（缺省主人格 / 无主人格 404 / 他人格隔离 404）/
 处理器直调契约面。
 """
 
@@ -34,6 +34,7 @@ from packages.harness.memory.models import (
 )
 from packages.harness.memory.service import MemoryService
 from packages.harness.persona.dtos import PersonaCreateDTO
+from packages.harness.persona.orm import PersonaRow
 from packages.harness.persona.service import PersonaService, bind_persona_context
 
 memory_service = MemoryService()
@@ -139,10 +140,10 @@ async def client(dream_app: FastAPI) -> AsyncIterator[AsyncClient]:
 
 
 @pytest.fixture
-async def active_persona_id(client: AsyncClient, db_session: AsyncSession) -> AsyncIterator[int]:
-    """铺底一个激活人格（返回主键）。"""
-    persona_id = await _create_persona(db_session, "dream-active", active=True)
-    await persona_service.activate(db_session, persona_id)
+async def primary_persona_id(client: AsyncClient, db_session: AsyncSession) -> AsyncIterator[int]:
+    """铺底一个主人格（返回主键）。"""
+    persona_id = await _create_persona(db_session, "dream-primary", active=True)
+    await persona_service.set_primary(db_session, persona_id)
     yield persona_id
 
 
@@ -152,10 +153,10 @@ async def active_persona_id(client: AsyncClient, db_session: AsyncSession) -> As
 
 
 async def test_dream_trigger_happy_path(
-    dream_app: FastAPI, client: AsyncClient, db_session: AsyncSession, active_persona_id: int
+    dream_app: FastAPI, client: AsyncClient, db_session: AsyncSession, primary_persona_id: int
 ) -> None:
     """触发 happy path：200 + success 记录 + 策展晋升 + 日记事件落库。"""
-    async with bind_persona_context(active_persona_id):
+    async with bind_persona_context(primary_persona_id):
         episode = await memory_service.append_episode(
             db_session,
             EpisodeCreateDTO(
@@ -182,7 +183,7 @@ async def test_dream_trigger_happy_path(
     assert data["diary_episode_id"] is not None
     assert "梦境整理完成" in body["message"]
 
-    async with bind_persona_context(active_persona_id):
+    async with bind_persona_context(primary_persona_id):
         page = await memory_service.query_curated(db_session, CuratedQueryDTO(topic="口味偏好"))
         assert len(page.items) == 1
         assert page.items[0].provenance == "agent"
@@ -195,12 +196,12 @@ async def test_dream_trigger_happy_path(
 
 
 async def test_dream_trigger_cfg_window_override(
-    dream_app: FastAPI, client: AsyncClient, db_session: AsyncSession, active_persona_id: int
+    dream_app: FastAPI, client: AsyncClient, db_session: AsyncSession, primary_persona_id: int
 ) -> None:
     """cfg 覆写：window_hours=1——窗口外旧事件不参与（零候选零调用）。"""
     current = now_ms()
     await _append_episode(
-        db_session, active_persona_id, "两小时前的旧事", ts_ms=current - 2 * 3_600_000
+        db_session, primary_persona_id, "两小时前的旧事", ts_ms=current - 2 * 3_600_000
     )
     dream_app.state.gateway = StubDreamGateway([])
 
@@ -215,10 +216,10 @@ async def test_dream_trigger_cfg_window_override(
 
 
 async def test_dream_trigger_failed_run_returns_record(
-    dream_app: FastAPI, client: AsyncClient, db_session: AsyncSession, active_persona_id: int
+    dream_app: FastAPI, client: AsyncClient, db_session: AsyncSession, primary_persona_id: int
 ) -> None:
     """失败运行是业务结果：200 + status=failed + error 原因（fail-closed 面）。"""
-    await _append_episode(db_session, active_persona_id, "今天发生的事")
+    await _append_episode(db_session, primary_persona_id, "今天发生的事")
     dream_app.state.gateway = StubDreamGateway(["这不是JSON"])
 
     response = await client.post("/api/v1/memories/dream/trigger", json={})
@@ -231,13 +232,16 @@ async def test_dream_trigger_failed_run_returns_record(
 
 
 async def test_dream_trigger_persona_resolution(
-    client: AsyncClient, db_session: AsyncSession, active_persona_id: int
+    client: AsyncClient, db_session: AsyncSession, primary_persona_id: int
 ) -> None:
-    """人格解析：缺省激活（404 前置）/ 无激活 404。"""
-    await persona_service.deactivate(db_session, active_persona_id)
-    no_active = await client.post("/api/v1/memories/dream/trigger", json={})
-    assert no_active.status_code == 404
-    assert no_active.json()["code"] == "NOT_FOUND"
+    """人格解析：缺省主人格（404 前置）/ 无主人格 404。"""
+    row = await db_session.get(PersonaRow, primary_persona_id)
+    assert row is not None
+    row.is_primary_marker = None
+    await db_session.commit()
+    no_primary = await client.post("/api/v1/memories/dream/trigger", json={})
+    assert no_primary.status_code == 404
+    assert no_primary.json()["code"] == "NOT_FOUND"
 
     missing = await client.post("/api/v1/memories/dream/trigger", json={"persona_id": 9999})
     assert missing.status_code == 404
@@ -252,10 +256,10 @@ async def test_dream_runs_list_and_detail(
     dream_app: FastAPI,
     client: AsyncClient,
     db_session: AsyncSession,
-    active_persona_id: int,
+    primary_persona_id: int,
 ) -> None:
     """运行日志：触发两次 → 游标分页 + 详情（决策明细）。"""
-    async with bind_persona_context(active_persona_id):
+    async with bind_persona_context(primary_persona_id):
         episode = await memory_service.append_episode(
             db_session,
             EpisodeCreateDTO(
@@ -302,7 +306,7 @@ async def test_dream_runs_list_and_detail(
 
 
 async def test_dream_run_detail_missing_and_isolation(
-    client: AsyncClient, db_session: AsyncSession, active_persona_id: int
+    client: AsyncClient, db_session: AsyncSession, primary_persona_id: int
 ) -> None:
     """运行详情：缺失 404 / 他人格隔离 404。"""
     other_id = await _create_persona(db_session, "dream-other")
@@ -321,16 +325,16 @@ async def test_dream_run_detail_missing_and_isolation(
 async def test_dream_trigger_handler_direct_contract(
     dream_app: FastAPI,
     db_session: AsyncSession,
-    active_persona_id: int,
+    primary_persona_id: int,
 ) -> None:
     """处理器直调：ResultDTO 包装契约（触发即返回运行记录）。"""
-    await _append_episode(db_session, active_persona_id, "直调契约事件")
+    await _append_episode(db_session, primary_persona_id, "直调契约事件")
     dream_app.state.gateway = StubDreamGateway(["[]", "今天的日记。"])
     request = Request(scope={"type": "http", "app": dream_app})
 
     from packages.harness.memory.dreaming_models import DreamTriggerRequestDTO
 
-    req = DreamTriggerRequestDTO.model_validate({"persona_id": active_persona_id})
+    req = DreamTriggerRequestDTO.model_validate({"persona_id": primary_persona_id})
     result = await trigger_dream(req, request, db=db_session)
 
     assert result.success is True

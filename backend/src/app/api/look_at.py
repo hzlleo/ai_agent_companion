@@ -27,8 +27,8 @@
       ——lifespan 装配形态，用量随装配网关发射；未装配回落裸构造
       ——与 memories 路由同一解析口径）；测试经 monkeypatch 替换
       模块级 ``LookAtService`` 构造面注入 fake；
-    - **人格绑定**：缺省取当前激活人格（用量 persona_id 归属）；无
-      激活人格 → 未绑定形态（persona_id 为空——look_at 是管理面工具，
+    - **人格绑定**：缺省取当前主人格（用量 persona_id 归属）；无
+      主人格 → 未绑定形态（persona_id 为空——look_at 是管理面工具，
       不因无人格而拒绝）。
 """
 
@@ -194,7 +194,7 @@ async def look_at_image(
     request: Request,
     db: AsyncSession = Depends(get_async_db),
 ) -> ResultDTO[LookAtResultModel]:
-    """图片 → 结构化中文描述（multipart 上传；用量绑定当前激活人格）。
+    """图片 → 结构化中文描述（multipart 上传；用量绑定当前主人格）。
 
     Args:
         request: 原始 ASGI 请求（multipart/form-data：``image`` 图片字段 +
@@ -221,7 +221,13 @@ async def look_at_image(
             message="图像理解请求参数非法（图像 / MIME / 聚焦问题）",
             details={"reason": str(exc)[:300]},
         ) from exc
-    persona = await persona_service.get_active_persona(db)
+    try:
+        persona = await persona_service.get_primary_persona(db)
+    except BusinessException as exc:
+        # 无主人格 = 未绑定形态（persona_id None——不拒绝图像理解）。
+        if exc.code != ErrorCode.NOT_FOUND:
+            raise
+        persona = None
     service = LookAtService(gateway=_resolve_request_gateway(request))
     result = await service.describe(
         payload.image,

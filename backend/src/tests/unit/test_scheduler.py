@@ -7,7 +7,7 @@
 假休眠——确定性驱动）；per-job 错误隔离（单作业抛错不击穿调度与其它
 作业）；重名 / 非法参数注册拒绝；run 重复启动拒绝；request_stop 优雅
 收束 + 在途排水（超时 cancel 兜底）；梦境触发作业（fake 链路——激活
-人格解析 + 绑定 + run_dream 透传 / 无激活跳过）。
+人格解析 + 绑定 + run_dream 透传 / 无主人格跳过）。
 """
 
 from __future__ import annotations
@@ -383,14 +383,19 @@ class FakeDreamService:
 
 
 class FakePersonaService:
-    """fake 人格服务（激活人格可配置）。"""
+    """fake 人格服务（主人格可配置——None = 无主人格）。"""
 
     def __init__(self, record: Any) -> None:
         """初始化。"""
         self.record = record
 
-    async def get_active_persona(self, session: Any) -> Any:
-        """返回配置的激活人格。"""
+    async def get_primary_persona(self, session: Any) -> Any:
+        """返回配置的主人格（无主人格抛 NOT_FOUND——对齐真实服务语义）。"""
+        if self.record is None:
+            raise BusinessException(
+                code=ErrorCode.NOT_FOUND,
+                message="当前没有主人格，请先创建并启用一个人格，再将其设为主人格",
+            )
         return self.record
 
 
@@ -422,8 +427,8 @@ class _FakeGateway:
     """占位网关（梦境 fake 链路不触达真实网关）。"""
 
 
-async def test_dream_job_runs_dream_for_active_persona() -> None:
-    """梦境作业：激活人格解析 → 绑定上下文 → run_dream 透传参数。"""
+async def test_dream_job_runs_dream_for_primary_persona() -> None:
+    """梦境作业：主人格解析 → 绑定上下文 → run_dream 透传参数。"""
     dream = FakeDreamService()
     persona_record = type("R", (), {"id": 701, "display_name": "大肥鱼"})()
     session_factory = _FakeSessionFactory()
@@ -445,8 +450,8 @@ async def test_dream_job_runs_dream_for_active_persona() -> None:
     assert session_factory.opened == 1
 
 
-async def test_dream_job_skips_without_active_persona() -> None:
-    """无激活人格：日志跳过——run_dream 零调用（正常路径）。"""
+async def test_dream_job_skips_without_primary_persona() -> None:
+    """无主人格：日志跳过——run_dream 零调用（正常路径）。"""
     dream = FakeDreamService()
     factory = build_dream_trigger_job(
         dream_service=dream,  # type: ignore[arg-type]
