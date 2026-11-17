@@ -113,8 +113,17 @@ os.environ["SEEKDB_POOL_MIN"] = "1"
 os.environ["SEEKDB_POOL_MAX"] = "2"
 # 密码本值（password_env 指向的变量 + 默认变量名——测试专用值，
 # 不可触达真实实例；单测经假池消费，永不真实连接）
-os.environ["SEEKDB_TEST_PASSWORD"] = "test-only-seekdb-password"
 os.environ["SEEKDB_PASSWORD"] = "test-only-seekdb-password"
+# SEEKDB_TEST_PASSWORD 例外（S4 真引擎套件）：该变量名同时是 SeekDB 真引擎
+# 强制套件（src/tests/integration_seekdb/）的显式测试服务 env 面（runner
+# 注入：CI service container env / 本地 pixi tests-seekdb 任务 env）。runner
+# 已显式提供 SEEKDB_TEST_URL（套件门控变量）时保留注入值（空密码 = 本地
+# 容器 root 空密码形态，合法）；未提供时维持下方硬覆盖哨兵值。套件本身
+# 只读 SEEKDB_TEST_*（显式配置-only，见其 conftest docstring）——本例外
+# 不影响单测：单测恒 SEEKDB_ENABLED=false 零真实连接，且消费该变量的
+# 单测均经 monkeypatch 注入自己的值。
+if "SEEKDB_TEST_URL" not in os.environ:
+    os.environ["SEEKDB_TEST_PASSWORD"] = "test-only-seekdb-password"
 
 # --- Telegram 通道（TELEGRAM_ 前缀 → TelegramSettings；默认关闭 → 测试零
 #     真实连接；S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入

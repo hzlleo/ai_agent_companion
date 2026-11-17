@@ -20,3 +20,29 @@
 | 沙盒 DTO 漂移门 | `pixi run sandbox-drift` | 沙盒 wire 契约 16 项文本镜像比对（backend `sandbox_models.py` ↔ `docker/tool-sandbox-agent` 树定义块——8 模型块 + 8 常量行，任一侧漂移即红） |
 | DTO schema fixture 门 | 后端 `test_dto_schema_fixture.py` + 前端 `dtoContract.test.ts` | 49 组共享 wire 契约双侧比对（fixture 经 `pixi run export-dto-schemas` 再生，后端改动未重导出 / 前端类型漂移均即红） |
 | 覆盖率门 | `pixi run coverage-gates` | 按模块 ≥80% enforce |
+| SeekDB 真引擎套件 | CI 专用步骤 `pixi run pytest src/tests/integration_seekdb -v --asyncio-mode=auto`（本地 `pixi run tests-seekdb`） | 迁移链 round-trip + 并发不变式 + 混合检索往返——真引擎强制（缺 env 即 `pytest.fail`，不跳过） |
+
+## SeekDB 真引擎强制套件（src/tests/integration_seekdb/）
+
+**不跳过策略**：套件目标经 runner 显式注入的 `SEEKDB_TEST_*` env 解析（`SEEKDB_TEST_URL=host:port`、`SEEKDB_TEST_USER` 默认 `root`、`SEEKDB_TEST_PASSWORD` 默认空、`SEEKDB_TEST_DATABASE` 默认 `aac_ci_verify`）；缺失 `SEEKDB_TEST_URL` 即 `pytest.fail`（失败消息携带本地容器启动命令）——无静默跳过，替代原 env 门控默认跳过的 `test_seekdb_smoke.py`（已删除，混合检索往返契约整体迁入）。套件**不读** `src/conftest.py` 的 S3 硬覆盖 env 面——docker 化测试依赖 + 显式测试 env 是本工程认可的测试服务模式（同 MySQL service container），不属于「真实项目配置」。
+
+**覆盖面**（三模块；scratch 库每模块 DROP+CREATE 重建——hermetic per run，单进程顺序运行）：
+
+- 迁移链 round-trip：alembic 0001→0008 升级 head（`SHOW TABLES` 收敛 9 表集含 `alembic_version`，版本戳 0008）→ 降级 base → 复升 head；
+- 并发不变式：`uq_ff_personas_primary` 单主人格（NULL 标记多行共存 + 第二 `'primary'` 被 1062 点名拒绝）、`uq_ff_curated_active` 复合单 active（superseded NULL 多代共存）、`uq_ff_chat_messages_seq` 会话内序号唯一、跨连接 `SELECT ... FOR UPDATE` 持锁 / 等锁超时（错误 1205）/ 释放正控——全部 raw SQL 经 aiomysql 直击真引擎；
+- 混合检索往返：`SeekDBStore` 生产路径 `ensure_schema` → 批量 upsert → keyword / hybrid（Form B 融合排序）检索回读 → 同键覆盖幂等 → 人格隔离 → delete 清理。
+
+**方言 bug 起源（制度化理由）**：迁移降级序在 MySQL 系引擎（含 SeekDB）受错误 5320（外键列须保有索引——须先删外键约束再删其索引）约束，SQLite 方言永不暴露该序错误，真引擎 round-trip 验证即为此制度化；同理行锁等待的生效旋钮是 `ob_trx_lock_timeout`（微秒）——`innodb_lock_wait_timeout` 在 SeekDB 为 mock 变量（live 实测读回恒 50、`SET SESSION` 无效）。
+
+**本地运行**：
+
+```bash
+# 1. 启动本地 SeekDB（server 模式——MySQL 线协议 2881；root 空密码）
+docker run -d --name seekdb-smoke -p 2881:2881 \
+  oceanbase/seekdb:1.4.0-100000172026082615
+
+# 2. 运行套件（测试 env 由 pixi 任务注入）
+cd backend && pixi run tests-seekdb
+```
+
+**CI 接线**：backend job 挂 SeekDB service container（同镜像，2881:2881）+ job 级 `SEEKDB_TEST_*` env + 就绪等待步骤（容器初始化需 ~60-90s，探针重试连接最长 180s——service 容器无 healthcheck 语义）+ 专用步骤显式定向运行套件。`tests-all` **不含**本套件（pyproject `norecursedirs` 排除出 `src/tests/` 扫集）——分立即「CI 全跑、本地无容器快速回路保持可跑」；`coverage-gates` 的逐模块分组本就跳过 tests 路径，套件不进覆盖率门。

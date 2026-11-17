@@ -12,9 +12,10 @@
     - SeekDB（v1.4.0）官方仅文档化 PyMySQL / mysqlclient 驱动，**aiomysql
       无官方背书**（MySQL 线协议标准，大概率可用）——原生 async 符合
       本工程约束（I/O 全 async），选定 aiomysql 为默认驱动并文档化
-      风险；真实实例可用性经 ``tests/integration/test_seekdb_smoke.py``
-      （env 门控，默认跳过）验证，不兼容时的回退路径为 PyMySQL +
-      ``run_blocking_ops`` 下沉（见 docs/backend/memory.md 检索层）。
+      风险；真实实例可用性经 ``src/tests/integration_seekdb/``
+      （真引擎强制套件——缺 env 即 fail 不跳过）验证，不兼容时的回
+      退路径为 PyMySQL + ``run_blocking_ops`` 下沉（见
+      docs/backend/memory.md 检索层）。
 
 连接形态：autocommit（单语句自决事务）——索引层的写路径全部为单
 语句 upsert / delete / DDL，无跨语句事务需求（文档化决策）。

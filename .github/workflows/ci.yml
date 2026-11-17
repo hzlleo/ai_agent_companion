@@ -35,6 +35,21 @@ jobs:
   backend:
     name: Backend (tests + gates + lint + typecheck)
     runs-on: ubuntu-latest
+    # SeekDB 真引擎强制套件的测试服务容器（MySQL 线协议 2881；套件经
+    # job 级 SEEKDB_TEST_* 显式 env 指向 127.0.0.1:2881 的端口映射）。
+    # 容器随 job 启动，但就绪需 ~60-90s（初始化）——套件步骤前置专用
+    # 就绪探针（最长 180s；service 容器无 healthcheck 语义，等待是
+    # 必要的——否则首连即败）。
+    services:
+      seekdb:
+        image: oceanbase/seekdb:1.4.0-100000172026082615
+        ports:
+          - 2881:2881
+    env:
+      SEEKDB_TEST_URL: 127.0.0.1:2881
+      SEEKDB_TEST_USER: root
+      SEEKDB_TEST_PASSWORD: ''
+      SEEKDB_TEST_DATABASE: aac_ci_verify
     steps:
       - uses: actions/checkout@v4
 
@@ -48,6 +63,49 @@ jobs:
 
       - name: Tests (unit + integration)
         run: cd backend && pixi run tests-all
+
+      # SeekDB 真引擎强制套件（与 tests-all 分离：tests-all 须在无容器的
+      # 本地快速回路可跑——套件经 pyproject norecursedirs 不入 src/tests/
+      # 扫集，仅本步骤显式定向运行；env 来自 job 级 SEEKDB_TEST_* + service
+      # 容器端口映射，不经 pixi tests-seekdb 任务）。
+      - name: Wait for SeekDB service readiness (up to 180s)
+        run: |
+          cat > /tmp/wait_seekdb.py <<'PY'
+          import asyncio
+          import os
+          import sys
+
+          import aiomysql
+
+
+          async def main() -> int:
+              url = os.environ.get("SEEKDB_TEST_URL", "")
+              host, _, port_text = url.partition(":")
+              port = int(port_text) if port_text else 2881
+              for attempt in range(90):
+                  try:
+                      conn = await aiomysql.connect(
+                          host=host,
+                          port=port,
+                          user=os.environ.get("SEEKDB_TEST_USER", "root"),
+                          password=os.environ.get("SEEKDB_TEST_PASSWORD", ""),
+                      )
+                      conn.close()
+                      print(f"[wait-seekdb] ready after {attempt + 1} attempt(s)")
+                      return 0
+                  except Exception as exc:
+                      print(f"[wait-seekdb] attempt {attempt + 1}: {type(exc).__name__}: {exc}")
+                      await asyncio.sleep(2)
+              print("[wait-seekdb] SeekDB service NOT ready after 180s", file=sys.stderr)
+              return 1
+
+
+          sys.exit(asyncio.run(main()))
+          PY
+          cd backend && pixi run python /tmp/wait_seekdb.py
+
+      - name: Tests (SeekDB real-engine suite)
+        run: cd backend && pixi run pytest src/tests/integration_seekdb -v --asyncio-mode=auto
 
       - name: Coverage gates (per-module >= 80%, enforce)
         run: cd backend && pixi run coverage-gates

@@ -14,6 +14,7 @@
 #   cd backend && pixi install --environment prod # 安装 prod 环境（Docker 用）
 #   cd backend && pixi run tests-unit             # 单元测试
 #   cd backend && pixi run tests-all              # 后端全量测试
+#   cd backend && pixi run tests-seekdb           # SeekDB 真引擎强制套件（前置：本地 seekdb 容器）
 #   cd backend && pixi run lint                   # ruff 静态检查
 #   cd backend && pixi run typecheck              # mypy 类型检查
 #   cd backend && pixi run coverage-gates         # 按模块覆盖率门禁（≥80% enforce）
@@ -84,7 +85,20 @@ tests-integration = { cmd = "pytest src/tests/integration/ -v --asyncio-mode=aut
 # 路径必须用 $PIXI_PROJECT_ROOT 绝对形态：src/conftest.py 在收集期即 chdir
 # 至 scratch 目录（CWD 隔离），相对路径在该时点之后不可靠。
 # 无 xdist（dev 依赖清单未含 pytest-xdist——锁定决策，后续按需评审追加）。
+# 不含 SeekDB 真引擎套件（src/tests/integration_seekdb/ 经 pyproject
+# norecursedirs 排除出扫集——无容器本地快速回路保持可跑；该套件见下方
+# tests-seekdb 任务与 CI 专用步骤）。
 tests-all = { cmd = "pytest $PIXI_PROJECT_ROOT/src/tests/ $PIXI_PROJECT_ROOT/src/packages/harness/ --asyncio-mode=auto", description = "运行全部后端测试（单元 + 集成 + harness 内嵌；单进程；严禁定向使用——定向用 pixi run pytest <文件> -q --asyncio-mode=auto）" }
+# SeekDB 真引擎强制套件（src/tests/integration_seekdb/——迁移链 round-trip
+# （含 MySQL 错误 5320 降级序回归）/ 并发不变式 / 混合检索往返；缺
+# SEEKDB_TEST_URL 即 pytest.fail 不跳过）。backend 本地任务（非跨树契约
+# 名——根 pixi 与 CI 不按名委托）。
+# 本地前置：seekdb 容器在跑（root 空密码）：
+#   docker run -d --name seekdb-smoke -p 2881:2881 \
+#     oceanbase/seekdb:1.4.0-100000172026082615
+# env 由本任务注入（显式测试服务配置）；CI 走 service container + 专用
+# pytest 步骤（不经本任务）。
+tests-seekdb = { cmd = "pytest $PIXI_PROJECT_ROOT/src/tests/integration_seekdb -v --asyncio-mode=auto", description = "SeekDB 真引擎强制套件（前置：本地 seekdb 容器已启动——docker 命令见上方注释；测试 env 由任务注入）", env = { SEEKDB_TEST_URL = "127.0.0.1:2881", SEEKDB_TEST_USER = "root", SEEKDB_TEST_PASSWORD = "", SEEKDB_TEST_DATABASE = "aac_ci_verify" } }
 # 静态检查：ruff over src/（任务名契约——根 pixi lint-all / CI lint job 委托此处）
 lint = { cmd = "ruff check src/", description = "ruff 静态检查（仅 backend/src）" }
 # 格式化

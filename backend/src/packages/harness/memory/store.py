@@ -187,7 +187,7 @@ def build_upsert_sql(n_rows: int) -> str:
     幂等）。**文档化决策**：首选 ON DUPLICATE KEY UPDATE（事实卡确认
     其作用于唯一键）；若 SeekDB 运行期拒绝该语法，回退路径为
     DELETE+INSERT（同键先删后插，事务外幂等性等价）——真实实例经
-    冒烟集成测试验证（tests/integration/test_seekdb_smoke.py）。
+    真引擎强制套件验证（tests/integration_seekdb/）。
 
     Args:
         n_rows: 行数（占位符行展开数；须 >=1）。
