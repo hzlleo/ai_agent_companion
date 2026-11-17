@@ -2,10 +2,11 @@
  * memory 域类型契约（与后端 harness.memory 契约对齐的 wire 形态）。
  *
  * 覆盖面：情景事件（episodes——载荷按 kind 判别）/ 策展记忆（curated
- * ——supersede 语义）/ 会话（sessions——chat 持久化面）/ 记忆检索
- * （search——dense / keyword / hybrid 三模式）/ 夜间梦境（dream——
- * 同步触发 + 运行日志）。本文件只承载类型（Unit 文件）——结构化数据
- * 一律走这里的接口形态，禁止裸对象字面量承载结构化语义。
+ * ——supersede 语义）/ 会话（sessions——chat 持久化面 + 消息变体
+ * swipes）/ 记忆检索（search——dense / keyword / hybrid 三模式）/
+ * 夜间梦境（dream——同步触发 + 运行日志）。本文件只承载类型（Unit
+ * 文件）——结构化数据一律走这里的接口形态，禁止裸对象字面量承载
+ * 结构化语义。
  */
 
 import type { BatchDeleteResult } from './common'
@@ -243,6 +244,22 @@ export interface ChatMessageMeta {
   emotion_deltas: Record<string, number>
   /** 该轮推进后的情绪快照（维度 → 0..1；无增量为 null）。 */
   emotion_snapshot: Record<string, number> | null
+  /** 变体序号（变体行为 1..N；正典行 / 旧数据为 undefined）。 */
+  variant_index?: number | null
+  /** 已选中的变体主键（正典行注记；未选过为 undefined）。 */
+  selected_variant_id?: number | null
+}
+
+/** 会话消息变体（父回合下的候选回复——swipes 探索面；不进入正典链）。 */
+export interface ChatMessageVariant {
+  /** 变体消息主键。 */
+  id: number
+  /** 变体可见正文。 */
+  content: string
+  /** 变体生成时间（epoch 毫秒）。 */
+  ts_ms: number
+  /** 变体元数据（心声 / 情绪增量；快照恒 null——变体不推进 M 态）。 */
+  meta: ChatMessageMeta | null
 }
 
 /** 会话消息（按 session 归属，seq 升序）。 */
@@ -251,7 +268,7 @@ export interface ChatMessage {
   id: number
   /** 所属会话主键。 */
   session_id: number
-  /** 会话内序号（从 1 递增）。 */
+  /** 会话内序号（从 1 递增；变体行与父回合同 seq）。 */
   seq: number
   /** 消息角色。 */
   role: ChatMessageRole
@@ -261,6 +278,20 @@ export interface ChatMessage {
   ts_ms: number
   /** 回合元数据（心声 / 情绪增量 / 情绪快照；无元数据为 null）。 */
   meta?: ChatMessageMeta | null
+  /** 嵌套变体列表（include_variants=true 的正典 assistant 回合；其余为空）。 */
+  variants: ChatMessageVariant[]
+}
+
+/** 变体重生成请求（POST .../variants；count 1-8 默认 4）。 */
+export interface ChatVariantRegenerateRequest {
+  /** 候选数量（1-8，默认 4；既有变体不清洗——序号续编）。 */
+  count: number
+}
+
+/** 变体选定请求（POST .../select-variant）。 */
+export interface ChatVariantSelectRequest {
+  /** 待选中的变体消息主键（须属同一父回合）。 */
+  variant_id: number
 }
 
 /** 会话详情（摘要 + 全量消息 seq 升序）。 */

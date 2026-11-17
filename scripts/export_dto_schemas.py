@@ -70,6 +70,9 @@ from packages.harness.memory.dreaming_models import (
 )
 from packages.harness.memory.dtos import (
     ChatMessageDTO,
+    ChatMessageMiniDTO,
+    ChatVariantRegenerateRequestDTO,
+    ChatVariantSelectRequestDTO,
     ChatSessionDetailDTO,
     ChatSessionSummaryDTO,
     CuratedQueryDTO,
@@ -234,6 +237,19 @@ def build_manifest() -> list[SchemaExportEntry]:
         SchemaExportEntry("ChatSessionSummaryDTO", ChatSessionSummaryDTO, "ChatSessionSummary", _FRONTEND_MEMORY),
         SchemaExportEntry("ChatMessageDTO", ChatMessageDTO, "ChatMessage", _FRONTEND_MEMORY),
         SchemaExportEntry("ChatSessionDetailDTO", ChatSessionDetailDTO, "ChatSessionDetail", _FRONTEND_MEMORY),
+        SchemaExportEntry("ChatMessageMiniDTO", ChatMessageMiniDTO, "ChatMessageVariant", _FRONTEND_MEMORY),
+        SchemaExportEntry(
+            "ChatVariantRegenerateRequestDTO",
+            ChatVariantRegenerateRequestDTO,
+            "ChatVariantRegenerateRequest",
+            _FRONTEND_MEMORY,
+        ),
+        SchemaExportEntry(
+            "ChatVariantSelectRequestDTO",
+            ChatVariantSelectRequestDTO,
+            "ChatVariantSelectRequest",
+            _FRONTEND_MEMORY,
+        ),
         # memory 域——检索。
         SchemaExportEntry(
             "MemorySearchRequestDTO", MemorySearchRequestDTO, "MemorySearchRequest", _FRONTEND_MEMORY

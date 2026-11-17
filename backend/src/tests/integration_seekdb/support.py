@@ -84,8 +84,8 @@ _MISSING_ENV_MESSAGE = (
     "未注入测试服务 env 的本地运行。"
 )
 
-#: alembic 迁移链 head 版本戳（0009——会话消息元数据列迁移）。
-HEAD_REVISION = "000000000009"
+#: alembic 迁移链 head 版本戳（0010——会话消息变体列 / 复合唯一键迁移）。
+HEAD_REVISION = "000000000010"
 
 #: 升级 head 后的全量表集（live 实测形态：alembic_version + 8 张 ff_* 域表）。
 EXPECTED_HEAD_TABLES: frozenset[str] = frozenset(

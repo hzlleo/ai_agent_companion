@@ -108,7 +108,7 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 **会话持久化（记忆层——可选绑定，缺省关闭）**：`ChatService` 构造注入 `session_service`（memory 域 `ChatSessionService`）后：
 
 - `create_session(db_session=..., title=...)` 同步落 `ff_chat_sessions` 行（经 `bind_persona_context` 绑定人格上下文——PersonaMixin 自动注入），状态携带 `session_id`；未给 `db_session` 时纯内存态；
-- `reply / stream_reply` 的用户与助手回合经 `session_scope` 短事务逐条落 `ff_chat_messages`（seq 递增；**开场白不落库**——正典确定性回放，resume 后幂等重现）；网关失败时用户回合保留在库——调用方重试是**完整重发**（用户消息再次进入历史与数据库，append-only；显式「重生成 / 复用上一条用户输入」API 有意推迟至后续 swipes 特性）；流式提前终止不落半截助手回合；持久化写入失败原样上抛（append-only 日志不静默丢行）；
+- `reply / stream_reply` 的用户与助手回合经 `session_scope` 短事务逐条落 `ff_chat_messages`（seq 递增；**开场白不落库**——正典确定性回放，resume 后幂等重现）；网关失败时用户回合保留在库——调用方重试是**完整重发**（用户消息再次进入历史与数据库，append-only；「重生成 / 复用上一条用户输入」的显式面见下节「消息变体（swipes）」）；流式提前终止不落半截助手回合；持久化写入失败原样上抛（append-only 日志不静默丢行）；
 - `resume_session(session_id, db_session=...)` 全量读取持久化会话、经 `max_history_turns` 窗口截断后回放进内存态 `turns`（保留最新回合；卡片按会话归属人格重取**当前**正典）；调用方须先绑定目标人格上下文（他人格会话 NOT_FOUND）；未绑定持久化服务的 resume → `INTERNAL_ERROR`；
 - 持久化消息不受 `max_history_turns` 滑动窗口约束（全量记录——内存窗口只是上下文组装面）；
 - 未绑定持久化服务（纯内存形态）时行为与既有完全一致——`/clear` 仅清内存历史（持久化消息保留）。
@@ -159,6 +159,84 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 标签原样放行；未闭合标签在流结束时剥离开标签标记、其后文本原样交还）；
 **心声 / 情绪不落 meta、不推进 M 态**（流式通道是操作员可见面——诚实边界，
 不引入逐块语义解析复杂度）。落库正文 = 已放行（客户端实际可见）文本。
+
+## 消息变体（swipes——R2b D7-5）
+
+单回合多候选重生成 + 选定提升（实现：`harness/chat/swipe.py` 的 `SwipeService`，
+持久面见 [memory.md](memory.md) 的 `ff_chat_messages` 变体列）。设计边界（锁定）：
+
+- **上下文脊柱**：重生成只回放父回合之前的**正典对话链**（`variant_of_id IS NULL`）——
+  既有变体**不进入上下文**（每回合针对原始对话脊柱重掷）；已选中的变体已就地替换正典
+  正文，因此自然进入后续回合上下文。这是「swipes 是逐回合重掷」语义的直接结果；
+- **生成路径**：与 `reply` 同一 `compose_messages`（人格卡片 / 世界书 / 情绪摘要 /
+  输出协议全量复用，**prompt 字节零变更**）+ `chat_by_role`（`role=chat`、
+  `purpose="chat"`、`persona_id` 直传）；**不装载工具面**（单轮候选——工具循环属
+  `reply` 的回合语义）；
+- **协议面**：每个候选独立经 `parse_assistant_output` 解析——可见正文落变体 `content`，
+  心声 / 情绪增量落 `meta`（附 `variant_index`）；变体情绪增量**不推进共享 M 态**
+  （探索面：只有选定变体经 select API 时推进，见下）；
+- **持久化**：候选全部生成成功后才逐条落库（网关中途失败 / 空正文 → 零变体行残留）；
+  变体行 `seq = 父回合 seq`、`variant_of_id = 父回合主键`、`variant_index` 从父回合
+  既有最大值**续编**（既有候选不清洗——历史全部保留）；变体不推进会话
+  `message_count` / `last_active_at`（正典链计数只度量真实对话回合）；
+- **选定提升（select）**：变体正文 / 协议元数据**就地替换**父回合行内内容（父行幸存、
+  正典身份不变），并在此刻**唯一一次**把该变体情绪增量推进 M 态（推进后快照 +
+  `selected_variant_id` 注记写回父行 `meta`）；变体行原样保留（历史可回溯）。
+
+### API（app/api/memories.py）
+
+| 方法与路径 | 语义 | 请求体 |
+|---|---|---|
+| `POST /api/v1/memories/sessions/{id}/messages/{mid}/variants` | 重生成候选变体（返回变体列表） | `{"count": 4}`（1-8，默认 4） |
+| `POST /api/v1/memories/sessions/{id}/messages/{mid}/select-variant` | 选定变体提升正典回合（返回更新后的正典消息） | `{"variant_id": 22}` |
+| `GET /api/v1/memories/sessions/{id}?include_variants=true` | 详情嵌套变体（`messages[].variants`，按序号升序） | —（默认 `false` 不含变体） |
+
+父回合语义：仅 **assistant 正典链行**可作父回合（用户回合 / 变体行 → `VALIDATION_ERROR`；
+他会话消息 → `NOT_FOUND`）。选定要求变体属于同一父回合（否则 `NOT_FOUND`）。
+
+变体行（`POST .../variants` 响应项）示例：
+
+```json
+{
+  "id": 22,
+  "session_id": 1,
+  "seq": 2,
+  "role": "assistant",
+  "content": "辛苦了，先坐下歇一会儿吧。",
+  "ts_ms": 1760000000600,
+  "meta": {
+    "thought": "他听起来真的很累，先别急着给建议。",
+    "emotion_deltas": {"affection": 0.3},
+    "emotion_snapshot": null,
+    "variant_index": 1
+  },
+  "variants": []
+}
+```
+
+选定后的正典回合（`POST .../select-variant` 响应项）：
+
+```json
+{
+  "id": 2,
+  "session_id": 1,
+  "seq": 2,
+  "role": "assistant",
+  "content": "辛苦了，先坐下歇一会儿吧。",
+  "ts_ms": 1760000000500,
+  "meta": {
+    "thought": "他听起来真的很累，先别急着给建议。",
+    "emotion_deltas": {"affection": 0.3},
+    "emotion_snapshot": {"joy": 0.8, "affection": 0.6, "calm": 0.5},
+    "variant_index": 1,
+    "selected_variant_id": 22
+  },
+  "variants": [{"id": 22, "content": "辛苦了，先坐下歇一会儿吧。", "ts_ms": 1760000000600, "meta": {"thought": "他听起来真的很累，先别急着给建议。", "emotion_deltas": {"affection": 0.3}, "emotion_snapshot": null, "variant_index": 1}}]
+}
+```
+
+前端会话详情对话框：assistant 回合「重生成变体」动作 → 候选轮播（`← 1/N →`、候选正文 /
+心声）→「选中此条」调用 select API 后失效详情缓存重拉。
 
 ## prompt 版本与 byte-lock
 
@@ -281,6 +359,9 @@ lifespan                                          上述函数对的 asynccontex
 - `tests/unit/test_chat_emotion.py`——协议 + 情绪引擎集成（真实 SQLite：可见
   正文返回 / meta 落库 + 详情 DTO 读回 / M 态推进 / 心情块注入位置 / 无标签
   零状态 / 引擎停用 / 流式边界不落 meta）；
+- `tests/unit/test_chat_swipe.py`——消息变体全语义（候选落库形态 / 脊柱-only 上下文 / 序号续编 / 空正文零残留 / 父回合校验 / 选定替换 + 单次 M 态推进 + 注记 / include_variants 读侧 / 引擎停用零推进）；
+- `tests/unit/test_chat_swipe_api.py`——变体端点（ASGITransport）：重生成 / 详情嵌套 / 选定 / 错误面（父回合语义 / 数量边界 / 缺失资源）；
+- `tests/unit/test_migration_chat_message_variants.py`——迁移 0010 SQLite 升 / 降 / 复升 + 复合唯一键语义；
 - `tests/unit/test_chat_persistence.py`——持久化集成：落库 / 网关失败保留用户回合 / resume 全链路 / 持久化关闭兼容纯内存形态 / CLI `/new` `/sessions` `/resume` 命令（真实启动栈 + tmp SQLite + 假网关）；
 - `tests/unit/test_chat_cli.py`——注入式 I/O 驱动全流程（真实启动栈 + tmp SQLite + 假网关，never real stdin）：命令面 / 无主人格指引（退出码 1）/ 业务异常不崩 REPL / main 入口；
 - `tests/unit/test_app_main.py`——create_app 路由注册 / startup-shutdown 函数对（真实组件 + LIFO 追踪）/ health 与 personas 经 ASGITransport 走真实 app / lifespan 全周期 / 外部引擎治理；

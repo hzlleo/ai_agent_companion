@@ -40,11 +40,18 @@ supersede 语义（ff_curated_memory）：
     - 删除 active 行后该 topic 无 active 行，下次 upsert 重新起链
       （version 从 1 重新计数——文档化决策）。
 
-会话消息序号（ff_chat_messages）：
+会话消息序号 / 变体（ff_chat_messages）：
 
-    - ``(session_id, seq)`` 唯一键 ``uq_ff_chat_messages_seq``——会话内
-      seq 至多一条（DB 级兜底；服务层经会话行锁串行化计数，见
-      ``ChatSessionService.append_message``）。
+    - 正典对话链行 ``variant_of_id`` / ``variant_index`` 均为 NULL：
+      seq 由服务层经会话行锁串行化计数（``append_message``）；
+    - 变体行（swipes——同回合多候选重生成）``variant_of_id`` 指向父
+      assistant 回合（自引用 FK，级联删除）、``variant_index`` 为父回合内
+      序号（1..N），seq 与父回合相同（**不进入 seq 链**、不推进会话
+      计数）；
+    - 复合唯一键 ``uq_ff_chat_messages_seq_variant (session_id, seq,
+      variant_of_id, variant_index)``——变体身份 DB 级兜底；正典行键列
+      含 NULL，两方言唯一键均忽略 NULL（正典 seq 唯一性由服务层行锁
+      计数维持——旧 ``uq_ff_chat_messages_seq`` 已由迁移 0010 让位）。
 
 列约定：时间全部 epoch 毫秒（BigInteger）；枚举值以字符串落库（值域
 由 memory.models 枚举在 DTO 边界校验）；importance 1-10。
@@ -203,11 +210,20 @@ class ChatMessageRow(Base, BigIntIdMixin, TimestampMixin):
         ts_ms: 消息时间（epoch 毫秒——回合产生时刻）。
         meta: 回合元数据 JSON（可空——心声 / 情绪增量 / 情绪快照等内部
             观测面；永不进入对方可见文本）。
+        variant_of_id: 父回合主键（自引用 FK，级联删除；NULL = 正典对话
+            链行——变体随父回合删除）。
+        variant_index: 父回合内变体序号（1..N；NULL = 正典对话链行）。
     """
 
     __tablename__ = "ff_chat_messages"
     __table_args__ = (
-        UniqueConstraint("session_id", "seq", name="uq_ff_chat_messages_seq"),
+        UniqueConstraint(
+            "session_id",
+            "seq",
+            "variant_of_id",
+            "variant_index",
+            name="uq_ff_chat_messages_seq_variant",
+        ),
     )
 
     session_id: Mapped[int] = mapped_column(
@@ -224,4 +240,15 @@ class ChatMessageRow(Base, BigIntIdMixin, TimestampMixin):
         JSON,
         nullable=True,
         comment="回合元数据 JSON（心声 / 情绪增量 / 情绪快照；NULL = 无元数据）",
+    )
+    variant_of_id: Mapped[int | None] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        ForeignKey("ff_chat_messages.id", ondelete="CASCADE"),
+        index=True,
+        comment="父回合主键（自引用 FK，级联删除；NULL = 正典对话链行）",
+    )
+    variant_index: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="父回合内变体序号（1..N；NULL = 正典对话链行）",
     )

@@ -20,6 +20,8 @@ import type {
   TraitPreset,
 } from '@/types/persona'
 import type {
+  ChatMessage,
+  ChatMessageVariant,
   ChatSessionDetail,
   ChatSessionSummary,
   CuratedRecord,
@@ -521,6 +523,22 @@ export function mockSessionSummary(overrides: Partial<ChatSessionSummary> = {}):
   }
 }
 
+/** 测试用消息变体（wire 形态；父回合候选回复）。 */
+export function mockVariant(overrides: Partial<ChatMessageVariant> = {}): ChatMessageVariant {
+  return {
+    id: 21,
+    content: '变体回复一',
+    ts_ms: 1731000000600,
+    meta: {
+      thought: '换个更温柔的说法。',
+      emotion_deltas: { affection: 0.3 },
+      emotion_snapshot: null,
+      variant_index: 1,
+    },
+    ...overrides,
+  }
+}
+
 /** 测试用会话详情（wire 形态；3 条消息 seq 升序）。 */
 export function mockSessionDetail(
   overrides: Partial<ChatSessionDetail> = {},
@@ -534,7 +552,7 @@ export function mockSessionDetail(
     created_at: 1731000000000,
     last_active_at: 1731000001000,
     messages: [
-      { id: 1, session_id: sessionId, seq: 1, role: 'user', content: '今天好累', ts_ms: 1731000000000 },
+      { id: 1, session_id: sessionId, seq: 1, role: 'user', content: '今天好累', ts_ms: 1731000000000, variants: [] },
       {
         id: 2,
         session_id: sessionId,
@@ -547,10 +565,36 @@ export function mockSessionDetail(
           emotion_deltas: { affection: 0.2 },
           emotion_snapshot: { affection: 0.7, shyness: 0.55 },
         },
+        variants: [],
       },
-      { id: 3, session_id: sessionId, seq: 3, role: 'user', content: '就是工作上的事', ts_ms: 1731000001000 },
+      { id: 3, session_id: sessionId, seq: 3, role: 'user', content: '就是工作上的事', ts_ms: 1731000001000, variants: [] },
     ],
     ...overrides,
+  }
+}
+
+/** 会话详情读侧 handler 用的 assistant 回合（含两条候选变体）。 */
+function mockAssistantMessageWithVariants(sessionId: number): ChatMessage {
+  const detail = mockSessionDetail({ id: sessionId })
+  const assistant = detail.messages.find((message) => message.role === 'assistant')
+  if (assistant === undefined) {
+    throw new Error('mockSessionDetail 缺少 assistant 回合（测试数据损坏）')
+  }
+  return {
+    ...assistant,
+    variants: [
+      mockVariant(),
+      mockVariant({
+        id: 22,
+        content: '变体回复二',
+        meta: {
+          thought: '换一种更温柔的说法。',
+          emotion_deltas: { affection: 0.3 },
+          emotion_snapshot: null,
+          variant_index: 2,
+        },
+      }),
+    ],
   }
 }
 
@@ -890,13 +934,55 @@ export const memoryHandlers = [
       }),
     )
   }),
-  http.get(`${BACKEND_ORIGIN}/memories/sessions/:sessionId`, ({ params }) => {
+  http.get(`${BACKEND_ORIGIN}/memories/sessions/:sessionId`, ({ request, params }) => {
     const id = Number(params.sessionId)
     if (id === 404) {
       return HttpResponse.json(errorResult('会话不存在或不在此人格作用域', 'NOT_FOUND'), { status: 404 })
     }
-    return HttpResponse.json(okResult(mockSessionDetail({ id })))
+    const includeVariants =
+      new URL(request.url).searchParams.get('include_variants') === 'true'
+    const detail = mockSessionDetail({ id })
+    if (includeVariants) {
+      detail.messages = detail.messages.map((message) =>
+        message.role === 'assistant' ? mockAssistantMessageWithVariants(id) : message,
+      )
+    }
+    return HttpResponse.json(okResult(detail))
   }),
+  // 变体重生成：按 count 返回候选（id 100 起）。
+  http.post(
+    `${BACKEND_ORIGIN}/memories/sessions/:sessionId/messages/:messageId/variants`,
+    async ({ request }) => {
+      const body = (await request.json()) as { count: number }
+      const variants = Array.from({ length: body.count }, (_, index) =>
+        mockVariant({ id: 100 + index, content: `新候选${index + 1}` }),
+      )
+      return HttpResponse.json(okResult(variants, `已生成 ${variants.length} 条变体`))
+    },
+  ),
+  // 变体选定：回显父回合（内容替换为选中候选）。
+  http.post(
+    `${BACKEND_ORIGIN}/memories/sessions/:sessionId/messages/:messageId/select-variant`,
+    async ({ request, params }) => {
+      const body = (await request.json()) as { variant_id: number }
+      const sessionId = Number(params.sessionId)
+      const assistant = mockAssistantMessageWithVariants(sessionId)
+      const variant =
+        [mockVariant(), mockVariant({ id: 22, content: '变体回复二' }), mockVariant({ id: 100, content: '新候选1' })]
+          .find((item) => item.id === body.variant_id) ?? mockVariant()
+      return HttpResponse.json(
+        okResult(
+          {
+            ...assistant,
+            content: variant.content,
+            meta: { ...variant.meta, selected_variant_id: variant.id },
+            variants: assistant.variants,
+          },
+          '已选中该变体',
+        ),
+      )
+    },
+  ),
   http.delete(`${BACKEND_ORIGIN}/memories/sessions/:sessionId`, ({ params }) => {
     const id = Number(params.sessionId)
     if (id === 404) {

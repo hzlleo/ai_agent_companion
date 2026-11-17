@@ -14,12 +14,23 @@ import {
   listDreamRuns,
   listEpisodes,
   listSessions,
+  regenerateVariants,
   searchMemories,
+  selectVariant,
   triggerDream,
   upsertCurated,
 } from '@/api/memories'
 import { ApiError } from '@/api/client'
-import { BACKEND_ORIGIN, errorResult, mockDreamRun, mockEpisode, okResult, server } from '@/test/server'
+import {
+  BACKEND_ORIGIN,
+  errorResult,
+  mockDreamRun,
+  mockEpisode,
+  mockSessionDetail,
+  mockVariant,
+  okResult,
+  server,
+} from '@/test/server'
 
 /** 捕获到的请求（method / url / body）。 */
 interface CapturedRequest {
@@ -324,5 +335,52 @@ describe('memories 端点（人格作用域查询参数）', () => {
       'NOT_FOUND',
     )
     expect(error.status).toBe(404)
+  })
+})
+
+describe('memories 消息变体端点（swipes）', () => {
+  it('getSession：includeVariants 时 include_variants=true 进查询串；默认不发送', async () => {
+    const { captured } = capture(`${BACKEND_ORIGIN}/memories/sessions/3`, 'get', () =>
+      HttpResponse.json(okResult(mockSessionDetail({ id: 3 }))),
+    )
+    await getSession(2, 3, true)
+    const first = captured()
+    if (first === null) throw new Error('请求未被捕获')
+    expect(first.url.searchParams.get('persona_id')).toBe('2')
+    expect(first.url.searchParams.get('include_variants')).toBe('true')
+
+    await getSession(undefined, 3)
+    const second = captured()
+    if (second === null) throw new Error('请求未被捕获')
+    expect(second.url.searchParams.get('persona_id')).toBeNull()
+    expect(second.url.searchParams.get('include_variants')).toBeNull()
+  })
+
+  it('regenerateVariants：persona_id 查询参数 + count 请求体 + 变体列表响应', async () => {
+    const variants = [mockVariant({ id: 101, content: '候选一' }), mockVariant({ id: 102, content: '候选二' })]
+    const { captured } = capture(`${BACKEND_ORIGIN}/memories/sessions/3/messages/7/variants`, 'post', () =>
+      HttpResponse.json(okResult(variants, '已生成 2 条变体')),
+    )
+    const result = await regenerateVariants(2, 3, 7, { count: 2 })
+    const request = captured()
+    if (request === null) throw new Error('请求未被捕获')
+    expect(request.url.searchParams.get('persona_id')).toBe('2')
+    expect(request.body).toEqual({ count: 2 })
+    expect(result.map((item) => item.content)).toEqual(['候选一', '候选二'])
+  })
+
+  it('selectVariant：variant_id 请求体 + 更新后的正典回合响应', async () => {
+    const parent = mockSessionDetail().messages[1]
+    const { captured } = capture(
+      `${BACKEND_ORIGIN}/memories/sessions/3/messages/7/select-variant`,
+      'post',
+      () => HttpResponse.json(okResult({ ...parent, content: '变体回复二' }, '已选中该变体')),
+    )
+    const updated = await selectVariant(undefined, 3, 7, { variant_id: 22 })
+    const request = captured()
+    if (request === null) throw new Error('请求未被捕获')
+    expect(request.url.searchParams.get('persona_id')).toBeNull()
+    expect(request.body).toEqual({ variant_id: 22 })
+    expect(updated.content).toBe('变体回复二')
   })
 })

@@ -49,7 +49,10 @@ __all__ = [
     "ChatSessionSummaryDTO",
     "ChatSessionDetailDTO",
     "ChatMessageDTO",
+    "ChatMessageMiniDTO",
     "ChatMessageMetaModel",
+    "ChatVariantRegenerateRequestDTO",
+    "ChatVariantSelectRequestDTO",
 ]
 
 #: kind → 载荷 Model Class 判别表（DTO 边界 content 解析真源；与
@@ -376,6 +379,10 @@ class ChatMessageMetaModel(BaseModel):
             留档）。
         emotion_snapshot: 该轮推进后的情绪状态快照（维度 → 0..1；引擎
             停用 / 无增量时为 None）。
+        variant_index: 变体行在父回合内的序号（1..N；正典行为 None——
+            与 ORM 列同源，读侧冗余镜像）。
+        selected_variant_id: 本回合被选中的变体主键（select-variant
+            提升后由服务层写入的正典行注记；未选过为 None）。
     """
 
     thought: str | None = Field(default=None, description="内心独白（永不展示给对方）")
@@ -385,6 +392,37 @@ class ChatMessageMetaModel(BaseModel):
     emotion_snapshot: dict[str, float] | None = Field(
         default=None, description="该轮推进后的情绪快照（维度 → 0..1；无增量为 null）"
     )
+    variant_index: int | None = Field(
+        default=None, description="变体序号（正典行 / 未声明为 null）"
+    )
+    selected_variant_id: int | None = Field(
+        default=None, description="已选中的变体主键（正典行注记；未选过为 null）"
+    )
+
+
+class ChatMessageMiniDTO(BaseModel):
+    """会话消息变体摘要 DTO（父回合下的候选回复——会话详情嵌套面）。
+
+    变体行共享父回合 seq，身分由 ``variant_of_id`` + ``variant_index``
+    承载（ORM 列）；读侧按 ``variant_index`` 升序返回，不携带 seq /
+    session_id（父回合已承载）与变体嵌套（变体不再生成变体）。
+
+    Attributes:
+        id: 变体消息主键。
+        content: 变体可见正文。
+        ts_ms: 变体生成时间（epoch 毫秒）。
+        meta: 变体元数据（心声 / 情绪增量；情绪快照恒 None——变体不推进
+            M 态，选定后才推进）。
+    """
+
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+
+    id: int = Field(description="变体消息主键")
+    content: str = Field(description="变体可见正文")
+    ts_ms: int = Field(description="变体生成时间（epoch 毫秒）")
+    meta: ChatMessageMetaModel | None = Field(
+        default=None, description="变体元数据（心声 / 情绪增量；快照恒 null）"
+    )
 
 
 class ChatMessageDTO(BaseModel):
@@ -393,11 +431,13 @@ class ChatMessageDTO(BaseModel):
     Attributes:
         id: 消息主键。
         session_id: 所属会话主键。
-        seq: 会话内序号（从 1 递增）。
+        seq: 会话内序号（从 1 递增；变体行与父回合同 seq）。
         role: 消息角色（user/assistant/system）。
         content: 消息文本。
         ts_ms: 消息时间（epoch 毫秒）。
         meta: 回合元数据（心声 / 情绪增量 / 情绪快照；无元数据为 null）。
+        variants: 嵌套变体列表（正典 assistant 回合经 ``include_variants``
+            详情请求时按序号升序附上；其余行 / 非变体查询为空列表）。
     """
 
     model_config = ConfigDict(from_attributes=True, protected_namespaces=())
@@ -411,6 +451,31 @@ class ChatMessageDTO(BaseModel):
     meta: ChatMessageMetaModel | None = Field(
         default=None, description="回合元数据（心声 / 情绪增量 / 情绪快照；无元数据为 null）"
     )
+    variants: list[ChatMessageMiniDTO] = Field(
+        default_factory=list,
+        description="嵌套变体列表（include_variants=true 的正典 assistant 回合；其余为空）",
+    )
+
+
+class ChatVariantRegenerateRequestDTO(BaseModel):
+    """变体重生成请求 DTO（单回合多候选——swipes 写入面）。
+
+    Attributes:
+        count: 本次生成的候选数量（1-8，默认 4）；既有变体不清洗——
+            新变体序号从父回合既有最大值续编。
+    """
+
+    count: int = Field(default=4, ge=1, le=8, description="变体生成数量（1-8，默认 4）")
+
+
+class ChatVariantSelectRequestDTO(BaseModel):
+    """变体选定请求 DTO（select-variant——正典回合内容提升面）。
+
+    Attributes:
+        variant_id: 待选中的变体消息主键（须属同一父回合——服务层校验）。
+    """
+
+    variant_id: int = Field(gt=0, description="待选中的变体消息主键")
 
 
 class ChatSessionDetailDTO(BaseModel):

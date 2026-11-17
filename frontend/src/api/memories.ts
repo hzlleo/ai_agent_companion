@@ -12,8 +12,10 @@
  *   - GET    /memories/curated/{id}/history       历史链读取（版本升序）
  *   - DELETE /memories/curated/{id}               删除
  *   - GET    /memories/sessions                   会话游标分页列表
- *   - GET    /memories/sessions/{id}              会话详情（含全量消息）
+ *   - GET    /memories/sessions/{id}              会话详情（正典消息；include_variants 可嵌套变体）
  *   - DELETE /memories/sessions/{id}              删除（消息同事务清理）
+ *   - POST   /memories/sessions/{id}/messages/{mid}/variants        重生成消息变体（swipes）
+ *   - POST   /memories/sessions/{id}/messages/{mid}/select-variant  选定变体提升正典回合
  *   - POST   /memories/search                     记忆检索（dense/keyword/hybrid）
  *   - POST   /memories/dream/trigger              手工触发梦境整理（同步运行）
  *   - GET    /memories/dream/runs                 运行日志游标分页
@@ -26,8 +28,11 @@
 import { request } from './client'
 import type { PageResponse } from '@/types/common'
 import type {
+  ChatMessage,
   ChatSessionDetail,
   ChatSessionSummary,
+  ChatVariantRegenerateRequest,
+  ChatVariantSelectRequest,
   CuratedListParams,
   CuratedRecord,
   CuratedUpsertRequest,
@@ -169,15 +174,19 @@ export async function listSessions(
   })
 }
 
-/** GET /memories/sessions/{id} —— 会话详情（摘要 + 全量消息 seq 升序）。 */
+/** GET /memories/sessions/{id} —— 会话详情（正典消息 seq 升序；可选嵌套变体）。 */
 export async function getSession(
   personaId: number | undefined,
   sessionId: number,
+  includeVariants = false,
 ): Promise<ChatSessionDetail> {
   return request<ChatSessionDetail>({
     method: 'GET',
     url: `/memories/sessions/${sessionId}`,
-    params: personaScope(personaId),
+    params: {
+      ...personaScope(personaId),
+      ...(includeVariants ? { include_variants: true } : {}),
+    },
   })
 }
 
@@ -190,6 +199,36 @@ export async function deleteSession(
     method: 'DELETE',
     url: `/memories/sessions/${sessionId}`,
     params: personaScope(personaId),
+  })
+}
+
+/** POST /memories/sessions/{id}/messages/{mid}/variants —— 重生成消息变体（swipes）。 */
+export async function regenerateVariants(
+  personaId: number | undefined,
+  sessionId: number,
+  messageId: number,
+  payload: ChatVariantRegenerateRequest,
+): Promise<ChatMessage[]> {
+  return request<ChatMessage[]>({
+    method: 'POST',
+    url: `/memories/sessions/${sessionId}/messages/${messageId}/variants`,
+    params: personaScope(personaId),
+    data: payload,
+  })
+}
+
+/** POST /memories/sessions/{id}/messages/{mid}/select-variant —— 选定变体提升正典回合。 */
+export async function selectVariant(
+  personaId: number | undefined,
+  sessionId: number,
+  messageId: number,
+  payload: ChatVariantSelectRequest,
+): Promise<ChatMessage> {
+  return request<ChatMessage>({
+    method: 'POST',
+    url: `/memories/sessions/${sessionId}/messages/${messageId}/select-variant`,
+    params: personaScope(personaId),
+    data: payload,
   })
 }
 
