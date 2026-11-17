@@ -46,6 +46,25 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
     - 流式 ``stream_reply`` 恒 content-only（网关面 tools+stream 已
       拒绝——本域不组合二者）。
 
+意图快径前钩（R2a-6——构造注入 ``intent_shortcut`` 后，``reply`` 前端
+先试快径；缺省 ``intent_shortcut=None`` 保持既有零快径形态）：
+
+    - 匹配链：``reply`` 前端调用 ``intent_shortcut.try_shortcut``（
+      :class:`IntentShortcutFace`——intent 域 ``IntentShortcutService``
+      结构满足）；命中（``handled=True``）时**完全跳过网关调用**——
+      罐头回复直接落回合；
+    - 拟真延迟：命中后经 ``intent_shortcut.realism_delay``（800-1500ms
+      随机——短区间「顺手秒回」语义，不走节律门完整延迟；决策文档化
+      于 harness/intent/service）；
+    - **持久化不变式**：快径回合照常落用户回合 + 罐头 assistant 回合
+      （``state.turns`` + ``ff_chat_messages``——记忆 / 梦境可见该轮，
+      文档化决策：快径对话是真实对话史的一部分）；
+    - 注入面（通道专属）：app 装配仅在**通道路径**的 ChatService 工厂
+      注入快径面（CLI / duty 不注入——行为零变化；意图快径是会话性
+      能，duty 是无头计划任务，见 docs/backend/intent.md 装配一节）；
+    - 流式 ``stream_reply`` 不走快径（CLI 消费面——通道回复全量走
+      ``reply``，零分叉）。
+
 会话持久化（**可选绑定，缺省关闭**）：
 
     - 构造注入 ``session_service``（memory 域 ``ChatSessionService``）
@@ -86,6 +105,7 @@ from packages.harness.chat.prompts import (
 from packages.harness.config.model_entry import ModelRole
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.database.session import session_scope
+from packages.harness.intent.intent_models import IntentMatchModel, PersonaNaming
 from packages.harness.llm.gateway import LlmGateway
 from packages.harness.llm.llm_models import (
     ChatMessageModel,
@@ -111,6 +131,7 @@ from packages.harness.tools.tool_models import (
 __all__ = [
     "ChatService",
     "ToolExecutorFace",
+    "IntentShortcutFace",
     "CHAT_TOOL_STEP_CAP",
     "compose_messages",
     "estimate_text_tokens",
@@ -374,6 +395,40 @@ class ToolExecutorFace(Protocol):
         ...
 
 
+class IntentShortcutFace(Protocol):
+    """chat 意图快径面协议（intent 域服务的结构化消费契约）。
+
+    结构化类型：真实
+    :class:`~packages.harness.intent.service.IntentShortcutService` 天然
+    满足（同签名 ``try_shortcut`` / ``realism_delay``）；测试注入 fake
+    同形态。注入面为**通道路径专属**（app 装配决策——CLI / duty 不注入，
+    见模块 docstring「意图快径前钩」一节）。
+    """
+
+    async def try_shortcut(
+        self, text: str, persona: PersonaNaming, now_ms: int | None = None
+    ) -> IntentMatchModel:
+        """尝试意图快径匹配（恒不抛异常——内部异常归一未命中）。
+
+        Args:
+            text: 用户消息原文。
+            persona: 人格命名面（会话状态同形——称呼提取原料）。
+            now_ms: 判定时刻（epoch 毫秒；None = 服务注入时钟）。
+
+        Returns:
+            匹配结果（``handled=False`` = 未命中——照常走 LLM）。
+        """
+        ...
+
+    async def realism_delay(self) -> None:
+        """快径拟真延迟（800-1500ms 随机 + 休眠面等待——注入式可测）。
+
+        Raises:
+            Exception: 休眠面异常（透传——注入面契约）。
+        """
+        ...
+
+
 class ChatService:
     """人格感知聊天会话服务（组装 + 网关调用 + 会话内存态维护 + 可选持久化）。
 
@@ -392,6 +447,7 @@ class ChatService:
         session_service: ChatSessionService | None = None,
         tools: Sequence[ToolSpecModel] | None = None,
         tool_executor: ToolExecutorFace | None = None,
+        intent_shortcut: IntentShortcutFace | None = None,
     ) -> None:
         """初始化服务。
 
@@ -407,6 +463,9 @@ class ChatService:
                 ``tool_executor`` 成对注入）。
             tool_executor: 工具执行面（``ToolRegistry`` 结构满足；
                 与 ``tools`` 成对注入——缺一即装配错误 fail loud）。
+            intent_shortcut: 意图快径面（None = 零快径形态——既有行为；
+                注入后 ``reply`` 前端先试快径，命中即罐头回复 + 跳过
+                网关——通道装配专属注入面，见模块 docstring）。
 
         Raises:
             BusinessException: ``tools`` 与 ``tool_executor`` 未成对注入
@@ -415,6 +474,8 @@ class ChatService:
         self._gateway = gateway
         self._persona_service = persona_service if persona_service is not None else PersonaService()
         self._session_service = session_service
+        #: 意图快径面绑定（None = 零快径形态——reply 前钩判定面）。
+        self._intent_shortcut = intent_shortcut
         bound_tools = list(tools) if tools else []
         if bound_tools and tool_executor is None:
             raise BusinessException(
@@ -584,6 +645,14 @@ class ChatService:
     async def reply(self, state: ChatSessionStateModel, user_text: str) -> str:
         """单轮回复（非流式）：追加用户回合 → 组装 → 网关 chat_by_role。
 
+        意图快径分派（R2a-6——``intent_shortcut`` 绑定时）：``reply``
+        前端先试快径（``try_shortcut``）；命中（``handled=True``）时
+        追加用户回合 → 拟真延迟（``realism_delay``——800-1500ms 随机）
+        → 罐头文本追加为 assistant 回合（持久化语义与正常回复**完全
+        同构**——用户 + 助手回合均落库，记忆 / 梦境可见；网关调用完全
+        跳过）；未命中照常走组装 / 工具循环 / 网关链路。快径面自身
+        恒不抛异常（未命中兜底——见 :class:`IntentShortcutFace`）。
+
         工具面分派：``tools`` 绑定时走有界工具循环（步数上限 + 收尾
         forcing——见模块 docstring「可选工具循环」；工具步为循环内部
         消息，不进入会话回合 / 持久化）；未绑定为既有单次调用形态。
@@ -602,13 +671,25 @@ class ChatService:
         Returns:
             人格回复文本（已追加为 assistant 回合；持久化绑定且已落库
             时用户 + 助手回合均落 ``ff_chat_messages``——仅最终 assistant
-            文本，工具中间态不落库）。
+            文本，工具中间态不落库；快径命中时为罐头文本，网关零调用）。
 
         Raises:
             BusinessException: 输入为空（``VALIDATION_ERROR``）；模型返回
                 空回复（``LLM_CALL_FAILED``）；网关链路异常（透传）；
                 持久化写入失败（透传——append-only 日志不静默丢行）。
         """
+        if self._intent_shortcut is not None:
+            match = await self._intent_shortcut.try_shortcut(user_text, state)
+            if match.handled:
+                logger.debug(
+                    "意图快径命中（跳过网关）: persona={}, kind={}, confidence={:.2f}",
+                    state.persona_name,
+                    match.kind.value if match.kind is not None else "none",
+                    match.confidence,
+                )
+                return await self._reply_via_shortcut(
+                    state, user_text, match.response_text, self._intent_shortcut
+                )
         user_turn = self._append_user_turn(state, user_text)
         await self._persist_turn(state, user_turn)
         result = compose_messages(state)
@@ -775,6 +856,42 @@ class ChatService:
             purpose=CHAT_PURPOSE,
         )
         return final_response.content.strip()
+
+    async def _reply_via_shortcut(
+        self,
+        state: ChatSessionStateModel,
+        user_text: str,
+        canned_text: str,
+        shortcut: IntentShortcutFace,
+    ) -> str:
+        """快径回复落回合（用户回合 → 拟真延迟 → 罐头助手回合；零网关）。
+
+        持久化语义与 ``reply`` 正常路径**完全同构**（``_append_user_turn``
+        空白校验 + ``_persist_turn`` 逐回合落库）——快径对话是真实对话
+        史的一部分（记忆 / 梦境消费面可见）。拟真延迟位于用户回合落库
+        之后、助手回合落库之前（时间戳语义：用户消息到达时刻 → 人格
+        「打字」耗时 → 回复产出时刻）。
+
+        Args:
+            state: 会话状态。
+            user_text: 用户输入（空白拒绝——与正常路径同校验）。
+            canned_text: 罐头回复文本（快径匹配层产出——非空契约）。
+            shortcut: 快径面（拟真延迟消费——调用方已判非 None）。
+
+        Returns:
+            罐头回复文本（已追加为 assistant 回合）。
+
+        Raises:
+            BusinessException: 输入为空（``VALIDATION_ERROR``——与正常
+                路径同边界）；持久化写入失败（透传——append-only 日志
+                不静默丢行）。
+        """
+        user_turn = self._append_user_turn(state, user_text)
+        await self._persist_turn(state, user_turn)
+        await shortcut.realism_delay()
+        assistant_turn = state.append_turn(ChatMessageRole.ASSISTANT, canned_text)
+        await self._persist_turn(state, assistant_turn)
+        return assistant_turn.content
 
     def _append_user_turn(self, state: ChatSessionStateModel, user_text: str) -> ChatTurnModel:
         """追加用户回合（空白输入拒绝——边界校验）。

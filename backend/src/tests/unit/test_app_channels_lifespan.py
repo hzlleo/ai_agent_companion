@@ -40,6 +40,9 @@ from packages.harness.config.models import (
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.core.background_tasks import background_task_manager
 from packages.harness.core.errors import BusinessException, ErrorCode
+from packages.harness.intent.intent_models import IntentSettings
+from packages.harness.intent.service import IntentShortcutService
+from packages.harness.rhythm.service import RhythmService
 
 
 def _settings(tmp_path: Path, *, telegram_enabled: bool) -> Settings:
@@ -275,9 +278,7 @@ class TestFailurePaths:
         task = app.state.channels_task
         assert task is not None
         # 收割终态（return_exceptions——异常只进日志面，不向测试抛出）
-        await asyncio.wait_for(
-            asyncio.gather(task, return_exceptions=True), timeout=5.0
-        )
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=5.0)
         await shutdown_app_state(app)
         assert app.state.channels_task is None
 
@@ -313,3 +314,62 @@ class TestFailurePaths:
         assert runner.stop_requested is True
         assert task.cancelled() is True
         assert app.state.channels_task is None
+
+
+class TestRhythmIntentSlots:
+    """rhythm / intent 会话性组件装配（R2a-6——通道层槽位契约）。"""
+
+    async def test_disabled_channels_leaves_slots_none(self, tmp_path: Path) -> None:
+        """通道全关：rhythm / intent 槽位 None（消费面是通道工厂）。"""
+        app = create_app()
+        settings = _settings(tmp_path, telegram_enabled=False)
+        await startup_app_state(app, settings, config_dir=tmp_path)
+        try:
+            assert app.state.rhythm_service is None
+            assert app.state.intent_shortcut is None
+        finally:
+            await shutdown_app_state(app)
+
+    async def test_enabled_channels_assembly_and_shared_rng(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """通道启用（INTENT 默认开）：双服务装配 + 单一随机源共享。"""
+        monkeypatch.setattr(app_main, "TelegramChannelRunner", FakeRunner)
+        app = create_app()
+        settings = _settings(tmp_path, telegram_enabled=True)
+        await startup_app_state(app, settings, config_dir=tmp_path)
+        try:
+            rhythm = app.state.rhythm_service
+            intent = app.state.intent_shortcut
+            assert isinstance(rhythm, RhythmService)
+            assert isinstance(intent, IntentShortcutService)
+            # 单一随机源共享：intent 拟真延迟与 rhythm 延迟采样同源。
+            assert intent._rng is rhythm._rng
+        finally:
+            await shutdown_app_state(app)
+        assert app.state.rhythm_service is None
+        assert app.state.intent_shortcut is None
+
+    async def test_intent_disabled_shortcut_slot_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """INTENT_ENABLED=false：快径槽位 None（工厂零注入——R2a 前行为）。"""
+        monkeypatch.setattr(app_main, "TelegramChannelRunner", FakeRunner)
+        app = create_app()
+        settings = build_isolated_settings(
+            database=DatabaseConfig(type="sqlite", name=str(tmp_path / "app-intent-off.db")),
+            channels=ChannelsSettings(
+                telegram=TelegramSettings(
+                    enabled=True,
+                    bot_token_env="TELEGRAM_TEST_BOT_TOKEN",
+                    state_dir=str(tmp_path / "channels-state"),
+                )
+            ),
+            intent=IntentSettings(enabled=False),
+        )
+        await startup_app_state(app, settings, config_dir=tmp_path)
+        try:
+            assert isinstance(app.state.rhythm_service, RhythmService)
+            assert app.state.intent_shortcut is None
+        finally:
+            await shutdown_app_state(app)

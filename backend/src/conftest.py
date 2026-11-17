@@ -234,6 +234,26 @@ os.environ["SEARCH_COOLDOWN_SECONDS"] = "60"
 os.environ["SEARCH_BOCHA_API_KEY"] = "test-only-bocha-api-key"
 os.environ["SEARCH_ZHIPU_API_KEY"] = "test-only-zhipu-api-key"
 
+# --- 拟人节律层（RHYTHM_ 前缀 → RhythmSettings；默认关闭 → 测试零节律
+#     副作用；S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入
+#     测试。naive 本地墙钟约定（scheduler daily_at 同先例）；作息值与
+#     生产默认同值——核心函数测试自注时刻，不依赖本全局值） ---
+os.environ["RHYTHM_ENABLED"] = "false"
+os.environ["RHYTHM_BEDTIME"] = "23:30"
+os.environ["RHYTHM_WAKE_TIME"] = "08:00"
+os.environ["RHYTHM_TIMEZONE_NOTE"] = "naive-local"
+os.environ["RHYTHM_REPLY_DELAY_MIN_MS"] = "1500"
+os.environ["RHYTHM_REPLY_DELAY_MAX_MS"] = "45000"
+os.environ["RHYTHM_TYPING_SPEED_MS_PER_CHAR"] = "45"
+os.environ["RHYTHM_TYPING_BASE_MS"] = "800"
+os.environ["RHYTHM_BURST_PROBABILITY"] = "0.12"
+
+# --- 意图快径（INTENT_ 前缀 → IntentSettings；默认开启（纯本地零成本——
+#     与 search 等外部成本面开关相反）；S3 硬覆盖模式。快径仅在通道路径
+#     注入（CLI / duty 不注入）——既有测试面构造 ChatService 时不带快径
+#     面，行为零变化；快径链路测试自注入 fake rng / sleep 面） ---
+os.environ["INTENT_ENABLED"] = "true"
+
 # --- 运行环境标识（Settings.env → ENV） ---
 os.environ["ENV"] = "test"
 

@@ -39,6 +39,12 @@
       ``VOICE_ASR_``——voice 域）
     - ``WebSearchSettings`` —— 联网搜索运营分节（``Settings.search``；
       env_prefix=``SEARCH_``——search 域开关 / 预算 / 冷却）
+    - ``RhythmSettings``    —— 拟人节律分节（``Settings.rhythm``；
+      env_prefix=``RHYTHM_``——rhythm 域；物理定义在
+      harness/rhythm/rhythm_models（config → rhythm 单向聚合）
+    - ``IntentSettings``    —— 意图快径分节（``Settings.intent``；
+      env_prefix=``INTENT_``——intent 域；物理定义在
+      harness/intent/intent_models（config → intent 单向聚合）
     - ``Settings``           —— 聚合器（全局单例 ``settings``）
     - ``LlmConfig``          —— config.yaml 的 ``llm`` 段（模型注册表 / 角色绑定 /
       多模态回退链）
@@ -62,6 +68,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from packages.harness.config.model_entry import LlmModelEntry, ModelRole
 from packages.harness.core.logging_models import LoggingConfig
+from packages.harness.intent.intent_models import IntentSettings
+from packages.harness.rhythm.rhythm_models import RhythmSettings
 
 __all__ = [
     "ServerConfig",
@@ -989,6 +997,12 @@ class Settings(BaseSettings):
         search: 联网搜索运营配置（开关 / 工具面 / 预算 / 冷却——
             SEARCH_ env 面；provider 注册表经 config.yaml ``search``
             段承载，见 :class:`SearchConfig`）。
+        rhythm: 拟人节律配置（默认关闭——RHYTHM_ env 面；物理定义在
+            :class:`packages.harness.rhythm.rhythm_models.RhythmSettings`，
+            此处聚合引用——models 与 logic 分离约定不变）。
+        intent: 意图快径配置（默认开启——INTENT_ env 面；物理定义在
+            :class:`packages.harness.intent.intent_models.IntentSettings`，
+            此处聚合引用）。
         env: 运行环境标识（local / dev / prod）。
     """
 
@@ -1006,6 +1020,8 @@ class Settings(BaseSettings):
     tools_browser_sidecar: ToolsBrowserSidecarSettings = ToolsBrowserSidecarSettings()
     voice: VoiceSettings = VoiceSettings()
     search: WebSearchSettings = WebSearchSettings()
+    rhythm: RhythmSettings = RhythmSettings()
+    intent: IntentSettings = IntentSettings()
     env: str = Field(default="local", description="运行环境标识（local / dev / prod）")
 
     model_config = SettingsConfigDict(

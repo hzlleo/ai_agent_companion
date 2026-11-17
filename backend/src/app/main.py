@@ -32,7 +32,11 @@
                                                  装配 runner 后台任务；token
                                                  缺失 fail fast；QQ_ENABLED
                                                  时注册适配器 + 启动校验
-                                                 warn-and-continue；缺省 no-op）
+                                                 warn-and-continue；任一通道
+                                                 启用时先装配 rhythm / intent
+                                                 会话性组件——单一随机源，
+                                                 INTENT_ENABLED 关闭时快径
+                                                 面 None；缺省 no-op）
         ↓ _startup_scheduler(app, settings)    中央调度器（DUTY_ENABLED /
                                                  DREAM_SCHEDULE_ENABLED 任一
                                                  开启时装配；**后于通道**——
@@ -78,6 +82,7 @@ memory 域经 memories 路由导入链注册。
 from __future__ import annotations
 
 import asyncio
+import random
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -123,6 +128,7 @@ from packages.harness.database.engine import close_database, init_database
 from packages.harness.database.session import session_scope
 from packages.harness.duty.duty_models import DutyRunConfigModel
 from packages.harness.duty.duty_service import DutyService
+from packages.harness.intent.service import IntentShortcutService
 from packages.harness.llm.gateway import LlmGateway, wire_default_usage_recorder
 from packages.harness.memory.dreaming import DreamService
 from packages.harness.memory.retrieval import MemorySearchService, build_memory_store
@@ -130,6 +136,8 @@ from packages.harness.memory.service import ChatSessionService, MemoryService
 from packages.harness.multimodal.look_at import LookAtService, register_look_at_tool
 from packages.harness.persona.service import PersonaService
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
+from packages.harness.rhythm.core import resolve_effective
+from packages.harness.rhythm.service import RhythmService
 from packages.harness.scheduler import Scheduler, build_dream_trigger_job
 from packages.harness.search.search_service import SearchService
 from packages.harness.search.tool import build_web_search_tool, register_web_search_tool
@@ -404,12 +412,30 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     """装配通道层（``TELEGRAM_ENABLED`` 长轮询 runner + ``QQ_ENABLED`` 适配器）。
 
     装配链（单一 ChannelRouter 服务全部通道——会话按 ``channel:chat_id``
-    维度天然隔离）：任一通道启用时构造 ChannelRouter（逐消息 ChatService
-    工厂闭包 ``app.state.gateway`` + ``session_scope`` 持久化）；telegram
-    启用时再装配 TelegramClient + TelegramChannelRunner → create_task +
-    ``background_task_manager`` 托管；QQ 启用时装配 NapCatOneBotClient +
-    NapCatQQAdapter → ``router.register_adapter`` + 启动校验
-    get_login_info。全部关闭时 no-op（零通道对象构造）。
+    维度天然隔离）：任一通道启用时先装配 rhythm / intent 会话性组件
+    （共享随机源——见下方），再构造 ChannelRouter（逐消息 ChatService
+    工厂闭包 ``app.state.gateway`` + ``session_scope`` 持久化 + 快径面
+    注入）；telegram 启用时再装配 TelegramClient +
+    TelegramChannelRunner → create_task + ``background_task_manager``
+    托管；QQ 启用时装配 NapCatOneBotClient + NapCatQQAdapter →
+    ``router.register_adapter`` + 启动校验 get_login_info。全部关闭时
+    no-op（零通道对象构造——rhythm / intent 槽位同样 None：二者的
+    R2a 消费面是通道 ChatService 工厂，通道关闭即无消费面）。
+
+    rhythm / intent 装配（R2a-6，通道专属——文档化决策）：
+
+    - 单一随机源：``random.Random()`` 实例由 RhythmService 与
+      IntentShortcutService **共享**（节律延迟采样与快径拟真延迟同源
+      ——可测性与随机面收敛）；
+    - ``app.state.rhythm_service``：门面直通或启用随
+      ``RHYTHM_ENABLED``（R2a 回复链路不消费门——R2d 心流 / R2e GUI
+      消费面；作息值面恒解析供 intent 问候选带）；
+    - ``app.state.intent_shortcut``：``INTENT_ENABLED``（默认 true——
+      纯本地零成本）关闭时为 None（工厂零注入，行为与 R2a 前一致）；
+      per-persona 节律覆写解析属 R2d（R2a 用全局面）；
+    - **duty 不注入快径面**：duty 是无头计划任务（章程驱动的巡检 /
+      报告生成），非对话性消费——意图快径是会话性能（「现在几点」
+      这类用户高频问法只出现在对话里），duty 工具面 / 章程零变化。
 
     **QQ 与 telegram 的失败语义差异（锁定决策）**：telegram token 缺失
     fail loud（``CHANNEL_TOKEN_MISSING``——app 拒绝启动）；QQ 启动校验
@@ -420,11 +446,12 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     只会因部署顺序杀掉整个 app。
 
     Args:
-        app: 待装配的 FastAPI 应用（router / runner / task 上挂
-            ``app.state``——router 供后续 duty 等出站投递面复用 + QQ
-            webhook 端点入站消费）。
+        app: 待装配的 FastAPI 应用（router / runner / task / rhythm /
+            intent 槽位上挂 ``app.state``——router 供后续 duty 等出站
+            投递面复用 + QQ webhook 端点入站消费）。
         settings: 生效 Settings（``settings.channels.telegram`` /
-            ``settings.channels.qq`` 分节）。
+            ``settings.channels.qq`` / ``settings.rhythm`` /
+            ``settings.intent`` 分节）。
 
     Raises:
         BusinessException: telegram token 环境变量缺失 / 为空
@@ -434,6 +461,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     app.state.channels_runner = None
     app.state.channels_task = None
     app.state.channels_router = None
+    app.state.rhythm_service = None
+    app.state.intent_shortcut = None
     telegram = settings.channels.telegram
     qq = settings.channels.qq
     if not telegram.enabled and not qq.enabled:
@@ -446,11 +475,27 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
             message="通道装配前置失败：公共池未启动（lifespan 装配顺序破坏）",
         )
     gateway = app.state.gateway
+    # rhythm / intent 会话性组件（单一随机源共享——见函数 docstring）。
+    rhythm_rng = random.Random()
+    effective_rhythm = resolve_effective(settings.rhythm, None)
+    app.state.rhythm_service = RhythmService(
+        effective=effective_rhythm,
+        enabled=settings.rhythm.enabled,
+        rng=rhythm_rng,
+    )
+    intent_shortcut: IntentShortcutService | None = None
+    if settings.intent.enabled:
+        intent_shortcut = IntentShortcutService(rng=rhythm_rng, effective=effective_rhythm)
+        logger.info("意图快径已装配（通道路径 ChatService 前钩；INTENT_ENABLED=true）")
+    else:
+        logger.info("意图快径未启用（INTENT_ENABLED=false）——通道回复全量走 LLM")
+    app.state.intent_shortcut = intent_shortcut
 
     def _chat_service_factory() -> ChatService:
         """逐消息 ChatService 工厂（工具面按当前装配态收缩——搜索工具
         注册表 + 规格列表就绪时绑定 chat 工具循环；浏览器槽位兜底；
-        两者皆无时零工具形态）。"""
+        两者皆无时零工具形态；快径面按 INTENT_ENABLED 注入——通道
+        专属消费面）。"""
         tool_specs = getattr(app.state, "search_tool_specs", None)
         tool_registry = getattr(app.state, "search_tool_registry", None)
         if tool_specs and tool_registry is not None:
@@ -459,6 +504,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
                 session_service=ChatSessionService(),
                 tools=tool_specs,
                 tool_executor=tool_registry,
+                intent_shortcut=intent_shortcut,
             )
         browser_specs = getattr(app.state, "browser_tool_specs", None)
         browser_registry = getattr(app.state, "browser_tool_registry", None)
@@ -468,8 +514,13 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
                 session_service=ChatSessionService(),
                 tools=browser_specs,
                 tool_executor=browser_registry,
+                intent_shortcut=intent_shortcut,
             )
-        return ChatService(gateway=gateway, session_service=ChatSessionService())
+        return ChatService(
+            gateway=gateway,
+            session_service=ChatSessionService(),
+            intent_shortcut=intent_shortcut,
+        )
 
     router = ChannelRouter(
         chat_service_factory=_chat_service_factory,
@@ -549,16 +600,22 @@ async def _shutdown_channels(app: FastAPI) -> None:
     收尾 → 超时 ``cancel`` 兜底（在途长轮询被取消——offset 已逐批持久化，
     重启安全）。QQ 通道无长驻任务（推送式入站 + 适配器注册态）——仅随
     ``channels_router`` 槽位复位（共享池 client 生命周期归 pools）。
+    rhythm / intent 会话性组件无自有资源（随机源随实例丢弃）——槽位
+    随通道层一同复位。
 
     Args:
         app: 待收尾的 FastAPI 应用（``channels_router`` / ``channels_runner``
-            / ``channels_task`` 槽位复位 None）。
+            / ``channels_task`` / ``rhythm_service`` / ``intent_shortcut``
+            槽位复位 None）。
     """
     runner: TelegramChannelRunner | None = getattr(app.state, "channels_runner", None)
     task: asyncio.Task[None] | None = getattr(app.state, "channels_task", None)
     app.state.channels_runner = None
     app.state.channels_task = None
     app.state.channels_router = None
+    # rhythm / intent 槽位复位（服务无自有资源——随机源随实例丢弃）。
+    app.state.rhythm_service = None
+    app.state.intent_shortcut = None
     if task is None or task.done():
         return
     if runner is not None:

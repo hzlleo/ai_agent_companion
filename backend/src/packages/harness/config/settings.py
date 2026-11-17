@@ -29,6 +29,8 @@ from packages.harness.config.models import (
     VoiceSettings,
     WebSearchSettings,
 )
+from packages.harness.intent.intent_models import IntentSettings
+from packages.harness.rhythm.rhythm_models import RhythmSettings
 
 __all__ = ["build_isolated_settings"]
 
@@ -49,6 +51,8 @@ def build_isolated_settings(
     tools_browser_sidecar: ToolsBrowserSidecarSettings | None = None,
     voice: VoiceSettings | None = None,
     search: WebSearchSettings | None = None,
+    rhythm: RhythmSettings | None = None,
+    intent: IntentSettings | None = None,
 ) -> Settings:
     """构造隔离 Settings 实例（测试 / 工具专用）。
 
@@ -77,6 +81,10 @@ def build_isolated_settings(
             voice 测试注入 enabled=True 形态）。
         search: 联网搜索运营配置（None = 代码默认——关闭形态；
             search lifespan 测试注入 enabled=True 形态）。
+        rhythm: 拟人节律配置（None = 代码默认——关闭形态；rhythm /
+            通道装配测试注入 enabled=True 形态）。
+        intent: 意图快径配置（None = 代码默认——开启形态；关闭面
+            测试注入 enabled=False 形态）。
 
     Returns:
         隔离 :class:`Settings` 实例（与全局单例无关联）。
@@ -98,4 +106,6 @@ def build_isolated_settings(
         ),
         voice=voice if voice is not None else VoiceSettings(),
         search=search if search is not None else WebSearchSettings(),
+        rhythm=rhythm if rhythm is not None else RhythmSettings(),
+        intent=intent if intent is not None else IntentSettings(),
     )

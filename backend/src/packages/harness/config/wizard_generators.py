@@ -61,6 +61,8 @@ _STEP_DEFINITIONS: list[tuple[str, list[str]]] = [
     ("语音合成配置", ["VOICE_TTS_"]),
     ("语音识别配置", ["VOICE_ASR_"]),
     ("联网搜索配置", ["SEARCH_"]),
+    ("拟人节律配置", ["RHYTHM_"]),
+    ("意图快径配置", ["INTENT_"]),
     ("其他配置", ["ENV"]),
 ]
 
