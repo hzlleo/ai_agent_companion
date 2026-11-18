@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Plus } from 'lucide-react'
+import { Pin, Plus, Snowflake } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { Input } from '@/components/ui/Input'
@@ -15,11 +15,17 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/Table'
+import { Checkbox } from '@/components/ui/Checkbox'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { useToast } from '@/components/ui/useToast'
 import { flattenCursorPages } from '@/api/pagination'
 import { toApiError } from '@/api/client'
-import { useCuratedList, useDeleteCurated } from '@/hooks/useMemoriesApi'
+import {
+  useCuratedList,
+  useDeleteCurated,
+  useSetCuratedFrozen,
+  useSetCuratedPinned,
+} from '@/hooks/useMemoriesApi'
 import type { CuratedKind, CuratedRecord, CuratedStatus } from '@/types/memory'
 import {
   CURATED_KIND_LABELS,
@@ -44,8 +50,10 @@ type CuratedKindFilter = '' | CuratedKind
 type CuratedStatusFilter = '' | CuratedStatus
 
 /**
- * 策展记忆页签：游标分页表（kind / topic / status 过滤）+ upsert
- * 对话框（supersede 语义）+ 历史链对话框 + 删除（确认）。
+ * 策展记忆页签：游标分页表（kind / topic / status 过滤 + 归档开关）+
+ * 生命周期操作（置顶 / 冻结切换；归档行禁用——不参与生命周期）+
+ * 强度列（读时计算——归档行占位）+ upsert 对话框 + 历史链对话框 +
+ * 删除（确认）。
  */
 export function CuratedTab({ personaId }: CuratedTabProps) {
   const toast = useToast()
@@ -56,15 +64,19 @@ export function CuratedTab({ personaId }: CuratedTabProps) {
   const [upsertOpen, setUpsertOpen] = useState(false)
   const [upsertInitial, setUpsertInitial] = useState<CuratedRecord | null>(null)
   const [historyAnchorId, setHistoryAnchorId] = useState<number | null>(null)
+  const [includeArchived, setIncludeArchived] = useState(false)
 
   const listQuery = useCuratedList({
     personaId,
     kind: kindFilter === '' ? undefined : kindFilter,
     topic: topicFilter.trim() === '' ? undefined : topicFilter.trim(),
     status: statusFilter === '' ? undefined : statusFilter,
+    includeArchived,
     limit: 20,
   })
   const deleteMutation = useDeleteCurated()
+  const pinnedMutation = useSetCuratedPinned()
+  const frozenMutation = useSetCuratedFrozen()
 
   const records = useMemo(
     () => flattenCursorPages(listQuery.data?.pages ?? []),
@@ -119,6 +131,11 @@ export function CuratedTab({ personaId }: CuratedTabProps) {
           onChange={(e) => setTopicFilter(e.target.value)}
           placeholder="精确匹配（留空 = 全部）"
         />
+        <Checkbox
+          label="含归档行"
+          checked={includeArchived}
+          onChange={(e) => setIncludeArchived(e.target.checked)}
+        />
         <div className="ml-auto">
           <Button
             size="sm"
@@ -168,6 +185,7 @@ export function CuratedTab({ personaId }: CuratedTabProps) {
                 <TableHead className="w-36">主题键</TableHead>
                 <TableHead>正文</TableHead>
                 <TableHead className="w-16">重要度</TableHead>
+                <TableHead className="w-20">强度</TableHead>
                 <TableHead className="w-20">可信度</TableHead>
                 <TableHead className="w-20">状态</TableHead>
                 <TableHead className="w-16">版本</TableHead>
@@ -176,7 +194,11 @@ export function CuratedTab({ personaId }: CuratedTabProps) {
             </TableHeader>
             <TableBody>
               {records.map((record) => (
-                <TableRow key={record.id} data-testid={`curated-row-${record.id}`}>
+                <TableRow
+                  key={record.id}
+                  data-testid={`curated-row-${record.id}`}
+                  className={record.status === 'archived' ? 'opacity-60' : undefined}
+                >
                   <TableCell>{record.id}</TableCell>
                   <TableCell>
                     <Badge variant="secondary">{CURATED_KIND_LABELS[record.kind]}</Badge>
@@ -186,6 +208,11 @@ export function CuratedTab({ personaId }: CuratedTabProps) {
                     {truncateText(record.content)}
                   </TableCell>
                   <TableCell>{record.importance}</TableCell>
+                  <TableCell data-testid={`curated-strength-${record.id}`}>
+                    {record.status === 'archived'
+                      ? '—'
+                      : record.effective_strength.toFixed(1)}
+                  </TableCell>
                   <TableCell>
                     <Badge variant={PROVENANCE_BADGE_VARIANTS[record.provenance]}>
                       {PROVENANCE_LABELS[record.provenance]}
@@ -199,6 +226,68 @@ export function CuratedTab({ personaId }: CuratedTabProps) {
                   <TableCell>v{record.version}</TableCell>
                   <TableCell>
                     <div className="flex flex-wrap items-center gap-1">
+                      <Button
+                        variant={record.pinned ? 'default' : 'outline'}
+                        size="sm"
+                        aria-pressed={record.pinned}
+                        disabled={record.status === 'archived' || pinnedMutation.isPending}
+                        title={
+                          record.status === 'archived'
+                            ? '归档行不参与生命周期'
+                            : undefined
+                        }
+                        onClick={() => {
+                          pinnedMutation.mutate(
+                            { personaId, memoryId: record.id, pinned: !record.pinned },
+                            {
+                              onSuccess: (updated) => {
+                                toast.success(
+                                  updated.pinned
+                                    ? `策展记忆 #${record.id} 已置顶`
+                                    : `策展记忆 #${record.id} 已取消置顶`,
+                                )
+                              },
+                              onError: (error) => {
+                                toast.error(toApiError(error).message)
+                              },
+                            },
+                          )
+                        }}
+                      >
+                        <Pin className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                        {record.pinned ? '取消置顶' : '置顶'}
+                      </Button>
+                      <Button
+                        variant={record.frozen ? 'default' : 'outline'}
+                        size="sm"
+                        aria-pressed={record.frozen}
+                        disabled={record.status === 'archived' || frozenMutation.isPending}
+                        title={
+                          record.status === 'archived'
+                            ? '归档行不参与生命周期'
+                            : undefined
+                        }
+                        onClick={() => {
+                          frozenMutation.mutate(
+                            { personaId, memoryId: record.id, frozen: !record.frozen },
+                            {
+                              onSuccess: (updated) => {
+                                toast.success(
+                                  updated.frozen
+                                    ? `策展记忆 #${record.id} 已冻结`
+                                    : `策展记忆 #${record.id} 已解冻`,
+                                )
+                              },
+                              onError: (error) => {
+                                toast.error(toApiError(error).message)
+                              },
+                            },
+                          )
+                        }}
+                      >
+                        <Snowflake className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                        {record.frozen ? '解冻' : '冻结'}
+                      </Button>
                       <Button
                         variant="outline"
                         size="sm"

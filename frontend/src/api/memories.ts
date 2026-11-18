@@ -7,9 +7,14 @@
  *   - POST   /memories/episodes/batch-delete      批量删除（部分成功形态）
  *   - GET    /memories/episodes/{id}              读取
  *   - DELETE /memories/episodes/{id}              删除（append-only 的管理面出口）
- *   - GET    /memories/curated                    游标分页列表（kind/topic/status 过滤）
+ *   - GET    /memories/curated                    游标分页列表（kind/topic/status 过滤 + 排序；
+ *                                                 include_archived 缺省排除归档行）
  *   - POST   /memories/curated/upsert             upsert（supersede 语义）
  *   - GET    /memories/curated/{id}/history       历史链读取（版本升序）
+ *   - POST   /memories/curated/{id}/pin           置顶（免衰减 / 免归档）
+ *   - POST   /memories/curated/{id}/unpin         取消置顶
+ *   - POST   /memories/curated/{id}/freeze        冻结（不参与梦境合并 / 不被归档）
+ *   - POST   /memories/curated/{id}/unfreeze      解冻
  *   - DELETE /memories/curated/{id}               删除
  *   - GET    /memories/sessions                   会话游标分页列表
  *   - GET    /memories/sessions/{id}              会话详情（正典消息；include_variants 可嵌套变体）
@@ -113,7 +118,7 @@ export async function deleteEpisode(
   })
 }
 
-/** GET /memories/curated —— 策展记忆游标分页（kind/topic/status 过滤）。 */
+/** GET /memories/curated —— 策展记忆游标分页（过滤 + 排序 + 归档开关）。 */
 export async function listCurated(
   personaId: number | undefined,
   params: CuratedListParams,
@@ -146,6 +151,54 @@ export async function getCuratedHistory(
   return request<CuratedRecord[]>({
     method: 'GET',
     url: `/memories/curated/${memoryId}/history`,
+    params: personaScope(personaId),
+  })
+}
+
+/** POST /memories/curated/{id}/pin —— 置顶（幂等；置顶行免衰减 / 免归档）。 */
+export async function pinCurated(
+  personaId: number | undefined,
+  memoryId: number,
+): Promise<CuratedRecord> {
+  return request<CuratedRecord>({
+    method: 'POST',
+    url: `/memories/curated/${memoryId}/pin`,
+    params: personaScope(personaId),
+  })
+}
+
+/** POST /memories/curated/{id}/unpin —— 取消置顶（幂等）。 */
+export async function unpinCurated(
+  personaId: number | undefined,
+  memoryId: number,
+): Promise<CuratedRecord> {
+  return request<CuratedRecord>({
+    method: 'POST',
+    url: `/memories/curated/${memoryId}/unpin`,
+    params: personaScope(personaId),
+  })
+}
+
+/** POST /memories/curated/{id}/freeze —— 冻结（幂等；不参与合并 / 不被归档）。 */
+export async function freezeCurated(
+  personaId: number | undefined,
+  memoryId: number,
+): Promise<CuratedRecord> {
+  return request<CuratedRecord>({
+    method: 'POST',
+    url: `/memories/curated/${memoryId}/freeze`,
+    params: personaScope(personaId),
+  })
+}
+
+/** POST /memories/curated/{id}/unfreeze —— 解冻（幂等）。 */
+export async function unfreezeCurated(
+  personaId: number | undefined,
+  memoryId: number,
+): Promise<CuratedRecord> {
+  return request<CuratedRecord>({
+    method: 'POST',
+    url: `/memories/curated/${memoryId}/unfreeze`,
     params: personaScope(personaId),
   })
 }

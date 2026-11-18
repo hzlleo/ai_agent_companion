@@ -508,6 +508,11 @@ export function mockCurated(overrides: Partial<CuratedRecord> = {}): CuratedReco
     version: 2,
     created_at: 1731000000000,
     updated_at: 1731000000000,
+    pinned: false,
+    frozen: false,
+    access_count: 0,
+    last_accessed_ms: null,
+    effective_strength: 5.2,
     ...overrides,
   }
 }
@@ -622,7 +627,15 @@ export function mockDreamRun(overrides: Partial<DreamRunRecord> = {}): DreamRunR
     status: 'success',
     started_ms: 1731000000000,
     finished_ms: 1731000009000,
-    stats: { candidates: 3, gated: 2, promoted: 1, superseded: 1, skipped_untrusted: 1, failed: 0 },
+    stats: {
+      candidates: 3,
+      gated: 2,
+      promoted: 1,
+      superseded: 1,
+      skipped_untrusted: 1,
+      failed: 0,
+      archived: 0,
+    },
     decisions: [
       { episode_id: 1, topic: 'favorite-food', kind: 'memory', action: 'promoted', reason: '分数达标，晋升为新主题' },
       { episode_id: 2, topic: 'sleep-pattern', kind: 'relationship', action: 'merged', reason: '并入既有 active 主题' },
@@ -839,6 +852,7 @@ export const memoryHandlers = [
     const kind = url.searchParams.get('kind')
     const topic = url.searchParams.get('topic')
     const status = url.searchParams.get('status')
+    const includeArchived = url.searchParams.get('include_archived') === 'true'
     const all = [
       mockCurated({ id: 3, topic: 'sleep-pattern', kind: 'relationship', status: 'active', version: 1 }),
       mockCurated({ id: 2, topic: 'sleep-pattern', kind: 'relationship', status: 'superseded', superseded_by_id: 3, version: 1 }),
@@ -847,7 +861,8 @@ export const memoryHandlers = [
     const filtered = all.filter((row) => {
       if (kind !== null && row.kind !== kind) return false
       if (topic !== null && row.topic !== topic) return false
-      if (status !== null && row.status !== status) return false
+      if (status !== null) return row.status === status
+      if (!includeArchived) return row.status !== 'archived'
       return true
     })
     if (cursor === null) {
@@ -898,6 +913,19 @@ export const memoryHandlers = [
         mockCurated({ id: 3, topic: 'sleep-pattern', kind: 'relationship', status: 'active', version: 2 }),
       ]),
     )
+  }),
+  // 生命周期端点：置顶 / 冻结态切换（幂等——返回目标态）
+  http.post(`${BACKEND_ORIGIN}/memories/curated/:memoryId/:action`, ({ params }) => {
+    const id = Number(params.memoryId)
+    const action = String(params.action)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('记忆不存在或不在此人格作用域', 'NOT_FOUND'), { status: 404 })
+    }
+    if (action === 'pin') return HttpResponse.json(okResult(mockCurated({ id, pinned: true }), '策展记忆已置顶'))
+    if (action === 'unpin') return HttpResponse.json(okResult(mockCurated({ id, pinned: false }), '策展记忆已取消置顶'))
+    if (action === 'freeze') return HttpResponse.json(okResult(mockCurated({ id, frozen: true }), '策展记忆已冻结'))
+    if (action === 'unfreeze') return HttpResponse.json(okResult(mockCurated({ id, frozen: false }), '策展记忆已解冻'))
+    return HttpResponse.json(okResult(mockCurated({ id })))
   }),
   http.delete(`${BACKEND_ORIGIN}/memories/curated/:memoryId`, ({ params }) => {
     const id = Number(params.memoryId)

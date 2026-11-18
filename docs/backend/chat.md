@@ -134,6 +134,15 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 - 持久化消息不受 `max_history_turns` 滑动窗口约束（全量记录——内存窗口只是上下文组装面）；
 - 未绑定持久化服务（纯内存形态）时行为与既有完全一致——`/clear` 仅清内存历史（持久化消息保留）。
 
+**情景落库（对话回合 → 情景层管道——可选绑定，缺省关闭）**：`ChatService` 构造可注入
+`episode_sink`（memory 域 `EpisodeSinkFace` 实现 `ChatTurnEpisodeSink`）。app 通道工厂
+绑定 `app.state.episode_sink` 后，每个**已落库**回合随即写入 kind=chat 情景事件
+（user 回合 provenance=owner / assistant 回合 provenance=agent；载荷含会话主键与对应侧
+文本；不去重——重复回合是真实事件的重复）。时序锁定：消息行提交之后才写情景（消息是
+事实源，情景是派生镜像）；未落库会话（纯内存态）零写入；sink 恒不抛（失败仅日志，
+回复链路不受影响）；fire-and-forget（后台管理器绑定——停机 drain 收口）。
+未注入 sink（CLI / 单元测试 / 未装配记忆服务的形态）行为与既有完全一致。
+
 **锁定决策（保持）**：会话创建时快照卡片（运行期管理面编辑不热更到在途会话；resume 按当前正典重取）。
 
 ## 输出协议（`<心声>` / `<情绪>`——R2b）
@@ -203,6 +212,11 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 - **选定提升（select）**：变体正文 / 协议元数据**就地替换**父回合行内内容（父行幸存、
   正典身份不变），并在此刻**唯一一次**把该变体情绪增量推进 M 态（推进后快照 +
   `selected_variant_id` 注记写回父行 `meta`）；变体行原样保留（历史可回溯）。
+
+**镜像分叉（append-only 真相）**：会话 episode 镜像（kind=chat）与检索索引保存的是
+回合生成时刻的原始回复；选定变体只就地替换正典消息内容（及协议元数据），不会重写
+镜像与索引。镜像与索引是历史轨迹，正典会话表才是展示 / 编辑面——二者有意允许分叉，
+检索命中展示的是当时生成的文本而非后来选中的变体。
 
 ### API（app/api/memories.py）
 
@@ -305,6 +319,8 @@ startup_app_state(app, settings[, config_dir])   可独立驱动的纯异步函�
     → init_database → pool_manager.start
     → app.state.gateway = LlmGateway(默认用量接线)
     → app.state.memory_store = build_memory_store(检索 / 梦境 / 调度器共用)
+    → _assemble_memory_services(索引管道绑定 memory_service / episode_sink /
+       memory_search_service / dream_service 长寿实例组——停机槽位复位)
     → _startup_channels(TELEGRAM / QQ 启用时装配；缺省 no-op)
     → _startup_scheduler(DUTY / DREAM_SCHEDULE 启用时装配；缺省 no-op)
 shutdown_app_state(app)                          LIFO 六步停机链：scheduler → channels

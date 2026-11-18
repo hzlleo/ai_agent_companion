@@ -1841,17 +1841,27 @@
           "title": "CuratedKind",
           "type": "string"
         },
+        "CuratedSort": {
+          "description": "策展记忆列表排序值域（GET /api/v1/memories/curated 的 sort 参数）。\n\n- ``updated_desc``：按行更新时间降序（缺省——管理面最近操作优先；\n  与既有 id 降序形态对齐）；\n- ``strength_desc``：按**读时计算**的有效强度降序（生命周期排序面\n  ——强度由行值 + 注入时钟 + LifecycleConfig 现场计算，故该排序在\n  服务层内存完成并受单页扫描上限约束，见 memory.service 查询面）。",
+          "enum": [
+            "updated_desc",
+            "strength_desc"
+          ],
+          "title": "CuratedSort",
+          "type": "string"
+        },
         "CuratedStatus": {
-          "description": "策展记忆状态值域（ff_curated_memory.status）。\n\n- ``active``：现行版本（同 (persona, kind, topic) 至多一条）；\n- ``superseded``：已被新版本取代（superseded_by_id 指向取代者）。",
+          "description": "策展记忆状态值域（ff_curated_memory.status）。\n\n- ``active``：现行版本（同 (persona, kind, topic) 至多一条）；\n- ``superseded``：已被新版本取代（superseded_by_id 指向取代者）；\n- ``archived``：已归档（生命周期终态——梦境巩固按有效强度批量置入，\n  归档行不参与默认列表、免于再次归档；``active_marker`` 置 NULL 使\n  同主题可重新起链，见 memory.lifecycle 与 memory.dreaming）。",
           "enum": [
             "active",
-            "superseded"
+            "superseded",
+            "archived"
           ],
           "title": "CuratedStatus",
           "type": "string"
         }
       },
-      "description": "策展记忆查询 DTO（kind / topic / status 过滤 + 游标分页——id 降序）。\n\nAttributes:\n    kind: 策展类型过滤（None = 全部）。\n    topic: 主题键精确过滤（None = 全部）。\n    status: 状态过滤（None = 全部；active = 现行版本面）。\n    cursor: 上一页返回的不透明游标（None = 首页）。\n    limit: 页大小（1-200，默认 20）。",
+      "description": "策展记忆查询 DTO（过滤 + 排序 + 游标分页）。\n\n``strength_desc`` 的排序语义与已知限制（自包含说明）：该排序只对\n**最新 2000 行**做 id 降序预取（服务层扫描上限），再在应用层按读时\n有效强度重排；有效强度由创建时刻 + 访问计数 + 注入时钟现场计算并\n随时间衰减，因此偏移游标翻页期间排序键本就会漂移——翻页结果不保证\n快照一致，跨页可能重复 / 遗漏。这是读时计算的已知限制（非缺陷）；\n需要稳定全量排序时使用 ``updated_desc`` 或缩小过滤面。\n\nAttributes:\n    kind: 策展类型过滤（None = 全部）。\n    topic: 主题键精确过滤（None = 全部）。\n    status: 状态过滤（None = 全部；active = 现行版本面）。\n    sort: 排序（``updated_desc`` 缺省——行更新时间降序；\n        ``strength_desc`` 按读时计算的有效强度降序，受上述扫描上限\n        与排序键漂移限制）。\n    include_archived: 是否包含归档行（默认 False——归档行不进入\n        管理面默认列表；显式 ``status`` 过滤时该开关让位于状态过滤）。\n    cursor: 上一页返回的不透明游标（None = 首页）。\n    limit: 页大小（1-200，默认 20）。",
       "properties": {
         "cursor": {
           "anyOf": [
@@ -1865,6 +1875,12 @@
           "default": null,
           "description": "分页游标（首页为 None）",
           "title": "Cursor"
+        },
+        "include_archived": {
+          "default": false,
+          "description": "是否包含归档行（显式 status 过滤时让位）",
+          "title": "Include Archived",
+          "type": "boolean"
         },
         "kind": {
           "anyOf": [
@@ -1885,6 +1901,11 @@
           "minimum": 1,
           "title": "Limit",
           "type": "integer"
+        },
+        "sort": {
+          "$ref": "#/$defs/CuratedSort",
+          "default": "updated_desc",
+          "description": "排序（updated_desc / strength_desc）"
         },
         "status": {
           "anyOf": [
@@ -1928,10 +1949,11 @@
           "type": "string"
         },
         "CuratedStatus": {
-          "description": "策展记忆状态值域（ff_curated_memory.status）。\n\n- ``active``：现行版本（同 (persona, kind, topic) 至多一条）；\n- ``superseded``：已被新版本取代（superseded_by_id 指向取代者）。",
+          "description": "策展记忆状态值域（ff_curated_memory.status）。\n\n- ``active``：现行版本（同 (persona, kind, topic) 至多一条）；\n- ``superseded``：已被新版本取代（superseded_by_id 指向取代者）；\n- ``archived``：已归档（生命周期终态——梦境巩固按有效强度批量置入，\n  归档行不参与默认列表、免于再次归档；``active_marker`` 置 NULL 使\n  同主题可重新起链，见 memory.lifecycle 与 memory.dreaming）。",
           "enum": [
             "active",
-            "superseded"
+            "superseded",
+            "archived"
           ],
           "title": "CuratedStatus",
           "type": "string"
@@ -1947,8 +1969,15 @@
           "type": "string"
         }
       },
-      "description": "策展记忆读取 DTO（ORM 行归一）。\n\nAttributes:\n    id: 记忆主键。\n    persona_id: 所属人格 ID。\n    kind: 策展类型。\n    topic: 主题键。\n    content: 记忆正文。\n    importance: 重要度（1-10）。\n    provenance: 来源可信度（owner/agent）。\n    status: 状态（active/superseded）。\n    superseded_by_id: 取代者行主键（active 行为 None）。\n    version: 链内版本号（首版 1）。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒）。",
+      "description": "策展记忆读取 DTO（ORM 行归一 + 生命周期读时投影）。\n\nAttributes:\n    id: 记忆主键。\n    persona_id: 所属人格 ID。\n    kind: 策展类型。\n    topic: 主题键。\n    content: 记忆正文。\n    importance: 重要度（1-10）。\n    provenance: 来源可信度（owner/agent）。\n    status: 状态（active/superseded/archived）。\n    superseded_by_id: 取代者行主键（active 行为 None）。\n    version: 链内版本号（首版 1）。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒）。\n    pinned: 是否置顶（免于时间衰减与归档）。\n    frozen: 是否冻结（不参与梦境合并 / 不被归档）。\n    access_count: 检索命中累计次数（写读强化轴）。\n    last_accessed_ms: 最近检索命中时刻（epoch 毫秒；None = 未命中）。\n    effective_strength: 有效强度（**读时计算**——由服务层以注入时钟 +\n        LifecycleConfig 现场求得，非落库列；归档行仍返回该值仅供\n        观测，前端对归档行展示占位符）。",
       "properties": {
+        "access_count": {
+          "default": 0,
+          "description": "检索命中累计次数",
+          "minimum": 0,
+          "title": "Access Count",
+          "type": "integer"
+        },
         "content": {
           "description": "记忆正文",
           "title": "Content",
@@ -1958,6 +1987,19 @@
           "description": "落库时间（epoch 毫秒）",
           "title": "Created At",
           "type": "integer"
+        },
+        "effective_strength": {
+          "default": 0.0,
+          "description": "有效强度（读时计算，非落库列）",
+          "minimum": 0,
+          "title": "Effective Strength",
+          "type": "number"
+        },
+        "frozen": {
+          "default": false,
+          "description": "是否冻结（不参与合并 / 不被归档）",
+          "title": "Frozen",
+          "type": "boolean"
         },
         "id": {
           "description": "记忆主键",
@@ -1973,10 +2015,29 @@
           "$ref": "#/$defs/CuratedKind",
           "description": "策展类型"
         },
+        "last_accessed_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "最近检索命中时刻（epoch 毫秒；None = 未命中）",
+          "title": "Last Accessed Ms"
+        },
         "persona_id": {
           "description": "所属人格 ID",
           "title": "Persona Id",
           "type": "string"
+        },
+        "pinned": {
+          "default": false,
+          "description": "是否置顶（免于衰减与归档）",
+          "title": "Pinned",
+          "type": "boolean"
         },
         "provenance": {
           "$ref": "#/$defs/MemoryProvenance",
@@ -1984,7 +2045,7 @@
         },
         "status": {
           "$ref": "#/$defs/CuratedStatus",
-          "description": "状态（active/superseded）"
+          "description": "状态（active/superseded/archived）"
         },
         "superseded_by_id": {
           "anyOf": [
@@ -2202,24 +2263,40 @@
           "type": "string"
         },
         "DreamDecisionAction": {
-          "description": "逐事件决策动作值域（DreamDecisionModel.action）。\n\n- ``promoted``：事件内容经 LLM 蒸馏进入**新起链**的策展主题\n  （upsert 落 version=1——事件被晋升为记忆）；\n- ``merged``：事件内容并入**既有 active 主题**（upsert 推进\n  supersede 链，version > 1——事件并入既有记忆）；\n- ``skipped``：未参与晋升（低于分数线 / 既往已晋升 / 超出候选\n  上限 / 提案未收录或被丢弃）。",
+          "description": "逐事件决策动作值域（DreamDecisionModel.action）。\n\n- ``promoted``：事件内容经 LLM 蒸馏进入**新起链**的策展主题\n  （upsert 落 version=1——事件被晋升为记忆）；\n- ``merged``：事件内容并入**既有 active 主题**（upsert 推进\n  supersede 链，version > 1——事件并入既有记忆）；\n- ``skipped``：未参与晋升（低于分数线 / 既往已晋升 / 超出候选\n  上限 / 提案未收录或被丢弃 / 目标主题已冻结）；\n- ``archived``：**策展记忆**归档（生命周期阶段产物——决策主体是\n  ``curated_id`` 指向的策展行，不是情景事件；``episode_id`` 为 0，\n  理由 = ``strength_below_threshold``）。",
           "enum": [
             "promoted",
             "skipped",
-            "merged"
+            "merged",
+            "archived"
           ],
           "title": "DreamDecisionAction",
           "type": "string"
         }
       },
-      "description": "逐事件决策记录（ff_dream_runs.decisions JSON 的元素形态）。\n\n决策覆盖口径：**全部可信候选事件**（窗口内非 untrusted 事件——\n无论过门与否每人一条；untrusted 事件不可见、不产生决策）。\n既往成功运行中 action ∈ {promoted, merged} 的 episode_id 集合构成\n后续运行的「已晋升」跳过依据。\n\nAttributes:\n    episode_id: 情景事件主键（决策主体）。\n    topic: 关联策展主题键（纯跳过决策为空串）。\n    kind: 关联策展类型（纯跳过决策为 None）。\n    action: 决策动作（promoted / skipped / merged）。\n    reason: 人读决策理由（跳过原因 / 晋升去向说明）。",
+      "description": "逐事件决策记录（ff_dream_runs.decisions JSON 的元素形态）。\n\n决策覆盖口径：**全部可信候选事件**（窗口内非 untrusted 事件——\n无论过门与否每人一条；untrusted 事件不可见、不产生决策）。\n既往成功运行中 action ∈ {promoted, merged} 的 episode_id 集合构成\n后续运行的「已晋升」跳过依据。\n\nAttributes:\n    episode_id: 情景事件主键（决策主体；策展归档决策为 0——无关联\n        情景事件，主体见 ``curated_id``）。\n    topic: 关联策展主题键（纯跳过决策为空串）。\n    kind: 关联策展类型（纯跳过决策为 None）。\n    action: 决策动作（promoted / skipped / merged / archived）。\n    reason: 人读决策理由（跳过原因 / 晋升去向说明 / 归档原因）。\n    curated_id: 关联策展记忆主键（仅 archived 决策填写——归档\n        决策的主体是策展行；其余决策为 None）。",
       "properties": {
         "action": {
           "$ref": "#/$defs/DreamDecisionAction",
           "description": "决策动作"
         },
+        "curated_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "关联策展记忆主键（仅 archived 决策填写）",
+          "title": "Curated Id"
+        },
         "episode_id": {
-          "description": "情景事件主键",
+          "default": 0,
+          "description": "情景事件主键（策展归档决策为 0）",
+          "minimum": 0,
           "title": "Episode Id",
           "type": "integer"
         },
@@ -2249,7 +2326,6 @@
         }
       },
       "required": [
-        "episode_id",
         "action"
       ],
       "title": "DreamDecisionModel",
@@ -2357,24 +2433,40 @@
           "type": "string"
         },
         "DreamDecisionAction": {
-          "description": "逐事件决策动作值域（DreamDecisionModel.action）。\n\n- ``promoted``：事件内容经 LLM 蒸馏进入**新起链**的策展主题\n  （upsert 落 version=1——事件被晋升为记忆）；\n- ``merged``：事件内容并入**既有 active 主题**（upsert 推进\n  supersede 链，version > 1——事件并入既有记忆）；\n- ``skipped``：未参与晋升（低于分数线 / 既往已晋升 / 超出候选\n  上限 / 提案未收录或被丢弃）。",
+          "description": "逐事件决策动作值域（DreamDecisionModel.action）。\n\n- ``promoted``：事件内容经 LLM 蒸馏进入**新起链**的策展主题\n  （upsert 落 version=1——事件被晋升为记忆）；\n- ``merged``：事件内容并入**既有 active 主题**（upsert 推进\n  supersede 链，version > 1——事件并入既有记忆）；\n- ``skipped``：未参与晋升（低于分数线 / 既往已晋升 / 超出候选\n  上限 / 提案未收录或被丢弃 / 目标主题已冻结）；\n- ``archived``：**策展记忆**归档（生命周期阶段产物——决策主体是\n  ``curated_id`` 指向的策展行，不是情景事件；``episode_id`` 为 0，\n  理由 = ``strength_below_threshold``）。",
           "enum": [
             "promoted",
             "skipped",
-            "merged"
+            "merged",
+            "archived"
           ],
           "title": "DreamDecisionAction",
           "type": "string"
         },
         "DreamDecisionModel": {
-          "description": "逐事件决策记录（ff_dream_runs.decisions JSON 的元素形态）。\n\n决策覆盖口径：**全部可信候选事件**（窗口内非 untrusted 事件——\n无论过门与否每人一条；untrusted 事件不可见、不产生决策）。\n既往成功运行中 action ∈ {promoted, merged} 的 episode_id 集合构成\n后续运行的「已晋升」跳过依据。\n\nAttributes:\n    episode_id: 情景事件主键（决策主体）。\n    topic: 关联策展主题键（纯跳过决策为空串）。\n    kind: 关联策展类型（纯跳过决策为 None）。\n    action: 决策动作（promoted / skipped / merged）。\n    reason: 人读决策理由（跳过原因 / 晋升去向说明）。",
+          "description": "逐事件决策记录（ff_dream_runs.decisions JSON 的元素形态）。\n\n决策覆盖口径：**全部可信候选事件**（窗口内非 untrusted 事件——\n无论过门与否每人一条；untrusted 事件不可见、不产生决策）。\n既往成功运行中 action ∈ {promoted, merged} 的 episode_id 集合构成\n后续运行的「已晋升」跳过依据。\n\nAttributes:\n    episode_id: 情景事件主键（决策主体；策展归档决策为 0——无关联\n        情景事件，主体见 ``curated_id``）。\n    topic: 关联策展主题键（纯跳过决策为空串）。\n    kind: 关联策展类型（纯跳过决策为 None）。\n    action: 决策动作（promoted / skipped / merged / archived）。\n    reason: 人读决策理由（跳过原因 / 晋升去向说明 / 归档原因）。\n    curated_id: 关联策展记忆主键（仅 archived 决策填写——归档\n        决策的主体是策展行；其余决策为 None）。",
           "properties": {
             "action": {
               "$ref": "#/$defs/DreamDecisionAction",
               "description": "决策动作"
             },
+            "curated_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "关联策展记忆主键（仅 archived 决策填写）",
+              "title": "Curated Id"
+            },
             "episode_id": {
-              "description": "情景事件主键",
+              "default": 0,
+              "description": "情景事件主键（策展归档决策为 0）",
+              "minimum": 0,
               "title": "Episode Id",
               "type": "integer"
             },
@@ -2404,15 +2496,21 @@
             }
           },
           "required": [
-            "episode_id",
             "action"
           ],
           "title": "DreamDecisionModel",
           "type": "object"
         },
         "DreamRunStatsModel": {
-          "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    failed: 提案丢弃计数。",
+          "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。",
           "properties": {
+            "archived": {
+              "default": 0,
+              "description": "策展记忆归档行数（生命周期阶段）",
+              "minimum": 0,
+              "title": "Archived",
+              "type": "integer"
+            },
             "candidates": {
               "default": 0,
               "description": "可信候选事件数",
@@ -2566,8 +2664,15 @@
       "type": "object"
     },
     "DreamRunStatsModel": {
-      "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    failed: 提案丢弃计数。",
+      "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。",
       "properties": {
+        "archived": {
+          "default": 0,
+          "description": "策展记忆归档行数（生命周期阶段）",
+          "minimum": 0,
+          "title": "Archived",
+          "type": "integer"
+        },
         "candidates": {
           "default": 0,
           "description": "可信候选事件数",

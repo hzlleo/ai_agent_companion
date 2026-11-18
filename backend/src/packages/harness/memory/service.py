@@ -41,11 +41,13 @@ Session 契约：方法接收调用方注入的 :class:`AsyncSession`（app 层�
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Callable, Sequence
+from contextlib import AbstractAsyncContextManager
+from typing import Any, cast
 
 from loguru import logger
-from sqlalchemy import delete, desc, func, select
+from sqlalchemy import Select, delete, desc, func, or_, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,6 +56,7 @@ from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.time_utils import now_ms
 from packages.harness.llm.llm_models import ChatMessageRole
 from packages.harness.memory.dtos import (
+    ArchiveCuratedResultModel,
     ChatMessageDTO,
     ChatMessageMetaModel,
     ChatMessageMiniDTO,
@@ -62,6 +65,7 @@ from packages.harness.memory.dtos import (
     ChatSessionSummaryDTO,
     CuratedQueryDTO,
     CuratedRecordDTO,
+    CuratedSort,
     CuratedUpsertDTO,
     EpisodeBatchDeleteItemDTO,
     EpisodeBatchDeleteResponseDTO,
@@ -69,6 +73,7 @@ from packages.harness.memory.dtos import (
     EpisodeQueryDTO,
     EpisodeRecordDTO,
 )
+from packages.harness.memory.lifecycle import LifecycleConfig, effective_strength
 from packages.harness.memory.models import (
     CuratedStatus,
     EpisodeKind,
@@ -84,10 +89,26 @@ from packages.harness.memory.orm import (
 )
 from packages.harness.memory.retrieval import (
     MemoryIndexer,
+    curated_to_index_entry,
     episode_to_index_entry,
 )
+from packages.harness.memory.retrieval_models import MemoryRefType
+from packages.harness.persona.service import bind_persona_context
 
-__all__ = ["MemoryService", "ChatSessionService"]
+__all__ = [
+    "MemoryService",
+    "ChatSessionService",
+    "CuratedAccessReinforcer",
+    "SessionFactory",
+]
+
+#: 会话工厂契约（``session_scope`` 与注入式测试工厂同形——无参 callable
+#: 返回异步上下文管理器；写读强化面经它自开短事务）。
+SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
+
+#: 强度排序的单次扫描上限（读时计算排序须在应用层完成——扫描面按
+#: 该上限截断并告警，防超宽过滤条件把全表拉进内存；文档化于查询面）。
+_STRENGTH_SCAN_LIMIT: int = 2000
 
 
 async def _rollback_quietly(session: AsyncSession) -> None:
@@ -151,6 +172,42 @@ def _episode_record(row: MemoryEpisodeRow) -> EpisodeRecordDTO:
 _CURATED_ACTIVE_MARKER: str = CuratedStatus.ACTIVE.value
 
 
+def _curated_record(
+    row: CuratedMemoryRow,
+    *,
+    reference_ms: int | None = None,
+    config: LifecycleConfig | None = None,
+) -> CuratedRecordDTO:
+    """策展记忆行 → 记录 DTO（含有效强度的读时投影）。
+
+    有效强度是**读时计算**（``memory.lifecycle.effective_strength``——
+    行值 + 注入时钟 + 生命周期参数现场求得，非落库列）：同一 config 与
+    同一时钟下行值恒同强度，写读一致不依赖冗余列。
+
+    Args:
+        row: 策展记忆 ORM 行。
+        reference_ms: 参考当前时间（epoch 毫秒；None = 当前真实时间）——
+            有效强度衰减轴的注入面（测试可控）。
+        config: 生命周期参数（None = LifecycleConfig 默认值）。
+
+    Returns:
+        记录 DTO（含 pinned / frozen / access_count / last_accessed_ms /
+        effective_strength）。
+    """
+    resolved_config = config if config is not None else LifecycleConfig()
+    resolved_now = reference_ms if reference_ms is not None else now_ms()
+    record = CuratedRecordDTO.model_validate(row)
+    record.effective_strength = effective_strength(
+        row.importance,
+        row.created_at,
+        row.access_count,
+        resolved_now,
+        resolved_config,
+        pinned=row.pinned,
+    )
+    return record
+
+
 def _message_dto(
     row: ChatMessageRow,
     variants: Sequence[ChatMessageMiniDTO] | None = None,
@@ -184,19 +241,42 @@ class MemoryService:
 
     检索索引联动（可选）：构造注入 ``indexer``
     （:class:`MemoryIndexer`——默认 None，写入路径零索引调用）后，
-    情景事件**提交后**触发索引链（append → commit → embed → upsert；
-    best-effort——任何失败仅告警，不影响写入结果与响应，见
-    ``_fire_indexing``）。
+    情景事件**提交后**触发索引链（append → commit → 能力面判定 →
+    embed → upsert；best-effort——任何失败仅告警，不影响写入结果与
+    响应，见 ``_fire_indexing``）；策展 upsert **提交后**同步索引条目
+    （新行 upsert + supersede 旧行索引删除——见 ``_fire_curated_index``）；
+    删除路径**提交后**触发索引删除（见 ``_fire_index_deletes``——
+    orphan-index 边界收口）。
+
+    生命周期面（策展层）：置顶 / 冻结开关（``set_curated_pinned`` /
+    ``set_curated_frozen``）、检索写读强化（``bump_curated_access``）、
+    归档（``archive_curated``——梦境巩固阶段调用，执行点复核 active
+    状态，归档同步移除索引）。
     """
 
-    def __init__(self, *, indexer: MemoryIndexer | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        indexer: MemoryIndexer | None = None,
+        lifecycle_config: LifecycleConfig | None = None,
+        clock: Callable[[], int] | None = None,
+    ) -> None:
         """初始化服务。
 
         Args:
             indexer: 记忆索引管道（None = 未绑定——写入路径零索引调用；
-                绑定后 append 提交即触发索引分发）。
+                绑定后 append 提交即触发索引分发、删除 / 归档提交即触发
+                索引删除）。
+            lifecycle_config: 生命周期参数（None = LifecycleConfig 默认
+                值——读侧有效强度投影与归档判定共用）。
+            clock: 注入时钟（epoch 毫秒；None = 当前真实时间——读侧强度
+                投影的衰减轴，测试可控）。
         """
         self._indexer = indexer
+        self._lifecycle_config = (
+            lifecycle_config if lifecycle_config is not None else LifecycleConfig()
+        )
+        self._clock = clock if clock is not None else now_ms
 
     # ------------------------------------------------------------------
     # 情景层——append / 查询 / 删除 / 日记
@@ -378,6 +458,9 @@ class MemoryService:
     async def delete_episode(self, session: AsyncSession, episode_id: int) -> None:
         """删除单条情景事件（管理面显式动作——append-only 的唯一出口）。
 
+        提交后同步移除检索索引行（``_fire_index_deletes``——fire-and-forget
+        / 内联见 indexer 分发决策；索引未绑定 / 失败均不阻断删除）。
+
         Args:
             session: 注入的异步 Session。
             episode_id: 事件主键。
@@ -386,8 +469,10 @@ class MemoryService:
             BusinessException: 事件不存在或不在当前人格作用域（``NOT_FOUND``）。
         """
         row = await self._require_episode(session, episode_id)
+        persona_id = row.persona_id
         await session.delete(row)
         await _commit(session)
+        await self._fire_index_deletes(MemoryRefType.EPISODE, [episode_id], persona_id)
         logger.info("情景事件已删除（管理面）: id={}", episode_id)
 
     async def batch_delete_episodes(
@@ -492,6 +577,39 @@ class MemoryService:
         except Exception:  # best-effort: 分发失败不阻断写入方
             logger.opt(exception=True).warning("情景事件索引分发失败（已吞没——不影响写入结果）")
 
+    async def _fire_index_deletes(
+        self, ref_type: MemoryRefType, ref_ids: Sequence[int], persona_id: str
+    ) -> None:
+        """提交后触发索引删除（best-effort——失败仅告警，不阻断业务）。
+
+        人格 ID 数值化失败（PersonaMixin 允许任意字符串隔离轴——索引表
+        为 BigInt）时整批跳过并告警（与索引写入侧同规则）。
+
+        Args:
+            ref_type: 引用类型（episode / curated）。
+            ref_ids: 已删除 / 已归档的引用行主键序列（空序列直接返回）。
+            persona_id: 引用行所属人格（PersonaMixin 字符串形态）。
+        """
+        if self._indexer is None or not ref_ids:
+            return
+        try:
+            numeric_persona = int(persona_id)
+        except ValueError:
+            logger.warning(
+                "人格 ID 非数值，跳过索引删除: persona={}, ref_type={}, count={}",
+                persona_id,
+                ref_type.value,
+                len(ref_ids),
+            )
+            return
+        for ref_id in ref_ids:
+            try:
+                await self._indexer.dispatch_delete(ref_type, ref_id, numeric_persona)
+            except Exception:  # best-effort: 分发失败不阻断业务方
+                logger.opt(exception=True).warning(
+                    "索引删除分发失败（已吞没——不影响业务结果）: ref_id={}", ref_id
+                )
+
     async def _require_episode(self, session: AsyncSession, episode_id: int) -> MemoryEpisodeRow:
         """按主键取情景事件行（人格作用域自动过滤）；缺失 fail loud。
 
@@ -541,6 +659,11 @@ class MemoryService:
         共存）；并发 upsert 撞唯一键时回滚后重试一次（重读 active 行
         走 supersede 分支），再冲突则映射 ``INTERNAL_ERROR``。
 
+        索引同步（提交后 best-effort）：新 active 行写策展索引条目，
+        supersede 路径在同一分发内删除旧行的索引条目（引用键轮转——
+        旧版本不再被检索命中）；索引失败仅告警，永不回滚已提交写入
+        （append-only 写入语义）。首版路径只 upsert 新条目。
+
         Args:
             session: 注入的异步 Session。
             dto: upsert DTO。
@@ -560,15 +683,18 @@ class MemoryService:
                 details={"topic": dto.topic, "provenance": dto.provenance.value},
             )
         try:
-            return await self._upsert_curated_once(session, dto)
+            record, superseded_id = await self._upsert_curated_once(session, dto)
         except IntegrityError:
             # 并发 upsert 抢先落了 active 行——回滚后重读走 supersede 分支
             await _rollback_quietly(session)
             logger.info(
                 "策展记忆并发单 active 冲突，重读 active 行后重试: topic={}", dto.topic
             )
+        else:
+            await self._fire_curated_index(record, superseded_id)
+            return record
         try:
-            return await self._upsert_curated_once(session, dto)
+            record, superseded_id = await self._upsert_curated_once(session, dto)
         except IntegrityError as exc:
             await _rollback_quietly(session)
             raise BusinessException(
@@ -576,10 +702,12 @@ class MemoryService:
                 message="策展记忆并发写入冲突（重试后仍冲突）",
                 details={"topic": dto.topic},
             ) from exc
+        await self._fire_curated_index(record, superseded_id)
+        return record
 
     async def _upsert_curated_once(
         self, session: AsyncSession, dto: CuratedUpsertDTO
-    ) -> CuratedRecordDTO:
+    ) -> tuple[CuratedRecordDTO, int | None]:
         """单次 upsert 尝试（无重试——由 ``upsert_curated`` 编排并发收敛）。
 
         语句序（确定性——腾位后占位）：无既有 active 行 → 新行直接携带
@@ -592,7 +720,9 @@ class MemoryService:
             dto: upsert DTO（untrusted 已在公共入口拒绝）。
 
         Returns:
-            新 active 行的记录 DTO。
+            ``(新 active 行的记录 DTO, 被取代旧行主键)`` 二元组——首版
+            路径旧行主键为 None（索引同步的引用键轮转输入；旧行 id 必须
+            取自本事务，提交后无法再从 active 查询面反推）。
 
         Raises:
             IntegrityError: 并发双写撞 ``uq_ff_curated_active``（由上层
@@ -611,6 +741,7 @@ class MemoryService:
             .scalars()
             .first()
         )
+        superseded_id = active_row.id if active_row is not None else None
         new_version = active_row.version + 1 if active_row is not None else 1
         row = CuratedMemoryRow(
             kind=dto.kind.value,
@@ -638,7 +769,41 @@ class MemoryService:
                 new_version,
             )
         await _commit(session)
-        return CuratedRecordDTO.model_validate(row)
+        return (
+            _curated_record(row, config=self._lifecycle_config, reference_ms=self._clock()),
+            superseded_id,
+        )
+
+    async def _fire_curated_index(
+        self, record: CuratedRecordDTO, superseded_id: int | None
+    ) -> None:
+        """提交后触发策展索引同步（best-effort——失败仅告警，不回滚写入）。
+
+        链路：``curated_to_index_entry``（正文 = ``topic：content``）→
+        ``indexer.dispatch_curated``（fire-and-forget / 内联 await 见
+        retrieval 模块分发决策）——同一分发内完成新条目 upsert 与旧
+        superseded 条目删除。索引未绑定时零调用；人格 ID 非数值时整批
+        跳过并告警（与情景索引写入侧同规则）。
+
+        Args:
+            record: 本次落库的新 active 行记录 DTO。
+            superseded_id: 被取代旧行主键（None = 首版无旧行）。
+        """
+        if self._indexer is None:
+            return
+        try:
+            entry = curated_to_index_entry(record, ts_ms=self._clock())
+        except Exception:  # best-effort: 条目构建失败（人格 ID 非数值）不阻断写入
+            logger.opt(exception=True).warning(
+                "策展记忆索引条目构建失败（已吞没——不影响写入结果）: id={}", record.id
+            )
+            return
+        try:
+            await self._indexer.dispatch_curated(entry, superseded_ref_id=superseded_id)
+        except Exception:  # best-effort: 分发失败不阻断写入方
+            logger.opt(exception=True).warning(
+                "策展记忆索引分发失败（已吞没——不影响写入结果）: id={}", record.id
+            )
 
     async def get_curated(self, session: AsyncSession, memory_id: int) -> CuratedRecordDTO:
         """按主键读取策展记忆（人格作用域外 / 缺失均 NOT_FOUND）。
@@ -648,25 +813,42 @@ class MemoryService:
             memory_id: 记忆主键。
 
         Returns:
-            记录 DTO。
+            记录 DTO（含读时计算的有效强度）。
 
         Raises:
             BusinessException: 记忆不存在或不在当前人格作用域（``NOT_FOUND``）。
         """
         row = await self._require_curated(session, memory_id)
-        return CuratedRecordDTO.model_validate(row)
+        return _curated_record(row, config=self._lifecycle_config, reference_ms=self._clock())
 
     async def query_curated(
         self, session: AsyncSession, query: CuratedQueryDTO
     ) -> PageResponse[CuratedRecordDTO]:
-        """策展记忆游标分页查询（id 降序；kind / topic / status 过滤）。
+        """策展记忆游标分页查询（过滤 + 排序；归档行默认排除）。
+
+        过滤语义（锁定决策）：
+
+            - ``status`` 显式过滤优先（指定 archived 即只看归档行）；
+            - 未指定 status 且 ``include_archived=False``（缺省）时排除
+              archived 行——管理面默认只见现行 / 已取代行；
+            - ``kind`` / ``topic`` 与既有过滤叠加。
+
+        排序语义：
+
+            - ``updated_desc``（缺省）：``ORDER BY updated_at DESC, id DESC``
+              （游标携带 updated_at + id 复合键；翻页期间若有写操作刷新
+              了排序键，分页不保证快照一致——文档化限制）；
+            - ``strength_desc``：读时计算有效强度后按强度降序（同强度按
+              id 降序）——排序键非落库列，故应用层完成并受
+              ``_STRENGTH_SCAN_LIMIT`` 扫描上限约束（超限截断并告警），
+              游标为偏移量形态（``{"offset": n}``）。
 
         Args:
             session: 注入的异步 Session。
             query: 查询 DTO。
 
         Returns:
-            分页响应（``next_cursor`` 非空表示还有更早记录；total 恒 -1）。
+            分页响应（``next_cursor`` 非空表示还有下一页；total 恒 -1）。
         """
         stmt = select(CuratedMemoryRow)
         if query.kind is not None:
@@ -675,17 +857,100 @@ class MemoryService:
             stmt = stmt.where(CuratedMemoryRow.topic == query.topic)
         if query.status is not None:
             stmt = stmt.where(CuratedMemoryRow.status == query.status.value)
+        elif not query.include_archived:
+            stmt = stmt.where(CuratedMemoryRow.status != CuratedStatus.ARCHIVED.value)
+        if query.sort == CuratedSort.STRENGTH_DESC:
+            return await self._query_curated_by_strength(session, stmt, query)
         cursor_payload = decode_cursor(query.cursor)
-        cursor_id = cursor_payload.get("id") if cursor_payload is not None else None
-        if isinstance(cursor_id, int):
-            stmt = stmt.where(CuratedMemoryRow.id < cursor_id)
-        stmt = stmt.order_by(desc(CuratedMemoryRow.id)).limit(query.limit + 1)
+        if cursor_payload is not None:
+            cursor_id = cursor_payload.get("id")
+            cursor_updated = cursor_payload.get("updated_at")
+            if isinstance(cursor_updated, int) and isinstance(cursor_id, int):
+                stmt = stmt.where(
+                    or_(
+                        CuratedMemoryRow.updated_at < cursor_updated,
+                        (
+                            (CuratedMemoryRow.updated_at == cursor_updated)
+                            & (CuratedMemoryRow.id < cursor_id)
+                        ),
+                    )
+                )
+            elif isinstance(cursor_id, int):
+                stmt = stmt.where(CuratedMemoryRow.id < cursor_id)
+        stmt = stmt.order_by(
+            desc(CuratedMemoryRow.updated_at), desc(CuratedMemoryRow.id)
+        ).limit(query.limit + 1)
         rows = list((await session.execute(stmt)).scalars().all())
         has_more = len(rows) > query.limit
         page_rows = rows[: query.limit]
-        next_cursor = encode_cursor({"id": page_rows[-1].id}) if has_more and page_rows else None
+        next_cursor = (
+            encode_cursor(
+                {"updated_at": page_rows[-1].updated_at, "id": page_rows[-1].id}
+            )
+            if has_more and page_rows
+            else None
+        )
         return PageResponse.of_cursor(
-            items=[CuratedRecordDTO.model_validate(row) for row in page_rows],
+            items=[
+                _curated_record(
+                    row, config=self._lifecycle_config, reference_ms=self._clock()
+                )
+                for row in page_rows
+            ],
+            page_size=query.limit,
+            next_cursor=next_cursor,
+        )
+
+    async def _query_curated_by_strength(
+        self,
+        session: AsyncSession,
+        stmt: Select[CuratedMemoryRow],
+        query: CuratedQueryDTO,
+    ) -> PageResponse[CuratedRecordDTO]:
+        """强度降序分页（应用层排序——偏移游标形态，扫描上限约束）。
+
+        Args:
+            session: 注入的异步 Session。
+            stmt: 已完成过滤条件的查询语句（未排序 / 未分页）。
+            query: 查询 DTO（limit + 偏移游标）。
+
+        Returns:
+            分页响应（``next_cursor`` 为 ``{"offset": n}`` 形态）。
+        """
+        cursor_payload = decode_cursor(query.cursor)
+        offset = 0
+        if cursor_payload is not None:
+            raw_offset = cursor_payload.get("offset")
+            if isinstance(raw_offset, int) and raw_offset >= 0:
+                offset = raw_offset
+        reference_ms = self._clock()
+        rows = list(
+            (
+                await session.execute(
+                    stmt.order_by(desc(CuratedMemoryRow.id)).limit(_STRENGTH_SCAN_LIMIT)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if len(rows) >= _STRENGTH_SCAN_LIMIT:
+            logger.warning(
+                "强度排序扫描达到上限，结果按上限截断: limit={}", _STRENGTH_SCAN_LIMIT
+            )
+        records = [
+            _curated_record(row, config=self._lifecycle_config, reference_ms=reference_ms)
+            for row in rows
+        ]
+        records.sort(key=lambda record: (-record.effective_strength, -record.id))
+        page_records = records[offset : offset + query.limit]
+        next_offset = offset + len(page_records)
+        next_cursor = (
+            encode_cursor({"offset": next_offset})
+            if next_offset < len(records) and page_records
+            else None
+        )
+        return PageResponse.of_cursor(
+            items=page_records,
             page_size=query.limit,
             next_cursor=next_cursor,
         )
@@ -723,7 +988,172 @@ class MemoryService:
             .scalars()
             .all()
         )
-        return [CuratedRecordDTO.model_validate(chain_row) for chain_row in chain_rows]
+        return [
+            _curated_record(
+                chain_row, config=self._lifecycle_config, reference_ms=self._clock()
+            )
+            for chain_row in chain_rows
+        ]
+
+    async def set_curated_pinned(
+        self, session: AsyncSession, memory_id: int, *, pinned: bool
+    ) -> CuratedRecordDTO:
+        """置顶 / 取消置顶策展记忆（幂等——返回值恒为目标态）。
+
+        置顶行的生命周期语义：免于时间衰减（强度不随时间下降）与归档
+        （``should_archive`` 硬门）——主人显式意图最高优先。
+
+        Args:
+            session: 注入的异步 Session。
+            memory_id: 记忆主键。
+            pinned: 目标态（True = 置顶；重复调用幂等）。
+
+        Returns:
+            更新后的记录 DTO（含读时有效强度）。
+
+        Raises:
+            BusinessException: 记忆不存在或不在当前人格作用域（``NOT_FOUND``）。
+        """
+        row = await self._require_curated(session, memory_id)
+        row.pinned = pinned
+        await _commit(session)
+        logger.info("策展记忆置顶态已更新: id={}, pinned={}", memory_id, pinned)
+        return _curated_record(row, config=self._lifecycle_config, reference_ms=self._clock())
+
+    async def set_curated_frozen(
+        self, session: AsyncSession, memory_id: int, *, frozen: bool
+    ) -> CuratedRecordDTO:
+        """冻结 / 解冻策展记忆（幂等——返回值恒为目标态）。
+
+        冻结主题的生命周期语义：不参与梦境合并提案（prompt 主题列表
+        排除 + 提案目标丢弃）、不被归档；本方法只改标记，不改状态 /
+        内容 / 链（文档化决策——冻结是保护面，不是状态迁移）。
+
+        Args:
+            session: 注入的异步 Session。
+            memory_id: 记忆主键。
+            frozen: 目标态（True = 冻结；重复调用幂等）。
+
+        Returns:
+            更新后的记录 DTO（含读时有效强度）。
+
+        Raises:
+            BusinessException: 记忆不存在或不在当前人格作用域（``NOT_FOUND``）。
+        """
+        row = await self._require_curated(session, memory_id)
+        row.frozen = frozen
+        await _commit(session)
+        logger.info("策展记忆冻结态已更新: id={}, frozen={}", memory_id, frozen)
+        return _curated_record(row, config=self._lifecycle_config, reference_ms=self._clock())
+
+    async def bump_curated_access(
+        self, session: AsyncSession, memory_ids: Sequence[int], *, accessed_ms: int
+    ) -> int:
+        """检索命中写读强化（access_count + 1 / last_accessed_ms 刷新）。
+
+        单条批量 UPDATE（人格作用域自动过滤——他人格 id 静默不命中）。
+        语义是**单调近似计数**（并发检索的 +1 可交错，非严格串行；对
+        对数强化公式无实质影响——文档化于 retrieval 模块写读强化一节）。
+
+        Args:
+            session: 注入的异步 Session。
+            memory_ids: 命中的策展记忆主键集合（空集合直接返回 0）。
+            accessed_ms: 命中时刻（epoch 毫秒——注入时钟）。
+
+        Returns:
+            实际更新的行数。
+        """
+        if not memory_ids:
+            return 0
+        result = cast(
+            "CursorResult[Any]",
+            await session.execute(
+                update(CuratedMemoryRow)
+                .where(CuratedMemoryRow.id.in_(list(memory_ids)))
+                .values(
+                    access_count=CuratedMemoryRow.access_count + 1,
+                    last_accessed_ms=accessed_ms,
+                )
+                .execution_options(synchronize_session="fetch")
+            ),
+        )
+        await _commit(session)
+        return int(result.rowcount or 0)
+
+    async def archive_curated(
+        self, session: AsyncSession, memory_ids: Sequence[int]
+    ) -> ArchiveCuratedResultModel:
+        """批量归档策展记忆（生命周期终态 + 索引移除——梦境巩固调用）。
+
+        归档语义（锁定决策）：
+
+            - 执行时**双重 active 复核**：SELECT 与逐行 UPDATE 均携带
+              ``status='active'`` 谓词——候选快照生成后、归档执行前被
+              supersede / 已归档的行在真实执行点被跳过（「归档只作用于
+              现行 active 行」的不变式在落库时刻仍成立）；
+            - ``status='archived'`` 且 ``active_marker`` 置 NULL——同主题
+              可重新起链（下次 upsert 从 version=1 重新计数）；
+            - 归档后同步移除检索索引行（仅对**实际归档**的 id 分发——
+              fire-and-forget / 内联见 indexer 分发决策；索引未绑定 /
+              失败不阻断归档）；
+            - 幂等：已归档 / 非 active 行再次归档不改变结果（WHERE 不
+              命中，返回集合为空）。
+
+        Args:
+            session: 注入的异步 Session。
+            memory_ids: 待归档记忆主键序列（空序列直接返回空结果）。
+
+        Returns:
+            归档结果 Model Class（``count`` = 实际归档行数；
+            ``archived_ids`` = 实际归档行主键——调用方的决策 / 统计必须
+            以本集合为准，不得以候选快照为准）。
+
+        Raises:
+            BusinessException: 人格上下文未绑定（``PERSONA_CONTEXT_REQUIRED``
+                ——归档查询的人格过滤面依赖上下文）。
+        """
+        if not memory_ids:
+            return ArchiveCuratedResultModel(count=0, archived_ids=[])
+        rows = list(
+            (
+                await session.execute(
+                    select(CuratedMemoryRow).where(
+                        CuratedMemoryRow.id.in_(list(memory_ids)),
+                        CuratedMemoryRow.status == CuratedStatus.ACTIVE.value,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return ArchiveCuratedResultModel(count=0, archived_ids=[])
+        persona_id = rows[0].persona_id
+        archived_ids: list[int] = []
+        for row in rows:
+            result = cast(
+                "CursorResult[Any]",
+                await session.execute(
+                    update(CuratedMemoryRow)
+                    .where(
+                        CuratedMemoryRow.id == row.id,
+                        CuratedMemoryRow.status == CuratedStatus.ACTIVE.value,
+                    )
+                    .values(
+                        status=CuratedStatus.ARCHIVED.value,
+                        active_marker=None,
+                    )
+                    .execution_options(synchronize_session="fetch")
+                ),
+            )
+            if int(result.rowcount or 0) > 0:
+                archived_ids.append(row.id)
+        await _commit(session)
+        await self._fire_index_deletes(MemoryRefType.CURATED, archived_ids, persona_id)
+        logger.info("策展记忆已归档: count={}, ids={}", len(archived_ids), archived_ids)
+        return ArchiveCuratedResultModel(
+            count=len(archived_ids), archived_ids=archived_ids
+        )
 
     async def delete_curated(self, session: AsyncSession, memory_id: int) -> None:
         """删除单条策展记忆（管理面显式动作）。
@@ -739,8 +1169,10 @@ class MemoryService:
             BusinessException: 记忆不存在或不在当前人格作用域（``NOT_FOUND``）。
         """
         row = await self._require_curated(session, memory_id)
+        persona_id = row.persona_id
         await session.delete(row)
         await _commit(session)
+        await self._fire_index_deletes(MemoryRefType.CURATED, [memory_id], persona_id)
         logger.info("策展记忆已删除（管理面）: id={}", memory_id)
 
     async def _require_curated(
@@ -1335,3 +1767,60 @@ class ChatSessionService:
                 details={"session_id": session_id},
             )
         return row
+
+
+class CuratedAccessReinforcer:
+    """写读强化面实现（检索命中策展行后的访问计数推进）。
+
+    实现 :class:`~packages.harness.memory.retrieval.CuratedAccessReinforcerFace`：
+    自开短事务（``session_factory``）+ 人格上下文绑定后调用
+    :meth:`MemoryService.bump_curated_access`；**恒不抛异常**（失败仅
+    告警——强化是增强面，检索结果不受影响）。
+
+    装配面：app 层把 ``session_scope`` 作为工厂注入（生产形态）；测试
+    注入共享引擎的会话工厂（hermetic 面——零真实连接）。
+    """
+
+    def __init__(
+        self,
+        *,
+        session_factory: SessionFactory,
+        memory_service: MemoryService | None = None,
+    ) -> None:
+        """初始化强化面。
+
+        Args:
+            session_factory: 会话工厂（``session_scope`` 同形——每次
+                强化自开短事务）。
+            memory_service: 记忆域服务（None = 新实例——访问计数推进面）。
+        """
+        self._session_factory = session_factory
+        self._memory = memory_service if memory_service is not None else MemoryService()
+
+    async def bump(
+        self, persona_id: int, memory_ids: Sequence[int], accessed_ms: int
+    ) -> None:
+        """推进访问计数（批量 + 人格作用域——失败仅告警）。
+
+        Args:
+            persona_id: 人格主键（人格作用域绑定面）。
+            memory_ids: 本次命中的策展记忆主键集合（空集合零写）。
+            accessed_ms: 命中时刻（epoch 毫秒——注入时钟；调用方传值
+                优先于本实例时钟，保持检索侧时刻一致性）。
+        """
+        if not memory_ids:
+            return
+        try:
+            async with self._session_factory() as session, bind_persona_context(
+                persona_id
+            ):
+                updated = await self._memory.bump_curated_access(
+                    session, memory_ids, accessed_ms=accessed_ms
+                )
+            logger.debug("策展记忆访问计数已推进: persona={}, updated={}", persona_id, updated)
+        except Exception:  # best-effort: 强化失败不影响检索结果（协议契约）
+            logger.opt(exception=True).warning(
+                "策展记忆访问计数推进失败（已吞没——不影响检索结果）: persona={}, count={}",
+                persona_id,
+                len(memory_ids),
+            )

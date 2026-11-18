@@ -85,11 +85,11 @@ _MISSING_ENV_MESSAGE = (
     "未注入测试服务 env 的本地运行。"
 )
 
-#: alembic 迁移链 head 版本戳（0011——持久化提醒表迁移）。
-HEAD_REVISION = "000000000011"
+#: alembic 迁移链 head 版本戳（0012——策展记忆生命周期列迁移）。
+HEAD_REVISION = "000000000012"
 
 #: 升级 head 后的全量表集（alembic_version + 9 张 ff_* 域表——0011 新增
-#: ff_reminders）。
+#: ff_reminders；0012 只给 ff_curated_memory 加生命周期列，表集不变）。
 EXPECTED_HEAD_TABLES: frozenset[str] = frozenset(
     {
         "alembic_version",

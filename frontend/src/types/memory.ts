@@ -24,8 +24,8 @@ export type MemoryProvenance = 'owner' | 'agent' | 'untrusted'
 /** 策展记忆类型（ff_curated_memory.kind）。 */
 export type CuratedKind = 'memory' | 'user_note' | 'relationship'
 
-/** 策展记忆状态（同 (persona, kind, topic) 至多一条 active）。 */
-export type CuratedStatus = 'active' | 'superseded'
+/** 策展记忆状态（active / superseded / archived——归档态为生命周期终态）。 */
+export type CuratedStatus = 'active' | 'superseded' | 'archived'
 
 /** 会话消息角色。 */
 export type ChatMessageRole = 'user' | 'assistant' | 'system'
@@ -39,8 +39,8 @@ export type MemoryRefType = 'episode' | 'curated'
 /** 梦境运行状态（failed 为业务结果——响应恒 200）。 */
 export type DreamRunStatus = 'running' | 'success' | 'failed'
 
-/** 梦境逐事件决策动作。 */
-export type DreamDecisionAction = 'promoted' | 'skipped' | 'merged'
+/** 梦境决策动作（archived 为策展归档决策——主体见 curated_id）。 */
+export type DreamDecisionAction = 'promoted' | 'skipped' | 'merged' | 'archived'
 
 // ---------------------------------------------------------------------------
 // 情景事件载荷（content JSON——按 kind 判别）
@@ -176,7 +176,7 @@ export interface CuratedRecord {
   importance: number
   /** 来源可信度（owner/agent——untrusted 服务层拒绝）。 */
   provenance: MemoryProvenance
-  /** 状态（active/superseded）。 */
+  /** 状态（active/superseded/archived）。 */
   status: CuratedStatus
   /** 取代者行主键（active 行为 null）。 */
   superseded_by_id: number | null
@@ -186,6 +186,16 @@ export interface CuratedRecord {
   created_at: number
   /** 行更新时间（epoch 毫秒）。 */
   updated_at: number
+  /** 是否置顶（免于时间衰减与归档）。 */
+  pinned: boolean
+  /** 是否冻结（不参与梦境合并 / 不被归档）。 */
+  frozen: boolean
+  /** 检索命中累计次数（写读强化轴）。 */
+  access_count: number
+  /** 最近检索命中时刻（epoch 毫秒；null = 未命中）。 */
+  last_accessed_ms: number | null
+  /** 有效强度（读时计算——归档行展示占位符）。 */
+  effective_strength: number
 }
 
 /** 策展记忆 upsert 请求（supersede 语义——同 (persona, kind, topic) 单 active）。 */
@@ -202,7 +212,10 @@ export interface CuratedUpsertRequest {
   provenance: MemoryProvenance
 }
 
-/** 策展记忆列表查询参数（kind / topic / status 过滤 + 游标分页）。 */
+/** 策展记忆列表排序值域（GET /memories/curated 的 sort 参数）。 */
+export type CuratedSort = 'updated_desc' | 'strength_desc'
+
+/** 策展记忆列表查询参数（kind / topic / status 过滤 + 排序 + 游标分页）。 */
 export interface CuratedListParams {
   /** 策展类型过滤（undefined = 全部）。 */
   kind?: CuratedKind
@@ -210,6 +223,10 @@ export interface CuratedListParams {
   topic?: string
   /** 状态过滤（undefined = 全部；active = 现行版本面）。 */
   status?: CuratedStatus
+  /** 排序（updated_desc 缺省 / strength_desc 读时有效强度降序）。 */
+  sort?: CuratedSort
+  /** 是否包含归档行（默认 false——归档行不进默认列表）。 */
+  include_archived?: boolean
   /** 分页游标（首页 undefined）。 */
   cursor?: string
   /** 页大小（1-200，默认 20）。 */
@@ -398,20 +415,24 @@ export interface DreamRunStats {
   skipped_untrusted: number
   /** LLM 提案丢弃计数（逐条丢弃，不整体失败）。 */
   failed: number
+  /** 策展记忆归档行数（生命周期阶段）。 */
+  archived: number
 }
 
 /** 梦境逐事件决策记录。 */
 export interface DreamDecision {
-  /** 情景事件主键（决策主体）。 */
+  /** 情景事件主键（策展归档决策为 0——主体见 curated_id）。 */
   episode_id: number
   /** 关联策展主题键（纯跳过决策为空串）。 */
   topic: string
   /** 关联策展类型（纯跳过决策为 null）。 */
   kind: CuratedKind | null
-  /** 决策动作（promoted / skipped / merged）。 */
+  /** 决策动作（promoted / skipped / merged / archived）。 */
   action: DreamDecisionAction
   /** 人读决策理由。 */
   reason: string
+  /** 关联策展记忆主键（仅 archived 决策填写；其余 null）。 */
+  curated_id?: number | null
 }
 
 /** 梦境运行记录（触发响应与运行日志共用读取面）。 */

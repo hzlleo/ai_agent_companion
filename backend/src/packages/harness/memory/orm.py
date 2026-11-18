@@ -55,6 +55,12 @@ supersede 语义（ff_curated_memory）：
 
 列约定：时间全部 epoch 毫秒（BigInteger）；枚举值以字符串落库（值域
 由 memory.models 枚举在 DTO 边界校验）；importance 1-10。
+
+生命周期列（migration 0012）：``pinned`` / ``frozen`` /
+``access_count`` / ``last_accessed_ms`` 四列承载记忆生命周期（置顶 /
+冻结 / 检索写读强化）。归档态 ``status='archived'`` 由梦境巩固链路按
+生命周期强度批量置入（见 memory.lifecycle 与 memory.dreaming 的归档
+阶段）；归档行 ``active_marker`` 同步置 NULL——同主题可重新起链。
 """
 
 from __future__ import annotations
@@ -64,12 +70,14 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     ForeignKey,
     Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -134,11 +142,18 @@ class CuratedMemoryRow(Base, BigIntIdMixin, TimestampMixin, PersonaMixin):
         importance: 重要度（1-10）。
         provenance: 来源可信度（owner/agent——untrusted 由服务层拒绝，
             永不落本表）。
-        status: 状态（active/superseded）。
+        status: 状态（active/superseded/archived——归档态由梦境巩固
+            按生命周期强度批量置入，见 memory.lifecycle）。
         superseded_by_id: 取代者行主键（自引用 FK；active 行为 NULL）。
         version: 链内版本号（首版 1，supersede 递增）。
         active_marker: 单 active 守卫标记（active 行恒 ``'active'`` /
-            superseded 行恒 NULL——唯一键忽略 NULL 使多代共存）。
+            superseded / archived 行恒 NULL——唯一键忽略 NULL 使多代共存
+            且归档后同主题可重新起链）。
+        pinned: 置顶标记（主人显式置顶——免于时间衰减与归档）。
+        frozen: 冻结标记（不参与梦境合并提案、不接收并入、不被归档）。
+        access_count: 检索命中累计次数（写读强化轴——检索命中后由后台
+            任务异步递增，见 memory.retrieval 写读强化约定）。
+        last_accessed_ms: 最近检索命中时刻（epoch 毫秒；NULL = 未命中）。
     """
 
     __tablename__ = "ff_curated_memory"
@@ -162,7 +177,9 @@ class CuratedMemoryRow(Base, BigIntIdMixin, TimestampMixin, PersonaMixin):
     provenance: Mapped[str] = mapped_column(
         String(16), comment="来源可信度（owner/agent；untrusted 服务层拒绝）"
     )
-    status: Mapped[str] = mapped_column(String(16), comment="状态（active/superseded）")
+    status: Mapped[str] = mapped_column(
+        String(16), comment="状态（active/superseded/archived）"
+    )
     superseded_by_id: Mapped[int | None] = mapped_column(
         BigInteger().with_variant(Integer, "sqlite"),
         ForeignKey("ff_curated_memory.id", ondelete="SET NULL"),
@@ -171,7 +188,33 @@ class CuratedMemoryRow(Base, BigIntIdMixin, TimestampMixin, PersonaMixin):
     version: Mapped[int] = mapped_column(Integer, comment="链内版本号（首版 1）")
     active_marker: Mapped[str | None] = mapped_column(
         String(16),
-        comment="单 active 守卫标记（active 行 'active' / superseded 行 NULL——唯一键忽略 NULL，多代共存）",
+        comment="单 active 守卫标记（active 行 'active' / superseded、archived 行 NULL——唯一键忽略 NULL，多代共存）",
+    )
+    pinned: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+        comment="置顶标记（免于时间衰减与归档）",
+    )
+    frozen: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+        comment="冻结标记（不参与梦境合并 / 不被归档）",
+    )
+    access_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="检索命中累计次数（写读强化轴）",
+    )
+    last_accessed_ms: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        comment="最近检索命中时刻（epoch 毫秒；NULL = 未命中）",
     )
 
 

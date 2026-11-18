@@ -75,7 +75,7 @@ def _alembic_config() -> AlembicConfig:
 
 
 async def test_migration_0011_reminders_table_round_trip(tmp_path: Path) -> None:
-    """0011：升级 head 后 ff_reminders 列 / 索引存在 → 降级 0010 消失 → 复升回归。"""
+    """0011：升级至 0011 后 ff_reminders 列 / 索引存在 → 降级 0010 消失 → 复升回归。"""
     db_path = tmp_path / "migration-reminders.db"
     database = settings.database
     backups = (database.type, database.name)
@@ -83,7 +83,7 @@ async def test_migration_0011_reminders_table_round_trip(tmp_path: Path) -> None
     database.name = str(db_path)
     config = _alembic_config()
     try:
-        await asyncio.to_thread(command.upgrade, config, "head")
+        await asyncio.to_thread(command.upgrade, config, _TARGET_REVISION)
         assert "ff_reminders" in _sqlite_tables(db_path)
         columns = _sqlite_columns(db_path, "ff_reminders")
         assert {
@@ -129,7 +129,7 @@ async def test_migration_0011_reminders_table_round_trip(tmp_path: Path) -> None
         assert "ff_reminders" not in _sqlite_tables(db_path)
         assert _sqlite_revision(db_path) == _PREV_REVISION
 
-        await asyncio.to_thread(command.upgrade, config, "head")
+        await asyncio.to_thread(command.upgrade, config, _TARGET_REVISION)
         assert "ff_reminders" in _sqlite_tables(db_path)
         assert _sqlite_revision(db_path) == _TARGET_REVISION
     finally:

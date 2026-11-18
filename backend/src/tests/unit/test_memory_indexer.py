@@ -14,10 +14,12 @@ from collections.abc import Sequence
 from typing import Any
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from packages.harness.core.background_tasks import BackgroundTaskManager
 from packages.harness.core.errors import BusinessException
+from packages.harness.database.engine import db_engine_holder
 from packages.harness.llm.llm_models import EmbeddingsResponseModel
 from packages.harness.memory.dtos import EpisodeCreateDTO
 from packages.harness.memory.models import ChatTurnPayloadModel, MemoryProvenance
@@ -28,10 +30,12 @@ from packages.harness.memory.retrieval import (
 )
 from packages.harness.memory.retrieval_models import (
     MemoryIndexEntryDTO,
+    MemoryRefType,
     MemorySearchMode,
     MemorySearchQueryDTO,
 )
 from packages.harness.memory.service import MemoryService
+from packages.harness.memory.sqlite_store import MemoryIndexLiteRow, SQLiteFallbackStore
 from packages.harness.persona.service import bind_persona_context
 
 
@@ -55,24 +59,35 @@ class FakeEmbedder:
 
 
 class FakeStore:
-    """假检索存储（记录 upsert / search 调用——零真实 IO）。"""
+    """假检索存储（记录 upsert / delete / search 调用——零真实 IO）。
 
-    def __init__(self) -> None:
-        """初始化（调用清单空）。"""
-        self.upserts: list[tuple[list[MemoryIndexEntryDTO], list[list[float]]]] = []
+    ``supports_vectors`` 模拟存储能力面：默认 True（SeekDB 形态——索引
+    管道正常嵌入）；False（keyword-only 回退形态——索引管道跳过嵌入，
+    以 None 向量写入）。
+    """
+
+    def __init__(self, *, supports_vectors: bool = True) -> None:
+        """初始化（调用清单空；能力面可配）。"""
+        self.supports_vectors = supports_vectors
+        self.upserts: list[tuple[list[MemoryIndexEntryDTO], list[list[float]] | None]] = []
+        self.deletes: list[tuple[Any, int, int]] = []
         self.searches: list[tuple[MemorySearchQueryDTO, list[float] | None]] = []
 
     async def ensure_schema(self) -> None:
         """建表 no-op。"""
         return
 
-    async def upsert(self, entries: list[MemoryIndexEntryDTO], vectors: list[list[float]]) -> None:
+    async def upsert(
+        self,
+        entries: list[MemoryIndexEntryDTO],
+        vectors: list[list[float]] | None = None,
+    ) -> None:
         """记录 upsert 调用。"""
         self.upserts.append((entries, vectors))
 
     async def delete(self, ref_type: Any, ref_id: int, persona_id: int) -> None:
-        """delete no-op（本测试面不消费）。"""
-        return
+        """记录 delete 调用（引用键轮转断言面）。"""
+        self.deletes.append((ref_type, ref_id, persona_id))
 
     async def search(
         self, query: MemorySearchQueryDTO, query_vector: list[float] | None
@@ -186,6 +201,81 @@ async def test_index_episodes_empty_short_circuit() -> None:
     assert await indexer.index_episodes([]) == []
     assert embedder.calls == []
     assert store.upserts == []
+
+
+async def test_index_episode_vector_store_embeds() -> None:
+    """向量存储（supports_vectors=True）：索引前正常嵌入并携带向量写入。"""
+    embedder = FakeEmbedder()
+    store = FakeStore(supports_vectors=True)
+    indexer = MemoryIndexer(embedder=embedder, store=store)
+
+    assert await indexer.index_episode(_entry()) is True
+    assert embedder.calls == [["今天吃了小鱼干"]]
+    assert len(store.upserts) == 1
+    entries, vectors = store.upserts[0]
+    assert [entry.ref_id for entry in entries] == [11]
+    assert vectors == [[0.1, 0.2]]
+
+
+async def test_index_episodes_fallback_store_skips_embedding(
+    shared_db_engine: AsyncEngine,
+) -> None:
+    """回退存储（supports_vectors=False）：零嵌入调用，索引行仍落库。"""
+    db_engine_holder.async_engine = shared_db_engine
+    db_engine_holder.session_factory = async_sessionmaker(
+        bind=shared_db_engine, expire_on_commit=False
+    )
+    db_engine_holder.owner_token = None
+    try:
+        embedder = FakeEmbedder()
+        store = SQLiteFallbackStore()
+        indexer = MemoryIndexer(embedder=embedder, store=store)
+
+        assert store.supports_vectors is False
+        assert await indexer.index_episodes([_entry(), _entry(ref_id=12)]) == [True, True]
+        assert await indexer.index_episode(_entry(ref_id=13)) is True
+        assert embedder.calls == []  # 能力面短路——零 embed 用量
+
+        async with shared_db_engine.connect() as conn:
+            rows = list(
+                (
+                    await conn.execute(select(MemoryIndexLiteRow.__table__))
+                ).all()
+            )
+        assert {(str(row.ref_type), int(row.ref_id)) for row in rows} == {
+            ("episode", 11),
+            ("episode", 12),
+            ("episode", 13),
+        }
+    finally:
+        db_engine_holder.reset()
+
+
+async def test_index_curated_writes_new_and_deletes_superseded() -> None:
+    """策展索引同步：新条目 upsert + 旧 superseded 引用删除（同一分发内）。"""
+    embedder = FakeEmbedder()
+    store = FakeStore(supports_vectors=True)
+    indexer = MemoryIndexer(embedder=embedder, store=store)
+    entry = _entry(
+        ref_type="curated", kind="memory", content="口味偏好：喜欢汤面"
+    )
+
+    assert await indexer.index_curated(entry, superseded_ref_id=9) is True
+    assert embedder.calls == [["口味偏好：喜欢汤面"]]
+    assert len(store.upserts) == 1
+    assert store.deletes == [(MemoryRefType.CURATED, 9, 7)]
+
+
+async def test_index_curated_first_version_does_not_delete() -> None:
+    """首版策展同步：superseded_ref_id=None 时只 upsert 新条目。"""
+    embedder = FakeEmbedder()
+    store = FakeStore()
+    indexer = MemoryIndexer(embedder=embedder, store=store)
+    entry = _entry(ref_type="curated", kind="memory", content="新主题：正文")
+
+    assert await indexer.index_curated(entry, superseded_ref_id=None) is True
+    assert len(store.upserts) == 1
+    assert store.deletes == []
 
 
 # ---------------------------------------------------------------------------

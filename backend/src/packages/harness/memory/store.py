@@ -75,7 +75,12 @@ class MemoryStore(Protocol):
 
     实现约定（协议级，逐实现文档化偏离）：
 
-        - ``upsert`` 条目与向量**同序同长**（配对由调用方保证）；
+        - ``supports_vectors`` 是**存储能力面**：仅当实现真正持久化向量
+          并支持向量检索时为 True；keyword-only 回退实现为 False——索引
+          管道据此在**调用嵌入器之前**短路（不产生无意义的 embed 用量）；
+        - ``upsert`` 在支持向量的实现上条目与向量**同序同长**（配对由
+          调用方保证）；不支持向量的实现收 ``vectors=None``，仅写标量 /
+          正文列；
         - ``search`` 的 ``query_vector`` 语义随模式：dense / hybrid 必填
           （None → ``VALIDATION_ERROR``）；keyword 必须为 None（携带向量
           → ``VALIDATION_ERROR``——模式违规面）；
@@ -83,16 +88,32 @@ class MemoryStore(Protocol):
         - ``close`` 幂等（注入式池的实现为 no-op——生命周期归注入方）。
     """
 
+    @property
+    def supports_vectors(self) -> bool:
+        """存储是否支持向量持久化与向量检索（索引管道的嵌入短路门）。
+
+        Returns:
+            True = 需要且接受向量（dense / hybrid 可用）；False =
+            keyword-only（索引管道跳过嵌入，``upsert`` 收 None 向量）。
+        """
+        ...
+
     async def ensure_schema(self) -> None:
         """确保索引表 schema 就绪（幂等——重复调用 no-op）。"""
         ...
 
-    async def upsert(self, entries: list[MemoryIndexEntryDTO], vectors: list[list[float]]) -> None:
+    async def upsert(
+        self,
+        entries: list[MemoryIndexEntryDTO],
+        vectors: list[list[float]] | None = None,
+    ) -> None:
         """批量写入索引条目（同键覆盖——upsert 语义）。
 
         Args:
             entries: 索引条目列表（与向量同序同长）。
-            vectors: 向量列表（JSON 字符串化后随行绑定）。
+            vectors: 向量列表（JSON 字符串化后随行绑定）；不支持向量的
+                实现收 None（``supports_vectors=False``——调用方短路嵌入
+                后以 None 写入，回退实现跳过向量维度校验）。
         """
         ...
 

@@ -114,6 +114,138 @@ describe('CuratedTab', () => {
     const record = mockCurated()
     expect(record.superseded_by_id).toBeNull()
     expect(record.version).toBe(2)
+    expect(record.pinned).toBe(false)
+    expect(record.frozen).toBe(false)
+    expect(record.access_count).toBe(0)
+    expect(record.last_accessed_ms).toBeNull()
+    expect(record.effective_strength).toBe(5.2)
+  })
+
+  it('强度列：现行行展示一位小数，归档行展示占位符', async () => {
+    server.use(
+      http.get(`${BACKEND_ORIGIN}/memories/curated`, () =>
+        HttpResponse.json(
+          okResult({
+            ...EMPTY_PAGE,
+            items: [
+              mockCurated({ id: 5, effective_strength: 3.24 }),
+              mockCurated({ id: 6, status: 'archived', effective_strength: 0.4 }),
+            ],
+          }),
+        ),
+      ),
+    )
+    renderWithProviders(<CuratedTab personaId={undefined} />)
+    expect(await screen.findByTestId('curated-strength-5')).toHaveTextContent('3.2')
+    expect(screen.getByTestId('curated-strength-6')).toHaveTextContent('—')
+  })
+
+  it('归档行置灰（dimmed 样式类）', async () => {
+    server.use(
+      http.get(`${BACKEND_ORIGIN}/memories/curated`, () =>
+        HttpResponse.json(
+          okResult({
+            ...EMPTY_PAGE,
+            items: [mockCurated({ id: 7, status: 'archived' })],
+          }),
+        ),
+      ),
+    )
+    renderWithProviders(<CuratedTab personaId={undefined} />)
+    const row = await screen.findByTestId('curated-row-7')
+    expect(row.className).toContain('opacity-60')
+  })
+
+  it('归档行：置顶 / 冻结按钮禁用（不参与生命周期）', async () => {
+    server.use(
+      http.get(`${BACKEND_ORIGIN}/memories/curated`, () =>
+        HttpResponse.json(
+          okResult({
+            ...EMPTY_PAGE,
+            items: [mockCurated({ id: 7, status: 'archived' })],
+          }),
+        ),
+      ),
+    )
+    renderWithProviders(<CuratedTab personaId={undefined} />)
+    const row = await screen.findByTestId('curated-row-7')
+    const pin = withinRow(row, '置顶')
+    const freeze = withinRow(row, '冻结')
+    expect(pin).toBeDisabled()
+    expect(freeze).toBeDisabled()
+    expect(pin).toHaveAttribute('title', '归档行不参与生命周期')
+    expect(freeze).toHaveAttribute('title', '归档行不参与生命周期')
+  })
+
+  it('含归档行开关：勾选后列表请求带 include_archived=true', async () => {
+    const user = userEvent.setup()
+    const urls: string[] = []
+    server.use(
+      http.get(`${BACKEND_ORIGIN}/memories/curated`, ({ request }) => {
+        urls.push(request.url)
+        return HttpResponse.json(
+          okResult({ ...EMPTY_PAGE, items: [mockCurated({ id: 3 })] }),
+        )
+      }),
+    )
+    renderWithProviders(<CuratedTab personaId={undefined} />)
+    await screen.findByTestId('curated-row-3')
+    await user.click(screen.getByLabelText('含归档行'))
+    await waitFor(() =>
+      expect(urls.some((url) => new URL(url).searchParams.get('include_archived') === 'true')).toBe(
+        true,
+      ),
+    )
+  })
+
+  it('置顶 / 冻结按钮：调用生命周期端点并提示结果', async () => {
+    const user = userEvent.setup()
+    const calls: string[] = []
+    server.use(
+      http.post(`${BACKEND_ORIGIN}/memories/curated/:memoryId/:action`, ({ params }) => {
+        const id = Number(params.memoryId)
+        const action = String(params.action)
+        calls.push(`${id}:${action}`)
+        return HttpResponse.json(
+          okResult(
+            mockCurated({ id, pinned: action === 'pin', frozen: action === 'freeze' }),
+          ),
+        )
+      }),
+    )
+    renderWithProviders(<CuratedTab personaId={undefined} />)
+    const row = await screen.findByTestId('curated-row-3')
+    await user.click(withinRow(row, '置顶'))
+    expect(await screen.findByText(/策展记忆 #3 已置顶/)).toBeInTheDocument()
+    await user.click(withinRow(screen.getByTestId('curated-row-3'), '冻结'))
+    expect(await screen.findByText(/策展记忆 #3 已冻结/)).toBeInTheDocument()
+    expect(calls).toEqual(['3:pin', '3:freeze'])
+  })
+
+  it('取消置顶 / 解冻：已处于目标态的行调用反向端点', async () => {
+    const user = userEvent.setup()
+    const calls: string[] = []
+    server.use(
+      http.get(`${BACKEND_ORIGIN}/memories/curated`, () =>
+        HttpResponse.json(
+          okResult({
+            ...EMPTY_PAGE,
+            items: [mockCurated({ id: 8, pinned: true, frozen: true })],
+          }),
+        ),
+      ),
+      http.post(`${BACKEND_ORIGIN}/memories/curated/:memoryId/:action`, ({ params }) => {
+        const id = Number(params.memoryId)
+        const action = String(params.action)
+        calls.push(`${id}:${action}`)
+        return HttpResponse.json(okResult(mockCurated({ id })))
+      }),
+    )
+    renderWithProviders(<CuratedTab personaId={undefined} />)
+    const row = await screen.findByTestId('curated-row-8')
+    await user.click(withinRow(row, '取消置顶'))
+    await user.click(withinRow(screen.getByTestId('curated-row-8'), '解冻'))
+    await waitFor(() => expect(calls).toEqual(['8:unpin', '8:unfreeze']))
   })
 })
 

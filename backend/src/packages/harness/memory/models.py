@@ -106,11 +106,15 @@ class CuratedStatus(StrEnum):
     """策展记忆状态值域（ff_curated_memory.status）。
 
     - ``active``：现行版本（同 (persona, kind, topic) 至多一条）；
-    - ``superseded``：已被新版本取代（superseded_by_id 指向取代者）。
+    - ``superseded``：已被新版本取代（superseded_by_id 指向取代者）；
+    - ``archived``：已归档（生命周期终态——梦境巩固按有效强度批量置入，
+      归档行不参与默认列表、免于再次归档；``active_marker`` 置 NULL 使
+      同主题可重新起链，见 memory.lifecycle 与 memory.dreaming）。
     """
 
     ACTIVE = "active"
     SUPERSEDED = "superseded"
+    ARCHIVED = "archived"
 
 
 # =========================================================================== []

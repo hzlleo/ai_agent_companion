@@ -75,12 +75,16 @@ class DreamDecisionAction(StrEnum):
     - ``merged``：事件内容并入**既有 active 主题**（upsert 推进
       supersede 链，version > 1——事件并入既有记忆）；
     - ``skipped``：未参与晋升（低于分数线 / 既往已晋升 / 超出候选
-      上限 / 提案未收录或被丢弃）。
+      上限 / 提案未收录或被丢弃 / 目标主题已冻结）；
+    - ``archived``：**策展记忆**归档（生命周期阶段产物——决策主体是
+      ``curated_id`` 指向的策展行，不是情景事件；``episode_id`` 为 0，
+      理由 = ``strength_below_threshold``）。
     """
 
     PROMOTED = "promoted"
     SKIPPED = "skipped"
     MERGED = "merged"
+    ARCHIVED = "archived"
 
 
 class DreamJobConfig(BaseModel):
@@ -154,7 +158,11 @@ class DreamRunStatsModel(BaseModel):
         - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数
           （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；
         - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用
-          未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）。
+          未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；
+        - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物
+          ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的
+          记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions
+          的 ``frozen`` 理由）。
 
     Attributes:
         candidates: 可信候选事件数。
@@ -163,6 +171,7 @@ class DreamRunStatsModel(BaseModel):
         superseded: 并入事件数（推进既有链）。
         skipped_untrusted: untrusted 硬排除计数。
         failed: 提案丢弃计数。
+        archived: 策展记忆归档行数（生命周期阶段）。
     """
 
     candidates: int = Field(default=0, ge=0, description="可信候选事件数")
@@ -171,6 +180,7 @@ class DreamRunStatsModel(BaseModel):
     superseded: int = Field(default=0, ge=0, description="并入事件数（推进既有链）")
     skipped_untrusted: int = Field(default=0, ge=0, description="untrusted 硬排除计数")
     failed: int = Field(default=0, ge=0, description="提案丢弃计数")
+    archived: int = Field(default=0, ge=0, description="策展记忆归档行数（生命周期阶段）")
 
 
 class DreamDecisionModel(BaseModel):
@@ -182,18 +192,26 @@ class DreamDecisionModel(BaseModel):
     后续运行的「已晋升」跳过依据。
 
     Attributes:
-        episode_id: 情景事件主键（决策主体）。
+        episode_id: 情景事件主键（决策主体；策展归档决策为 0——无关联
+            情景事件，主体见 ``curated_id``）。
         topic: 关联策展主题键（纯跳过决策为空串）。
         kind: 关联策展类型（纯跳过决策为 None）。
-        action: 决策动作（promoted / skipped / merged）。
-        reason: 人读决策理由（跳过原因 / 晋升去向说明）。
+        action: 决策动作（promoted / skipped / merged / archived）。
+        reason: 人读决策理由（跳过原因 / 晋升去向说明 / 归档原因）。
+        curated_id: 关联策展记忆主键（仅 archived 决策填写——归档
+            决策的主体是策展行；其余决策为 None）。
     """
 
-    episode_id: int = Field(description="情景事件主键")
+    episode_id: int = Field(
+        default=0, ge=0, description="情景事件主键（策展归档决策为 0）"
+    )
     topic: str = Field(default="", description="关联策展主题键（纯跳过为空串）")
     kind: CuratedKind | None = Field(default=None, description="关联策展类型（纯跳过为 None）")
     action: DreamDecisionAction = Field(description="决策动作")
     reason: str = Field(default="", description="决策理由")
+    curated_id: int | None = Field(
+        default=None, description="关联策展记忆主键（仅 archived 决策填写）"
+    )
 
 
 class DreamProposedItemModel(BaseModel):

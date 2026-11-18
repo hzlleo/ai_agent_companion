@@ -24,7 +24,20 @@
           upsert_curated（provenance=agent——supersede 语义自动推进链）
         ↓ ⑧ 日记（dream 角色）：当日可信事件 → 第一人称日记 →
           append_episode（kind=dream / source="dream:diary" / provenance=agent）
-        ↓ ⑨ DreamRunRow 终态落库（status/error/stats/decisions）→ 返回记录 DTO
+        ↓ ⑨ 生命周期归档（**纯规则**，零模型调用）：既有 active 策展行按
+          memory.lifecycle.should_archive 判定 → archive_curated（执行点
+          复核 status=active，快照后已被取代的行跳过；status=archived +
+          索引移除）→ stats.archived / decisions(action=archived) 只按
+          实际归档集合生成
+        ↓ ⑩ DreamRunRow 终态落库（status/error/stats/decisions）→ 返回记录 DTO
+
+冻结 / 置顶语义（生命周期保护面——文档化决策）：
+
+    - **冻结主题不进入合并 prompt 主题列表**（``render_merge_prompt`` 的
+      既有主题数据面过滤——模板字节零变化）且**提案目标为冻结主题时
+      整条丢弃**（merged_from 逐事件落 skipped 决策，理由含 ``frozen``）；
+    - **置顶 / 冻结行不归档**（``should_archive`` 硬门）；置顶行同时免于
+      时间衰减（有效强度不衰减）。
 
 fail-closed 语义（锁定决策，逐条）：
 
@@ -99,6 +112,7 @@ from packages.harness.memory.dtos import (
     EpisodeCreateDTO,
     EpisodeRecordDTO,
 )
+from packages.harness.memory.lifecycle import LifecycleConfig, should_archive
 from packages.harness.memory.models import (
     CuratedStatus,
     EpisodeKind,
@@ -123,7 +137,10 @@ __all__ = [
     "dream_score",
     "select_dream_candidates",
     "parse_merge_proposals",
+    "select_archive_candidates",
     "DreamService",
+    "ARCHIVE_REASON_STRENGTH",
+    "SKIP_REASON_FROZEN",
 ]
 
 #: 一天的毫秒数（epoch 毫秒轴的换算基准）。
@@ -137,6 +154,10 @@ DIARY_SOURCE: str = "dream:diary"
 #: 孤儿 running 行收敛的落库失败原因（run_dream 入口批量置 failed 时写入
 #: DreamRunRow.error——进程崩溃遗留的终态补齐）。
 _STALE_RUNNING_ERROR: str = "进程崩溃遗留，由调度收敛"
+#: 归档决策理由（生命周期阶段的 decisions.reason——强度低于归档阈值）。
+ARCHIVE_REASON_STRENGTH: str = "strength_below_threshold"
+#: 冻结目标导致的提案丢弃理由（decisions.reason 片段——文档化 deltas）。
+SKIP_REASON_FROZEN: str = "目标主题已冻结（frozen），提案丢弃"
 
 
 class _DreamPhaseError(Exception):
@@ -394,6 +415,43 @@ def parse_merge_proposals(raw: str) -> tuple[list[DreamProposedItemModel], int]:
     return valid, dropped
 
 
+def select_archive_candidates(
+    topics: Sequence[CuratedRecordDTO],
+    *,
+    now_ms: int,
+    cfg: LifecycleConfig,
+) -> list[CuratedRecordDTO]:
+    """生命周期归档候选（纯函数——零 I/O、零模型调用）。
+
+    判定委托 :func:`packages.harness.memory.lifecycle.should_archive`
+    （非置顶 / 非冻结 / 现行 active / 年龄超阈值 / 强度低于阈值）；
+    候选按 id 升序返回（确定性——归档语句与决策列表的稳定排列）。
+
+    Args:
+        topics: 既有 active 策展记忆（孤儿 running 收敛后的取回面）。
+        now_ms: 参考当前时间（epoch 毫秒——注入式，测试可控）。
+        cfg: 生命周期参数（衰减 / 强化 / 归档阈值 / 最小年龄）。
+
+    Returns:
+        应归档的策展记忆记录列表（id 升序；空列表 = 本次无归档）。
+    """
+    candidates = [
+        topic
+        for topic in topics
+        if should_archive(
+            importance=topic.importance,
+            anchor_ms=topic.created_at,
+            access_count=topic.access_count,
+            pinned=topic.pinned,
+            frozen=topic.frozen,
+            status=topic.status,
+            now_ms=now_ms,
+            config=cfg,
+        )
+    ]
+    return sorted(candidates, key=lambda topic: topic.id)
+
+
 # =========================================================================== []
 # 编排面——DreamService（取数 / LLM 调用 / 落库；无状态，Session 注入）
 # =========================================================================== []
@@ -410,14 +468,25 @@ class DreamService:
     网关 / 存储 / 时钟 / 参数逐次调用注入（run_dream 关键字参数）。
     """
 
-    def __init__(self, *, memory_service: MemoryService | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        memory_service: MemoryService | None = None,
+        lifecycle_config: LifecycleConfig | None = None,
+    ) -> None:
         """初始化服务。
 
         Args:
             memory_service: 记忆域服务（None = 新实例——日记追加 / 策展
-                晋升 / 窗口取回的复用面）。
+                晋升 / 窗口取回 / 归档的复用面；注入索引绑定形态时归档
+                同步移除检索索引）。
+            lifecycle_config: 生命周期参数（None = LifecycleConfig 默认
+                值——归档阶段的强度判定旋钮）。
         """
         self._memory = memory_service if memory_service is not None else MemoryService()
+        self._lifecycle_config = (
+            lifecycle_config if lifecycle_config is not None else LifecycleConfig()
+        )
 
     # ------------------------------------------------------------------
     # 夜间梦境主链路
@@ -595,7 +664,11 @@ class DreamService:
         stats: DreamRunStatsModel,
         decisions: list[DreamDecisionModel],
     ) -> None:
-        """执行取数 → 门控 → 合并 → 晋升 → 日记各阶段（异常上抛归 run_dream）。
+        """执行取数 → 门控 → 合并 → 晋升 → 日记 → 生命周期归档各阶段。
+
+        阶段顺序锁定（gate → merge → diary → archive → finalize）：日记
+        之后执行归档（归档是**整理产物**，失败归 run_dream 终态记录；
+        归档前序阶段异常时本次跳过归档——下个周期重试）。
 
         Args:
             session: 注入的异步 Session。
@@ -629,9 +702,13 @@ class DreamService:
             session, run_now=run_now, cfg=cfg
         )
         active_topics = await self._active_topics(session)
+        prompt_topics = [topic for topic in active_topics if not topic.frozen]
+        frozen_keys = frozenset(
+            (topic.kind.value, topic.topic) for topic in active_topics if topic.frozen
+        )
         topic_hits = (
-            await self._collect_topic_hits(store, persona_scope, active_topics, cfg)
-            if store is not None and trusted and active_topics
+            await self._collect_topic_hits(store, persona_scope, prompt_topics, cfg)
+            if store is not None and trusted and prompt_topics
             else frozenset()
         )
         selected, gate_stats, gate_decisions = select_dream_candidates(
@@ -653,7 +730,8 @@ class DreamService:
                 gateway=gateway,
                 persona_scope=persona_scope,
                 selected=selected,
-                active_topics=active_topics,
+                active_topics=prompt_topics,
+                frozen_keys=frozen_keys,
                 stats=stats,
                 decisions=decisions,
                 decided_ids=decided_ids,
@@ -669,6 +747,9 @@ class DreamService:
                 cfg=cfg,
                 row_id=row.id,
             )
+        await self._archive_pass(
+            session, run_now=run_now, active_topics=active_topics, stats=stats, decisions=decisions
+        )
 
     async def _merge_and_promote(
         self,
@@ -678,6 +759,7 @@ class DreamService:
         persona_scope: str,
         selected: list[EpisodeRecordDTO],
         active_topics: list[CuratedRecordDTO],
+        frozen_keys: frozenset[tuple[str, str]],
         stats: DreamRunStatsModel,
         decisions: list[DreamDecisionModel],
         decided_ids: set[int],
@@ -693,7 +775,10 @@ class DreamService:
             gateway: LLM 网关（dream 角色）。
             persona_scope: 人格作用域 ID。
             selected: 过门候选（分数降序）。
-            active_topics: 既有 active 策展记忆。
+            active_topics: 可参与合并的既有 active 策展记忆（冻结行已
+                排除——prompt 主题列表数据面）。
+            frozen_keys: 冻结主题键集（kind 值, topic）——提案目标命中
+                即整条丢弃（merged_from 逐事件落 skipped/frozen 决策）。
             stats: 运行统计（failed 就地累加）。
             decisions: 决策列表（晋升 / 并入 / 未收录决策就地追加）。
             decided_ids: 已决策事件 id 集（就地更新——防重复决策）。
@@ -712,6 +797,7 @@ class DreamService:
                 persona_scope=persona_scope,
                 selected=selected,
                 active_topics=active_topics,
+                frozen_keys=frozen_keys,
                 stats=stats,
                 decisions=decisions,
                 decided_ids=decided_ids,
@@ -739,6 +825,7 @@ class DreamService:
         persona_scope: str,
         selected: list[EpisodeRecordDTO],
         active_topics: list[CuratedRecordDTO],
+        frozen_keys: frozenset[tuple[str, str]],
         stats: DreamRunStatsModel,
         decisions: list[DreamDecisionModel],
         decided_ids: set[int],
@@ -750,7 +837,10 @@ class DreamService:
             gateway: LLM 网关（dream 角色）。
             persona_scope: 人格作用域 ID。
             selected: 过门候选（分数降序）。
-            active_topics: 既有 active 策展记忆。
+            active_topics: 可参与合并的既有 active 策展记忆（冻结行已排除）。
+            frozen_keys: 冻结主题键集（kind 值, topic）——提案目标命中即
+                丢弃（deltas 文档化：merged_from 逐事件落 skipped 决策，
+                理由含 frozen；不计入 failed——非校验失败）。
             stats: 运行统计（failed 就地累加）。
             decisions: 决策列表（晋升 / 并入 / 未收录决策就地追加）。
             decided_ids: 已决策事件 id 集（就地更新——防重复决策）。
@@ -786,6 +876,26 @@ class DreamService:
                     item.topic,
                     unknown_ids,
                 )
+                continue
+            if (item.kind.value, item.topic) in frozen_keys:
+                logger.info(
+                    "梦境提案目标主题已冻结，丢弃: topic={}, kind={}",
+                    item.topic,
+                    item.kind.value,
+                )
+                for episode_id in item.merged_from:
+                    if episode_id in decided_ids:
+                        continue
+                    decisions.append(
+                        DreamDecisionModel(
+                            episode_id=episode_id,
+                            topic=item.topic,
+                            kind=item.kind,
+                            action=DreamDecisionAction.SKIPPED,
+                            reason=SKIP_REASON_FROZEN,
+                        )
+                    )
+                    decided_ids.add(episode_id)
                 continue
             actionable.append(item)
         for item in actionable:
@@ -890,6 +1000,74 @@ class DreamService:
             ),
         )
         return episode.id
+
+    # ------------------------------------------------------------------
+    # 生命周期归档阶段（纯规则——零模型调用）
+    # ------------------------------------------------------------------
+
+    async def _archive_pass(
+        self,
+        session: AsyncSession,
+        *,
+        run_now: int,
+        active_topics: list[CuratedRecordDTO],
+        stats: DreamRunStatsModel,
+        decisions: list[DreamDecisionModel],
+    ) -> int:
+        """生命周期归档阶段（active 策展行按有效强度批量归档）。
+
+        判定与执行分离：:func:`select_archive_candidates` 纯规则求出候选
+        （非置顶 / 非冻结 / 现行 active / 年龄超阈值 / 强度低于阈值），
+        再由 :meth:`MemoryService.archive_curated` 批量落库——归档执行点
+        会重新校验 ``status='active'``（候选快照与执行之间被 supersede /
+        已归档的行被跳过），落库结果为 :class:`ArchiveCuratedResultModel`
+        的**实际归档集合**。
+
+        决策面口径：只对**实际归档**的 id 产生 ``action=archived`` 决策
+        （``episode_id=0`` / ``curated_id=行主键`` / 理由
+        ``strength_below_threshold``）——``stats.archived`` 与 archived
+        决策条数恒等（逐行可审计；候选快照中未实际归档的行既不计入统计、
+        也不产生决策）。
+
+        Args:
+            session: 注入的异步 Session。
+            run_now: 注入时钟（epoch 毫秒——强度判定参考轴）。
+            active_topics: 既有 active 策展记忆（本轮取回面——候选快照；
+                执行点以 ``archive_curated`` 的复核结果为准）。
+            stats: 运行统计（archived 按实际归档数就地累加）。
+            decisions: 决策列表（归档决策仅对实际归档 id 就地追加）。
+
+        Returns:
+            本次实际归档行数（0 = 无候选 / 候选在执行点均已非 active）。
+        """
+        candidates = select_archive_candidates(
+            active_topics, now_ms=run_now, cfg=self._lifecycle_config
+        )
+        if not candidates:
+            return 0
+        result = await self._memory.archive_curated(
+            session, [candidate.id for candidate in candidates]
+        )
+        stats.archived += result.count
+        candidates_by_id = {candidate.id: candidate for candidate in candidates}
+        for archived_id in result.archived_ids:
+            candidate = candidates_by_id[archived_id]
+            decisions.append(
+                DreamDecisionModel(
+                    episode_id=0,
+                    topic=candidate.topic,
+                    kind=candidate.kind,
+                    action=DreamDecisionAction.ARCHIVED,
+                    reason=ARCHIVE_REASON_STRENGTH,
+                    curated_id=candidate.id,
+                )
+            )
+        logger.info(
+            "梦境生命周期归档完成: archived={}, candidates={}",
+            result.count,
+            len(candidates),
+        )
+        return result.count
 
     # ------------------------------------------------------------------
     # 运行日志读写面（API 消费）

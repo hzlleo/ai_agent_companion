@@ -133,8 +133,17 @@ from packages.harness.duty.duty_service import DutyService
 from packages.harness.intent.service import IntentShortcutService
 from packages.harness.llm.gateway import LlmGateway, wire_default_usage_recorder
 from packages.harness.memory.dreaming import DreamService
-from packages.harness.memory.retrieval import MemorySearchService, build_memory_store
-from packages.harness.memory.service import ChatSessionService, MemoryService
+from packages.harness.memory.episode_sink import ChatTurnEpisodeSink
+from packages.harness.memory.retrieval import (
+    MemoryIndexer,
+    MemorySearchService,
+    build_memory_store,
+)
+from packages.harness.memory.service import (
+    ChatSessionService,
+    CuratedAccessReinforcer,
+    MemoryService,
+)
 from packages.harness.multimodal.look_at import LookAtService, register_look_at_tool
 from packages.harness.persona.directives import DirectivesService
 from packages.harness.persona.directives_models import DirectiveCreateDTO
@@ -222,10 +231,62 @@ async def startup_app_state(
         usage_recorder=wire_default_usage_recorder(),
     )
     app.state.memory_store = build_memory_store(settings)
+    _assemble_memory_services(app)
     await _startup_search(app, settings, config_dir=config_dir)
     await _startup_browser_sidecar(app, settings)
     await _startup_channels(app, settings)
     await _startup_scheduler(app, settings)
+
+
+def _assemble_memory_services(app: FastAPI) -> None:
+    """装配记忆管道（索引管道 + 情景 sink + 检索 / 梦境服务——单一长寿实例）。
+
+    装配链（记忆管道闭合——两条既有阶段性边界在此收口）：
+
+        1. ``MemoryIndexer``（embedder = 装配网关的 embed 角色绑定）绑定
+           全局后台任务管理器——索引链 fire-and-forget，停机经管理器 drain；
+        2. ``MemoryService``（indexer 绑定）→ ``app.state.memory_service``
+           ——情景写入提交后触发索引、删除 / 归档触发索引移除；
+        3. ``ChatTurnEpisodeSink`` → ``app.state.episode_sink``——通道
+           ChatService 工厂消费（对话回合落库即写 kind=chat 情景事件）；
+        4. ``MemorySearchService``（写读强化面注入）→
+           ``app.state.memory_search_service``——检索命中策展行的访问
+           计数经后台管理器异步推进；
+        5. ``DreamService``（记忆服务绑定）→ ``app.state.dream_service``
+           ——夜间巩固的归档阶段同步移除索引。
+
+    装配前置：``app.state.memory_store`` / ``app.state.gateway`` 已就绪
+    （本函数在存储 / 网关装配之后、通道 / 调度器装配之前调用——后者
+    消费上述槽位）。
+
+    Args:
+        app: 待装配的 FastAPI 应用（服务槽位上挂 ``app.state``）。
+    """
+    store = app.state.memory_store
+    gateway = app.state.gateway
+    indexer = MemoryIndexer(
+        embedder=gateway.embed_by_role,
+        store=store,
+        background_manager=background_task_manager,
+    )
+    memory_service = MemoryService(indexer=indexer)
+    app.state.memory_service = memory_service
+    app.state.memory_indexer = indexer
+    app.state.episode_sink = ChatTurnEpisodeSink(
+        session_factory=session_scope,
+        memory_service=memory_service,
+        background_manager=background_task_manager,
+    )
+    app.state.memory_search_service = MemorySearchService(
+        store=store,
+        embedder=gateway.embed_by_role,
+        reinforcer=CuratedAccessReinforcer(
+            session_factory=session_scope, memory_service=memory_service
+        ),
+        background_manager=background_task_manager,
+    )
+    app.state.dream_service = DreamService(memory_service=memory_service)
+    logger.info("记忆管道已装配（索引 / 情景 sink / 检索强化 / 梦境服务）")
 
 
 async def shutdown_app_state(app: FastAPI) -> None:
@@ -252,6 +313,11 @@ async def shutdown_app_state(app: FastAPI) -> None:
     shutdown_shared_thread_pool(wait=True)
     app.state.gateway = None
     app.state.memory_store = None
+    app.state.memory_service = None
+    app.state.memory_indexer = None
+    app.state.episode_sink = None
+    app.state.memory_search_service = None
+    app.state.dream_service = None
     # 搜索槽位复位（服务无自有资源——共享池 client 生命周期归 pools）。
     app.state.search_service = None
     app.state.search_tool_registry = None
@@ -520,6 +586,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
         logger.info("意图快径未启用（INTENT_ENABLED=false）——通道回复全量走 LLM")
     app.state.intent_shortcut = intent_shortcut
 
+    episode_sink = getattr(app.state, "episode_sink", None)
+
     def _chat_service_factory() -> ChatService:
         """逐消息 ChatService 工厂（工具面按当前装配态收缩——搜索工具
         注册表 + 规格列表就绪时绑定 chat 工具循环；浏览器槽位兜底；
@@ -535,6 +603,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
                 tool_executor=tool_registry,
                 intent_shortcut=intent_shortcut,
                 directive_service=directives_service,
+                episode_sink=episode_sink,
             )
         browser_specs = getattr(app.state, "browser_tool_specs", None)
         browser_registry = getattr(app.state, "browser_tool_registry", None)
@@ -546,12 +615,14 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
                 tool_executor=browser_registry,
                 intent_shortcut=intent_shortcut,
                 directive_service=directives_service,
+                episode_sink=episode_sink,
             )
         return ChatService(
             gateway=gateway,
             session_service=ChatSessionService(),
             intent_shortcut=intent_shortcut,
             directive_service=directives_service,
+            episode_sink=episode_sink,
         )
 
     router = ChannelRouter(
@@ -719,11 +790,16 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
     scheduler = Scheduler(tick_seconds=settings.scheduler.tick_seconds)
     if duty_enabled:
         registry = ToolRegistry()
+        memory_search_service = getattr(app.state, "memory_search_service", None)
         register_builtin_tools(
             registry,
-            search_service=MemorySearchService(
-                store=store,
-                embedder=app.state.gateway.embed_by_role,
+            search_service=(
+                memory_search_service
+                if memory_search_service is not None
+                else MemorySearchService(
+                    store=store,
+                    embedder=app.state.gateway.embed_by_role,
+                )
             ),
         )
         await _register_sandbox_tools(app, settings, registry)
@@ -743,7 +819,7 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
         duty_service = DutyService(
             gateway=app.state.gateway,
             registry=registry,
-            memory_service=MemoryService(),
+            memory_service=getattr(app.state, "memory_service", None) or MemoryService(),
             persona_service=PersonaService(),
             channel_router=app.state.channels_router,
             owner_chat_id=settings.channels.telegram.owner_chat_id,
@@ -771,7 +847,7 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
         app.state.duty_registry = registry
     if dream_enabled:
         dream_job = build_dream_trigger_job(
-            dream_service=DreamService(),
+            dream_service=getattr(app.state, "dream_service", None) or DreamService(),
             gateway=app.state.gateway,
             persona_service=PersonaService(),
             session_factory=session_scope,

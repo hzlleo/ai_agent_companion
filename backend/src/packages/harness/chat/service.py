@@ -118,6 +118,20 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
       卡片按会话归属人格重取当前正典）；
     - 未绑定持久化服务（纯内存形态）时行为与既有完全一致——既有测试面
       零变更。
+
+情景落库（对话回合 → 情景层管道——**可选绑定，缺省关闭**）：
+
+    - 构造注入 ``episode_sink``（memory 域的 chat 回合情景落库面）后，
+      ``reply / stream_reply`` 的每个**已落库**回合随即写入 kind=chat
+      情景事件（user 回合 provenance=owner / assistant 回合
+      provenance=agent）——检索索引 / 夜间梦境 / 生命周期巩固由此获得
+      真实对话数据；
+    - 时序锁定：消息行提交**之后**才写情景（消息是事实源，情景是派生
+      镜像）；未落库会话（纯内存态）零写入；
+    - 失败语义：sink 恒不抛（实现吞没），回复链路不受影响——fire-and-
+      forget 分发与失败日志见 ``harness.memory.episode_sink``；
+    - 未注入 sink（CLI / 单元测试 / 未装配记忆服务的形态）行为与既有
+      完全一致。
 """
 
 from __future__ import annotations
@@ -168,6 +182,7 @@ from packages.harness.llm.llm_models import (
     ChatResponseModel,
     ToolDefinitionModel,
 )
+from packages.harness.memory.episode_sink import EpisodeSinkFace
 from packages.harness.memory.service import ChatSessionService
 from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
@@ -425,6 +440,7 @@ class ChatService:
         intent_shortcut: IntentShortcutFace | None = None,
         emotion_service: EmotionService | None = None,
         directive_service: DirectivesService | None = None,
+        episode_sink: EpisodeSinkFace | None = None,
     ) -> None:
         """初始化服务。
 
@@ -449,6 +465,10 @@ class ChatService:
             directive_service: 长期指令服务（None = 不注入长期指令块——
                 行为与既有完全一致；注入后持久化会话回合在 compose 前
                 读取现行指令——纯内存形态零附加 I/O，见模块 docstring）。
+            episode_sink: chat 回合情景落库面（None = 零情景写入——CLI /
+                未装配记忆服务的形态行为与既有完全一致；注入后每回合
+                消息落库即写入 kind=chat 情景事件——fire-and-forget 语义
+                与失败吞没见 ``_record_episode``）。
 
         Raises:
             BusinessException: ``tools`` 与 ``tool_executor`` 未成对注入
@@ -465,6 +485,8 @@ class ChatService:
         )
         #: 长期指令服务绑定（None = 不注入——纯内存 / 未接线形态零 I/O）。
         self._directive_service = directive_service
+        #: 情景落库面绑定（None = 零情景写入——记忆管道未接线形态）。
+        self._episode_sink = episode_sink
         bound_tools = list(tools) if tools else []
         if bound_tools and tool_executor is None:
             raise BusinessException(
@@ -682,6 +704,7 @@ class ChatService:
                 )
         user_turn = self._append_user_turn(state, user_text)
         await self._persist_turn(state, user_turn)
+        await self._record_episode(state, user_turn)
         emotion_summary = await self._current_emotion_summary(state)
         directives = await self._current_directives(state)
         result = compose_messages(
@@ -712,6 +735,7 @@ class ChatService:
         meta = await self._emotion_round_meta(state, parsed)
         assistant_turn = state.append_turn(ChatMessageRole.ASSISTANT, content)
         await self._persist_turn(state, assistant_turn, meta=meta)
+        await self._record_episode(state, assistant_turn)
         return content
 
     async def stream_reply(
@@ -743,6 +767,7 @@ class ChatService:
         """
         user_turn = self._append_user_turn(state, user_text)
         await self._persist_turn(state, user_turn)
+        await self._record_episode(state, user_turn)
         emotion_summary = await self._current_emotion_summary(state)
         directives = await self._current_directives(state)
         result = compose_messages(
@@ -778,6 +803,7 @@ class ChatService:
             )
         assistant_turn = state.append_turn(ChatMessageRole.ASSISTANT, content)
         await self._persist_turn(state, assistant_turn)
+        await self._record_episode(state, assistant_turn)
 
     # ------------------------------------------------------------------
     # 会话观测 / 维护
@@ -906,9 +932,11 @@ class ChatService:
         """
         user_turn = self._append_user_turn(state, user_text)
         await self._persist_turn(state, user_turn)
+        await self._record_episode(state, user_turn)
         await shortcut.realism_delay()
         assistant_turn = state.append_turn(ChatMessageRole.ASSISTANT, canned_text)
         await self._persist_turn(state, assistant_turn)
+        await self._record_episode(state, assistant_turn)
         return assistant_turn.content
 
     def _append_user_turn(self, state: ChatSessionStateModel, user_text: str) -> ChatTurnModel:
@@ -962,6 +990,36 @@ class ChatService:
                 content=turn.content,
                 ts_ms=turn.ts_ms,
                 meta=meta,
+            )
+
+    async def _record_episode(
+        self, state: ChatSessionStateModel, turn: ChatTurnModel
+    ) -> None:
+        """把已落库回合并入情景层（sink 未接线 / 会话未落库时 no-op）。
+
+        时序：**消息行提交之后**调用（回合持久化是情景镜像的前提）；
+        ``session_id`` 为 None（纯内存态）时零写入——情景事件必须可回溯
+        到会话。失败仅日志：sink 契约恒不抛，本方法仍显式兜底（回复链路
+        的失败路径不应包含记忆管道面）。
+
+        Args:
+            state: 会话状态（``session_id`` / ``persona_id`` 为事件归属面）。
+            turn: 已落库回合（角色 / 正文 / 时间——事件载荷来源）。
+        """
+        if self._episode_sink is None or state.session_id is None:
+            return
+        try:
+            await self._episode_sink.record_chat_turn(
+                state.persona_id,
+                state.session_id,
+                turn.role.value,
+                turn.content,
+                turn.ts_ms,
+            )
+        except Exception:  # best-effort: 记忆管道面不进回复失败路径（显式兜底）
+            logger.opt(exception=True).warning(
+                "chat 回合情景落库失败（已吞没——不影响回复）: session_id={}",
+                state.session_id,
             )
 
     def _emotion_runtime_active(self, state: ChatSessionStateModel) -> bool:
