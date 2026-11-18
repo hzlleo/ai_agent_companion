@@ -6,7 +6,7 @@ test_persona_api.py 同模式）；DB 经共享会话级 SQLite fixture 外部�
 JSON 面与 multipart 面全走真实 HTTP 编码（httpx 原生 multipart——
 stdlib email 解析器的边界 / 文件名归一经实证路径）。
 
-覆盖面：预设库读取（8 预设 + 组件注册表）；JSON 导入矩阵（预设生成 /
+覆盖面：预设库读取（11 预设 + 组件注册表）；JSON 导入矩阵（预设生成 /
 未知预设 404 / 载荷恰一 422 / 期望名 / 同卡幂等 / 名称冲突三策略）；
 multipart 单文件导入（含策略与期望名字段）；批量导入（部分成功 +
 策略字段）；错误面（非 multipart 400 / 空体 400 / 非法 JSON 400 /
@@ -106,16 +106,22 @@ def _card_payload(name: str = "小助手", **overrides: Any) -> dict[str, Any]:
 
 
 async def test_list_trait_presets_http(client: AsyncClient) -> None:
-    """预设库读取：8 预设（名单与顺序）+ 组件注册表（≥30）全量下发。"""
+    """预设库读取：11 预设（名单与顺序）+ 组件注册表（≥120）全量下发。"""
     response = await client.get("/api/v1/personas/presets")
     assert response.status_code == 200
     body: dict[str, Any] = response.json()
     assert body["success"] is True
     data = body["data"]
     assert [preset["name_zh"] for preset in data["presets"]] == [
-        "大家闺秀", "小家碧玉", "绿茶", "傲娇", "温柔治愈", "高冷御姐", "元气少女", "毒舌损友",
+        "大家闺秀", "小家碧玉", "绿茶", "傲娇", "温柔治愈",
+        "高冷御姐", "元气少女", "毒舌损友", "同窗旧友", "合租室友", "旧识恋人",
     ]
-    assert len(data["components"]) >= 30
+    assert len(data["components"]) >= 120
+    levels = {preset["id"]: preset["intimacy_level"] for preset in data["presets"]}
+    assert levels["green-tea"] == 2 and levels["refined-lady"] == 1
+    assert levels["reunion-lover"] == 3
+    for preset in data["presets"]:
+        assert preset["scene_scripts"]["daily"] and preset["scene_scripts"]["flirty"]
     assert {component["id"] for component in data["components"]} == set(
         load_official_components()
     )
@@ -164,6 +170,93 @@ async def test_import_preset_with_desired_name_and_suffix(client: AsyncClient) -
     detail = await client.get(f"/api/v1/personas/{data['persona_id']}")
     card = detail.json()["data"]["card"]
     assert card["name"] == "小桃-酱"
+
+
+async def test_import_preset_intimacy_override_filters_components(
+    client: AsyncClient,
+) -> None:
+    """覆盖等级：降到 1 时剔除预设内的暧昧组件，卡片不含任何人格级新字段。"""
+    default = await client.post(
+        "/api/v1/personas/import",
+        json=_preset_payload("green-tea", desired_name="绿茶默认"),
+    )
+    assert default.status_code == 200
+    default_card = (
+        await client.get(f"/api/v1/personas/{default.json()['data']['persona_id']}")
+    ).json()["data"]["card"]
+    assert "话从不说满" in default_card["personality"]
+
+    narrowed = await client.post(
+        "/api/v1/personas/import",
+        json=_preset_payload(
+            "green-tea", desired_name="绿茶收敛", intimacy_level_override=1
+        ),
+    )
+    assert narrowed.status_code == 200
+    narrowed_card = (
+        await client.get(f"/api/v1/personas/{narrowed.json()['data']['persona_id']}")
+    ).json()["data"]["card"]
+    assert "话从不说满" not in narrowed_card["personality"]
+    assert "不经意" not in narrowed_card["personality"]
+    assert "说话甜" in narrowed_card["personality"]
+    assert "intimacy_level" not in narrowed_card
+
+
+async def test_import_preset_override_narrows_explicit_pack(client: AsyncClient) -> None:
+    """亲密包预设：默认纳入 explicit 组件，覆盖降到 1 时收窄为安全组件。"""
+    default = await client.post(
+        "/api/v1/personas/import",
+        json=_preset_payload("reunion-lover", desired_name="旧识默认"),
+    )
+    assert default.status_code == 200
+    default_card = (
+        await client.get(f"/api/v1/personas/{default.json()['data']['persona_id']}")
+    ).json()["data"]["card"]
+    assert "心动起来藏不住" in default_card["personality"]
+    assert "一有机会就要挨着" in default_card["personality"]
+
+    narrowed = await client.post(
+        "/api/v1/personas/import",
+        json=_preset_payload(
+            "reunion-lover", desired_name="旧识收敛", intimacy_level_override=1
+        ),
+    )
+    assert narrowed.status_code == 200
+    narrowed_card = (
+        await client.get(f"/api/v1/personas/{narrowed.json()['data']['persona_id']}")
+    ).json()["data"]["card"]
+    assert "心动起来藏不住" not in narrowed_card["personality"]
+    assert "关灯之后的谈话" not in narrowed_card["personality"]
+    assert "记得各种日子" in narrowed_card["personality"]
+
+
+async def test_import_preset_intimacy_override_out_of_range_422(
+    client: AsyncClient,
+) -> None:
+    """覆盖等级越界：VALIDATION_ERROR 422（不静默夹取）。"""
+    for bad in (-1, 4):
+        response = await client.post(
+            "/api/v1/personas/import",
+            json=_preset_payload("tsundere", intimacy_level_override=bad),
+        )
+        assert response.status_code == 422
+        assert response.json()["code"] == "VALIDATION_ERROR"
+
+
+async def test_import_card_ignores_intimacy_override(client: AsyncClient) -> None:
+    """卡片导入载荷可携带覆盖字段（模型接受），但不影响卡片内容与落库形态。"""
+    response = await client.post(
+        "/api/v1/personas/import",
+        json=_card_payload("小助手", intimacy_level_override=3),
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["imported"] is True
+    card = (
+        await client.get(f"/api/v1/personas/{data['persona_id']}")
+    ).json()["data"]["card"]
+    assert card["name"] == "小助手"
+    assert "intimacy_level" not in card
 
 
 async def test_import_preset_identical_content_idempotent(client: AsyncClient) -> None:

@@ -274,7 +274,8 @@ export interface PersonaListParams {
 // 特质组件库（R2b-2——官方预设画廊 / 生成面）
 // ---------------------------------------------------------------------------
 
-/** 特质组件分类（六类：温性 / 言语风格 / 习惯癖性 / 价值取向 / 社交风格 / 幽默感）。 */
+/** 特质组件分类（十二类：温性 / 言语风格 / 习惯癖性 / 价值取向 / 社交风格 /
+ * 幽默感 / 言语体系 / 情绪表达 / 主动性 / 亲密风格 / 互动仪礼 / 边界）。 */
 export type TraitComponentCategory =
   | 'temperament'
   | 'speech'
@@ -282,6 +283,15 @@ export type TraitComponentCategory =
   | 'values'
   | 'sociality'
   | 'humor'
+  | 'verbal_system'
+  | 'emotion_expression'
+  | 'initiative'
+  | 'intimacy_style'
+  | 'interaction_ritual'
+  | 'boundaries'
+
+/** 特质组件成熟度分档（safe 安全 / suggestive 暧昧 / explicit 亲密直白）。 */
+export type TraitMaturity = 'safe' | 'suggestive' | 'explicit'
 
 /** 特质组件（最小可复用人格碎片——预设的组合原子）。 */
 export interface TraitComponent {
@@ -291,14 +301,30 @@ export interface TraitComponent {
   name_zh: string
   /** 特质描述碎片（落入卡片 personality 的短句）。 */
   description_zh: string
-  /** 分类（六类值域）。 */
+  /** 分类（十二类值域）。 */
   category: TraitComponentCategory
+  /** 成熟度分档（safe 安全 / suggestive 暧昧 / explicit 亲密直白）。 */
+  maturity: TraitMaturity
   /** 语气指令行（拼入 system 提示碎片）。 */
   tone_directives: string[]
-  /** 示例台词（null = 无）。 */
+  /** 示例台词（各成 mes_example 的 <START> 块；官方库 3-5 条）。 */
+  sample_lines: string[]
+  /** 遗留单条示例台词（装载时折叠进 sample_lines；null = 无）。 */
   sample_speech: string | null
   /** 冲突组件 id 列表（同组组合软警告——不拒绝）。 */
   conflicts: string[]
+}
+
+/** 四态场景脚本（预设级行为指令集——渲染进生成卡片的 system 提示）。 */
+export interface TraitSceneScriptSet {
+  /** 日常状态行为指令。 */
+  daily: string[]
+  /** 暧昧状态行为指令。 */
+  flirty: string[]
+  /** 亲密状态行为指令。 */
+  intimate: string[]
+  /** 冲突状态行为指令。 */
+  conflict: string[]
 }
 
 /** 预设级卡片覆写片段（全部可选——生成时的部分合并面）。 */
@@ -325,6 +351,10 @@ export interface TraitPreset {
   description_zh: string
   /** 组件 id 组合集（1-16 个——声明序即组合序）。 */
   components: string[]
+  /** 推荐亲密等级上限（0-3；生成期按此过滤组件成熟度）。 */
+  intimacy_level: number
+  /** 四态场景脚本（渲染进 system 提示的命名段）。 */
+  scene_scripts: TraitSceneScriptSet
   /** 卡片覆写片段（全部可选）。 */
   base_card_overrides: TraitPresetCardOverrides
   /** 建议语音绑定（null = 无建议；导入时随人格落库）。 */
@@ -361,6 +391,8 @@ export interface PersonaImportRequest {
   conflict_strategy: PersonaImportConflictStrategy
   /** 期望注册名（null = 卡片名 / 预设名；1-128 字符）。 */
   desired_name: string | null
+  /** 覆盖预设推荐亲密等级（0-3；null = 沿用预设值）。 */
+  intimacy_level_override: number | null
 }
 
 /** 导入结果（单发面——含幂等 / 冲突未导入形态）。 */

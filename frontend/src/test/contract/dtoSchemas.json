@@ -105,6 +105,11 @@
       },
       {
         "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "TraitSceneScriptSet",
+        "schema_key": "SceneScriptSetModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
         "frontend_type": "TraitLibrary",
         "schema_key": "TraitLibraryDTO"
       },
@@ -5914,7 +5919,7 @@
           "type": "string"
         }
       },
-      "description": "人格导入请求 DTO（JSON 面——multipart 面经同一模型归一）。\n\n载荷三选一（模型校验强制恰一）：``preset_id``（官方预设导入——\n服务端确定性生成卡片）或 ``card``（用户自有卡片文档导入）；\n冲突策略与期望名对两种载荷通用。multipart 面由 API 层解析后经\n本模型归一（``preset_id`` 恒 None——文件导入即卡片载荷）。\n\nAttributes:\n    preset_id: 官方预设 id（与 ``card`` 恰一提供；提供时服务端按\n        预设 + 组件库生成卡片）。\n    card: 用户自有 chara card v2 卡片文档（与 ``preset_id`` 恰一\n        提供）。\n    conflict_strategy: 名称冲突策略（缺省 skip——内容同卡恒幂等，\n        策略不适用）。\n    desired_name: 期望注册名（None = 卡片名 / 预设名；1-128 字符）。\n\nRaises:\n    ValueError: ``preset_id`` 与 ``card`` 同时提供或均未提供（载荷\n        恰一约束）。",
+      "description": "人格导入请求 DTO（JSON 面——multipart 面经同一模型归一）。\n\n载荷三选一（模型校验强制恰一）：``preset_id``（官方预设导入——\n服务端确定性生成卡片）或 ``card``（用户自有卡片文档导入）；\n冲突策略与期望名对两种载荷通用。multipart 面由 API 层解析后经\n本模型归一（``preset_id`` 恒 None——文件导入即卡片载荷）。\n\nAttributes:\n    preset_id: 官方预设 id（与 ``card`` 恰一提供；提供时服务端按\n        预设 + 组件库生成卡片）。\n    card: 用户自有 chara card v2 卡片文档（与 ``preset_id`` 恰一\n        提供）。\n    conflict_strategy: 名称冲突策略（缺省 skip——内容同卡恒幂等，\n        策略不适用）。\n    desired_name: 期望注册名（None = 卡片名 / 预设名；1-128 字符）。\n    intimacy_level_override: 覆盖预设推荐的亲密等级（0-3；None =\n        沿用预设值；只影响生成期组件过滤，不落库为人格字段）。\n\nRaises:\n    ValueError: ``preset_id`` 与 ``card`` 同时提供或均未提供（载荷\n        恰一约束）。",
       "properties": {
         "card": {
           "anyOf": [
@@ -5947,6 +5952,21 @@
           "default": null,
           "description": "期望注册名（None = 卡片名）",
           "title": "Desired Name"
+        },
+        "intimacy_level_override": {
+          "anyOf": [
+            {
+              "maximum": 3,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "覆盖预设推荐亲密等级（0-3；None = 预设值）",
+          "title": "Intimacy Level Override"
         },
         "preset_id": {
           "anyOf": [
@@ -7485,6 +7505,49 @@
       "title": "RoleBindingDTO",
       "type": "object"
     },
+    "SceneScriptSetModel": {
+      "description": "四态场景脚本（预设级行为指令集——渲染进生成卡片的 system 提示）。\n\n每个字段是一组短中文行为指令（1-200 字符 / 至多 6 条），描述该\n情境下人格的具体表现方式；缺省或空列表表示该状态不单独成段。\n\nAttributes:\n    daily: 日常相处状态（问候、吃饭、琐事、陪伴）。\n    flirty: 暧昧状态（试探、心动、若即若离）。\n    intimate: 亲密状态（依偎、亲吻、同处的松弛感）。\n    conflict: 冲突状态（争执、冷战、和好）。",
+      "properties": {
+        "conflict": {
+          "description": "冲突状态行为指令",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 6,
+          "title": "Conflict",
+          "type": "array"
+        },
+        "daily": {
+          "description": "日常状态行为指令",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 6,
+          "title": "Daily",
+          "type": "array"
+        },
+        "flirty": {
+          "description": "暧昧状态行为指令",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 6,
+          "title": "Flirty",
+          "type": "array"
+        },
+        "intimate": {
+          "description": "亲密状态行为指令",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 6,
+          "title": "Intimate",
+          "type": "array"
+        }
+      },
+      "title": "SceneScriptSetModel",
+      "type": "object"
+    },
     "SkillCreateModel": {
       "description": "技能创建入参（管理面手工录入面）。\n\nAttributes:\n    name: 技能名（1-120 字符——slug 由服务层按名称归一化派生）。\n    description: 何时使用的触发描述（1-500 字符）。\n    triggers: 触发短语（1-8 条、每条 1-40 字符——主人可能说出的\n        字面短语）。\n    content: markdown 步骤正文（1-8000 字符）。\n    confidence: 置信度（0-1；缺省 0.6——手工录入属较高可信）。",
       "properties": {
@@ -7749,24 +7812,40 @@
     "TraitComponentModel": {
       "$defs": {
         "TraitComponentCategory": {
-          "description": "特质组件分类值域（六类——覆盖人格表达的主要维度）。\n\n- ``temperament``：温性（情绪基调与待人温度）；\n- ``speech``：言语风格（说话方式与措辞习惯）；\n- ``quirks``：习惯癖性（标志性小动作与反应模式）；\n- ``values``：价值取向（在意什么 / 如何衡量对错）；\n- ``sociality``：社交风格（与人相处时的姿态）；\n- ``humor``：幽默感（逗趣与自嘲的方式）。",
+          "description": "特质组件分类值域（十二类——覆盖人格表达与亲密互动的完整维度）。\n\n- ``temperament``：温性（情绪基调与待人温度）；\n- ``speech``：言语风格（说话方式与措辞习惯）；\n- ``quirks``：习惯癖性（标志性小动作与反应模式）；\n- ``values``：价值取向（在意什么 / 如何衡量对错）；\n- ``sociality``：社交风格（与人相处时的姿态）；\n- ``humor``：幽默感（逗趣与自嘲的方式）；\n- ``verbal_system``：言语体系（口癖词汇 / 句长 / 标点与表情符号风格）；\n- ``emotion_expression``：情绪表达（羞怯 / 吃醋 / 委屈如何落成文本）；\n- ``initiative``：主动性（撩拨强度与黏人程度）；\n- ``intimacy_style``：亲密风格（含蓄到直白的光谱位置）；\n- ``interaction_ritual``：互动仪礼（称谓习惯 / 早晚安仪式）；\n- ``boundaries``：边界（雷区与回避话题的处理方式）。",
           "enum": [
             "temperament",
             "speech",
             "quirks",
             "values",
             "sociality",
-            "humor"
+            "humor",
+            "verbal_system",
+            "emotion_expression",
+            "initiative",
+            "intimacy_style",
+            "interaction_ritual",
+            "boundaries"
           ],
           "title": "TraitComponentCategory",
           "type": "string"
+        },
+        "TraitMaturity": {
+          "description": "特质组件成熟度分档（生成期按预设亲密等级过滤的选取依据）。\n\n- ``safe``：安全（任何亲密等级均可组合——日常相处与人格底色）；\n- ``suggestive``：暧昧（调情、心动、若即若离——亲密等级 2 起可用）；\n- ``explicit``：亲密直白（拥抱、亲吻、同床共枕的直白表达——亲密\n  等级 3 才可用；措辞自然克制，不靠露骨词汇制造效果）。",
+          "enum": [
+            "safe",
+            "suggestive",
+            "explicit"
+          ],
+          "title": "TraitMaturity",
+          "type": "string"
         }
       },
-      "description": "特质组件（最小可复用人格碎片——预设的组合原子）。\n\n``description_zh`` 是**落入卡片的碎片**（组合时拼接进\n``personality``）；``tone_directives`` 是进入 system 提示的短指令行；\n``sample_speech`` 是一条示例台词（组合时拼进 ``mes_example``）。\n\nAttributes:\n    id: 组件 id（kebab-case，库内唯一）。\n    name_zh: 组件中文名（画廊芯片展示）。\n    description_zh: 特质描述碎片（落入卡片 personality 的短句）。\n    category: 分类（六类值域）。\n    tone_directives: 语气指令行（零或多条——拼入 system 提示碎片）。\n    sample_speech: 示例台词（None = 无；一条最能体现该特质的台词）。\n    conflicts: 冲突组件 id 列表（同组组合时软警告——不拒绝）。",
+      "description": "特质组件（最小可复用人格碎片——预设的组合原子）。\n\n``description_zh`` 是**落入卡片的碎片**（组合时拼接进\n``personality``）；``tone_directives`` 是进入 system 提示的短指令行；\n``sample_lines`` 是 3-5 条示例台词（组合时各成 ``mes_example`` 的\n``<START>`` 块）。``sample_speech`` 是单条示例台词的遗留字段：装载\n时若 ``sample_lines`` 为空则折叠为首条示例（两字段并存时以\n``sample_lines`` 为准，遗留值不再参与生成）。\n\nAttributes:\n    id: 组件 id（kebab-case，库内唯一）。\n    name_zh: 组件中文名（画廊芯片展示）。\n    description_zh: 特质描述碎片（落入卡片 personality 的短句）。\n    category: 分类（十二类值域）。\n    maturity: 成熟度分档（默认 safe——需显式声明的才升档）。\n    tone_directives: 语气指令行（零或多条——拼入 system 提示碎片）。\n    sample_lines: 示例台词（0-8 条；官方库要求 3-5 条，每条 1-120\n        字符——拼入 mes_example 的 <START> 块）。\n    sample_speech: 遗留单条示例台词（装载时折叠进 sample_lines；\n        保留字段以兼容旧数据文件的序列化形态）。\n    conflicts: 冲突组件 id 列表（同组组合时软警告——不拒绝）。",
       "properties": {
         "category": {
           "$ref": "#/$defs/TraitComponentCategory",
-          "description": "分类（六类值域）"
+          "description": "分类（十二类值域）"
         },
         "conflicts": {
           "description": "冲突组件 id 列表（同组组合软警告）",
@@ -7790,6 +7869,11 @@
           "title": "Id",
           "type": "string"
         },
+        "maturity": {
+          "$ref": "#/$defs/TraitMaturity",
+          "default": "safe",
+          "description": "成熟度分档（默认 safe）"
+        },
         "name_zh": {
           "description": "组件中文名",
           "maxLength": 64,
@@ -7797,10 +7881,19 @@
           "title": "Name Zh",
           "type": "string"
         },
+        "sample_lines": {
+          "description": "示例台词（0-8 条；官方库要求 3-5 条，每条 1-120 字符）",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Sample Lines",
+          "type": "array"
+        },
         "sample_speech": {
           "anyOf": [
             {
-              "maxLength": 512,
+              "maxLength": 120,
               "type": "string"
             },
             {
@@ -7808,7 +7901,7 @@
             }
           ],
           "default": null,
-          "description": "示例台词（None = 无）",
+          "description": "遗留单条示例台词（装载时折叠进 sample_lines）",
           "title": "Sample Speech"
         },
         "tone_directives": {
@@ -8008,25 +8101,74 @@
           "title": "PresetCardOverridesModel",
           "type": "object"
         },
+        "SceneScriptSetModel": {
+          "description": "四态场景脚本（预设级行为指令集——渲染进生成卡片的 system 提示）。\n\n每个字段是一组短中文行为指令（1-200 字符 / 至多 6 条），描述该\n情境下人格的具体表现方式；缺省或空列表表示该状态不单独成段。\n\nAttributes:\n    daily: 日常相处状态（问候、吃饭、琐事、陪伴）。\n    flirty: 暧昧状态（试探、心动、若即若离）。\n    intimate: 亲密状态（依偎、亲吻、同处的松弛感）。\n    conflict: 冲突状态（争执、冷战、和好）。",
+          "properties": {
+            "conflict": {
+              "description": "冲突状态行为指令",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 6,
+              "title": "Conflict",
+              "type": "array"
+            },
+            "daily": {
+              "description": "日常状态行为指令",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 6,
+              "title": "Daily",
+              "type": "array"
+            },
+            "flirty": {
+              "description": "暧昧状态行为指令",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 6,
+              "title": "Flirty",
+              "type": "array"
+            },
+            "intimate": {
+              "description": "亲密状态行为指令",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 6,
+              "title": "Intimate",
+              "type": "array"
+            }
+          },
+          "title": "SceneScriptSetModel",
+          "type": "object"
+        },
         "TraitComponentCategory": {
-          "description": "特质组件分类值域（六类——覆盖人格表达的主要维度）。\n\n- ``temperament``：温性（情绪基调与待人温度）；\n- ``speech``：言语风格（说话方式与措辞习惯）；\n- ``quirks``：习惯癖性（标志性小动作与反应模式）；\n- ``values``：价值取向（在意什么 / 如何衡量对错）；\n- ``sociality``：社交风格（与人相处时的姿态）；\n- ``humor``：幽默感（逗趣与自嘲的方式）。",
+          "description": "特质组件分类值域（十二类——覆盖人格表达与亲密互动的完整维度）。\n\n- ``temperament``：温性（情绪基调与待人温度）；\n- ``speech``：言语风格（说话方式与措辞习惯）；\n- ``quirks``：习惯癖性（标志性小动作与反应模式）；\n- ``values``：价值取向（在意什么 / 如何衡量对错）；\n- ``sociality``：社交风格（与人相处时的姿态）；\n- ``humor``：幽默感（逗趣与自嘲的方式）；\n- ``verbal_system``：言语体系（口癖词汇 / 句长 / 标点与表情符号风格）；\n- ``emotion_expression``：情绪表达（羞怯 / 吃醋 / 委屈如何落成文本）；\n- ``initiative``：主动性（撩拨强度与黏人程度）；\n- ``intimacy_style``：亲密风格（含蓄到直白的光谱位置）；\n- ``interaction_ritual``：互动仪礼（称谓习惯 / 早晚安仪式）；\n- ``boundaries``：边界（雷区与回避话题的处理方式）。",
           "enum": [
             "temperament",
             "speech",
             "quirks",
             "values",
             "sociality",
-            "humor"
+            "humor",
+            "verbal_system",
+            "emotion_expression",
+            "initiative",
+            "intimacy_style",
+            "interaction_ritual",
+            "boundaries"
           ],
           "title": "TraitComponentCategory",
           "type": "string"
         },
         "TraitComponentModel": {
-          "description": "特质组件（最小可复用人格碎片——预设的组合原子）。\n\n``description_zh`` 是**落入卡片的碎片**（组合时拼接进\n``personality``）；``tone_directives`` 是进入 system 提示的短指令行；\n``sample_speech`` 是一条示例台词（组合时拼进 ``mes_example``）。\n\nAttributes:\n    id: 组件 id（kebab-case，库内唯一）。\n    name_zh: 组件中文名（画廊芯片展示）。\n    description_zh: 特质描述碎片（落入卡片 personality 的短句）。\n    category: 分类（六类值域）。\n    tone_directives: 语气指令行（零或多条——拼入 system 提示碎片）。\n    sample_speech: 示例台词（None = 无；一条最能体现该特质的台词）。\n    conflicts: 冲突组件 id 列表（同组组合时软警告——不拒绝）。",
+          "description": "特质组件（最小可复用人格碎片——预设的组合原子）。\n\n``description_zh`` 是**落入卡片的碎片**（组合时拼接进\n``personality``）；``tone_directives`` 是进入 system 提示的短指令行；\n``sample_lines`` 是 3-5 条示例台词（组合时各成 ``mes_example`` 的\n``<START>`` 块）。``sample_speech`` 是单条示例台词的遗留字段：装载\n时若 ``sample_lines`` 为空则折叠为首条示例（两字段并存时以\n``sample_lines`` 为准，遗留值不再参与生成）。\n\nAttributes:\n    id: 组件 id（kebab-case，库内唯一）。\n    name_zh: 组件中文名（画廊芯片展示）。\n    description_zh: 特质描述碎片（落入卡片 personality 的短句）。\n    category: 分类（十二类值域）。\n    maturity: 成熟度分档（默认 safe——需显式声明的才升档）。\n    tone_directives: 语气指令行（零或多条——拼入 system 提示碎片）。\n    sample_lines: 示例台词（0-8 条；官方库要求 3-5 条，每条 1-120\n        字符——拼入 mes_example 的 <START> 块）。\n    sample_speech: 遗留单条示例台词（装载时折叠进 sample_lines；\n        保留字段以兼容旧数据文件的序列化形态）。\n    conflicts: 冲突组件 id 列表（同组组合时软警告——不拒绝）。",
           "properties": {
             "category": {
               "$ref": "#/$defs/TraitComponentCategory",
-              "description": "分类（六类值域）"
+              "description": "分类（十二类值域）"
             },
             "conflicts": {
               "description": "冲突组件 id 列表（同组组合软警告）",
@@ -8050,6 +8192,11 @@
               "title": "Id",
               "type": "string"
             },
+            "maturity": {
+              "$ref": "#/$defs/TraitMaturity",
+              "default": "safe",
+              "description": "成熟度分档（默认 safe）"
+            },
             "name_zh": {
               "description": "组件中文名",
               "maxLength": 64,
@@ -8057,10 +8204,19 @@
               "title": "Name Zh",
               "type": "string"
             },
+            "sample_lines": {
+              "description": "示例台词（0-8 条；官方库要求 3-5 条，每条 1-120 字符）",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 8,
+              "title": "Sample Lines",
+              "type": "array"
+            },
             "sample_speech": {
               "anyOf": [
                 {
-                  "maxLength": 512,
+                  "maxLength": 120,
                   "type": "string"
                 },
                 {
@@ -8068,7 +8224,7 @@
                 }
               ],
               "default": null,
-              "description": "示例台词（None = 无）",
+              "description": "遗留单条示例台词（装载时折叠进 sample_lines）",
               "title": "Sample Speech"
             },
             "tone_directives": {
@@ -8089,8 +8245,18 @@
           "title": "TraitComponentModel",
           "type": "object"
         },
+        "TraitMaturity": {
+          "description": "特质组件成熟度分档（生成期按预设亲密等级过滤的选取依据）。\n\n- ``safe``：安全（任何亲密等级均可组合——日常相处与人格底色）；\n- ``suggestive``：暧昧（调情、心动、若即若离——亲密等级 2 起可用）；\n- ``explicit``：亲密直白（拥抱、亲吻、同床共枕的直白表达——亲密\n  等级 3 才可用；措辞自然克制，不靠露骨词汇制造效果）。",
+          "enum": [
+            "safe",
+            "suggestive",
+            "explicit"
+          ],
+          "title": "TraitMaturity",
+          "type": "string"
+        },
         "TraitPresetModel": {
-          "description": "特质预设（组件 id 组合集 + 可选生成覆写——官方库的发行单元）。\n\nAttributes:\n    id: 预设 id（kebab-case，库内唯一）。\n    name_zh: 预设中文名（画廊标题；缺省基础名来源）。\n    tagline_zh: 一句话标语（画廊副标题）。\n    description_zh: 预设描述（组合时作为 personality 的首段碎片）。\n    components: 组件 id 组合集（至少一个——空组合的预设无意义）。\n    base_card_overrides: 卡片覆写片段（全部可选）。\n    suggested_voice: 建议语音绑定（None = 无建议；导入时随人格落库）。\n    suggested_book: 建议世界书条目（生成时并入卡片世界书）。",
+          "description": "特质预设（组件 id 组合集 + 可选生成覆写——官方库的发行单元）。\n\nAttributes:\n    id: 预设 id（kebab-case，库内唯一）。\n    name_zh: 预设中文名（画廊标题；缺省基础名来源）。\n    tagline_zh: 一句话标语（画廊副标题）。\n    description_zh: 预设描述（组合时作为 personality 的首段碎片）。\n    components: 组件 id 组合集（至少一个——空组合的预设无意义）。\n    intimacy_level: 推荐亲密等级上限（0-3；生成期按此过滤组件，\n        缺省 0 = 仅安全组件）。\n    scene_scripts: 四态场景脚本（可选；渲染进 system 提示的命名段）。\n    base_card_overrides: 卡片覆写片段（全部可选）。\n    suggested_voice: 建议语音绑定（None = 无建议；导入时随人格落库）。\n    suggested_book: 建议世界书条目（生成时并入卡片世界书）。",
           "properties": {
             "base_card_overrides": {
               "$ref": "#/$defs/PresetCardOverridesModel",
@@ -8120,12 +8286,24 @@
               "title": "Id",
               "type": "string"
             },
+            "intimacy_level": {
+              "default": 0,
+              "description": "推荐亲密等级上限（0-3；生成期组件过滤）",
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Intimacy Level",
+              "type": "integer"
+            },
             "name_zh": {
               "description": "预设中文名",
               "maxLength": 64,
               "minLength": 1,
               "title": "Name Zh",
               "type": "string"
+            },
+            "scene_scripts": {
+              "$ref": "#/$defs/SceneScriptSetModel",
+              "description": "四态场景脚本（可选）"
             },
             "suggested_book": {
               "description": "建议世界书条目",
@@ -8410,6 +8588,49 @@
           "title": "PresetCardOverridesModel",
           "type": "object"
         },
+        "SceneScriptSetModel": {
+          "description": "四态场景脚本（预设级行为指令集——渲染进生成卡片的 system 提示）。\n\n每个字段是一组短中文行为指令（1-200 字符 / 至多 6 条），描述该\n情境下人格的具体表现方式；缺省或空列表表示该状态不单独成段。\n\nAttributes:\n    daily: 日常相处状态（问候、吃饭、琐事、陪伴）。\n    flirty: 暧昧状态（试探、心动、若即若离）。\n    intimate: 亲密状态（依偎、亲吻、同处的松弛感）。\n    conflict: 冲突状态（争执、冷战、和好）。",
+          "properties": {
+            "conflict": {
+              "description": "冲突状态行为指令",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 6,
+              "title": "Conflict",
+              "type": "array"
+            },
+            "daily": {
+              "description": "日常状态行为指令",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 6,
+              "title": "Daily",
+              "type": "array"
+            },
+            "flirty": {
+              "description": "暧昧状态行为指令",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 6,
+              "title": "Flirty",
+              "type": "array"
+            },
+            "intimate": {
+              "description": "亲密状态行为指令",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 6,
+              "title": "Intimate",
+              "type": "array"
+            }
+          },
+          "title": "SceneScriptSetModel",
+          "type": "object"
+        },
         "VoiceProfileModel": {
           "description": "人格语音绑定（存储于 ``ff_personas.voice_profile`` JSON 列）。\n\n绑定语义（锁定决策）：**人格级配置覆盖 settings 缺省**——人格绑定\n存在时，其 speaker / speed 覆盖 ``Settings.voice.tts`` 的\ndefault_speaker / default_speed；请求级显式参数又覆盖人格绑定。\n优先级：请求参数 > 人格绑定 > settings 缺省。\n\nAttributes:\n    speaker: 发音人（CosyVoice speaker id——预置名或部署侧克隆音色名）。\n    instruct_text: instruct2 模式风格指令（None = 普通合成；≤2000\n        字符；提供时随合成请求透传给 CosyVoice instruct2 模式）。\n    speed: 语速（0.5-2.0，默认 1.0）。",
           "properties": {
@@ -8450,7 +8671,7 @@
           "type": "object"
         }
       },
-      "description": "特质预设（组件 id 组合集 + 可选生成覆写——官方库的发行单元）。\n\nAttributes:\n    id: 预设 id（kebab-case，库内唯一）。\n    name_zh: 预设中文名（画廊标题；缺省基础名来源）。\n    tagline_zh: 一句话标语（画廊副标题）。\n    description_zh: 预设描述（组合时作为 personality 的首段碎片）。\n    components: 组件 id 组合集（至少一个——空组合的预设无意义）。\n    base_card_overrides: 卡片覆写片段（全部可选）。\n    suggested_voice: 建议语音绑定（None = 无建议；导入时随人格落库）。\n    suggested_book: 建议世界书条目（生成时并入卡片世界书）。",
+      "description": "特质预设（组件 id 组合集 + 可选生成覆写——官方库的发行单元）。\n\nAttributes:\n    id: 预设 id（kebab-case，库内唯一）。\n    name_zh: 预设中文名（画廊标题；缺省基础名来源）。\n    tagline_zh: 一句话标语（画廊副标题）。\n    description_zh: 预设描述（组合时作为 personality 的首段碎片）。\n    components: 组件 id 组合集（至少一个——空组合的预设无意义）。\n    intimacy_level: 推荐亲密等级上限（0-3；生成期按此过滤组件，\n        缺省 0 = 仅安全组件）。\n    scene_scripts: 四态场景脚本（可选；渲染进 system 提示的命名段）。\n    base_card_overrides: 卡片覆写片段（全部可选）。\n    suggested_voice: 建议语音绑定（None = 无建议；导入时随人格落库）。\n    suggested_book: 建议世界书条目（生成时并入卡片世界书）。",
       "properties": {
         "base_card_overrides": {
           "$ref": "#/$defs/PresetCardOverridesModel",
@@ -8480,12 +8701,24 @@
           "title": "Id",
           "type": "string"
         },
+        "intimacy_level": {
+          "default": 0,
+          "description": "推荐亲密等级上限（0-3；生成期组件过滤）",
+          "maximum": 3,
+          "minimum": 0,
+          "title": "Intimacy Level",
+          "type": "integer"
+        },
         "name_zh": {
           "description": "预设中文名",
           "maxLength": 64,
           "minLength": 1,
           "title": "Name Zh",
           "type": "string"
+        },
+        "scene_scripts": {
+          "$ref": "#/$defs/SceneScriptSetModel",
+          "description": "四态场景脚本（可选）"
         },
         "suggested_book": {
           "description": "建议世界书条目",

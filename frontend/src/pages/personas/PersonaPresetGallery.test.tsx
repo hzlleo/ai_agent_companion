@@ -39,6 +39,111 @@ describe('PersonaPresetGallery', () => {
     expect(screen.getByLabelText('期望名')).toHaveValue('元气少女')
   })
 
+  it('画廊展示组件成熟度徽章与预设亲密等级上限', async () => {
+    renderWithProviders(<PersonaPresetGallery />, {
+      route: '/personas/presets',
+      path: '/personas/presets',
+    })
+    expect(await screen.findByTestId('preset-intimacy-tsundere')).toHaveTextContent(
+      '亲密等级上限 1',
+    )
+    expect(screen.getByTestId('preset-intimacy-genki-girl')).toHaveTextContent('亲密等级上限 2')
+    expect(
+      screen.getByTestId('preset-chip-tsundere-duplicitous-mouth-maturity'),
+    ).toHaveTextContent('安全')
+    expect(
+      screen.getByTestId('preset-chip-genki-girl-energetic-sunny-maturity'),
+    ).toHaveTextContent('暧昧')
+  })
+
+  it('生成对话框：亲密等级选择器默认预设值 + 中文提示 + 过滤预览', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<PersonaPresetGallery />, {
+      route: '/personas/presets',
+      path: '/personas/presets',
+    })
+    await screen.findByTestId('preset-card-genki-girl')
+    await user.click(inCard('genki-girl').getByRole('button', { name: '生成' }))
+    const selector = await screen.findByLabelText('亲密等级')
+    expect(selector).toHaveValue('2')
+    expect(screen.getByTestId('generate-intimacy-hint')).toHaveTextContent('安全 + 暧昧')
+    expect(screen.getByTestId('generate-intimacy-preview')).toHaveTextContent(
+      '本次将组合 2 / 2 个组件',
+    )
+
+    await user.selectOptions(selector, '1')
+    expect(selector).toHaveValue('1')
+    expect(screen.getByTestId('generate-intimacy-hint')).toHaveTextContent('仅安全特质')
+    expect(screen.getByTestId('generate-intimacy-preview')).toHaveTextContent(
+      '本次将组合 1 / 2 个组件',
+    )
+    expect(screen.getByTestId('generate-intimacy-preview')).toHaveTextContent(
+      '1 个超出该等级上限的组件会被过滤',
+    )
+
+    await user.selectOptions(selector, '3')
+    expect(screen.getByTestId('generate-intimacy-hint')).toHaveTextContent('全部特质')
+    expect(screen.getByTestId('generate-intimacy-preview')).toHaveTextContent('无组件被过滤')
+  })
+
+  it('生成提交携带所选亲密等级覆盖（后端子集过滤依据）', async () => {
+    const user = userEvent.setup()
+    const holder: { body?: Record<string, unknown> } = {}
+    server.use(
+      http.post(`${BACKEND_ORIGIN}/personas/import`, async ({ request }) => {
+        holder.body = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json(
+          okResult({ imported: true, persona_id: 12, reason: null, warnings: [] }, '人格已导入'),
+        )
+      }),
+    )
+    renderWithProviders(<PersonaPresetGallery />, {
+      route: '/personas/presets',
+      path: '/personas/presets',
+    })
+    await screen.findByTestId('preset-card-genki-girl')
+    await user.click(inCard('genki-girl').getByRole('button', { name: '生成' }))
+    await user.selectOptions(await screen.findByLabelText('亲密等级'), '1')
+    await user.click(screen.getByRole('button', { name: '生成' }))
+    expect(await screen.findByText(/已按预设「元气少女」生成人格/)).toBeInTheDocument()
+    expect(holder.body).toMatchObject({
+      preset_id: 'genki-girl',
+      intimacy_level_override: 1,
+    })
+  })
+
+  it('亲密包预设：直白徽章 + 等级 3 默认全量、降到 2 过滤 explicit 预览', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<PersonaPresetGallery />, {
+      route: '/personas/presets',
+      path: '/personas/presets',
+    })
+    expect(await screen.findByTestId('preset-intimacy-reunion-lover')).toHaveTextContent(
+      '亲密等级上限 3',
+    )
+    expect(
+      screen.getByTestId('preset-chip-reunion-lover-love-drunk-maturity'),
+    ).toHaveTextContent('直白')
+
+    await user.click(inCard('reunion-lover').getByRole('button', { name: '生成' }))
+    const selector = await screen.findByLabelText('亲密等级')
+    expect(selector).toHaveValue('3')
+    expect(screen.getByTestId('generate-intimacy-hint')).toHaveTextContent('全部特质')
+    expect(screen.getByTestId('generate-intimacy-preview')).toHaveTextContent(
+      '本次将组合 2 / 2 个组件',
+    )
+    expect(screen.getByTestId('generate-intimacy-preview')).toHaveTextContent('无组件被过滤')
+
+    await user.selectOptions(selector, '2')
+    expect(screen.getByTestId('generate-intimacy-hint')).toHaveTextContent('安全 + 暧昧')
+    expect(screen.getByTestId('generate-intimacy-preview')).toHaveTextContent(
+      '本次将组合 1 / 2 个组件',
+    )
+    expect(screen.getByTestId('generate-intimacy-preview')).toHaveTextContent(
+      '1 个超出该等级上限的组件会被过滤',
+    )
+  })
+
   it('生成流：期望名输入（预填预设名）→ 提交导入 → 成功 toast + 返回列表', async () => {
     const user = userEvent.setup()
     renderWithProviders(<PersonaPresetGallery />, {
@@ -138,6 +243,7 @@ describe('PersonaPresetGallery', () => {
       card: null,
       conflict_strategy: 'rename',
       desired_name: '傲娇二号',
+      intimacy_level_override: 1,
     })
   })
 

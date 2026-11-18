@@ -28,7 +28,11 @@ async function expectApiError(promise: Promise<unknown>, message: string, code: 
 describe('personas 导入 / 预设库端点', () => {
   it('getTraitLibrary：GET /personas/presets 解包画廊载荷', async () => {
     const library = await getTraitLibrary()
-    expect(library.presets.map((preset) => preset.id)).toEqual(['tsundere', 'genki-girl'])
+    expect(library.presets.map((preset) => preset.id)).toEqual([
+      'tsundere',
+      'reunion-lover',
+      'genki-girl',
+    ])
     expect(library.components.length).toBeGreaterThanOrEqual(5)
     expect(library.components[0]).toMatchObject({
       id: 'warm-hearted',
@@ -53,6 +57,7 @@ describe('personas 导入 / 预设库端点', () => {
       card: null,
       conflict_strategy: 'rename',
       desired_name: '小桃',
+      intimacy_level_override: 2,
     })
     expect(result.imported).toBe(true)
     expect(result.persona_id).toBe(11)
@@ -62,6 +67,7 @@ describe('personas 导入 / 预设库端点', () => {
       card: null,
       conflict_strategy: 'rename',
       desired_name: '小桃',
+      intimacy_level_override: 2,
     })
   })
 
@@ -142,7 +148,13 @@ describe('personas 导入 / 预设库端点', () => {
       ),
     )
     await expectApiError(
-      importPersona({ preset_id: 'ghost', card: null, conflict_strategy: 'skip', desired_name: null }),
+      importPersona({
+        preset_id: 'ghost',
+        card: null,
+        conflict_strategy: 'skip',
+        desired_name: null,
+        intimacy_level_override: null,
+      }),
       '官方预设不存在',
       'NOT_FOUND',
     )

@@ -87,7 +87,7 @@
 | R2b 人格表达 | ①世界书高级（depth/recursive/groups/probability/cooldown）②性格组件库（33组件×8原型预设+导入API+冲突UI，DTO 68组）③内心独白协议+轻情绪引擎（8维/M层）④swipes 变体（迁移0010）⑤提醒（ff_reminders 迁移0011+扫描作业）+常备指令 | ✅ 代码完成，**PR #11 OPEN（未合并）**，分支 `feat/r2b-persona-expression` 最新 `c65b930` |
 | R2c 记忆关系 | c1 管线闭环+生命周期（迁移0012/索引真接线/归档/审计二审整改）✅`99317c6`；c2 人物画像事实链（迁移0013/facts 域/梦境提取阶段/纠错闭环）✅`0880cc1`；c2b provenance 分级紧急修（PEER 枚举/群聊 peer 落档/梦境双排除/skipped_peer 统计/证据面纵深防御）✅ 已实现并全量验收；c3 SKILL层+历史挖矿（迁移 0014 `ff_persona_skills` / `SkillsService` / 梦境 skills 提取阶段 / compose 相关技能块 / API+面板+文档）✅ 代码完成、全门禁绿；c4 自编辑核心记忆+溯源闸（迁移 0015 `ff_core_memory_blocks` / `ff_core_memory_revisions` / `CoreMemoryService` / `edit_core_memory` 工具 + 发送者来源分级结构性工具闸 / compose【自我认知】块 / API+面板+文档）✅ 代码完成、全门禁绿（含活 SeekDB 0015 round-trip）；c5 终验PR —— **待做** | 🔄 进行中 |
 | R2-defense | 丙+丁：D1 结构隔离 + 宪章五条 + nonce 定界、D2 注入检测 + 角色内反击（毒舌 / 温柔 / 傲娇）、D3 peer 记忆免疫与来源标注、D4 38 条红队回归集 | ✅ 代码完成、全门禁绿（2026-11；`INJECTION_*` 示例模板生成待主 Agent 补齐） |
-| R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | 🔄 甲套件 core（角色契约 compose 常驻块 + 助手腔检测 + 1 次强化重试）✅ 代码完成、全门禁绿；余：示例台词 few-shot / 乙分轨 / 组件库A / 成熟度分层 / 关系连续性A |
+| R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | 🔄 甲套件 core（角色契约 compose 常驻块 + 助手腔检测 + 1 次强化重试）+ 组件库A/成熟度分层（126 组件 × 十二类目 × 3 条示例台词；33 suggestive / 15 explicit；11 预设 × intimacy_level 1-3 × 四态场景脚本（10 个 SFW 预设 + 1 个 explicit 亲密包）；生成期覆盖过滤 + 导入端点 override）✅ 代码完成、全门禁绿；余：示例台词 few-shot / 乙分轨 / 关系连续性A |
 | R2d 心流社交 | 心流门控/群聊多人格/声纹/表情包库+VLM标注 | ⏳ |
 | R2e 通道扩展 | 企微智能机器人（长连接）/GUI 微信容器化（PoC 门）/抖音 web（同底座）/表情包收发/Canvas | ⏳ |
 | R2f 实时语音 | 独立全双工会话（VAD+流式ASR+句级TTS+打断），允许溢出 R3 | ⏳ |
@@ -130,16 +130,16 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2232 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 2258 passed）
 cd backend && pixi run coverage-gates       # 23 组 ≥80% enforce
 cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 6 用例（迁移链/并发唯一键/行锁/混合检索）
-cd frontend && pixi run test / coverage / lint / build   # 555 passed
+cd frontend && pixi run test / coverage / lint / build   # 559 passed
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
 根级：pixi run gen-examples（三件套再生成）、pixi run gates
 ```
 - SeekDB 本地容器：`docker run -d --name seekdb-smoke -p 2881:2881 oceanbase/seekdb:1.4.0-100000172026082615`（root 空密码；就绪约 5-60s；网络中断后需重启）。
-- DTO 契约门：`scripts/export_dto_schemas.py` + `frontend/src/test/contract/dtoSchemas.json`（当前 78 组）；改后端 wire DTO 必须 `pixi run export-dto-schemas` 再提交，改前端 types 契约测试即红。
+- DTO 契约门：`scripts/export_dto_schemas.py` + `frontend/src/test/contract/dtoSchemas.json`（当前 79 组）；改后端 wire DTO 必须 `pixi run export-dto-schemas` 再提交，改前端 types 契约测试即红。
 - 漂移门：`scripts/check_sandbox_dtos_drift.py`（36 项，三树镜像契约 byte 级）。
 - 沙盒树：`docker/tool-sandbox-agent`、`docker/browser-sidecar`（独立 pixi；CI 有对应 job；browser 镜像 ~2GB 不在 CI 构建）。
 - 模型子模组：`models/`（ModelScope；权重 lfs 延迟拉取；ModelScope UA 墙：`git config http.https://www.modelscope.cn/.userAgent "git/2.47.0"`）。
@@ -158,6 +158,16 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 6. docs：persona.md 核心记忆一节 / chat.md 链路与工具闸 / README 行 / 本台账。
 **验证**：后端 2106 passed / 23 组覆盖率 / mypy 148 文件零问题 / ruff / 门禁集（36 项漂移 + noqa 冻结 + 注释门 + 棘轮）/ 活 SeekDB 6 用例；前端 555 passed / coverage / lint / build。
 **剩余**：PR#12（head `9d6c331`，CI 四 job 全绿、CLEAN）待用户在页面合并；合并后三条堆叠分支（r2-defense / llm-confidence-logprobs / r2b-plus-intimacy）按 `rebase --onto origin/main <base>` 收敛并逐一开 PR。
+
+### 已完成切片：R2b+ 组件库 A + 成熟度分层（亲密补强）
+**已完成**：
+1. `harness/persona/trait_library.py`：`TraitMaturity`（safe/suggestive/explicit）+ 分类值域扩至十二类；组件新增 `maturity` / `sample_lines`（3-5 条 × 1-120 字符）与 `sample_speech` 装载期折叠归一；`SceneScriptSetModel`（日常/暧昧/亲密/冲突四态 × ≤6 条 × 1-200 字符）+ 预设 `intimacy_level` 0-3；`allowed_maturities_for_intimacy_level` 过滤映射 + `render_scene_scripts` 命名段渲染；生成面过滤超限组件、mes_example 24 条上限、场景脚本并入 system 提示；装载期新增示例台词条数与预设成熟度上限校验。
+2. `presets/components.yaml`：126 组件 × 十二类目（每类 ≥10）× 3 条示例台词；分布 safe 78 / suggestive 33 / explicit 15。`presets/presets.yaml`：11 预设（8 既有 + 同窗旧友 / 合租室友两个 SFW 原型 + 旧识恋人 explicit 亲密包）× 四态场景脚本 × intimacy_level（10 个 ≤2，亲密包为 3）。
+3. `dtos.py` / `app/api/personas.py`：导入请求新增 `intimacy_level_override`（0-3，越界 422）并接入生成期覆盖；不新增人格字段。
+4. 前端：类型 / msw / 画廊组件成熟度徽章 + 预设亲密等级上限 + 生成对话框亲密等级选择器（默认预设值、中文提示、过滤预览、提交携带 override）+ 测试。
+5. docs：persona.md 组件 schema（含 `sample_speech` 迁移说明）/ 成熟度映射表 / 场景脚本语义 / 计数；README / 本台账；DTO fixture 79 组双侧重生成。
+**验证**：后端 2258 passed / 23 组覆盖率（harness/persona 94.9%）/ mypy 153 文件零问题 / ruff / 门禁链全绿（注释门 + noqa 冻结 + 沙盒漂移 36 + sync 棘轮 0）/ DTO fixture 79 组；前端 559 passed / coverage（96.23% statements）/ lint / build。
+**剩余**：示例台词 few-shot 注入（chat 提示面）/ 乙分轨 roles:intimate 端点 / 关系连续性 A。
 
 ### 已完成切片：R2b+ 甲套件 core（人格输出契约 + 合规守卫）
 **已完成**：
