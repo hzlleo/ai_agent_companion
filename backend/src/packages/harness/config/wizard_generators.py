@@ -64,6 +64,7 @@ _STEP_DEFINITIONS: list[tuple[str, list[str]]] = [
     ("拟人节律配置", ["RHYTHM_"]),
     ("意图快径配置", ["INTENT_"]),
     ("轻情绪引擎配置", ["EMOTION_"]),
+    ("提示词注入防御配置", ["INJECTION_"]),
     ("其他配置", ["ENV"]),
 ]
 

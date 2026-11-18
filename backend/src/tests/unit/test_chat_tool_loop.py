@@ -175,7 +175,11 @@ class TestToolLoopMechanics:
         tool_feedback = second_messages[-1]
         assert tool_feedback.role == ChatMessageRole.TOOL
         assert tool_feedback.tool_call_id == "call-1"
-        assert tool_feedback.content == "【1】天气\n链接：https://w.test"
+        # tool 反馈正文经不可信内容定界包裹（注入防御——内容逐字节保留）
+        assert tool_feedback.content.startswith("[[[内容开始 ")
+        assert "· 工具结果]]]" in tool_feedback.content
+        assert "【1】天气\n链接：https://w.test" in tool_feedback.content
+        assert tool_feedback.content.rstrip().endswith("]]]")
         # 执行器收到配对调用
         assert len(executor.calls) == 1
         assert executor.calls[0].name == "web_search"
@@ -298,7 +302,9 @@ class TestToolLoopMechanics:
         await service.reply(_state(), "问")
         tool_feedback = gateway.requests[1]["messages"][-1]
         assert tool_feedback.role == ChatMessageRole.TOOL
-        payload = json.loads(tool_feedback.content)
+        # 定界包裹的内层正文即紧凑 JSON（开 / 闭定界行各占一行）
+        inner = tool_feedback.content.split("\n", 1)[1].rsplit("\n", 1)[0]
+        payload = json.loads(inner)
         assert payload["ok"] is True
         assert payload["result"] == {"count": 3}
 

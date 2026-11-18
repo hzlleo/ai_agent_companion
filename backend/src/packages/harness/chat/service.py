@@ -6,22 +6,49 @@
         ↓ ① prompts.render_charter()                      会话章程帧
         ↓ ② 世界书 before_char 条目块                      检索增强（前段）
         ↓ ③ prompts.render_persona_system_prompt(card)     人格正典（覆写感知）
-        ↓ ④ 非中性情绪摘要块（render_emotion_state_block——R2b 轻情绪引擎；
-             无状态 / 全中性跳过）
-        ↓ ⑤ 长期指令块（render_directives_block——R2b D7-14；现行指令
-             注入，20 条 / 2000 字符帽截断；无指令跳过）
-        ↓ ⑥ 人物事实块（render_facts_block——R2c；【关于对方】现行高置信
-             事实注入，12 条 / 1500 字符帽由读取面裁剪；无事实跳过）
-        ↓ ⑦ 核心记忆块（render_core_memory_block——R2c；【自我认知】四块
-             自编辑自我模型的非空块注入，锁定块带锁定标识，总字符 2400
-             帽由渲染面截断；全空跳过）
-        ↓ ⑧ 相关技能块（render_skills_block——R2c；【相关技能】仅当命中
-             本轮用户文本时注入，2 条 / 2000 字符帽；无命中跳过）
-        ↓ ⑨ prompts.render_output_protocol()               输出格式协议（心声 /
-             情绪标签指令——R2b）
-        ↓ ⑩ 世界书 after_char 条目块                       检索增强（后段）
-        ↓ ⑪ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合）
-        ↓ ⑫ prompts.render_post_history_message(card)      历史后再注入（末块）
+        ↓ ④ prompts.render_constitution()                 宪章（注入面防护五条
+              ——身份 / 规则 / 引用 / 标签 / 挑衅应对）
+        ↓ ⑤ 非中性情绪摘要块（render_emotion_state_block——R2b 轻情绪引擎；
+              无状态 / 全中性跳过）
+        ↓ ⑥ 长期指令块（render_directives_block——R2b D7-14；现行指令
+              注入，20 条 / 2000 字符帽截断；无指令跳过）
+        ↓ ⑦ 人物事实块（render_facts_block——R2c；【关于对方】现行高置信
+              事实注入，12 条 / 1500 字符帽由读取面裁剪；无事实跳过）
+        ↓ ⑧ 核心记忆块（render_core_memory_block——R2c；【自我认知】四块
+              自编辑自我模型的非空块注入，锁定块带锁定标识，总字符 2400
+              帽由渲染面截断；全空跳过）
+        ↓ ⑨ 相关技能块（render_skills_block——R2c；【相关技能】仅当命中
+              本轮用户文本时注入，2 条 / 2000 字符帽；无命中跳过）
+        ↓ ⑩ prompts.render_output_protocol()               输出格式协议（心声 /
+              情绪标签指令——R2b）
+        ↓ ⑪ 世界书 after_char 条目块                       检索增强（后段）
+        ↓ ⑫ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合；
+              当轮入站回合经 nonce 定界包裹——历史保持原文，见下节）
+        ↓ ⑬ 注入提示块（检测命中时）                        紧接当轮包裹消息之后
+        ↓ ⑭ prompts.render_post_history_message(card)      历史后再注入（末块）
+
+注入面防护（结构隔离 + 检测提示——本域新增防线，攻击面矩阵见
+docs/backend/defense.md）：
+
+    - **当轮入站消息定界包裹**：``compose_messages(..., wrap_current_message=True,
+      current_message_label=...)`` 时，仅**最新一条 user 回合**被
+      ``wrap_untrusted_content`` 包进 nonce 定界的「内容开始 / 内容结束」
+      帧（标签区分主人消息 / 群友消息）；更早的历史回合保持原文——历史是
+      已发生的对话记录，逐条重包裹会让上下文膨胀且稀释边界信号，文档化
+      为已知边界；
+    - **工具结果定界包裹**：``_render_tool_result_content`` 对执行器回灌的
+      tool 轮正文统一包裹（标签「工具结果」）——搜索摘要 / 浏览器
+      ``read_text`` / 任意执行器结果里的「指令」都不再裸奔；duty 域
+      ``render_tool_result`` 同语义（见 duty 域文档）；
+    - **检测提示**：``reply`` / ``stream_reply`` 在组装前对当轮用户文本跑
+      ``detect_injection``；越过阈值时记 debug 日志（命中种类列表），并在
+      包裹消息之后追加 ``render_injection_hint`` 块（宪章复述 + 一句按
+      ``INJECTION_COUNTER_STYLE`` 确定性选出的参考回怼）——模型可改写或
+      无视提示，护栏是宪章与结构边界本身；
+    - **配置**：``INJECTION_`` env 面（``InjectionGuardSettings``：启用 /
+      风格 / 阈值 / 提示开关）；``enabled=False`` 时包裹与检测全关，回复
+      链路回到原始形态。世界书 / 长期指令 / 人物事实 / 核心记忆 / 技能
+      属**受信层**（主人或人格自身写入），不做包裹。
 
 世界书筛选语义（chara card v2 规格 + R2b 高级触发——算法链全文见
 ``world_book`` 模块文档，此处为消费面摘要）：
@@ -193,14 +220,25 @@ from packages.harness.chat.chat_models import (
     ChatTurnModel,
     MessageCompositionResult,
 )
+from packages.harness.chat.injection_guard import (
+    build_injection_hint,
+    detect_injection,
+    wrap_untrusted_content,
+)
+from packages.harness.chat.injection_models import InjectionGuardSettings
 from packages.harness.chat.output_protocol import (
     ParsedAssistantOutputModel,
     StreamTagStripper,
     parse_assistant_output,
 )
 from packages.harness.chat.prompts import (
+    UNTRUSTED_LABEL_DEFAULT,
+    UNTRUSTED_LABEL_OWNER,
+    UNTRUSTED_LABEL_PEER,
+    UNTRUSTED_LABEL_TOOL_RESULT,
     WORLD_BOOK_SECTION_SEPARATOR,
     render_charter,
+    render_constitution,
     render_core_memory_block,
     render_directives_block,
     render_emotion_state_block,
@@ -280,24 +318,35 @@ _TOOL_LOOP_FINAL_INSTRUCTION: Final[str] = (
 # ---------------------------------------------------------------------------
 
 
-def _render_tool_result_content(result: ToolResultModel) -> str:
-    """工具执行结果 → tool 角色消息正文。
+def _render_tool_result_content(result: ToolResultModel, *, wrap: bool) -> str:
+    """工具执行结果 → tool 角色消息正文（可选定界包裹）。
 
     优先取执行器预格式化 ``text`` 块（web_search 的紧凑中文结果块）；
     其余结果整体紧凑 JSON（与 duty ``render_tool_result`` 同信息量——
     ok / result / error / 时延全量反馈，失败形态原样供模型自行调整）。
+    ``wrap=True`` 时正文经 :func:`wrap_untrusted_content` 包进「工具结果」
+    定界帧——工具输出可能夹带外部网页 / 评论原文，不能直接当规则读。
 
     Args:
         result: 执行结果（registry 归一终态）。
+        wrap: 是否加不可信内容定界包裹（注入防御启用时由调用方传 True）。
 
     Returns:
-        tool 消息正文文本。
+        tool 消息正文文本（包裹形态为定界帧 + 原正文）。
     """
     if result.ok:
         preformatted = result.result.get("text")
         if isinstance(preformatted, str) and preformatted:
-            return preformatted
-    return json.dumps(result.model_dump(), ensure_ascii=False, separators=(",", ":"))
+            body = preformatted
+            if wrap:
+                return wrap_untrusted_content(
+                    body, label=UNTRUSTED_LABEL_TOOL_RESULT
+                ).text
+            return body
+    body = json.dumps(result.model_dump(), ensure_ascii=False, separators=(",", ":"))
+    if wrap:
+        return wrap_untrusted_content(body, label=UNTRUSTED_LABEL_TOOL_RESULT).text
+    return body
 
 
 # ---------------------------------------------------------------------------
@@ -335,17 +384,26 @@ def compose_messages(
     facts: Sequence[str] | None = None,
     core_memory: Sequence[CoreMemoryBlockDTO] | None = None,
     skills: Sequence[SkillRecordDTO] | None = None,
+    wrap_current_message: bool = False,
+    current_message_label: str = "",
+    injection_hint: str | None = None,
 ) -> MessageCompositionResult:
     """组装完整请求消息序列（纯函数——无 I/O / 无网关调用 / 无会话回写）。
 
     消息序列结构::
 
-        [system]  章程 + 世界书 before 段 + 人格正典 + 心情状态块 +
+        [system]  章程 + 世界书 before 段 + 人格正典 + 宪章 + 心情状态块 +
                   长期指令块 + 人物事实块 + 核心记忆块 + 相关技能块 +
                   输出格式协议块 + 世界书 after 段
-        [user/assistant ...]  全部历史回合（含刚追加的用户回合）
+        [user/assistant ...]  全部历史回合（含刚追加的用户回合；当轮入站
+                  回合在 ``wrap_current_message=True`` 时被定界包裹）
+        [system]  注入提示块（仅检测命中且调用方传入 ``injection_hint`` 时；
+                  紧接当轮包裹消息之后）
         [system]  历史后再注入（卡片声明 post_history_instructions 时；
                   位于**最后一条历史回合之后**——deep anti-drift 位置）
+
+    宪章块（``render_constitution``）恒注入且紧跟人格正典——五条注入面
+    防护规则先于一切记忆层与对话内容生效。
 
     心情状态块仅在 ``emotion_summary`` 非空时注入（非中性情绪——由
     ChatService 经 emotion 域读取 M 态产出）；长期指令块仅在
@@ -360,6 +418,13 @@ def compose_messages(
     匹配；条数帽在读取面、字符帽在 ``render_skills_block`` 施加）；输出
     格式协议块恒注入（心声 / 情绪标签指令——解析面见
     ``chat/output_protocol``）。
+
+    当轮入站包裹（结构隔离，锁定边界）：``wrap_current_message=True``
+    时**只包裹最后一条 user 回合**（即本轮刚追加的入站消息），历史回合
+    保持原文——历史是已发生的对话记录，不逐条重包裹。包裹用
+    ``wrap_untrusted_content``（nonce 定界 + 来源标签）；标签缺省回落
+    「消息」。``injection_hint`` 非空且确实发生包裹时，提示块作为 system
+    消息紧接包裹回合之后追加（先于历史后再注入）。
 
     世界书选择经 ``world_book.select_world_book_entries``（算法链与
     渲染序裁定见该模块文档）；推进后的回合状态（冷却时钟 + 注入
@@ -383,6 +448,13 @@ def compose_messages(
         skills: 命中本轮用户文本的技能记录列表（None / 空 = 不注入相关
             技能块；匹配与条数帽在调用方、字符帽在 ``render_skills_block``
             ——本函数保持纯函数无 I/O）。
+        wrap_current_message: 是否把当轮入站 user 回合包进不可信内容定界帧
+            （注入防御启用时由 ChatService 传 True；直调缺省 False 保持
+            既有组装形态）。
+        current_message_label: 当轮入站消息的来源标签（主人消息 / 群友消息
+            ／……；空白回落 ``UNTRUSTED_LABEL_DEFAULT``）。
+        injection_hint: 注入提示块文本（检测命中时由调用方渲染；None = 不
+            追加提示——仅在发生包裹时生效）。
 
     Returns:
         组装结果（消息序列 + 观测元数据 + 推进后的世界书回合状态）。
@@ -403,6 +475,7 @@ def compose_messages(
     if before_block:
         system_parts.append(before_block)
     system_parts.append(render_persona_system_prompt(state.card))
+    system_parts.append(render_constitution())
     emotion_block = render_emotion_state_block(emotion_summary)
     if emotion_block:
         system_parts.append(emotion_block)
@@ -428,6 +501,25 @@ def compose_messages(
         ChatMessageModel(role=ChatMessageRole.SYSTEM, content=system_prompt)
     ]
     messages.extend(ChatMessageModel(role=turn.role, content=turn.content) for turn in state.turns)
+    current_message_wrapped = False
+    applied_hint: str | None = None
+    current_content = messages[-1].content
+    if (
+        wrap_current_message
+        and messages[-1].role == ChatMessageRole.USER
+        and isinstance(current_content, str)
+    ):
+        wrapped = wrap_untrusted_content(
+            current_content,
+            label=current_message_label.strip() or UNTRUSTED_LABEL_DEFAULT,
+        )
+        messages[-1] = ChatMessageModel(role=ChatMessageRole.USER, content=wrapped.text)
+        current_message_wrapped = True
+        if injection_hint:
+            applied_hint = injection_hint
+            messages.append(
+                ChatMessageModel(role=ChatMessageRole.SYSTEM, content=injection_hint)
+            )
     post_history_message: str | None = None
     if state.card.post_history_instructions:
         post_history_message = render_post_history_message(state.card)
@@ -440,6 +532,8 @@ def compose_messages(
         estimated_system_tokens=estimate_text_tokens(system_prompt),
         world_book_state=selection.turn_state,
         emotion_summary=emotion_summary if emotion_block else None,
+        current_message_wrapped=current_message_wrapped,
+        injection_hint=applied_hint,
     )
 
 
@@ -593,6 +687,7 @@ class ChatService:
         facts_reader: FactsReaderFace | None = None,
         core_memory_reader: CoreMemoryReaderFace | None = None,
         skills_reader: SkillsReaderFace | None = None,
+        injection_settings: InjectionGuardSettings | None = None,
         episode_sink: EpisodeSinkFace | None = None,
     ) -> None:
         """初始化服务。
@@ -630,6 +725,9 @@ class ChatService:
                 既有完全一致；注入后持久化会话回合在 compose 前按本轮
                 用户文本匹配现行技能——纯内存形态零附加 I/O，见模块
                 docstring「相关技能注入」）。
+            injection_settings: 注入防御配置（None = 现场构造默认实例——
+                读 ``INJECTION_`` env；缺省启用结构隔离与检测提示，见
+                模块 docstring「注入面防护」）。
             episode_sink: chat 回合情景落库面（None = 零情景写入——CLI /
                 未装配记忆服务的形态行为与既有完全一致；注入后每回合
                 消息落库即写入 kind=chat 情景事件——fire-and-forget 语义
@@ -654,6 +752,10 @@ class ChatService:
         self._core_memory_reader = core_memory_reader
         #: 技能读取面绑定（None = 不注入——纯内存 / 未接线形态零 I/O）。
         self._skills_reader = skills_reader
+        #: 注入防御配置（默认实例读 INJECTION_ env——见模块 docstring）。
+        self._injection_settings = (
+            injection_settings if injection_settings is not None else InjectionGuardSettings()
+        )
         #: 情景落库面绑定（None = 零情景写入——记忆管道未接线形态）。
         self._episode_sink = episode_sink
         bound_tools = list(tools) if tools else []
@@ -842,6 +944,11 @@ class ChatService:
         ``edit_core_memory``（自编辑写入闸——见模块 docstring「核心记忆
         注入与自编辑工具闸」）。
 
+        注入面防护（``INJECTION_ENABLED`` 开启——见模块 docstring「注入面
+        防护」）：当轮入站回合按来源分级加定界包裹（标签「主人消息」/
+        「群友消息」），检测命中时在包裹回合之后追加注入提示块；工具循环
+        回灌的 tool 轮正文同样定界包裹（「工具结果」）。
+
         失败语义：网关异常原样上抛（用户回合保留在历史——调用方决定
         重试或提示）。重试语义（文档化决策）：调用方对 ``reply`` 的任何
         重试都是**完整重发**——用户消息再次进入会话历史；持久化绑定且
@@ -890,6 +997,9 @@ class ChatService:
         facts = await self._current_facts(state)
         core_memory = await self._current_core_memory(state)
         skills = await self._current_skills(state, user_text)
+        wrap_current, current_label, injection_hint = self._injection_compose_inputs(
+            state, user_text, sender_provenance
+        )
         result = compose_messages(
             state,
             emotion_summary=emotion_summary,
@@ -897,6 +1007,9 @@ class ChatService:
             facts=facts,
             core_memory=core_memory,
             skills=skills,
+            wrap_current_message=wrap_current,
+            current_message_label=current_label,
+            injection_hint=injection_hint,
         )
         # 功能式回合状态回存：组装纯函数不回写会话态，冷却时钟推进由
         # 本服务消费后落回（快径路径不组装、不推进——时钟只度量真实
@@ -953,6 +1066,8 @@ class ChatService:
         Args:
             state: 会话状态。
             user_text: 用户输入（空白拒绝）。
+            sender_provenance: 发送者来源分级（私聊 owner / 群聊 peer——
+                情景落档层级与当轮包裹标签同源；缺省 owner）。
 
         Yields:
             回复增量文本块。
@@ -970,6 +1085,9 @@ class ChatService:
         facts = await self._current_facts(state)
         core_memory = await self._current_core_memory(state)
         skills = await self._current_skills(state, user_text)
+        wrap_current, current_label, injection_hint = self._injection_compose_inputs(
+            state, user_text, sender_provenance
+        )
         result = compose_messages(
             state,
             emotion_summary=emotion_summary,
@@ -977,6 +1095,9 @@ class ChatService:
             facts=facts,
             core_memory=core_memory,
             skills=skills,
+            wrap_current_message=wrap_current,
+            current_message_label=current_label,
+            injection_hint=injection_hint,
         )
         # 功能式回合状态回存（与 reply 同构——冷却时钟只度量真实组装回合）。
         state.world_book_state = result.world_book_state
@@ -1037,6 +1158,50 @@ class ChatService:
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
+
+    def _injection_compose_inputs(
+        self,
+        state: ChatSessionStateModel,
+        user_text: str,
+        sender_provenance: MemoryProvenance,
+    ) -> tuple[bool, str, str | None]:
+        """构建注入防御的组装入参（包裹开关 / 来源标签 / 注入提示）。
+
+        运行判定：``INJECTION_ENABLED`` 关闭时返回未启用形态（不包裹、不
+        检测——回复链路回到原始组装）。启用时：标签按发送者来源分级
+        （owner = 主人消息；peer / untrusted = 群友消息）；检测命中且
+        ``INJECTION_ANTI_INJECTION_HINT`` 开启时，按 ``INJECTION_COUNTER_STYLE``
+        渲染注入提示块（台词按本轮文本确定性选取）。检测只记 debug 日志、
+        只追加提示——从不拦截回合。
+
+        Args:
+            state: 会话状态（日志归属人格）。
+            user_text: 本轮入站文本（检测与台词种子）。
+            sender_provenance: 本轮发送者来源分级（决定包裹标签）。
+
+        Returns:
+            ``(是否包裹当轮消息, 来源标签, 注入提示或 None)`` 三元组。
+        """
+        if not self._injection_settings.enabled:
+            return False, "", None
+        label = (
+            UNTRUSTED_LABEL_OWNER
+            if sender_provenance == MemoryProvenance.OWNER
+            else UNTRUSTED_LABEL_PEER
+        )
+        signal = detect_injection(user_text, threshold=self._injection_settings.threshold)
+        if not signal.suspected:
+            return True, label, None
+        logger.debug(
+            "注入信号命中: persona_id={}, score={:.2f}, kinds={}",
+            state.persona_id,
+            signal.score,
+            [reason.kind.value for reason in signal.reasons],
+        )
+        if not self._injection_settings.anti_injection_hint:
+            return True, label, None
+        hint = build_injection_hint(self._injection_settings.counter_style, user_text)
+        return True, label, hint
 
     async def _tool_loop(
         self,
@@ -1108,7 +1273,9 @@ class ChatService:
                     loop_messages.append(
                         ChatMessageModel(
                             role=ChatMessageRole.TOOL,
-                            content=_render_tool_result_content(result),
+                            content=_render_tool_result_content(
+                                result, wrap=self._injection_settings.enabled
+                            ),
                             tool_call_id=call.id,
                         )
                     )
