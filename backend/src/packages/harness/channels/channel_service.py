@@ -69,8 +69,10 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.harness.channels.channel_models import (
+    ChannelAttachmentKind,
     ChannelContextModel,
     ChannelDeliveryResultModel,
+    ChannelMessageAttachment,
     ChannelType,
     InboundMessageModel,
     OutboundMessageModel,
@@ -117,6 +119,8 @@ __all__ = [
     "PersonaListFace",
     "RelationshipLookupFace",
     "RhythmGateFace",
+    "StickerIngestHook",
+    "StickerReplyHook",
 ]
 
 #: 通用兜底回复文案（错误细节只进日志——用户面恒短句）。
@@ -133,6 +137,12 @@ DelayedJobFactory = Callable[[], Coroutine[Any, Any, None]]
 
 #: 关系摘要查询契约（人格主键 + 判定时刻 → 关系摘要；未接线为 None）。
 RelationshipLookupFace = Callable[[int, int], Awaitable[RelationshipSummaryModel | None]]
+
+#: 入站表情收录契约（人格上下文已绑定——桥内部自开会话；未接线为 None）。
+StickerIngestHook = Callable[[list[ChannelMessageAttachment]], Awaitable[None]]
+
+#: 出站表情选取契约（人格上下文已绑定——返回 None = 本轮不发表情）。
+StickerReplyHook = Callable[[], Awaitable[ChannelMessageAttachment | None]]
 
 
 class RhythmGateFace(Protocol):
@@ -247,6 +257,8 @@ class ChannelRouter:
         scheduler_provider: Callable[[], DelayedSchedulerFace | None] | None = None,
         persona_service: PersonaListFace | None = None,
         relationship_lookup: RelationshipLookupFace | None = None,
+        sticker_ingest_hook: StickerIngestHook | None = None,
+        sticker_reply_hook: StickerReplyHook | None = None,
         clock: Callable[[], int] = time_utils.now_ms,
     ) -> None:
         """初始化路由器。
@@ -272,6 +284,11 @@ class ChannelRouter:
                 None = 现场构造默认实例）。
             relationship_lookup: 关系摘要查询面（None = 门控不消费关系
                 输入；注入后仅在门控启用且回复主路径解析出人格时调用）。
+            sticker_ingest_hook: 入站表情收录桥（None = 不收录；注入后在
+                入站含 sticker 附件时以应答人格上下文调用——桥内部自开
+                数据库会话）。
+            sticker_reply_hook: 出站表情选取桥（None = 不发；注入且本轮入站
+                带 sticker 附件时取一张表情随文本回复投递）。
             clock: 时钟（epoch 毫秒——门控判定与投递观测面的注入式时间源）。
         """
         self._chat_service_factory = chat_service_factory
@@ -286,6 +303,8 @@ class ChannelRouter:
         self._scheduler_provider = scheduler_provider
         self._persona_service = persona_service if persona_service is not None else PersonaService()
         self._relationship_lookup = relationship_lookup
+        self._sticker_ingest_hook = sticker_ingest_hook
+        self._sticker_reply_hook = sticker_reply_hook
         self._clock = clock
         self._adapters: dict[ChannelType, ChannelAdapterProtocol] = {}
         self._sessions: dict[str, ChatSessionStateModel] = {}
@@ -399,6 +418,14 @@ class ChannelRouter:
                     gate_persona_id = primary_state.persona_id
                 else:
                     gate_persona_id = group_pool[0].id
+                has_sticker = any(
+                    attachment.kind is ChannelAttachmentKind.STICKER
+                    for attachment in message.attachments
+                )
+                if has_sticker:
+                    await self._ingest_sticker_attachments(
+                        message.attachments, gate_persona_id
+                    )
                 if self._flow_settings is not None:
                     gate_result = await self._apply_flow_gate(
                         context,
@@ -415,6 +442,7 @@ class ChannelRouter:
                         group_pool,
                         message.text,
                         reply_to_message_id=message.message_id,
+                        include_sticker_reply=has_sticker,
                     )
                     if group_delivery is not None:
                         await self._finalize_flow_state(context)
@@ -429,6 +457,7 @@ class ChannelRouter:
                     message.text,
                     is_group_chat=message.is_group_chat,
                     reply_to_message_id=message.message_id,
+                    include_sticker_reply=has_sticker,
                 )
                 await self._finalize_flow_state(context)
                 return delivery
@@ -728,6 +757,7 @@ class ChannelRouter:
         *,
         is_group_chat: bool,
         reply_to_message_id: str | None,
+        include_sticker_reply: bool = False,
     ) -> ChannelDeliveryResultModel:
         """单人格回复并投递（人格上下文绑定 + 来源分级）。
 
@@ -738,6 +768,8 @@ class ChannelRouter:
             user_text: 用户输入文本。
             is_group_chat: 是否群聊（群聊按 peer 落档）。
             reply_to_message_id: 引用回复目标（None = 不引用）。
+            include_sticker_reply: 是否随文本附发一张表情（入站带 sticker
+                附件且表情桥已装配时生效）。
 
         Returns:
             投递结果。
@@ -749,13 +781,54 @@ class ChannelRouter:
             reply_text = await self._chat_service_factory().reply(
                 state, user_text, sender_provenance=sender_provenance
             )
+        attachments: list[ChannelMessageAttachment] = []
+        if include_sticker_reply and self._sticker_reply_hook is not None:
+            try:
+                sticker = await self._sticker_reply_hook()
+            except Exception:  # 表情是装饰面——失败不阻断文本回复
+                logger.opt(exception=True).warning("通道表情选取失败（跳过附发）")
+                sticker = None
+            if sticker is not None:
+                attachments.append(sticker)
         return await adapter.send_message(
             OutboundMessageModel(
                 chat_id=chat_id,
                 text=reply_text,
                 reply_to_message_id=reply_to_message_id,
+                attachments=attachments,
             )
         )
+
+    async def _ingest_sticker_attachments(
+        self,
+        attachments: Sequence[ChannelMessageAttachment],
+        persona_id: int,
+    ) -> None:
+        """以应答人格上下文收录入站表情（失败仅告警——不阻断回复）。
+
+        Args:
+            attachments: 入站附件列表（内部只筛 sticker 类）。
+            persona_id: 应答人格主键（桥内数据库写入的人格作用域）。
+        """
+        hook = self._sticker_ingest_hook
+        if hook is None:
+            return
+        stickers = [
+            attachment
+            for attachment in attachments
+            if attachment.kind is ChannelAttachmentKind.STICKER
+        ]
+        if not stickers:
+            return
+        try:
+            async with bind_persona_context(persona_id):
+                await hook(stickers)
+        except Exception:
+            logger.opt(exception=True).warning(
+                "入站表情收录失败（跳过——不影响回复）: persona_id={}, count={}",
+                persona_id,
+                len(stickers),
+            )
 
     # ------------------------------------------------------------------
     # 群聊多人格（选择 + 逐人格会话 + 投递归属）
@@ -822,6 +895,7 @@ class ChannelRouter:
         user_text: str,
         *,
         reply_to_message_id: str | None,
+        include_sticker_reply: bool = False,
     ) -> ChannelDeliveryResultModel | None:
         """按轮转 / 冷却 / 重复抑制结论逐人格应答并投递。
 
@@ -837,6 +911,8 @@ class ChannelRouter:
             user_text: 回复输入文本（单条或合并文本）。
             reply_to_message_id: 首条应答的引用目标（None = 不引用；其余
                 人格的应答不再引用同一入站，避免引用噪声）。
+            include_sticker_reply: 每位应答人格是否随文本附发自己库中的
+                表情（入站带 sticker 附件且表情桥已装配时生效）。
 
         Returns:
             聚合投递结果；选择为空时返回 None（调用方回退单人格路径）。
@@ -894,6 +970,7 @@ class ChannelRouter:
                     user_text,
                     is_group_chat=True,
                     reply_to_message_id=reply_to_message_id if index == 0 else None,
+                    include_sticker_reply=include_sticker_reply,
                 )
             except Exception as exc:  # 逐人格隔离——其余人格照常应答
                 logger.opt(exception=True).error(

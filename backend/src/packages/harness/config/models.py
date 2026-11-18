@@ -71,7 +71,9 @@ from packages.harness.chat.persona_rotation_models import GroupPersonaSettings
 from packages.harness.config.model_entry import LlmModelEntry, ModelRole
 from packages.harness.core.logging_models import LoggingConfig
 from packages.harness.intent.intent_models import IntentSettings
+from packages.harness.multimodal.sticker_models import StickerSettings
 from packages.harness.rhythm.rhythm_models import RhythmSettings
+from packages.harness.voice.voiceprint_models import VoiceprintSettings
 
 __all__ = [
     "ServerConfig",
@@ -91,6 +93,8 @@ __all__ = [
     "TtsSettings",
     "AsrSettings",
     "VoiceSettings",
+    "VoiceprintSettings",
+    "StickerSettings",
     "WebSearchSettings",
     "Settings",
     "settings",
@@ -996,6 +1000,10 @@ class Settings(BaseSettings):
             不可达时回落到既有工具集）。
         voice: 语音域配置（TTS / ASR 默认关闭；外部本地
             模型服务经 HTTP 契约消费，部署接线属部署侧事务）。
+        voiceprint: 声纹配置（默认关闭——VOICEPRINT_ env 面；物理定义在
+            :class:`packages.harness.voice.voiceprint_models.VoiceprintSettings`）。
+        sticker: 表情包库配置（默认关闭——STICKER_ env 面；物理定义在
+            :class:`packages.harness.multimodal.sticker_models.StickerSettings`）。
         search: 联网搜索运营配置（开关 / 工具面 / 预算 / 冷却——
             SEARCH_ env 面；provider 注册表经 config.yaml ``search``
             段承载，见 :class:`SearchConfig`）。
@@ -1028,6 +1036,8 @@ class Settings(BaseSettings):
     tools_sandbox: ToolsSandboxSettings = ToolsSandboxSettings()
     tools_browser_sidecar: ToolsBrowserSidecarSettings = ToolsBrowserSidecarSettings()
     voice: VoiceSettings = VoiceSettings()
+    voiceprint: VoiceprintSettings = VoiceprintSettings()
+    sticker: StickerSettings = StickerSettings()
     search: WebSearchSettings = WebSearchSettings()
     rhythm: RhythmSettings = RhythmSettings()
     flow: FlowGateSettings = FlowGateSettings()

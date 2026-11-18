@@ -1,4 +1,4 @@
-# voice — 语音域（TTS 合成 + ASR 转写 + 人格语音绑定）
+# voice — 语音域（TTS 合成 + ASR 转写 + 人格语音绑定 + 声纹档案）
 
 `backend/src/packages/harness/voice/` 承载语音能力面：**TTS 客户端**（CosyVoice3 包装服务——文本 → WAV 音频）、**ASR 客户端**（Qwen3-ASR OpenAI 兼容 audio 端点——音频 → 文本）、**VoiceService 编排门面**（enabled 门控 / 人格绑定参数解析 / 用量埋点）+ persona 域的**人格语音绑定**（`ff_personas.voice_profile`）+ app 层 **voice 管理 API** + CLI **`--voice` 旗标**。
 
@@ -12,6 +12,10 @@
 | `tts_client.py` | CosyVoice3 合成客户端（共享 httpx client 注入；部署契约持有方） | `CosyVoiceTtsClient` |
 | `asr_client.py` | Qwen3-ASR 转写客户端（OpenAI 兼容 multipart；共享 httpx client 注入） | `Qwen3AsrClient` |
 | `voice_service.py` | 编排门面（enabled 门控 + 人格绑定解析 + 惰性客户端构建 + 用量发射）+ 默认用量接线 | `VoiceService` / `VoiceUsageRecorder` / `wire_default_voice_usage_recorder` |
+| `voiceprint_models.py` | 声纹域 Model Classes（Unit 文件）：`VOICEPRINT_` 配置面、注册 / 校验 / 同意 / 档案契约、PIPL 告知文本与版本常量 | `VoiceprintSettings` / `VoiceprintEnrollRequestDTO` / `VoiceprintVerifyResultModel` / `VoiceprintPrivacyNoticeDTO` / `render_privacy_notice` |
+| `voiceprint_orm.py` | 声纹样本 / 同意记录 ORM 行（PersonaMixin 人格作用域） | `VoiceprintSampleRow` / `VoiceprintConsentRow` |
+| `voiceprint_embedding.py` | 说话人向量 HTTP 客户端（可配置端点；共享池 client 注入） | `VoiceprintEmbeddingClient` |
+| `voiceprint_service.py` | 声纹服务（同意闸 / 批量注册 / 余弦校验 / 档案删除 / 撤回 / 保存期清理 / 文件落盘） | `VoiceprintService` |
 
 依赖方向：voice → persona（`PersonaRecordDTO` 绑定面）/ config（Settings.voice）/ core（errors / context / time_utils / thread_pool）；persona → voice 仅经 `voice_models.VoiceProfileModel`（绑定列序列化——单向，无环）。HTTP 出站一律经 pools 共享 `httpx.AsyncClient`（硬规则：无私建连接——与 llm / channels / tools 沙盒同约定）；multipart 出站经 httpx 原生 `files=` / `data=`（零手工拼装、零新增依赖）。
 
@@ -176,6 +180,162 @@ file: (filename, audio_bytes)    model: <model_id>    language?: str
 | 传输异常 / 非 200 / 响应契约破坏（内容类型 / JSON / 空体） | `LLM_CALL_FAILED` | 503 |
 | 公共池未启动（惰性构建前置破坏） | `INTERNAL_ERROR` | 500 |
 
+## 声纹档案（PIPL 合规面）
+
+`harness/voice/voiceprint_*` 承载声纹识别能力：**在用户主动授予同意后**注册语音样本、提取说话人向量、在后续音频中校验「是否同一说话人」。声纹按**人格 × 发送者**隔离；样本音频落盘、向量落库，撤回同意或删除档案时样本文件与向量立即清除，同意记录只保留版本与授予 / 撤回时间作为处理合法性凭证。
+
+### PIPL 告知与同意（目的 / 范围 / 保存期 / 撤回权）
+
+管理 API `GET /api/v1/voiceprints/notice` 返回当前告知文本（版本 `v1`，保存期取 `VOICEPRINT_RETENTION_DAYS`）；告知文本明确：
+
+| 义务 | 文本口径 |
+|---|---|
+| 目的 | 在多人对话与语音消息中区分说话人身份（称呼 / 关系记忆 / 说话人确认） |
+| 范围 | 仅同意后采集样本，提取说话人向量，保存时长 / 采样率 / 哈希等必要元数据；全文不因声纹额外留存，向量不用于第三方训练 |
+| 保存期 | 样本与向量最多 `VOICEPRINT_RETENTION_DAYS` 天（到期自动清理）；撤回 / 删除立即清除 |
+| 撤回权 | 随时可撤回同意或删除档案；撤回后样本音频与向量立即清除，仅保留同意文本版本 / 授予时间 / 撤回时间 |
+| 隔离 | 人格 × 发送者隔离，他人格不可见 |
+
+授予同意是注册与校验的硬前置（`POST .../consent`）；同版本有效同意幂等返回。撤回（`POST .../consent/withdraw`）写入 `revoked_at_ms` 并同批清除样本行与文件。删除档案（`DELETE .../{sender_id}`）只清样本，不动同意记录（主人可保留授权凭证继续使用该校验能力）。
+
+### 数据模型（迁移 `000000000016`）
+
+`ff_voiceprint_samples`（每人格 × 每发送者每样本一行）：
+
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| `persona_id` | varchar(64) | 人格作用域（PersonaMixin 自动注入 / 过滤） |
+| `sender_id` | varchar(128) | 发送者 ID（平台侧用户标识） |
+| `sample_path` | varchar(512) | 样本文件落盘路径（撤回 / 删除 / 过期时随行清理） |
+| `sample_sha256` | varchar(64) | 样本哈希（同发送者去重键） |
+| `duration_ms` / `sample_rate_hz` | int | 样本时长 / 采样率（注册门槛校验面） |
+| `embedding` / `embedding_dim` | text / int | 说话人向量（JSON 浮点数组）/ 维度（同档案一致性校验） |
+
+唯一键 `uq_ff_voiceprint_samples_persona_sender_sha (persona_id, sender_id, sample_sha256)`；索引 `ix_ff_voiceprint_samples_persona_sender`。`ff_voiceprint_consents` 记录 `consent_text_version` / `granted_at_ms` / `revoked_at_ms`（可空 = 有效），同一发送者可多次授予 / 撤回，读取面取最新有效行。
+
+### 链路顺序（注册 / 校验）
+
+```
+POST /api/v1/voiceprints/{sender_id}/enroll
+    ↓ ① 人格解析 + bind_persona_context（隔离轴）
+    ↓ ② 功能门控：VOICEPRINT_ENABLED=true 且 VOICEPRINT_EMBEDDING_BASE_URL 非空
+    ↓ ③ 同意闸：当前有效同意（版本 = v1）不存在 → 409
+    ↓ ④ 批量门槛：样本数 ≥ VOICEPRINT_MIN_SAMPLES、≤ MAX_BATCH_SAMPLES、
+    │            档案累计 ≤ MAX_SAMPLES
+    ↓ ⑤ 逐样本校验（MIME 白名单 / base64 / 字节上限 / 时长 / 采样率 / 哈希去重）
+    ↓ ⑥ 向量提取（VOICEPRINT_EMBEDDING_PATH，共享 HTTP 池）→ 维度一致性
+    ↓ ⑦ 样本原子落盘（临时文件 + fsync + os.replace）+ 行插入（逐样本部分成功）
+    ↓ ⑧ 返回注册结果与档案聚合
+
+POST /api/v1/voiceprints/{sender_id}/verify
+    ↓ ①-③ 同上（校验同样要求同意）
+    ↓ ④ 短音频拒识：duration_ms < VOICEPRINT_MIN_VERIFY_DURATION_MS
+    ↓ ⑤ 保存期清理 → 无样本 → matched=false（no_samples）
+    ↓ ⑥ 查询向量 → 档案向量均值 → 余弦相似度
+    ↓ ⑦ matched = similarity ≥ VOICEPRINT_SIMILARITY_THRESHOLD
+```
+
+### API（app/api/voiceprints.py）
+
+```
+POST /api/v1/voiceprints/user-1/consent
+{"consent_text_version": "v1"}
+200 ← {"success": true, "code": "200", "message": "声纹同意已授予",
+       "data": {"id": 3, "sender_id": "user-1", "consent_text_version": "v1",
+                "granted_at_ms": 1760000000000, "revoked_at_ms": null}}
+
+POST /api/v1/voiceprints/user-1/enroll
+{"samples": [
+  {"audio_base64": "UklGRi...", "content_type": "audio/wav",
+   "duration_ms": 2400, "sample_rate_hz": 16000},
+  {"audio_base64": "UklGRi...", "content_type": "audio/wav",
+   "duration_ms": 2100, "sample_rate_hz": 16000}
+]}
+200 ← {"success": true, "code": "200", "message": "声纹注册完成",
+       "data": {"accepted": 2,
+                "rejected": [],
+                "profile": {"sender_id": "user-1", "sample_count": 2,
+                            "total_duration_ms": 4500,
+                            "samples": [{"id": 7, "sender_id": "user-1",
+                                         "sample_sha256": "9f2c...",
+                                         "duration_ms": 2400, "sample_rate_hz": 16000,
+                                         "embedding_dim": 192,
+                                         "created_at": 1760000000000}],
+                            "consent": {"id": 3, "sender_id": "user-1",
+                                        "consent_text_version": "v1",
+                                        "granted_at_ms": 1760000000000,
+                                        "revoked_at_ms": null},
+                            "privacy_notice_version": "v1",
+                            "privacy_notice": "声纹识别用于…（完整告知文本）"}}}
+
+POST /api/v1/voiceprints/user-1/verify
+{"sample": {"audio_base64": "UklGRi...", "content_type": "audio/wav",
+            "duration_ms": 1800, "sample_rate_hz": 16000}}
+200 ← {"success": true, "code": "200", "message": "声纹校验完成",
+       "data": {"sender_id": "user-1", "matched": true, "similarity": 0.8731,
+                "threshold": 0.75, "reason": "matched"}}
+
+POST /api/v1/voiceprints/user-1/consent/withdraw
+200 ← {"success": true, "code": "200", "message": "声纹同意已撤回，样本已清除",
+       "data": {"consent": {"id": 3, "sender_id": "user-1",
+                            "consent_text_version": "v1",
+                            "granted_at_ms": 1760000000000,
+                            "revoked_at_ms": 1760000500000},
+                "deleted_samples": 2}}
+
+DELETE /api/v1/voiceprints/user-1
+200 ← {"success": true, "code": "200", "message": "声纹档案已删除",
+       "data": {"sender_id": "user-1", "deleted_samples": 0}}
+```
+
+`GET /api/v1/voiceprints` 返回当前人格全部档案（样本主体 ∪ 同意主体，便于展示「已同意未注册」态）；`GET /api/v1/voiceprints/{sender_id}` 返回单档案（无样本时零条目空档案）。全部端点支持 `persona_id` 查询参数（缺省当前主人格；无主人格 404）。
+
+### 向量提供方契约（部署侧包装）
+
+```
+POST {VOICEPRINT_EMBEDDING_BASE_URL}{VOICEPRINT_EMBEDDING_PATH}
+Content-Type: multipart/form-data
+    file:  (filename, audio_bytes, content_type)   # 音频文件（必填）
+    model: str                                      # VOICEPRINT_EMBEDDING_MODEL
+
+200 → application/json
+{"embedding": [float, ...]}          # 非空有限浮点数组
+# 或 OpenAI 兼容形态：{"data": [{"embedding": [float, ...]}]}
+```
+
+未配置提供方（`VOICEPRINT_EMBEDDING_BASE_URL` 为空）时**注册 / 校验**关闭——不产生「已同意但无法比对」的半配置态；同意授予 / 撤回、档案读取与删除不受总闸限制（关停功能后仍可履行撤回权并清理数据）。
+
+### 错误码映射（voiceprint 段——复用既有码表）
+
+| 失败类别 | 错误码 | HTTP |
+|---|---|---|
+| 注册 / 校验时功能关闭或未配置向量提供方 / 未授予同意 | `CONFLICT` | 409 |
+| 同意文本版本不一致 / 样本条数越界 / 校验音频非法 | `VALIDATION_ERROR` | 422 |
+| 无有效同意时撤回 | `NOT_FOUND` | 404 |
+| 向量提供方传输 / 非 200 / 响应契约破坏 | `LLM_CALL_FAILED` | 503 |
+
+### Settings（`VOICEPRINT_` env 面——默认关闭）
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `VOICEPRINT_ENABLED` | `false` | 声纹功能总闸 |
+| `VOICEPRINT_EMBEDDING_BASE_URL` | （空） | 说话人向量服务基础 URL（空 = 整功能关闭） |
+| `VOICEPRINT_EMBEDDING_PATH` | `/embedding` | 向量端点路径 |
+| `VOICEPRINT_EMBEDDING_MODEL` | `voiceprint-embedding` | 向量模型名（multipart `model` 字段） |
+| `VOICEPRINT_REQUEST_TIMEOUT_SECONDS` | `30.0` | 向量提取请求超时 |
+| `VOICEPRINT_SIMILARITY_THRESHOLD` | `0.75` | 校验余弦相似度阈值（0-1） |
+| `VOICEPRINT_MIN_SAMPLES` | `3` | 一次注册至少样本数 |
+| `VOICEPRINT_MAX_SAMPLES` | `20` | 单发送者档案样本上限 |
+| `VOICEPRINT_MIN_SAMPLE_DURATION_MS` | `1500` | 注册样本最短时长 |
+| `VOICEPRINT_MIN_VERIFY_DURATION_MS` | `1000` | 校验音频最短时长（短音频拒识） |
+| `VOICEPRINT_MIN_SAMPLE_RATE_HZ` | `8000` | 注册样本最低采样率 |
+| `VOICEPRINT_MAX_UPLOAD_BYTES` | `10485760` | 单样本字节上限（10MB 量级） |
+| `VOICEPRINT_MAX_BATCH_SAMPLES` | `20` | 单次注册请求样本条数上限 |
+| `VOICEPRINT_RETENTION_DAYS` | `365` | 样本与向量最长保存天数 |
+| `VOICEPRINT_STORAGE_DIR` | `data/voiceprints` | 样本文件落盘根目录 |
+
 ## 测试
 
 `src/tests/unit/test_voice_{settings,clients,service,api}.py` + `test_persona_voice_profile.py` + `test_chat_cli_voice.py`（82 例）：客户端 MockTransport（请求形状 / multipart 体 / 内容类型校验 / 超时 / 错误映射）、服务（优先级 / 用量含错误行 / disabled / 惰性构建 / 默认接线真实落库）、人格绑定全链路 round-trip（服务 / DTO / API）、API（ASGI + 处理器直调双面：字节响应 + 头 / multipart 解析 / 校验 400 / 上传上限字节精确边界）、CLI（旗标开关 / 人格绑定 / 失败存活 / 旗标透传）。迁移 `000000000006` 经 scratch SQLite `alembic upgrade head` → `downgrade -1` → 再 upgrade 实证（升列 / 降列 / 复升三态）。
+
+声纹测试：`src/tests/unit/test_voiceprint_service.py`（同意闸 / 注册门槛与逐样本拒收 / 重复哈希 / 向量维度 / 时长与采样率 / 短音频拒识 / 命中与阈值下 / 撤回清样本留凭证 / 删除幂等 / 保存期清理 / 人格 × 发送者隔离）、`test_voiceprint_embedding.py`（multipart 请求形状 / 两种响应形态 / 传输与非 200 / 向量非法）、`test_voiceprint_api.py`（告知 / 同意 / 注册 / 档案 / 校验 / 撤回 / 删除 / 人格解析 404 / 请求体校验）；迁移 `000000000016` 经 scratch SQLite round-trip（`test_migration_voiceprint_sticker.py`）与 SeekDB 真引擎迁移链（`integration_seekdb/test_migration_chain.py`）双面验证。

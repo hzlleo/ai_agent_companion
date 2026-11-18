@@ -90,7 +90,7 @@ def migrated_scratch(seekdb_scratch: SeekDbTestTarget) -> SeekDbTestTarget:
         seekdb_scratch: scratch 库目标（空库）。
 
     Returns:
-        目标（scratch 库已升级到 head——8 张域表 + alembic_version）。
+        目标（scratch 库已升级到 head——16 张域表 + alembic_version）。
     """
     support.run_alembic_command(seekdb_scratch, "head")
     return seekdb_scratch

@@ -42,7 +42,9 @@ from packages.harness.config.models import (
 from packages.harness.emotion.emotion_models import EmotionSettings
 from packages.harness.intent.intent_models import IntentSettings
 from packages.harness.llm.intimate_models import IntimateChannelConfig
+from packages.harness.multimodal.sticker_models import StickerSettings
 from packages.harness.rhythm.rhythm_models import RhythmSettings
+from packages.harness.voice.voiceprint_models import VoiceprintSettings
 
 # .env.example 分节标题: (section_title, config_classes)
 _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
@@ -62,6 +64,8 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("TOOLS_BROWSER_SIDECAR — 浏览器 sidecar 配置（可选运行时；令牌经 BROWSER_SIDECAR_TOKEN 间接；容器侧 BROWSER_SIDECAR_* 键见 compose）", [ToolsBrowserSidecarSettings]),
     ("VOICE.TTS — 语音合成配置（CosyVoice3 服务端点）", [TtsSettings]),
     ("VOICE.ASR — 语音识别配置（Qwen3-ASR 服务端点）", [AsrSettings]),
+    ("VOICEPRINT — 声纹档案配置（默认关闭；说话人向量服务端点 + 阈值 / 样本门槛 / 保存期）", [VoiceprintSettings]),
+    ("STICKER — 表情包库配置（默认关闭；哈希去重 / VLM 标注 / 通道表情收发）", [StickerSettings]),
     ("SEARCH.WEB — 联网搜索运营配置（默认关闭；密钥经 SEARCH_BOCHA_API_KEY / SEARCH_ZHIPU_API_KEY 间接——条目表在 config.yaml search 节管理）", [WebSearchSettings]),
     ("RHYTHM — 拟人节律层配置（默认关闭；HH:MM 为 naive 本地时间——调度器同口径）", [RhythmSettings]),
     ("FLOW — 心流门控配置（默认关闭；延迟 / 合并批次经中央调度器一次性作业排程）", [FlowGateSettings]),

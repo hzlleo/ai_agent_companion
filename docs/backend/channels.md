@@ -310,7 +310,29 @@ NapCat 段数组消息的 image / record 段提取为附件（引用形态优先
 
 ### 消费者边界（诚实边界）
 
-v2 只交付 **wire**（模型 + 适配器 + 测试）：入站附件由 `InboundMessageModel` 承载供**未来消费者**（R2d 贴纸 / 语音、R2e heartflow-silent / 合成事件）读取——当前 `ChatService.reply` 回复循环仍为纯文本（回合内容不落附件、`ff_chat_messages` 零 schema 变更——附件不持久化）；`ChannelRouter.handle_inbound` 零改动（附件随入站模型透传，路由器不消耗）；duty 属主投递维持纯文本（无附件）；出站附件的构造方（TTS 语音 bytes → base64、贴纸引用等）属 R2d/R2e 交付面。
+v2 只交付 **wire**（模型 + 适配器 + 测试）。**表情包收发桥**已接入（`STICKER_ENABLED=true` 时装配——见下节）；语音 / 合成事件消费者仍待后续切片。当前 `ChatService.reply` 回复循环仍为纯文本（回合内容不落附件、`ff_chat_messages` 零 schema 变更——附件不持久化）；duty 属主投递维持纯文本（无附件）。
+
+### 表情包收发桥（`STICKER_ENABLED`——默认关闭）
+
+`ChannelRouter` 的可选钩子 `sticker_ingest_hook` / `sticker_reply_hook`（缺省 None = 既有语义零变化）在 app 装配时由 `StickerService` 接线：
+
+```
+入站（handle_inbound）
+    ↓ 门控判定前：入站 attachments 含 kind=sticker？→ 以应答人格上下文
+      调用收录桥（闭包开短事务 → StickerService.ingest_bytes）
+    ↓ 仅 base64 已持有字节可收录；tg-file:// / url 引用跳过（二次下载
+      属后续交付面）
+    ↓ 收录失败仅告警——回复链路不受影响
+
+出站（_send_single_reply）
+    ↓ 本轮入站带 sticker 且 STICKER_CHANNEL_REPLY_ENABLED=true？
+       ├─ 是 → 取当前人格最新可读素材 → ChannelMessageAttachment(kind=sticker,
+       │        media_type=记录 MIME, base64=文件字节) 随文本投递
+       └─ 否 → 出站零附件（v1 形态）
+    ↓ 取表情 / 平台附件投递失败：文本照常投递（逐附件结果由适配器聚合）
+```
+
+延迟 / 合并批次只承接文本，不携带入站附件；收录已在门控前完成，回表情仅即时回复路径生效（文档化边界）。群聊多人格模式下每位应答人格使用自己的素材库（人格隔离轴与文本会话一致）。
 
 
 ## offset 持久化（重启不重消费）

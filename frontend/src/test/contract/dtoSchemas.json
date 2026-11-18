@@ -374,6 +374,56 @@
         "schema_key": "UsageAggregateQueryDTO"
       },
       {
+        "frontend_file": "frontend/src/types/stickers.ts",
+        "frontend_type": "StickerUploadItem",
+        "schema_key": "StickerUploadItemModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/stickers.ts",
+        "frontend_type": "StickerBatchUploadRequest",
+        "schema_key": "StickerBatchUploadDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/stickers.ts",
+        "frontend_type": "StickerUpdateRequest",
+        "schema_key": "StickerUpdateModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/stickers.ts",
+        "frontend_type": "StickerListParams",
+        "schema_key": "StickerQueryDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/stickers.ts",
+        "frontend_type": "StickerBatchDeleteRequest",
+        "schema_key": "StickerBatchDeleteRequest"
+      },
+      {
+        "frontend_file": "frontend/src/types/stickers.ts",
+        "frontend_type": "StickerRecord",
+        "schema_key": "StickerRecordDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/stickers.ts",
+        "frontend_type": "StickerRejectedItem",
+        "schema_key": "StickerRejectedItemModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/stickers.ts",
+        "frontend_type": "StickerBatchUploadResult",
+        "schema_key": "StickerBatchUploadResultModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/stickers.ts",
+        "frontend_type": "StickerBatchDeleteResult",
+        "schema_key": "StickerBatchDeleteResultModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/stickers.ts",
+        "frontend_type": "StickerAnnotationResult",
+        "schema_key": "StickerAnnotationResultModel"
+      },
+      {
         "frontend_file": "frontend/src/types/model-registry.ts",
         "frontend_type": "ModelEntryCreateRequest",
         "schema_key": "ModelEntryCreateDTO"
@@ -7807,6 +7857,776 @@
         }
       },
       "title": "SkillUpdateModel",
+      "type": "object"
+    },
+    "StickerAnnotationResultModel": {
+      "$defs": {
+        "StickerAnnotationStatus": {
+          "description": "VLM 标注状态值域。",
+          "enum": [
+            "pending",
+            "done",
+            "failed"
+          ],
+          "title": "StickerAnnotationStatus",
+          "type": "string"
+        },
+        "StickerRecordDTO": {
+          "description": "表情包读取形态（含 VLM 标注状态与来源备注）。\n\nAttributes:\n    id: 主键。\n    sha256: 文件哈希（去重键）。\n    content_type: 图片 MIME 类型。\n    size_bytes: 文件字节数。\n    tags: 标签列表。\n    description: 描述（VLM 标注可补充）。\n    source_note: 素材来源与授权备注。\n    annotation_status: VLM 标注状态。\n    annotation_error: 标注失败原因（成功为 None）。\n    annotation_model_entry: 标注命中的视觉模型条目名（未标注为 None）。\n    annotated_at_ms: 标注完成时间（epoch 毫秒；未标注为 None）。\n    created_at: 入库时间（epoch 毫秒）。\n    updated_at: 更新时间（epoch 毫秒）。\n    data_base64: 文件 base64（仅 ``include_data`` 查询填充）。",
+          "properties": {
+            "annotated_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Annotated At Ms"
+            },
+            "annotation_error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Annotation Error"
+            },
+            "annotation_model_entry": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Annotation Model Entry"
+            },
+            "annotation_status": {
+              "$ref": "#/$defs/StickerAnnotationStatus"
+            },
+            "content_type": {
+              "title": "Content Type",
+              "type": "string"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "integer"
+            },
+            "data_base64": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Data Base64"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "integer"
+            },
+            "sha256": {
+              "title": "Sha256",
+              "type": "string"
+            },
+            "size_bytes": {
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            },
+            "source_note": {
+              "title": "Source Note",
+              "type": "string"
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Tags",
+              "type": "array"
+            },
+            "updated_at": {
+              "title": "Updated At",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "sha256",
+            "content_type",
+            "size_bytes",
+            "tags",
+            "description",
+            "source_note",
+            "annotation_status",
+            "created_at",
+            "updated_at"
+          ],
+          "title": "StickerRecordDTO",
+          "type": "object"
+        }
+      },
+      "description": "VLM 标注结果（失败落状态且可重试——不抛异常给管理面）。\n\nAttributes:\n    ok: 本次标注是否成功。\n    record: 标注后的记录（失败时状态为 failed 且携带错误）。\n    message: 中文可读说明。",
+      "properties": {
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "ok": {
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "record": {
+          "$ref": "#/$defs/StickerRecordDTO"
+        }
+      },
+      "required": [
+        "ok",
+        "record",
+        "message"
+      ],
+      "title": "StickerAnnotationResultModel",
+      "type": "object"
+    },
+    "StickerBatchDeleteRequest": {
+      "description": "批量删除请求。\n\nAttributes:\n    ids: 目标主键列表（1-100 条）。",
+      "properties": {
+        "ids": {
+          "description": "表情包主键列表",
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "ids"
+      ],
+      "title": "StickerBatchDeleteRequest",
+      "type": "object"
+    },
+    "StickerBatchDeleteResultModel": {
+      "description": "批量删除结果（部分成功语义）。\n\nAttributes:\n    deleted_ids: 实际删除的主键。\n    missing_ids: 不存在的主键（幂等跳过）。",
+      "properties": {
+        "deleted_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Deleted Ids",
+          "type": "array"
+        },
+        "missing_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Missing Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "deleted_ids",
+        "missing_ids"
+      ],
+      "title": "StickerBatchDeleteResultModel",
+      "type": "object"
+    },
+    "StickerBatchUploadDTO": {
+      "$defs": {
+        "StickerUploadItemModel": {
+          "description": "单条表情包上传形态（JSON base64 载荷）。\n\nAttributes:\n    image_base64: 图片字节 base64 编码（解码后按 MIME 白名单与大小上限\n        校验）。\n    content_type: 图片 MIME 类型（png / jpeg / webp / gif）。\n    source_note: 素材来源与授权备注（必填——法律边界提示义务）。\n    tags: 初始标签（可选；服务归一去重并套用上限）。\n    description: 描述（可选；VLM 标注成功后可补充）。",
+          "properties": {
+            "content_type": {
+              "default": "image/png",
+              "description": "图片 MIME 类型",
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Content Type",
+              "type": "string"
+            },
+            "description": {
+              "default": "",
+              "description": "描述",
+              "maxLength": 500,
+              "title": "Description",
+              "type": "string"
+            },
+            "image_base64": {
+              "description": "图片字节 base64 载荷",
+              "minLength": 1,
+              "title": "Image Base64",
+              "type": "string"
+            },
+            "source_note": {
+              "description": "素材来源与授权备注（必填）",
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Source Note",
+              "type": "string"
+            },
+            "tags": {
+              "description": "初始标签",
+              "items": {
+                "type": "string"
+              },
+              "title": "Tags",
+              "type": "array"
+            }
+          },
+          "required": [
+            "image_base64",
+            "source_note"
+          ],
+          "title": "StickerUploadItemModel",
+          "type": "object"
+        }
+      },
+      "description": "批量上传请求。\n\nAttributes:\n    items: 上传条目列表（条数由服务按 ``max_batch_items`` 校验）。",
+      "properties": {
+        "items": {
+          "description": "批量上传条目",
+          "items": {
+            "$ref": "#/$defs/StickerUploadItemModel"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "title": "StickerBatchUploadDTO",
+      "type": "object"
+    },
+    "StickerBatchUploadResultModel": {
+      "$defs": {
+        "StickerAnnotationStatus": {
+          "description": "VLM 标注状态值域。",
+          "enum": [
+            "pending",
+            "done",
+            "failed"
+          ],
+          "title": "StickerAnnotationStatus",
+          "type": "string"
+        },
+        "StickerRecordDTO": {
+          "description": "表情包读取形态（含 VLM 标注状态与来源备注）。\n\nAttributes:\n    id: 主键。\n    sha256: 文件哈希（去重键）。\n    content_type: 图片 MIME 类型。\n    size_bytes: 文件字节数。\n    tags: 标签列表。\n    description: 描述（VLM 标注可补充）。\n    source_note: 素材来源与授权备注。\n    annotation_status: VLM 标注状态。\n    annotation_error: 标注失败原因（成功为 None）。\n    annotation_model_entry: 标注命中的视觉模型条目名（未标注为 None）。\n    annotated_at_ms: 标注完成时间（epoch 毫秒；未标注为 None）。\n    created_at: 入库时间（epoch 毫秒）。\n    updated_at: 更新时间（epoch 毫秒）。\n    data_base64: 文件 base64（仅 ``include_data`` 查询填充）。",
+          "properties": {
+            "annotated_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Annotated At Ms"
+            },
+            "annotation_error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Annotation Error"
+            },
+            "annotation_model_entry": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Annotation Model Entry"
+            },
+            "annotation_status": {
+              "$ref": "#/$defs/StickerAnnotationStatus"
+            },
+            "content_type": {
+              "title": "Content Type",
+              "type": "string"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "integer"
+            },
+            "data_base64": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Data Base64"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "integer"
+            },
+            "sha256": {
+              "title": "Sha256",
+              "type": "string"
+            },
+            "size_bytes": {
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            },
+            "source_note": {
+              "title": "Source Note",
+              "type": "string"
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Tags",
+              "type": "array"
+            },
+            "updated_at": {
+              "title": "Updated At",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "sha256",
+            "content_type",
+            "size_bytes",
+            "tags",
+            "description",
+            "source_note",
+            "annotation_status",
+            "created_at",
+            "updated_at"
+          ],
+          "title": "StickerRecordDTO",
+          "type": "object"
+        },
+        "StickerRejectReason": {
+          "description": "上传拒收原因值域（批量部分成功——逐条目结局）。",
+          "enum": [
+            "duplicate",
+            "payload_invalid",
+            "payload_too_large",
+            "unsupported_content_type",
+            "source_note_invalid",
+            "tag_invalid",
+            "description_too_long"
+          ],
+          "title": "StickerRejectReason",
+          "type": "string"
+        },
+        "StickerRejectedItemModel": {
+          "description": "批量上传中被拒收的条目。\n\nAttributes:\n    index: 请求内条目序（0 起）。\n    reason: 拒收原因。\n    message: 中文可读说明。",
+          "properties": {
+            "index": {
+              "description": "请求内条目序（0 起）",
+              "minimum": 0,
+              "title": "Index",
+              "type": "integer"
+            },
+            "message": {
+              "description": "中文可读说明",
+              "title": "Message",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/StickerRejectReason",
+              "description": "拒收原因"
+            }
+          },
+          "required": [
+            "index",
+            "reason",
+            "message"
+          ],
+          "title": "StickerRejectedItemModel",
+          "type": "object"
+        }
+      },
+      "description": "批量上传结果（部分成功语义）。\n\nAttributes:\n    created: 成功入库的表情包记录。\n    rejected: 被拒收条目。",
+      "properties": {
+        "created": {
+          "items": {
+            "$ref": "#/$defs/StickerRecordDTO"
+          },
+          "title": "Created",
+          "type": "array"
+        },
+        "rejected": {
+          "items": {
+            "$ref": "#/$defs/StickerRejectedItemModel"
+          },
+          "title": "Rejected",
+          "type": "array"
+        }
+      },
+      "required": [
+        "created",
+        "rejected"
+      ],
+      "title": "StickerBatchUploadResultModel",
+      "type": "object"
+    },
+    "StickerQueryDTO": {
+      "$defs": {
+        "StickerAnnotationStatus": {
+          "description": "VLM 标注状态值域。",
+          "enum": [
+            "pending",
+            "done",
+            "failed"
+          ],
+          "title": "StickerAnnotationStatus",
+          "type": "string"
+        }
+      },
+      "description": "表情包列表查询（标签过滤 / 标注状态过滤 / 数据内联）。\n\nAttributes:\n    tag: 标签过滤（精确匹配归一后的标签）。\n    annotation_status: 标注状态过滤。\n    limit: 返回条数上限（1-200）。\n    include_data: 是否内联文件 base64（管理面缩略图用）。",
+      "properties": {
+        "annotation_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StickerAnnotationStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "标注状态过滤"
+        },
+        "include_data": {
+          "default": false,
+          "description": "是否内联文件 base64",
+          "title": "Include Data",
+          "type": "boolean"
+        },
+        "limit": {
+          "default": 100,
+          "description": "返回条数上限",
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "tag": {
+          "anyOf": [
+            {
+              "maxLength": 24,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "标签过滤",
+          "title": "Tag"
+        }
+      },
+      "title": "StickerQueryDTO",
+      "type": "object"
+    },
+    "StickerRecordDTO": {
+      "$defs": {
+        "StickerAnnotationStatus": {
+          "description": "VLM 标注状态值域。",
+          "enum": [
+            "pending",
+            "done",
+            "failed"
+          ],
+          "title": "StickerAnnotationStatus",
+          "type": "string"
+        }
+      },
+      "description": "表情包读取形态（含 VLM 标注状态与来源备注）。\n\nAttributes:\n    id: 主键。\n    sha256: 文件哈希（去重键）。\n    content_type: 图片 MIME 类型。\n    size_bytes: 文件字节数。\n    tags: 标签列表。\n    description: 描述（VLM 标注可补充）。\n    source_note: 素材来源与授权备注。\n    annotation_status: VLM 标注状态。\n    annotation_error: 标注失败原因（成功为 None）。\n    annotation_model_entry: 标注命中的视觉模型条目名（未标注为 None）。\n    annotated_at_ms: 标注完成时间（epoch 毫秒；未标注为 None）。\n    created_at: 入库时间（epoch 毫秒）。\n    updated_at: 更新时间（epoch 毫秒）。\n    data_base64: 文件 base64（仅 ``include_data`` 查询填充）。",
+      "properties": {
+        "annotated_at_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Annotated At Ms"
+        },
+        "annotation_error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Annotation Error"
+        },
+        "annotation_model_entry": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Annotation Model Entry"
+        },
+        "annotation_status": {
+          "$ref": "#/$defs/StickerAnnotationStatus"
+        },
+        "content_type": {
+          "title": "Content Type",
+          "type": "string"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "integer"
+        },
+        "data_base64": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Base64"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "integer"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "source_note": {
+          "title": "Source Note",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "updated_at": {
+          "title": "Updated At",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "sha256",
+        "content_type",
+        "size_bytes",
+        "tags",
+        "description",
+        "source_note",
+        "annotation_status",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "StickerRecordDTO",
+      "type": "object"
+    },
+    "StickerRejectedItemModel": {
+      "$defs": {
+        "StickerRejectReason": {
+          "description": "上传拒收原因值域（批量部分成功——逐条目结局）。",
+          "enum": [
+            "duplicate",
+            "payload_invalid",
+            "payload_too_large",
+            "unsupported_content_type",
+            "source_note_invalid",
+            "tag_invalid",
+            "description_too_long"
+          ],
+          "title": "StickerRejectReason",
+          "type": "string"
+        }
+      },
+      "description": "批量上传中被拒收的条目。\n\nAttributes:\n    index: 请求内条目序（0 起）。\n    reason: 拒收原因。\n    message: 中文可读说明。",
+      "properties": {
+        "index": {
+          "description": "请求内条目序（0 起）",
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        },
+        "message": {
+          "description": "中文可读说明",
+          "title": "Message",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/StickerRejectReason",
+          "description": "拒收原因"
+        }
+      },
+      "required": [
+        "index",
+        "reason",
+        "message"
+      ],
+      "title": "StickerRejectedItemModel",
+      "type": "object"
+    },
+    "StickerUpdateModel": {
+      "description": "表情包修改请求（标签 / 描述 / 来源备注——至少一项）。\n\nAttributes:\n    tags: 新标签集（None = 不修改；空列表 = 清空标签）。\n    description: 新描述（None = 不修改）。\n    source_note: 新来源备注（None = 不修改）。",
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新描述（None = 不修改）",
+          "title": "Description"
+        },
+        "source_note": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新来源备注（None = 不修改）",
+          "title": "Source Note"
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新标签集（None = 不修改）",
+          "title": "Tags"
+        }
+      },
+      "title": "StickerUpdateModel",
+      "type": "object"
+    },
+    "StickerUploadItemModel": {
+      "description": "单条表情包上传形态（JSON base64 载荷）。\n\nAttributes:\n    image_base64: 图片字节 base64 编码（解码后按 MIME 白名单与大小上限\n        校验）。\n    content_type: 图片 MIME 类型（png / jpeg / webp / gif）。\n    source_note: 素材来源与授权备注（必填——法律边界提示义务）。\n    tags: 初始标签（可选；服务归一去重并套用上限）。\n    description: 描述（可选；VLM 标注成功后可补充）。",
+      "properties": {
+        "content_type": {
+          "default": "image/png",
+          "description": "图片 MIME 类型",
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Content Type",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "description": "描述",
+          "maxLength": 500,
+          "title": "Description",
+          "type": "string"
+        },
+        "image_base64": {
+          "description": "图片字节 base64 载荷",
+          "minLength": 1,
+          "title": "Image Base64",
+          "type": "string"
+        },
+        "source_note": {
+          "description": "素材来源与授权备注（必填）",
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Source Note",
+          "type": "string"
+        },
+        "tags": {
+          "description": "初始标签",
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "image_base64",
+        "source_note"
+      ],
+      "title": "StickerUploadItemModel",
       "type": "object"
     },
     "TraitComponentModel": {

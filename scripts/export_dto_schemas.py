@@ -142,6 +142,18 @@ from packages.harness.persona.trait_library import (
     TraitComponentModel,
     TraitPresetModel,
 )
+from packages.harness.multimodal.sticker_models import (
+    StickerAnnotationResultModel,
+    StickerBatchDeleteRequest,
+    StickerBatchDeleteResultModel,
+    StickerBatchUploadDTO,
+    StickerBatchUploadResultModel,
+    StickerQueryDTO,
+    StickerRecordDTO,
+    StickerRejectedItemModel,
+    StickerUpdateModel,
+    StickerUploadItemModel,
+)
 from packages.harness.reminders.models import (
     ReminderBatchCancelItemDTO,
     ReminderBatchCancelRequest,
@@ -181,6 +193,7 @@ _FRONTEND_MEMORY = "frontend/src/types/memory.ts"
 _FRONTEND_REMINDERS = "frontend/src/types/reminders.ts"
 _FRONTEND_USAGE = "frontend/src/types/usage.ts"
 _FRONTEND_REGISTRY = "frontend/src/types/model-registry.ts"
+_FRONTEND_STICKER = "frontend/src/types/stickers.ts"
 
 
 @dataclass(frozen=True)
@@ -343,6 +356,17 @@ def build_manifest() -> list[SchemaExportEntry]:
         SchemaExportEntry(
             "UsageAggregateQueryDTO", UsageAggregateQueryDTO, "UsageAggregateParams", _FRONTEND_USAGE
         ),
+        # multimodal 域——表情包库（上传 / 去重 / 标签 / 标注状态 / 批量结果）。
+        SchemaExportEntry("StickerUploadItemModel", StickerUploadItemModel, "StickerUploadItem", _FRONTEND_STICKER),
+        SchemaExportEntry("StickerBatchUploadDTO", StickerBatchUploadDTO, "StickerBatchUploadRequest", _FRONTEND_STICKER),
+        SchemaExportEntry("StickerUpdateModel", StickerUpdateModel, "StickerUpdateRequest", _FRONTEND_STICKER),
+        SchemaExportEntry("StickerQueryDTO", StickerQueryDTO, "StickerListParams", _FRONTEND_STICKER),
+        SchemaExportEntry("StickerBatchDeleteRequest", StickerBatchDeleteRequest, "StickerBatchDeleteRequest", _FRONTEND_STICKER),
+        SchemaExportEntry("StickerRecordDTO", StickerRecordDTO, "StickerRecord", _FRONTEND_STICKER),
+        SchemaExportEntry("StickerRejectedItemModel", StickerRejectedItemModel, "StickerRejectedItem", _FRONTEND_STICKER),
+        SchemaExportEntry("StickerBatchUploadResultModel", StickerBatchUploadResultModel, "StickerBatchUploadResult", _FRONTEND_STICKER),
+        SchemaExportEntry("StickerBatchDeleteResultModel", StickerBatchDeleteResultModel, "StickerBatchDeleteResult", _FRONTEND_STICKER),
+        SchemaExportEntry("StickerAnnotationResultModel", StickerAnnotationResultModel, "StickerAnnotationResult", _FRONTEND_STICKER),
         # model-registry 域。
         SchemaExportEntry("ModelEntryCreateDTO", ModelEntryCreateDTO, "ModelEntryCreateRequest", _FRONTEND_REGISTRY),
         SchemaExportEntry("ModelEntryUpdateDTO", ModelEntryUpdateDTO, "ModelEntryUpdateRequest", _FRONTEND_REGISTRY),

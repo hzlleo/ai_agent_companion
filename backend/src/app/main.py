@@ -3,9 +3,10 @@
 装配契约：
 
     - :func:`create_app` —— FastAPI 工厂（共享异常处理器 + personas /
-      memories / usage / voice / look_at / models / search / reminders /
-      directives / facts / skills / channels-qq / health 共十三路由 + 管理面
-      owner-token 鉴权（十一管理路由统一挂接，health / qq webhook 豁免——
+      memories / usage / voice / voiceprints / look_at / stickers / models /
+      search / reminders / directives / facts / skills / channels-qq /
+      health 共十六路由 + 管理面 owner-token 鉴权（十四管理路由统一挂接，
+      health / qq webhook 豁免——
       豁免契约见 :func:`_include_routers`）+ CORS + lifespan）；
     - :func:`startup_app_state` / :func:`shutdown_app_state` —— **可独立
       驱动的纯异步函数对**（不藏在 lifespan 闭包内——测试无需 ASGI
@@ -29,7 +30,8 @@
                                                  ChatService 工厂消费工具面；
                                                  缺省 no-op）
         ↓ _startup_channels(app, settings)  通道层（TELEGRAM_ENABLED 时
-                                                 装配 runner 后台任务；token
+                                                 装配 runner 后台任务；表情包启用时
+                                                 接线附件 v2 收发桥；token
                                                  缺失 fail fast；QQ_ENABLED
                                                  时注册适配器 + 启动校验
                                                  warn-and-continue；任一通道
@@ -82,6 +84,7 @@ memory 域经 memories 路由导入链注册。
 from __future__ import annotations
 
 import asyncio
+import base64
 import random
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -92,8 +95,10 @@ from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
+import packages.harness.multimodal.sticker_orm as sticker_orm
 import packages.harness.persona.orm as persona_orm
 import packages.harness.usage.orm as usage_orm
+import packages.harness.voice.voiceprint_orm as voiceprint_orm
 from app.api.channels_qq import router as qq_channels_router
 from app.api.core_memory import router as core_memory_router
 from app.api.directives import router as directives_router
@@ -107,14 +112,20 @@ from app.api.personas import router as personas_router
 from app.api.reminders import router as reminders_router
 from app.api.search import router as search_router
 from app.api.skills import router as skills_router
+from app.api.stickers import router as stickers_router
 from app.api.usage import router as usage_router
 from app.api.voice import router as voice_router
+from app.api.voiceprints import router as voiceprints_router
 from app.middleware.admin_auth import (
     log_admin_auth_startup_notice,
     require_admin_token,
 )
 from app.middleware.error_handler import register_exception_handlers
-from packages.harness.channels.channel_models import ChannelType
+from packages.harness.channels.channel_models import (
+    ChannelAttachmentKind,
+    ChannelMessageAttachment,
+    ChannelType,
+)
 from packages.harness.channels.channel_service import ChannelRouter
 from packages.harness.channels.qq.qq_adapter import NapCatQQAdapter
 from packages.harness.channels.qq.qq_client import NapCatOneBotClient
@@ -148,6 +159,7 @@ from packages.harness.memory.service import (
     MemoryService,
 )
 from packages.harness.multimodal.look_at import LookAtService, register_look_at_tool
+from packages.harness.multimodal.sticker_service import StickerService
 from packages.harness.persona.core_memory import (
     CoreMemoryService,
     core_memory_session_id_var,
@@ -196,10 +208,10 @@ from packages.harness.tools.sandbox_models import (
 from packages.harness.usage.service import UsageService
 
 # ORM 模型注册（导入副作用——见模块 docstring「ORM 注册」一节）。
-_ORM_REGISTRY = (persona_orm, usage_orm)
+_ORM_REGISTRY = (persona_orm, usage_orm, sticker_orm, voiceprint_orm)
 
 #: CORS 显式放行方法面（管理面全操作集）。
-_CORS_ALLOW_METHODS: list[str] = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+_CORS_ALLOW_METHODS: list[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 #: CORS 显式放行请求头面（JSON API 最小集 + 鉴权）。
 _CORS_ALLOW_HEADERS: list[str] = ["Accept", "Authorization", "Content-Type"]
 #: 通道 runner 优雅停机等待秒数（在途长轮询最多一个窗口——超时 cancel 兜底）。
@@ -559,6 +571,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     app.state.channels_router = None
     app.state.rhythm_service = None
     app.state.intent_shortcut = None
+    app.state.sticker_service = None
     telegram = settings.channels.telegram
     qq = settings.channels.qq
     if not telegram.enabled and not qq.enabled:
@@ -681,6 +694,66 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
             )
             return None
 
+    sticker_service: StickerService | None = None
+    if settings.sticker.enabled:
+        sticker_service = StickerService(settings=settings.sticker, gateway=gateway)
+        logger.info(
+            "表情包库通道桥已装配（入站收录 sticker 附件；回表情={}）",
+            settings.sticker.channel_reply_enabled,
+        )
+    app.state.sticker_service = sticker_service
+
+    async def _ingest_inbound_stickers(
+        attachments: list[ChannelMessageAttachment],
+    ) -> None:
+        """通道入站表情收录（仅 base64 载荷；人格上下文由路由器绑定）。
+
+        v2 入站附件可能是 base64（QQ 段内联）或平台文件引用
+        （``tg-file://`` / ``url``）——后者需要二次下载，本桥按「只收录
+        已持有字节」的边界跳过（文档化于 channels.md）。单张失败仅告警
+        ——通道消息回复不受影响。
+        """
+        if sticker_service is None:
+            return
+        async with session_scope() as db_session:
+            for attachment in attachments:
+                if not attachment.base64:
+                    continue
+                try:
+                    payload = base64.b64decode(
+                        "".join(attachment.base64.split()), validate=True
+                    )
+                except ValueError:
+                    logger.opt(exception=True).warning(
+                        "通道入站表情 base64 解码失败（跳过该附件）"
+                    )
+                    continue
+                source_note = (
+                    f"通道入站表情：{attachment.caption}"
+                    if attachment.caption
+                    else "通道入站表情（平台消息附件）"
+                )
+                await sticker_service.ingest_bytes(
+                    db_session,
+                    payload,
+                    attachment.media_type or "image/png",
+                    source_note=source_note,
+                )
+
+    async def _pick_reply_sticker() -> ChannelMessageAttachment | None:
+        """取当前人格最新表情作为随文本附发的出站附件（无可发素材为 None）。"""
+        if sticker_service is None:
+            return None
+        async with session_scope() as db_session:
+            binary = await sticker_service.pick_channel_reply(db_session)
+        if binary is None:
+            return None
+        return ChannelMessageAttachment(
+            kind=ChannelAttachmentKind.STICKER,
+            media_type=binary.record.content_type,
+            base64=base64.b64encode(binary.content).decode("ascii"),
+        )
+
     router = ChannelRouter(
         chat_service_factory=_chat_service_factory,
         session_factory=session_scope,
@@ -690,6 +763,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
         scheduler_provider=lambda: getattr(app.state, "scheduler", None),
         persona_service=persona_service,
         relationship_lookup=_relationship_lookup,
+        sticker_ingest_hook=_ingest_inbound_stickers if sticker_service else None,
+        sticker_reply_hook=_pick_reply_sticker if sticker_service else None,
     )
     if telegram.enabled:
         client = TelegramClient(
@@ -781,6 +856,7 @@ async def _shutdown_channels(app: FastAPI) -> None:
     # rhythm / intent 槽位复位（服务无自有资源——随机源随实例丢弃）。
     app.state.rhythm_service = None
     app.state.intent_shortcut = None
+    app.state.sticker_service = None
     if task is None or task.done():
         return
     if runner is not None:
@@ -1144,8 +1220,9 @@ def _include_routers(app: FastAPI) -> None:
     挂载契约（R2 审计放行条件——新端点不得扩张无鉴权面）：
 
         - **受保护路由集**：personas / memories / usage / voice /
-          look_at / models / search / reminders / directives / facts /
-          skills / core-memory 十二个管理路由统一挂 ``require_admin_token``
+          voiceprints / look_at / stickers / models / search / reminders /
+          directives / facts / skills / core-memory 十四个管理路由统一挂
+          ``require_admin_token``
           依赖——经单一 ``APIRouter(dependencies=[...])`` 包装路由**一次
           注册**（依赖定义在 ``app/middleware/admin_auth``；token 经
           ``ServerConfig.admin_token_env`` env 间接，空 = 鉴权关闭）；
@@ -1168,7 +1245,9 @@ def _include_routers(app: FastAPI) -> None:
     admin_api.include_router(memories_router)
     admin_api.include_router(usage_router)
     admin_api.include_router(voice_router)
+    admin_api.include_router(voiceprints_router)
     admin_api.include_router(look_at_router)
+    admin_api.include_router(stickers_router)
     admin_api.include_router(models_router)
     admin_api.include_router(search_router)
     admin_api.include_router(reminders_router)

@@ -590,6 +590,16 @@ COMPLIANCE_MAX_RETRIES=1
 标签**（owner = 主人消息；peer / untrusted = 群友消息（可能是其他 AI）——
 见 [defense.md](defense.md)）。
 
+## 表情包附件（通道路由层——聊天回合仍为文本）
+
+`ChatService.reply` 继续以纯文本为回合内容（`ff_chat_messages` 零 schema 变更）——表情包走通道路由层的附件桥（`STICKER_ENABLED=true` 时装配，见 [channels.md](channels.md#表情包收发桥sticker_enabled默认关闭)）：
+
+- 入站 `InboundMessageModel.attachments`（kind=sticker）在门控判定前由路由器以应答人格上下文收录到本表情包库（哈希去重、来源备注自动生成）；
+- 本轮入站带 sticker 且 `STICKER_CHANNEL_REPLY_ENABLED=true` 时，路由器在文本回复后附发该人格最新素材（`OutboundMessageModel.attachments`），适配器按 v2 映射表投递；
+- 表情桥任何失败（收录 / 取素材 / 平台附件投递）均不阻断文本回复；延迟 / 合并批次不携带附件。
+
+表情包管理面（上传 / 标签 / VLM 标注 / 删除）见 [multimodal.md](multimodal.md#表情包库与-vlm-标注sticker_-env-面默认关闭)。
+
 ## 消息变体（swipes——R2b D7-5）
 
 单回合多候选重生成 + 选定提升（实现：`harness/chat/swipe.py` 的 `SwipeService`，
