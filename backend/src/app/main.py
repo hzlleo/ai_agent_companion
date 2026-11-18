@@ -34,8 +34,11 @@
                                                  接线附件 v2 收发桥；token
                                                  缺失 fail fast；QQ_ENABLED
                                                  时注册适配器 + 启动校验
-                                                 warn-and-continue；任一通道
-                                                 启用时先装配 rhythm / intent
+                                                 warn-and-continue；WECOM_ENABLED
+                                                 时装配企微智能机器人长连接
+                                                 runner（配置 / 凭据面失败仅
+                                                 跳过该通道）；任一通道启用时
+                                                 先装配 rhythm / intent
                                                  会话性组件——单一随机源，
                                                  INTENT_ENABLED 关闭时快径
                                                  面 None；缺省 no-op）
@@ -52,8 +55,9 @@
 
     _shutdown_scheduler(app)                  调度器优雅停机（先于通道——
                                               duty 出站消费通道路由器）
-        ↓ _shutdown_channels(app)             通道 runner 优雅停机（先于池——
-                                              runner 消费共享 HTTP client）
+        ↓ _shutdown_channels(app)             通道 runner 优雅停机（telegram /
+                                              企微长连接——先于池，runner 消费
+                                              共享 HTTP client）
         ↓ background_task_manager.shutdown()  全局后台任务 drain（先于池——
                                               fire-and-forget 索引等在途
                                               任务消费 SeekDB 池 / 共享
@@ -89,8 +93,9 @@ import random
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
+import httpx
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
@@ -131,6 +136,8 @@ from packages.harness.channels.qq.qq_adapter import NapCatQQAdapter
 from packages.harness.channels.qq.qq_client import NapCatOneBotClient
 from packages.harness.channels.telegram.tg_client import TelegramClient
 from packages.harness.channels.telegram.tg_runner import TelegramChannelRunner
+from packages.harness.channels.wecom.wecom_client import WeComLongConnectionClient
+from packages.harness.channels.wecom.wecom_runner import WeComChannelRunner
 from packages.harness.chat.service import ChatService
 from packages.harness.config import search_registry
 from packages.harness.config.loader import load_all_config, setup_logging_from_settings
@@ -517,7 +524,7 @@ async def _startup_browser_sidecar(app: FastAPI, settings: Settings) -> None:
 
 
 async def _startup_channels(app: FastAPI, settings: Settings) -> None:
-    """装配通道层（``TELEGRAM_ENABLED`` 长轮询 runner + ``QQ_ENABLED`` 适配器）。
+    """装配通道层（Telegram 长轮询 runner / QQ 适配器 / 企微长连接 runner）。
 
     装配链（单一 ChannelRouter 服务全部通道——会话按 ``channel:chat_id``
     维度天然隔离）：任一通道启用时先装配 rhythm / intent 会话性组件
@@ -568,14 +575,19 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     """
     app.state.channels_runner = None
     app.state.channels_task = None
+    app.state.channels_wecom_runner = None
+    app.state.channels_wecom_task = None
     app.state.channels_router = None
     app.state.rhythm_service = None
     app.state.intent_shortcut = None
     app.state.sticker_service = None
     telegram = settings.channels.telegram
     qq = settings.channels.qq
-    if not telegram.enabled and not qq.enabled:
-        logger.info("通道层未启用（TELEGRAM_ENABLED / QQ_ENABLED 均关闭）——跳过装配")
+    wecom = settings.channels.wecom
+    if not telegram.enabled and not qq.enabled and not wecom.enabled:
+        logger.info(
+            "通道层未启用（TELEGRAM_ENABLED / QQ_ENABLED / WECOM_ENABLED 均关闭）——跳过装配"
+        )
         return
     manager = get_pool_manager()
     if manager is None or not manager.started:
@@ -804,6 +816,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
             "QQ 通道适配器已注册（webhook 入站 + NapCat HTTP API 出站）: base_url={}",
             qq.http_api_base_url,
         )
+    if wecom.enabled:
+        await _startup_wecom_channel(app, settings, router, manager.get_http_client())
     app.state.channels_router = router
 
 
@@ -833,6 +847,71 @@ async def _validate_qq_startup(client: NapCatOneBotClient) -> None:
     )
 
 
+async def _startup_wecom_channel(
+    app: FastAPI,
+    settings: Settings,
+    router: ChannelRouter,
+    http_client: httpx.AsyncClient,
+) -> None:
+    """装配企业微信智能机器人长连接通道（配置 / 凭据面失败即跳过该通道）。
+
+    装配链：`WeComLongConnectionClient`（BotID + Secret 环境变量间接解析；
+    构造期缺失即 ``CHANNEL_TOKEN_MISSING``）→ `WeComChannelRunner`（入站队列 +
+    msgid 去重 + 回复上下文登记 + 出站文本 / 附件投递）→
+    ``router.register_adapter(WECOM, runner)`` → ``create_task(runner.run())`` +
+    ``background_task_manager`` 托管。
+
+    **失败语义（与 telegram 的差异，锁定决策）**：telegram token 缺失 fail loud
+    （app 拒绝启动）；企微装配期失败（BotID / 密钥缺失等配置面错误）记 ERROR
+    并**跳过该通道**——长连接是新增通道，其配置瑕疵不应连带杀掉已在工作的
+    telegram / QQ 通道。运行期故障（断开 / 订阅被拒 / 命令失败）由 runner 的
+    退避重连与逐消息错误隔离消化，同样不波及其余通道。
+
+    Args:
+        app: 待装配的 FastAPI 应用（``channels_wecom_runner`` /
+            ``channels_wecom_task`` 槽位上挂）。
+        settings: 生效 Settings（读取 ``settings.channels.wecom`` 分节）。
+        router: 通道路由器（注册企微适配器发送面）。
+        http_client: 共享 HTTP 客户端（出站附件 ``url`` 源下载——不私建连接）。
+    """
+    wecom = settings.channels.wecom
+    try:
+        client = WeComLongConnectionClient(
+            bot_id=wecom.bot_id,
+            secret_env=wecom.secret_env,
+            endpoint=wecom.ws_endpoint,
+            request_timeout_seconds=wecom.request_timeout_seconds,
+            heartbeat_interval_seconds=wecom.heartbeat_interval_seconds,
+            heartbeat_timeout_seconds=wecom.heartbeat_timeout_seconds,
+            open_timeout_seconds=wecom.open_timeout_seconds,
+            backoff_base_seconds=wecom.backoff_base_seconds,
+            backoff_max_seconds=wecom.backoff_max_seconds,
+            backoff_jitter_ratio=wecom.backoff_jitter_ratio,
+        )
+    except BusinessException as exc:
+        logger.error(
+            "企微长连接通道未装配（配置 / 凭据面失败——其余通道继续工作）: {}", exc.message
+        )
+        return
+    runner = WeComChannelRunner(
+        client=client,
+        router=router,
+        reply_window_seconds=wecom.reply_window_seconds,
+        http_client=http_client,
+    )
+    router.register_adapter(ChannelType.WECOM, runner)
+    task = asyncio.create_task(runner.run(), name="wecom-channel-runner")
+    background_task_manager.register(task)
+    task.add_done_callback(_log_channel_task_termination)
+    app.state.channels_wecom_runner = runner
+    app.state.channels_wecom_task = task
+    logger.info(
+        "企微长连接通道 runner 已启动（managed background task）: endpoint={}, bot_id={}",
+        wecom.ws_endpoint,
+        wecom.bot_id,
+    )
+
+
 async def _shutdown_channels(app: FastAPI) -> None:
     """停机通道层（先于公共池——通道组件消费共享 HTTP client；幂等）。
 
@@ -845,18 +924,39 @@ async def _shutdown_channels(app: FastAPI) -> None:
 
     Args:
         app: 待收尾的 FastAPI 应用（``channels_router`` / ``channels_runner``
-            / ``channels_task`` / ``rhythm_service`` / ``intent_shortcut``
+            / ``channels_task`` / ``channels_wecom_runner`` /
+            ``channels_wecom_task`` / ``rhythm_service`` / ``intent_shortcut``
             槽位复位 None）。
     """
     runner: TelegramChannelRunner | None = getattr(app.state, "channels_runner", None)
     task: asyncio.Task[None] | None = getattr(app.state, "channels_task", None)
+    wecom_runner: WeComChannelRunner | None = getattr(
+        app.state, "channels_wecom_runner", None
+    )
+    wecom_task: asyncio.Task[None] | None = getattr(app.state, "channels_wecom_task", None)
     app.state.channels_runner = None
     app.state.channels_task = None
+    app.state.channels_wecom_runner = None
+    app.state.channels_wecom_task = None
     app.state.channels_router = None
     # rhythm / intent 槽位复位（服务无自有资源——随机源随实例丢弃）。
     app.state.rhythm_service = None
     app.state.intent_shortcut = None
     app.state.sticker_service = None
+    await _stop_managed_channel_task(runner, task, label="Telegram 通道")
+    await _stop_managed_channel_task(wecom_runner, wecom_task, label="企微长连接通道")
+
+
+async def _stop_managed_channel_task(
+    runner: Any, task: asyncio.Task[None] | None, *, label: str
+) -> None:
+    """停机单个通道的托管后台任务（优雅请求 → bounded 等待 → cancel 兜底）。
+
+    Args:
+        runner: 通道 runner（提供 ``request_stop``；None = 无 runner 可请求）。
+        task: 该通道的后台任务（None / 已完成 = 无需等待）。
+        label: 日志面通道名。
+    """
     if task is None or task.done():
         return
     if runner is not None:
@@ -865,24 +965,25 @@ async def _shutdown_channels(app: FastAPI) -> None:
         await asyncio.wait_for(task, timeout=_CHANNELS_STOP_TIMEOUT_SECONDS)
     except TimeoutError:
         # wait_for 超时路径已 cancel 任务并等待取消收尾——此处仅记录
-        logger.warning("Telegram 通道停机等待超时——已强制取消长轮询任务")
+        logger.warning("{} 停机等待超时——已强制取消后台任务", label)
     except Exception as exc:
-        logger.warning("Telegram 通道任务以异常收尾: {}", exc)
-    logger.info("Telegram 通道 runner 已停机")
+        logger.warning("{} 任务以异常收尾: {}", label, exc)
+    logger.info("{} runner 已停机", label)
 
 
 def _log_channel_task_termination(task: asyncio.Task[None]) -> None:
     """通道后台任务终态日志（异常终止 / 取消均落日志——不留哑任务）。
 
     Args:
-        task: 已完成（或已取消）的后台任务。
+        task: 已完成（或已取消）的后台任务（任务名标识通道——``telegram-channel-runner``
+            / ``wecom-channel-runner``）。
     """
     if task.cancelled():
-        logger.info("Telegram 通道任务已被取消（停机兜底路径）")
+        logger.info("{} 已被取消（停机兜底路径）", task.get_name())
         return
     exc = task.exception()
     if exc is not None:
-        logger.error("Telegram 通道任务异常终止: {}", exc)
+        logger.error("{} 异常终止: {}", task.get_name(), exc)
 
 
 async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:

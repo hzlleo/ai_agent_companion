@@ -158,6 +158,27 @@ os.environ["QQ_ACCESS_TOKEN"] = "test-only-qq-access-token"
 os.environ["QQ_TEST_WEBHOOK_TOKEN"] = "test-only-qq-webhook-token"
 os.environ["QQ_WEBHOOK_TOKEN"] = "test-only-qq-webhook-token"
 
+# --- 企业微信智能机器人长连接（WECOM_ 前缀 → WecomChannelSettings；默认关闭
+#     → 测试零 WebSocket 连接 / 零后台任务；S3 硬覆盖模式——开发者 shell 导出的
+#     同名真实配置不得泄入测试。Secret 经 WECOM_TEST_SECRET 间接（长连接专用
+#     密钥，与回调 Token 不同源）——测试专用值，不可触达真实机器人；单测经
+#     fake 连接消费，永不真实连接） ---
+os.environ["WECOM_ENABLED"] = "false"
+os.environ["WECOM_BOT_ID"] = ""
+os.environ["WECOM_SECRET_ENV"] = "WECOM_TEST_SECRET"
+os.environ["WECOM_WS_ENDPOINT"] = "wss://openws.work.weixin.qq.com"
+os.environ["WECOM_REQUEST_TIMEOUT_SECONDS"] = "15"
+os.environ["WECOM_HEARTBEAT_INTERVAL_SECONDS"] = "30"
+os.environ["WECOM_HEARTBEAT_TIMEOUT_SECONDS"] = "10"
+os.environ["WECOM_OPEN_TIMEOUT_SECONDS"] = "10"
+os.environ["WECOM_BACKOFF_BASE_SECONDS"] = "1.0"
+os.environ["WECOM_BACKOFF_MAX_SECONDS"] = "60.0"
+os.environ["WECOM_BACKOFF_JITTER_RATIO"] = "0.3"
+os.environ["WECOM_REPLY_WINDOW_SECONDS"] = "86400"
+# 密钥本值（secret_env 指向的变量 + 默认变量名——测试专用值）
+os.environ["WECOM_TEST_SECRET"] = "test-only-wecom-secret"
+os.environ["WECOM_SECRET"] = "test-only-wecom-secret"
+
 # --- 值班轮（DUTY_ 前缀 → DutySettings；默认关闭 → 测试零调度副作用；
 #     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试） ---
 os.environ["DUTY_ENABLED"] = "false"

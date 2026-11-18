@@ -16,8 +16,8 @@
       形态），通道层统一 ``str`` 承载（平台适配器负责双向归一）；
     - **时间一律 epoch 毫秒**（``core.time_utils.now_ms``——Telegram wire
       层的 epoch 秒在 runner 映射时 ×1000 归一）；
-    - ``ChannelType`` 为 StrEnum 值域（初始为 telegram；多通道扩展在此
-      追加成员——QQ 已加入，B站等后续通道同点追加）。
+    - ``ChannelType`` 为 StrEnum 值域（telegram / qq / wecom——多通道扩展在
+      此追加成员，B站 / 抖音等后续通道同点追加）。
 
 协议 v2（附件 / 静默 / 合成事件——additive 扩展，v1 形态缺省保持）：
 
@@ -73,7 +73,7 @@ ATTACHMENT_BASE64_SIZE_GUIDE_BYTES: Final[int] = 10 * 1024 * 1024
 
 
 class ChannelType(StrEnum):
-    """通道类型值域（telegram / qq；后续通道同点追加）。
+    """通道类型值域（telegram / qq / wecom；后续通道同点追加）。
 
     继承 ``StrEnum`` 保证与字符串比较兼容——``ChannelType.TELEGRAM ==
     "telegram"`` 为 ``True``（与 core ``ErrorCode`` 同约定）。
@@ -81,6 +81,7 @@ class ChannelType(StrEnum):
 
     TELEGRAM = "telegram"
     QQ = "qq"
+    WECOM = "wecom"
 
 
 class ChannelContextModel(BaseModel):

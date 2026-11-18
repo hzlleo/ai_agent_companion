@@ -48,6 +48,7 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 | SeekDBSettings | `SEEKDB_` | `ENABLED`(false) · `HOST`(127.0.0.1) · `PORT`(2881) · `USER`(root) · `PASSWORD_ENV`(SEEKDB_PASSWORD) · `DATABASE`(test) · `VECTOR_DIM`(1024) · `POOL_MIN`(1) · `POOL_MAX`(4) |
 | TelegramSettings | `TELEGRAM_` | `ENABLED`(false) · `BOT_TOKEN_ENV`(TELEGRAM_BOT_TOKEN) · `API_BASE`(https://api.telegram.org) · `POLL_TIMEOUT_SECONDS`(25) · `OWNER_CHAT_ID`(null) · `BACKOFF_BASE_SECONDS`(1.0) · `BACKOFF_MAX_SECONDS`(60.0) · `STATE_DIR`(data/channels) |
 | QqChannelSettings | `QQ_` | `ENABLED`(false) · `HTTP_API_BASE_URL`(http://127.0.0.1:3000) · `ACCESS_TOKEN_ENV`(QQ_ACCESS_TOKEN) · `WEBHOOK_TOKEN_ENV`(QQ_WEBHOOK_TOKEN) · `REQUEST_TIMEOUT_SECONDS`(15.0) |
+| WecomChannelSettings | `WECOM_` | `ENABLED`(false) · `BOT_ID`("") · `SECRET_ENV`(WECOM_SECRET) · `WS_ENDPOINT`(wss://openws.work.weixin.qq.com) · `REQUEST_TIMEOUT_SECONDS`(15.0) · `HEARTBEAT_INTERVAL_SECONDS`(30.0) · `HEARTBEAT_TIMEOUT_SECONDS`(10.0) · `OPEN_TIMEOUT_SECONDS`(10.0) · `BACKOFF_BASE_SECONDS`(1.0) · `BACKOFF_MAX_SECONDS`(60.0) · `BACKOFF_JITTER_RATIO`(0.3) · `REPLY_WINDOW_SECONDS`(86400.0) |
 | DutySettings | `DUTY_` | `ENABLED`(false) · `DAILY_AT`(22:00) · `MAX_TOOL_STEPS`(8) · `REPORT_TO_OWNER`(true) · `CHARTER_TEXT`(null) |
 | DreamScheduleSettings | `DREAM_SCHEDULE_` | `ENABLED`(false) · `DAILY_AT`(03:00) |
 | SchedulerSettings | `SCHEDULER_` | `TICK_SECONDS`(1.0) |

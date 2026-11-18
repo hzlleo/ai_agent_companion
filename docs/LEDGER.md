@@ -89,7 +89,7 @@
 | R2-defense | 丙+丁：D1 结构隔离 + 宪章五条 + nonce 定界、D2 注入检测 + 角色内反击（毒舌 / 温柔 / 傲娇）、D3 peer 记忆免疫与来源标注、D4 38 条红队回归集 | ✅ merged（PR #13 → main `7fe68a0`；`INJECTION_*` 与 compliance 示例模板生成已并入主线） |
 | R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | ✅ 代码完成、PR #15 OPEN（`b5846c0`）；甲套件 core + 组件库A/成熟度分层 + 关系连续性A + 乙分轨已全门禁绿；**剩余仅「示例台词 few-shot」** |
 | R2d 心流社交 | R2d-1 心流门控（`FLOW_` env 面——判定矩阵 / 连发合并 / 延迟批次经调度器 / 关系与节律输入）+ 群聊多人格（`GROUP_PERSONA_` env 面——轮转 / 冷却 / 重复抑制 / 人格会话归属）；R2d-2 声纹（`VOICEPRINT_` env 面——PIPL 告知 / 同意记录 / 注册 / 校验 / 撤回删除 / 保存期）+ 表情包库与 VLM 标注（`STICKER_` env 面——哈希去重 / 来源授权备注 / 标注状态机 / 通道附件 v2 收发桥 / 前端面板），迁移 0016 | ✅ R2d-1 + R2d-2 代码完成（本分支；全门禁见第 5 节） |
-| R2e 通道扩展 | 企微智能机器人（长连接）/GUI 微信容器化（PoC 门）/抖音 web（同底座）/表情包收发/Canvas | ⏳ |
+| R2e 通道扩展 | R2e-1 企微智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 去重 / 回复上下文 / 文本分段 / 素材分片上传 / 配置面 / 装配 / 文档）；余项：GUI 微信容器化（PoC 门）/抖音 web（同底座）/Canvas | 🔄 R2e-1 ✅ 代码完成、全门禁绿（本分支，验证数值见第 5 节）；余项 ⏳ |
 | R2f 实时语音 | 独立全双工会话（VAD+流式ASR+句级TTS+打断），允许溢出 R3 | ⏳ |
 | R3 | 安全/防穿透/性能深度审计版（独立版本）：admin 鉴权已前置完成，余项：提示注入纵深/SSRF/SeekDB DSL 注入/密钥治理/限流背压/性能基线 | ⏳ |
 
@@ -167,7 +167,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 3. `chat/service.py`：compose 链在【自我认知】之后、【相关技能】之前恒注入【关系进展】块（后续块序号顺移，链路十六段）；`reply` / `stream_reply` / 工具循环 / 合规重试分支全部一致携带；关系事实经既有 `FactsService.list_facts` 读取（公共池 + 既有异步面），派生失败记 warning 并降级为空摘要（初识）、不阻断回复；`ChatService` 可注入 `RelationshipThresholdsModel`（缺省 = 锁定表），无新 env 键。
 4. 测试：`test_relationship_summary.py`（派生矩阵 31 例（23 个用例含参数化）：空事实 / 混类与历史过滤 / 阶梯上下沿 / 衰减档边界与未来时间戳 / 夹取与阶段回落 / 事件裁剪顺序 / 边界上限 / 确定性 / 时间轴拒绝 / 阈值表不变式）+ `test_chat_relationship.py`（渲染 7 例 / 链序 2 例 / 服务集成 8 例：正常注入 / 阈值注入 / 读失败降级 / 未接线 / 纯内存零 I/O / 流式 / 工具循环 / 合规重试）+ prompts byte-lock 增补。
 5. docs：persona.md 关系进展摘要一节（来源 / 公式与阈值表 / 衰减档 / 夹取语义 / 注入位置 / 降级行为 / JSON 示例）、chat.md 组装链十六段完整重写与关系进展块示例、backend README 行、本台账状态行。
-**验证**：见下方门禁节（定向用例 + 全量测试 + 覆盖率 + lint / mypy / 门禁链）。
+**验证**（主 Agent 终验，全部经 pixi）：后端 2573 passed（新增 116 条企微用例）/ 23 组覆盖率门禁（harness/channels 97.0%、app/main 89.8%）/ mypy 175 文件零问题 / ruff 零问题 / 门禁链全绿（注释门 violations=0、同步测试棘轮 +0、noqa 冻结 0、沙盒漂移 36 项一致）/ `gen-examples` 再生成 byte-stable（仅 CHANNELS.WECOM 分节 39 行）。示意命令：`cd backend && pixi run tests-all`、`pixi run coverage-gates`、`pixi run lint`、`pixi run typecheck`、根 `pixi run gates`、根 `pixi run gen-examples`。
 
 ### 已完成切片：R2b+ 组件库 A + 成熟度分层（亲密补强）
 **已完成**：
@@ -238,6 +238,19 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 9. 测试：声纹（服务 / 向量客户端 / API）、表情包（服务 / API / 提示词 / 通道桥 / 页面 / API / hooks / 文件助手）、迁移 0016 SQLite round-trip；SeekDB 迁移链断言扩到 0016。
 
 **验证**（主 Agent 终验，全部经 pixi）：后端 2457 passed / 23 组覆盖率（harness/voice 95.8%、harness/multimodal 93.5%、app/api 82.6%）/ mypy 172 文件零问题 / ruff / 门禁链全绿（注释门 + noqa 冻结 + 沙盒漂移 36 + sync 棘轮 0）/ 活 SeekDB 6 用例（迁移链 0016 升 / 降 base / 复升）；DTO fixture 89 组双侧重生成；前端 596 passed / coverage perFile（96.04% statements / 92.68% branches）/ lint / build；gen-examples 再生成 byte-stable。示意命令：`cd backend && pixi run tests-all`、`pixi run coverage-gates`、`pixi run lint`、`pixi run typecheck`、根 `pixi run gates`、`SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto`、`cd frontend && pixi run test / coverage / lint / build`。
+
+### 已完成切片：R2e-1 企业微信智能机器人长连接通道（本分支未提交工作区）
+**已完成**：
+1. `harness/channels/wecom/wecom_models.py`：长连接 wire Model Classes（Unit 文件）——订阅 / 心跳 / 消息与事件回调 / 应答 / 回复（markdown）/ 主动推送（markdown、image、voice、file）/ 素材分片上传（init / chunk / finish）命令；入站映射（`single:<userid>` / `group:<chatid>` 会话键、文本 / 语音转写 / 图文混排 / 图片 / 文件 / 视频归一与占位符、媒体 url 附件、`compat_info` → `synthetic`）；chat_id grammar 解析；markdown 20480 字节分段（换行边界优先、UTF-8 硬切不破字符）。
+2. `harness/channels/wecom/wecom_client.py`：长连接客户端——BotID + Secret（环境变量间接，缺失即 `CHANNEL_TOKEN_MISSING`）订阅；req_id 应答关联（超时 / 平台拒绝 / 断连均拒绝在途请求）；应用层心跳（间隔 30s 缺省、应答超时判失效）；指数退避重连 + 比例抖动（可被停机即时打断）；单连接不变式（重复 run 幂等）；`disconnected_event` 被踢下线即停止重连；优雅停机（关闭连接 + STOPPED）；连接状态观测日志；素材分片上传（512KB/片、100 片上限、类型体积上限）。连接传输面经 `connector` 注入（生产 websockets，测试进程内 fake）——`websockets` 由声明的 `uvicorn[standard]` 提供，未新增依赖。
+3. `harness/channels/wecom/wecom_runner.py`：runner——回调去重（msgid，有界 FIFO 1024）、回复上下文登记与时效判定、有界入站队列 + 固定 worker（解耦收帧循环与 LLM 耗时）、出站文本分段（首段回复 / 续段推送）、附件三源（base64 / url 经共享池 / path 本地）上传与推送、逐附件失败承载、停机收尾。
+4. `channel_models.py`：`ChannelType.WECOM`；`config/models.py`：`WecomChannelSettings`（`WECOM_` env 面 12 字段 + 不变式：启用必填 BotID / 退避边界 / 心跳预算 / 抖动值域）并聚合进 `ChannelsSettings`；协议面不引入 `corp_id` / `agent_id` / access_token（长连接只认 BotID + Secret，文档化理由）。
+5. `app/main.py`：`_startup_wecom_channel` 装配（客户端 → runner → 适配器注册 → 托管后台任务 → 槽位）；装配期凭据失败记 ERROR 并跳过该通道（不波及其余通道，与 telegram fail-fast 的差异锁定）；`_shutdown_channels` 复用 `_stop_managed_channel_task` 对 telegram / 企微逐一优雅停机（bounded 5s + cancel 兜底）。
+6. 配置面：`scripts/generate_examples_env.py` 新增 `CHANNELS.WECOM` 分节并再生成 `backend/.env.example`（+39 行，其余分节 byte-stable）；`wizard_generators.py` 新增「企业微信智能机器人通道配置」步骤；`src/conftest.py` 补 `WECOM_*` / 密钥硬覆盖块。
+7. 测试：`tests/wecom_fakes.py`（共享 fake 基建——wire 级连接替身、连接工厂、逐次放行伪休眠、fake 客户端 / 路由器）+ `test_wecom_models.py` / `test_wecom_client.py` / `test_wecom_runner.py` / `test_wecom_settings.py` / `test_app_wecom_channels_lifespan.py`（伪时钟与 fake 连接，零真实网络、零真实等待）；既有 `test_channels_models.py` 枚举值域断言按新成员更新（唯一既有测试改动）。
+8. docs：channels.md 企微长连接整节（协议依据 / 模块表 / 入站字段表与 JSON / 归一表 / 出站命令 JSON / 附件映射与平台限制 / 生命周期状态机与语义表 / 错误码表 / 配置表与 .env 示例 / 部署五步 / 测试面）、channels.md 概览与模块表与协议 v2 映射表补列、config.md 分节行、backend README channels 行、根 README 核心特性行、本台账。
+
+**验证**（主 Agent 终验，全部经 pixi）：后端 2573 passed（新增 116 条企微用例）/ 23 组覆盖率门禁（harness/channels 97.0%、app/main 89.8%）/ mypy 175 文件零问题 / ruff 零问题 / 门禁链全绿（注释门 violations=0、同步测试棘轮 +0、noqa 冻结 0、沙盒漂移 36 项一致）/ `gen-examples` 再生成 byte-stable（仅 CHANNELS.WECOM 分节 39 行）。示意命令：`cd backend && pixi run tests-all`、`pixi run coverage-gates`、`pixi run lint`、`pixi run typecheck`、根 `pixi run gates`、根 `pixi run gen-examples`。
 
 ## 6. 遗留与部署台账（非阻塞）
 
