@@ -5,6 +5,7 @@
     Scheduler(tick_seconds=?, clock=?, sleep=?)
         ↓ register_interval(name, factory, every_seconds)   间隔作业
         ↓ register_daily(name, factory, daily_at="HH:MM")   每日作业
+        ↓ schedule_once(name, factory, delay_ms)            一次性延迟作业
         ↓ run()（managed background task——app lifespan 装配）
         ↓ tick 循环（默认 1s）：
         ↓     clock() 取当前 epoch 毫秒 → 逐作业判定到期
@@ -16,8 +17,9 @@
 锁定设计决策：
 
     - **手滚调度**（无 APScheduler / cron 解析 / 时区数据库依赖）：
-      作业面只有间隔（``every_seconds``）与每日定时（``daily_at`` "HH:MM"）
-      两类——duty 每日 + dream 每日 + 未来作业足够；
+      作业面为间隔（``every_seconds``）、每日定时（``daily_at`` "HH:MM"）
+      与一次性延迟（``schedule_once``）三类——duty / dream / 提醒扫描与
+      心流门控的延迟回复批次共用同一条计时链；
     - **naive 本地时间**（文档化）：每日作业的 "HH:MM" 按进程本地时区
       的墙钟语义解析（``datetime.fromtimestamp`` 无 tz 参数——与
       ``tools.get_current_time`` 同约定）；不引入 zoneinfo / DST 规则；
@@ -134,6 +136,8 @@ class _JobSpec:
         interval_ms: 间隔毫秒（间隔作业；每日作业为 None）。
         daily_at: 每日定时二元组（每日作业；间隔作业为 None）。
         next_run_ms: 下次计划执行时刻（epoch 毫秒——drift-safe 锚定轴）。
+        one_shot: 是否为一次性作业（到期执行后从作业表移除，不再重排；
+            心流门控的延迟回复经此面排程）。
     """
 
     name: str
@@ -141,6 +145,7 @@ class _JobSpec:
     interval_ms: int | None = None
     daily_at: tuple[int, int] | None = None
     next_run_ms: int = 0
+    one_shot: bool = False
 
     def advance(self) -> None:
         """锚定推进下次执行时刻（以当前计划时刻为锚——非 now）。
@@ -150,6 +155,8 @@ class _JobSpec:
         调度循环按 tick 节奏逐槽补齐（每 tick 至多一槽，防风暴）。
         """
         anchor = self.next_run_ms
+        if self.one_shot:
+            return
         if self.interval_ms is not None:
             self.next_run_ms = anchor + self.interval_ms
         elif self.daily_at is not None:
@@ -173,7 +180,7 @@ class _SchedulerState:
 
 
 class Scheduler:
-    """中央调度器（间隔 / 每日两类作业；tick 循环 + per-job 隔离）。
+    """中央调度器（间隔 / 每日 / 一次性延迟作业；tick 循环 + per-job 隔离）。
 
     构造注入（测试友好）：``clock`` / ``sleep`` 可替换——测试以假时钟
     与零耗时休眠确定性驱动；生产用缺省 ``core.now_ms`` / ``asyncio.sleep``。
@@ -278,6 +285,51 @@ class Scheduler:
             first_run,
         )
 
+    def schedule_once(self, name: str, factory: JobFactory, *, delay_ms: int) -> str:
+        """注册一次性延迟作业（到期执行一次后自动移除）。
+
+        消费面：心流门控的延迟 / 合并回复排程——延迟消息与合并批次经
+        中央调度器统一计时，不新建线程或独立定时器。作业名由调用方
+        给出（须在在途集合内唯一）；作业到期经 ``_dispatch_due`` 执行
+        ——执行前即从注册表移除，**不会重复触发**。调度器停机时仍在途
+        的一次性作业随停机排水收尾；尚未到期且调度器已退出时该作业
+        不再执行（停机语义文档化）。
+
+        Args:
+            name: 作业名（在途集合内唯一——重复注册 fail loud）。
+            factory: 作业工厂（到期调用一次创建协程）。
+            delay_ms: 延迟毫秒（≥0；相对当前注入时钟的偏移）。
+
+        Returns:
+            作业名（调用方观测用；与入参同名）。
+
+        Raises:
+            BusinessException: 延迟为负 / 作业名已注册（``VALIDATION_ERROR``
+                ——装配错误面）。
+        """
+        if delay_ms < 0:
+            raise BusinessException(
+                code=ErrorCode.VALIDATION_ERROR,
+                message="一次性作业延迟须为非负数",
+                details={"name": name, "delay_ms": delay_ms},
+            )
+        now = self._clock()
+        self._register(
+            _JobSpec(
+                name=name,
+                factory=factory,
+                next_run_ms=now + delay_ms,
+                one_shot=True,
+            )
+        )
+        logger.info(
+            "调度作业已注册（一次性）: name={}, delay_ms={}, due_ms={}",
+            name,
+            delay_ms,
+            now + delay_ms,
+        )
+        return name
+
     def _register(self, spec: _JobSpec) -> None:
         """落入注册表（重名 fail loud——装配错误面）。
 
@@ -375,7 +427,12 @@ class Scheduler:
         for spec in list(self._state.jobs.values()):
             if spec.next_run_ms > now:
                 continue
-            spec.advance()
+            if spec.one_shot:
+                # 一次性作业先移除再执行——不会重复触发，作业名可在执行后
+                # 立即复用（心流门控的后续批次排程依赖该语义）。
+                self._state.jobs.pop(spec.name, None)
+            else:
+                spec.advance()
             task: asyncio.Task[None] = asyncio.create_task(
                 self._run_job(spec.name, spec.factory),
                 name=f"scheduler-job:{spec.name}",

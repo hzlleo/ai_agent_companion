@@ -468,8 +468,9 @@ async def import_persona(
     载荷分支（锁定语义）：
 
         - ``preset_id``（JSON）——服务端按官方预设 + 组件库确定性生成
-            卡片（基础名 = 期望名或预设名 + 预设后缀；生成冲突软警告
-            并入结果 ``warnings``；预设建议语音随创建落库）；
+            卡片（基础名 = 期望名或预设名 + 预设后缀；可按
+            ``intimacy_level_override`` 覆盖预设推荐的亲密等级；生成冲突
+            软警告并入结果 ``warnings``；预设建议语音随创建落库）；
         - ``card``（JSON）或 ``file``（multipart 卡片 JSON 文件）——
             用户自有卡片文档直载。
 
@@ -516,7 +517,12 @@ async def import_persona(
                 details={"preset_id": dto.preset_id},
             )
         base_name = dto.desired_name or preset.name_zh
-        generation = generate_card_from_preset(preset, registry, base_name=base_name)
+        generation = generate_card_from_preset(
+            preset,
+            registry,
+            base_name=base_name,
+            intimacy_level_override=dto.intimacy_level_override,
+        )
         card = generation.card
         warnings = [warning.message for warning in generation.warnings]
         voice_profile = preset.suggested_voice

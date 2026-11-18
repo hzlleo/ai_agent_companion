@@ -8,24 +8,30 @@
         ↓ ③ prompts.render_persona_system_prompt(card)     人格正典（覆写感知）
         ↓ ④ prompts.render_constitution()                 宪章（注入面防护五条
               ——身份 / 规则 / 引用 / 标签 / 挑衅应对）
-        ↓ ⑤ 非中性情绪摘要块（render_emotion_state_block——R2b 轻情绪引擎；
+        ↓ ⑤ prompts.render_persona_contract(card.name)     角色契约（人格输出
+              契约五条——不自我声明 AI / 不道歉式开场 / 不总结腔软化 /
+              亲密场景不升维 / 被纠正不辩论）
+        ↓ ⑥ 非中性情绪摘要块（render_emotion_state_block——R2b 轻情绪引擎；
               无状态 / 全中性跳过）
-        ↓ ⑥ 长期指令块（render_directives_block——R2b D7-14；现行指令
+        ↓ ⑦ 长期指令块（render_directives_block——R2b D7-14；现行指令
               注入，20 条 / 2000 字符帽截断；无指令跳过）
-        ↓ ⑦ 人物事实块（render_facts_block——R2c；【关于对方】现行高置信
+        ↓ ⑧ 人物事实块（render_facts_block——R2c；【关于对方】现行高置信
               事实注入，12 条 / 1500 字符帽由读取面裁剪；无事实跳过）
-        ↓ ⑧ 核心记忆块（render_core_memory_block——R2c；【自我认知】四块
+        ↓ ⑨ 核心记忆块（render_core_memory_block——R2c；【自我认知】四块
               自编辑自我模型的非空块注入，锁定块带锁定标识，总字符 2400
               帽由渲染面截断；全空跳过）
-        ↓ ⑨ 相关技能块（render_skills_block——R2c；【相关技能】仅当命中
+        ↓ ⑩ 关系进展块（render_relationship_block——R2b+；【关系进展】由
+              关系类事实派生的阶段 / 最近变化 / 边界约定摘要，恒注入——
+              空事实渲染「初识」，总字符 1200 帽）
+        ↓ ⑪ 相关技能块（render_skills_block——R2c；【相关技能】仅当命中
               本轮用户文本时注入，2 条 / 2000 字符帽；无命中跳过）
-        ↓ ⑩ prompts.render_output_protocol()               输出格式协议（心声 /
+        ↓ ⑫ prompts.render_output_protocol()               输出格式协议（心声 /
               情绪标签指令——R2b）
-        ↓ ⑪ 世界书 after_char 条目块                       检索增强（后段）
-        ↓ ⑫ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合；
+        ↓ ⑬ 世界书 after_char 条目块                       检索增强（后段）
+        ↓ ⑭ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合；
               当轮入站回合经 nonce 定界包裹——历史保持原文，见下节）
-        ↓ ⑬ 注入提示块（检测命中时）                        紧接当轮包裹消息之后
-        ↓ ⑭ prompts.render_post_history_message(card)      历史后再注入（末块）
+        ↓ ⑮ 注入提示块（检测命中时）                        紧接当轮包裹消息之后
+        ↓ ⑯ prompts.render_post_history_message(card)      历史后再注入（末块）
 
 注入面防护（结构隔离 + 检测提示——本域新增防线，攻击面矩阵见
 docs/backend/defense.md）：
@@ -49,6 +55,29 @@ docs/backend/defense.md）：
       风格 / 阈值 / 提示开关）；``enabled=False`` 时包裹与检测全关，回复
       链路回到原始形态。世界书 / 长期指令 / 人物事实 / 核心记忆 / 技能
       属**受信层**（主人或人格自身写入），不做包裹。
+
+人格输出合规守卫（助手腔检测 + 单次强化重试——``COMPLIANCE_`` env 面
+``ComplianceGuardSettings``）：
+
+    - **输出契约**：compose 链在宪章之后恒注入【角色契约】块
+      （``render_persona_contract``——不自我声明 AI / 不道歉式开场 /
+      不总结腔软化 / 亲密场景不升维 / 被纠正不辩论），属 system 提示的
+      常驻约束，不随开关变化；
+    - **检测面**：``reply`` 在网关响应之后、输出协议解析之前对原始回复跑
+      ``detect_assistant_violation``（助手腔种类：AI 自我声明 / 道歉开场 /
+      短回复里的总结腔 / 客服话术），越过阈值时记一条 warning（人格 +
+      命中种类，不含回复正文）；
+    - **重试语义（锁定）**：命中的非流式回复**只重试一次**——同一段对话
+      末尾追加角色提醒块（``render_compliance_nudge``）并把温度提升
+      ``temperature_bump``（请求未携带采样参数时以
+      ``COMPLIANCE_RETRY_BASELINE_TEMPERATURE`` 为基线，叠加结果夹取
+      2.0 上限；请求自带温度时以其为基线）。重试结果是**无条件接受**的：
+      不再检测、不循环，重试后仍失守也照常解析落回合；``max_retries=0``
+      等价于只记日志不重试；
+    - **工具循环分支**：重试请求只带组装消息 + 提醒块、不携带工具面——
+      工具步是循环内部状态，重写的是最终可见文本，不需要重新跑工具；
+    - **流式边界**：``stream_reply`` 恒不重试——逐块产出时已经交给了
+      消费方，无法回头重说一遍；检测面因此只覆盖非流式回复。
 
 世界书筛选语义（chara card v2 规格 + R2b 高级触发——算法链全文见
 ``world_book`` 模块文档，此处为消费面摘要）：
@@ -130,9 +159,46 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
       回复（日志 + 空块——画像注入是增强面而非回复前提），无现行事实时
       整块跳过。
 
+关系进展注入（R2b+——复用构造注入 ``facts_reader`` 的事实读面）：
+
+    - compose 链在核心记忆块之后、相关技能块之前恒注入【关系进展】块
+      （``render_relationship_block``——由关系类现行事实派生的阶段 / 最近
+      变化 / 边界约定摘要，总字符 1200 帽由渲染函数执行确定性截断）；
+    - **来源只读既有 facts 层**：经 ``facts_reader.list_facts``（类别 =
+      relationship、状态 = active）读取事实记录，再用
+      ``persona.relationship.build_relationship_summary`` 纯函数聚合——
+      不新增存储、不迁移、不改 DTO；得分公式 / 衰减档 / 阈值阶梯集中在
+      ``persona.relationship_models`` 的锁定阈值表，可经
+      ``ChatService(relationship_thresholds=...)`` 注入替换（无新 env 键）；
+    - 注入面与人物事实同轴：仅在持久化会话绑定且已落库时读取（
+      ``session_scope`` 独立短事务 + 人格上下文绑定）——纯内存形态零附加
+      I/O；空事实产出 stranger / 0 空摘要并照常注入（关系状态是恒注入面，
+      不是「有内容才注入」）；
+    - **降级语义（锁定）**：读取失败记 warning 并降级为空摘要（stranger /
+      0 / 零事件），回复链路照常——关系摘要不阻断回复；未接线读取面
+      （CLI / 单元直调形态）整块跳过，既有行为零变更；
+    - **人格侧等级上限**：预设 ``intimacy_level`` 只存在于生成期，聊天
+      上下文拿不到该值——摘要只输出事实派生值（构建函数保留
+      ``intimacy_ceiling`` 形参供未来接线），边界文档化于
+      ``persona.relationship_models`` 模块文档。
+
+亲密通道路由输入（R2b+ 乙分轨——可选独立模型端点，默认关闭）：
+
+    - 本服务**只声明路由输入**：把本轮关系摘要的 ``intimacy_level`` 原样
+      传给网关的 ``chat_by_role`` / ``stream_by_role``（``intimacy_level``
+      关键字）；开关 / 配置齐全性 / 阈值 / 端点与凭据选择全部在 llm 域
+      完成（见 ``llm.intimate_router`` 与 docs/backend/llm.md「亲密通道」
+      一节）；
+    - 一致性：``reply`` 的单次调用、工具循环的每一步与收尾调用、合规
+      强化重试、``stream_reply`` 的全部网关调用携带同一输入——同一回合
+      不会被换到另一条通道；
+    - 摘要缺失（读取面未接线 / 未落库）传 ``None``、读取降级传空摘要的
+      等级 0——两种情况都低于缺省阈值，自然回退默认通道；亲密通道调用
+      失败按网关既有错误语义上抛，本服务不做静默换道。
+
 相关技能注入（R2c——构造注入 ``skills_reader`` 后）：
 
-    - compose 链在人物事实块之后、输出格式协议之前注入【相关技能】块
+    - compose 链在关系进展块之后、输出格式协议之前注入【相关技能】块
       （``render_skills_block``——仅当命中**本轮用户文本**时注入；命中
       由 ``SkillsService.match_for_compose`` 按技能触发短语的字面包含
       判定，条数 / 字符帽由服务与渲染函数分别施加）；
@@ -220,6 +286,11 @@ from packages.harness.chat.chat_models import (
     ChatTurnModel,
     MessageCompositionResult,
 )
+from packages.harness.chat.compliance_guard import (
+    build_retry_params,
+    detect_assistant_violation,
+)
+from packages.harness.chat.compliance_models import ComplianceGuardSettings
 from packages.harness.chat.injection_guard import (
     build_injection_hint,
     detect_injection,
@@ -238,6 +309,7 @@ from packages.harness.chat.prompts import (
     UNTRUSTED_LABEL_TOOL_RESULT,
     WORLD_BOOK_SECTION_SEPARATOR,
     render_charter,
+    render_compliance_nudge,
     render_constitution,
     render_core_memory_block,
     render_directives_block,
@@ -245,8 +317,10 @@ from packages.harness.chat.prompts import (
     render_facts_block,
     render_first_greeting,
     render_output_protocol,
+    render_persona_contract,
     render_persona_system_prompt,
     render_post_history_message,
+    render_relationship_block,
     render_skills_block,
     render_world_book_block,
 )
@@ -256,6 +330,8 @@ from packages.harness.chat.world_book import (
     select_world_book_entries,
 )
 from packages.harness.config.model_entry import ModelRole
+from packages.harness.core import time_utils
+from packages.harness.core.dtos import PageResponse
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.database.session import session_scope
 from packages.harness.emotion.service import EmotionService
@@ -281,6 +357,18 @@ from packages.harness.persona.core_memory_models import (
 )
 from packages.harness.persona.directives import DirectivesService
 from packages.harness.persona.dtos import PersonaRecordDTO
+from packages.harness.persona.facts_models import (
+    FactQueryDTO,
+    FactRecordDTO,
+    PersonaFactStatus,
+)
+from packages.harness.persona.relationship import build_relationship_summary
+from packages.harness.persona.relationship_models import (
+    DEFAULT_RELATIONSHIP_THRESHOLDS,
+    RELATIONSHIP_FACT_CATEGORY,
+    RelationshipSummaryModel,
+    RelationshipThresholdsModel,
+)
 from packages.harness.persona.service import PersonaService, bind_persona_context
 from packages.harness.persona.skills_models import SkillRecordDTO
 from packages.harness.tools.tool_models import (
@@ -383,6 +471,7 @@ def compose_messages(
     directives: Sequence[str] | None = None,
     facts: Sequence[str] | None = None,
     core_memory: Sequence[CoreMemoryBlockDTO] | None = None,
+    relationship: RelationshipSummaryModel | None = None,
     skills: Sequence[SkillRecordDTO] | None = None,
     wrap_current_message: bool = False,
     current_message_label: str = "",
@@ -392,9 +481,9 @@ def compose_messages(
 
     消息序列结构::
 
-        [system]  章程 + 世界书 before 段 + 人格正典 + 宪章 + 心情状态块 +
-                  长期指令块 + 人物事实块 + 核心记忆块 + 相关技能块 +
-                  输出格式协议块 + 世界书 after 段
+        [system]  章程 + 世界书 before 段 + 人格正典 + 宪章 + 角色契约 +
+                  心情状态块 + 长期指令块 + 人物事实块 + 核心记忆块 +
+                  关系进展块 + 相关技能块 + 输出格式协议块 + 世界书 after 段
         [user/assistant ...]  全部历史回合（含刚追加的用户回合；当轮入站
                   回合在 ``wrap_current_message=True`` 时被定界包裹）
         [system]  注入提示块（仅检测命中且调用方传入 ``injection_hint`` 时；
@@ -403,7 +492,10 @@ def compose_messages(
                   位于**最后一条历史回合之后**——deep anti-drift 位置）
 
     宪章块（``render_constitution``）恒注入且紧跟人格正典——五条注入面
-    防护规则先于一切记忆层与对话内容生效。
+    防护规则先于一切记忆层与对话内容生效；角色契约块
+    （``render_persona_contract``）紧随宪章之后、先于一切记忆层注入——
+    宪章管身份与规则从哪来，契约管说出来的话像不像这个人（输出腔调
+    约束）。
 
     心情状态块仅在 ``emotion_summary`` 非空时注入（非中性情绪——由
     ChatService 经 emotion 域读取 M 态产出）；长期指令块仅在
@@ -413,10 +505,12 @@ def compose_messages(
     条目时注入（【关于对方】——由 ChatService 经事实读取面提供；条数 /
     字符帽在读取面施加）；核心记忆块仅在 ``core_memory`` 有非空块时注入
     （【自我认知】——由 ChatService 经核心记忆读取面提供；总字符帽在
-    ``render_core_memory_block`` 施加）；相关技能块仅在 ``skills`` 有命中
-    条目时注入（【相关技能】——由 ChatService 经技能读取面按本轮用户文本
-    匹配；条数帽在读取面、字符帽在 ``render_skills_block`` 施加）；输出
-    格式协议块恒注入（心声 / 情绪标签指令——解析面见
+    ``render_core_memory_block`` 施加）；关系进展块在 ``relationship`` 非空时
+    恒注入（【关系进展】——由 ChatService 经事实读取面派生；空事实摘要同样
+    注入，总字符帽在 ``render_relationship_block`` 施加）；相关技能块仅在
+    ``skills`` 有命中条目时注入（【相关技能】——由 ChatService 经技能读取面
+    按本轮用户文本匹配；条数帽在读取面、字符帽在 ``render_skills_block``
+    施加）；输出格式协议块恒注入（心声 / 情绪标签指令——解析面见
     ``chat/output_protocol``）。
 
     当轮入站包裹（结构隔离，锁定边界）：``wrap_current_message=True``
@@ -445,6 +539,9 @@ def compose_messages(
         core_memory: 核心记忆块记录列表（None / 空 / 全空正文 = 不注入
             核心记忆块；读取在调用方、总字符帽在
             ``render_core_memory_block`` ——本函数保持纯函数无 I/O）。
+        relationship: 关系进展摘要（None = 不注入关系进展块——读取面未接线
+            形态；非 None 时恒注入，空事实摘要渲染「初识」；派生与时间注入
+            在调用方——本函数保持纯函数无 I/O）。
         skills: 命中本轮用户文本的技能记录列表（None / 空 = 不注入相关
             技能块；匹配与条数帽在调用方、字符帽在 ``render_skills_block``
             ——本函数保持纯函数无 I/O）。
@@ -476,6 +573,7 @@ def compose_messages(
         system_parts.append(before_block)
     system_parts.append(render_persona_system_prompt(state.card))
     system_parts.append(render_constitution())
+    system_parts.append(render_persona_contract(state.card.name))
     emotion_block = render_emotion_state_block(emotion_summary)
     if emotion_block:
         system_parts.append(emotion_block)
@@ -488,6 +586,9 @@ def compose_messages(
     core_memory_block = render_core_memory_block(core_memory or [])
     if core_memory_block:
         system_parts.append(core_memory_block)
+    relationship_block = render_relationship_block(relationship)
+    if relationship_block:
+        system_parts.append(relationship_block)
     skills_block = render_skills_block(skills or [])
     if skills_block:
         system_parts.append(skills_block)
@@ -601,8 +702,10 @@ class FactsReaderFace(Protocol):
 
     结构化类型：真实 :class:`~packages.harness.persona.facts.FactsService`
     天然满足（``top_facts_for_compose``——现行高置信事实的注入行读取，
-    条数 / 字符帽在实现侧施加）；测试注入 fake 同形态。注入面与长期指令
-    同轴：仅在持久化会话已落库时读取（见模块 docstring「人物事实注入」）。
+    条数 / 字符帽在实现侧施加；``list_facts``——类别 / 状态过滤的公开
+    分页读面，关系进展摘要据此读取关系类事实）；测试注入 fake 同形态。
+    注入面与长期指令同轴：仅在持久化会话已落库时读取（见模块 docstring
+    「人物事实注入」／「关系进展注入」）。
     """
 
     async def top_facts_for_compose(self, session: AsyncSession) -> list[str]:
@@ -613,6 +716,22 @@ class FactsReaderFace(Protocol):
 
         Returns:
             注入行列表（``【类别标签】正文``；空列表 = 无现行事实）。
+        """
+        ...
+
+    async def list_facts(
+        self, session: AsyncSession, query: FactQueryDTO
+    ) -> PageResponse[FactRecordDTO]:
+        """读取事实分页记录（类别 / 状态过滤 + 游标分页——关系进展摘要的
+        事实来源面）。
+
+        Args:
+            session: 注入的异步 Session（人格上下文已绑定）。
+            query: 查询入参（关系进展读取面固定类别 = relationship、状态 =
+                active，页大小取阈值表的扫描上限）。
+
+        Returns:
+            分页响应（``items`` 为事实记录；空页 = 无匹配事实）。
         """
         ...
 
@@ -688,6 +807,8 @@ class ChatService:
         core_memory_reader: CoreMemoryReaderFace | None = None,
         skills_reader: SkillsReaderFace | None = None,
         injection_settings: InjectionGuardSettings | None = None,
+        compliance_settings: ComplianceGuardSettings | None = None,
+        relationship_thresholds: RelationshipThresholdsModel | None = None,
         episode_sink: EpisodeSinkFace | None = None,
     ) -> None:
         """初始化服务。
@@ -728,6 +849,13 @@ class ChatService:
             injection_settings: 注入防御配置（None = 现场构造默认实例——
                 读 ``INJECTION_`` env；缺省启用结构隔离与检测提示，见
                 模块 docstring「注入面防护」）。
+            compliance_settings: 人格输出合规守卫配置（None = 现场构造
+                默认实例——读 ``COMPLIANCE_`` env；缺省启用一次强化重试，
+                见模块 docstring「人格输出合规守卫」）。
+            relationship_thresholds: 关系进展派生阈值表（None = 锁定缺省表
+                :data:`~packages.harness.persona.relationship_models.
+                DEFAULT_RELATIONSHIP_THRESHOLDS`——测试 / 运营调参注入面，
+                无新 env 键；见模块 docstring「关系进展注入」）。
             episode_sink: chat 回合情景落库面（None = 零情景写入——CLI /
                 未装配记忆服务的形态行为与既有完全一致；注入后每回合
                 消息落库即写入 kind=chat 情景事件——fire-and-forget 语义
@@ -755,6 +883,16 @@ class ChatService:
         #: 注入防御配置（默认实例读 INJECTION_ env——见模块 docstring）。
         self._injection_settings = (
             injection_settings if injection_settings is not None else InjectionGuardSettings()
+        )
+        #: 合规守卫配置（默认实例读 COMPLIANCE_ env——见模块 docstring）。
+        self._compliance_settings = (
+            compliance_settings if compliance_settings is not None else ComplianceGuardSettings()
+        )
+        #: 关系进展阈值表（默认即锁定表——派生参数集中地，无 env 面）。
+        self._relationship_thresholds = (
+            relationship_thresholds
+            if relationship_thresholds is not None
+            else DEFAULT_RELATIONSHIP_THRESHOLDS
         )
         #: 情景落库面绑定（None = 零情景写入——记忆管道未接线形态）。
         self._episode_sink = episode_sink
@@ -949,6 +1087,11 @@ class ChatService:
         「群友消息」），检测命中时在包裹回合之后追加注入提示块；工具循环
         回灌的 tool 轮正文同样定界包裹（「工具结果」）。
 
+        人格输出合规守卫（``COMPLIANCE_ENABLED`` 开启——见模块 docstring
+        「人格输出合规守卫」）：网关响应之后、协议解析之前检测助手腔，
+        命中时按配置做一次强化重试（提醒块 + 温度提升），重试结果无条件
+        采用；``stream_reply`` 不重试。
+
         失败语义：网关异常原样上抛（用户回合保留在历史——调用方决定
         重试或提示）。重试语义（文档化决策）：调用方对 ``reply`` 的任何
         重试都是**完整重发**——用户消息再次进入会话历史；持久化绑定且
@@ -996,6 +1139,7 @@ class ChatService:
         directives = await self._current_directives(state)
         facts = await self._current_facts(state)
         core_memory = await self._current_core_memory(state)
+        relationship = await self._current_relationship(state)
         skills = await self._current_skills(state, user_text)
         wrap_current, current_label, injection_hint = self._injection_compose_inputs(
             state, user_text, sender_provenance
@@ -1006,6 +1150,7 @@ class ChatService:
             directives=directives,
             facts=facts,
             core_memory=core_memory,
+            relationship=relationship,
             skills=skills,
             wrap_current_message=wrap_current,
             current_message_label=current_label,
@@ -1015,12 +1160,16 @@ class ChatService:
         # 本服务消费后落回（快径路径不组装、不推进——时钟只度量真实
         # 组装回合）。
         state.world_book_state = result.world_book_state
+        # 亲密通道路由输入：只声明本轮关系摘要的等级；端点选择与阈值裁决
+        # 在 llm 网关完成（摘要缺失 / 降级为空摘要 → None / 0 → 默认通道）。
+        intimacy_level = relationship.intimacy_level if relationship is not None else None
         if self._tools_binding is not None:
             raw_content = await self._tool_loop(
                 result.messages,
                 state,
                 self._tools_binding,
                 sender_provenance=sender_provenance,
+                intimacy_level=intimacy_level,
             )
         else:
             response: ChatResponseModel = await self._gateway.chat_by_role(
@@ -1028,8 +1177,12 @@ class ChatService:
                 result.messages,
                 persona_id=str(state.persona_id),
                 purpose=CHAT_PURPOSE,
+                intimacy_level=intimacy_level,
             )
             raw_content = response.content
+        raw_content = await self._apply_compliance_retry(
+            result.messages, raw_content, state, intimacy_level=intimacy_level
+        )
         parsed = parse_assistant_output(raw_content)
         content = parsed.visible_text
         if not content:
@@ -1057,7 +1210,8 @@ class ChatService:
         标签剥离后 yield（空增量块跳过；未知 / 未闭合标签原样放行）；
         流自然结束后聚合已放行文本追加为 assistant 回合。本路径**不跑
         完整输出协议**：心声 / 情绪增量不落 meta、不推进 M 态（流式
-        通道是操作员可见面——边界文档化于模块 docstring）。消费方提前终止
+        通道是操作员可见面——边界文档化于模块 docstring），也不跑人格
+        输出合规重试（增量已逐块交给消费方，无法回头重说）。消费方提前终止
         （``GeneratorExit``）时**不追加助手回合**——半截回复不入历史
         （文档化决策；持久化面同语义——半截助手回合不落库）。重试语义
         同 ``reply``：调用方重试是完整重发——用户回合已落库时再落一行
@@ -1084,6 +1238,7 @@ class ChatService:
         directives = await self._current_directives(state)
         facts = await self._current_facts(state)
         core_memory = await self._current_core_memory(state)
+        relationship = await self._current_relationship(state)
         skills = await self._current_skills(state, user_text)
         wrap_current, current_label, injection_hint = self._injection_compose_inputs(
             state, user_text, sender_provenance
@@ -1094,6 +1249,7 @@ class ChatService:
             directives=directives,
             facts=facts,
             core_memory=core_memory,
+            relationship=relationship,
             skills=skills,
             wrap_current_message=wrap_current,
             current_message_label=current_label,
@@ -1101,6 +1257,7 @@ class ChatService:
         )
         # 功能式回合状态回存（与 reply 同构——冷却时钟只度量真实组装回合）。
         state.world_book_state = result.world_book_state
+        intimacy_level = relationship.intimacy_level if relationship is not None else None
         stripper = StreamTagStripper()
         parts: list[str] = []
         async for chunk in self._gateway.stream_by_role(
@@ -1108,6 +1265,7 @@ class ChatService:
             result.messages,
             persona_id=str(state.persona_id),
             purpose=CHAT_PURPOSE,
+            intimacy_level=intimacy_level,
         ):
             if not chunk.content:
                 continue
@@ -1203,6 +1361,75 @@ class ChatService:
         hint = build_injection_hint(self._injection_settings.counter_style, user_text)
         return True, label, hint
 
+    async def _apply_compliance_retry(
+        self,
+        messages: Sequence[ChatMessageModel],
+        raw_content: str,
+        state: ChatSessionStateModel,
+        *,
+        intimacy_level: int | None = None,
+    ) -> str:
+        """人格输出合规守卫：命中助手腔时做一次强化重试。
+
+        运行判定：``COMPLIANCE_ENABLED`` 关闭时原样返回；启用时对原始回复
+        跑 ``detect_assistant_violation``，未越过阈值原样返回。命中即记一条
+        warning（人格 + 命中种类，不含回复正文），并在
+        ``COMPLIANCE_MAX_RETRIES=1`` 时重试一次：同一段组装对话末尾追加
+        【角色提醒】system 块，温度按 ``COMPLIANCE_TEMPERATURE_BUMP`` 提升
+        （参数构建见 :func:`build_retry_params`）。重试结果**无条件返回**
+        ——不再检测、不循环；重试仍失守的回复照常进入协议解析与落回合。
+
+        工具循环分支的重试请求只带组装消息与提醒块、不携带工具面：工具步
+        是循环内部状态，本次重写的是最终可见文本，不需要重新执行工具。
+
+        Args:
+            messages: 组装结果消息序列（重试请求的基底——不含工具循环内部
+                的 assistant 调用轮与 tool 反馈轮）。
+            raw_content: 网关返回的原始回复文本（含可能的协议标签）。
+            state: 会话状态（卡片人格名进提醒块——与角色契约同名；人格
+                ID 进日志与请求参数）。
+            intimacy_level: 本轮关系摘要的亲密等级（0-3；None = 摘要不可用）
+                ——重试请求沿用同一路由输入，避免重试回合被换到另一条
+                通道。
+
+        Returns:
+            最终采用的原始回复文本（未命中 / 守卫关闭 / 重试禁用时为入参
+            原样；命中且重试时为重试请求的回复文本）。
+        """
+        if not self._compliance_settings.enabled:
+            return raw_content
+        signal = detect_assistant_violation(
+            raw_content, threshold=self._compliance_settings.threshold
+        )
+        if not signal.violated:
+            return raw_content
+        logger.warning(
+            "人格输出失守（助手腔），触发强化重试: persona_id={}, score={:.2f}, kinds={}",
+            state.persona_id,
+            signal.score,
+            [reason.kind.value for reason in signal.reasons],
+        )
+        if self._compliance_settings.max_retries < 1:
+            return raw_content
+        retry_messages = [
+            *messages,
+            ChatMessageModel(
+                role=ChatMessageRole.SYSTEM,
+                content=render_compliance_nudge(state.card.name),
+            ),
+        ]
+        response: ChatResponseModel = await self._gateway.chat_by_role(
+            ModelRole.CHAT,
+            retry_messages,
+            build_retry_params(
+                None, temperature_bump=self._compliance_settings.temperature_bump
+            ),
+            persona_id=str(state.persona_id),
+            purpose=CHAT_PURPOSE,
+            intimacy_level=intimacy_level,
+        )
+        return response.content
+
     async def _tool_loop(
         self,
         messages: Sequence[ChatMessageModel],
@@ -1210,6 +1437,7 @@ class ChatService:
         binding: tuple[list[ToolDefinitionModel], ToolExecutorFace],
         *,
         sender_provenance: MemoryProvenance = MemoryProvenance.OWNER,
+        intimacy_level: int | None = None,
     ) -> str:
         """有界工具循环（返回最终回复文本；机械镜像 duty_service._tool_loop）。
 
@@ -1232,6 +1460,9 @@ class ChatService:
             binding: 工具面绑定（定义列表 + 执行面——reply 分派传入）。
             sender_provenance: 本轮发送者来源分级（缺省 owner——私聊 /
                 本地入口；群聊 peer 会剔除自编辑工具）。
+            intimacy_level: 本轮关系摘要的亲密等级（0-3；None = 摘要不可用
+                ——逐次网关调用原样透传，通道选择在 llm 网关完成；工具循环
+                的每一步与收尾调用保持同一路由输入）。
 
         Returns:
             最终回复文本（空串 = 模型未产出——调用方归
@@ -1256,6 +1487,7 @@ class ChatService:
                     tools=active_definitions or None,
                     persona_id=persona_id,
                     purpose=CHAT_PURPOSE,
+                    intimacy_level=intimacy_level,
                 )
                 if not response.tool_calls:
                     return response.content.strip()
@@ -1288,6 +1520,7 @@ class ChatService:
                 loop_messages,
                 persona_id=persona_id,
                 purpose=CHAT_PURPOSE,
+                intimacy_level=intimacy_level,
             )
             return final_response.content.strip()
         finally:
@@ -1525,6 +1758,57 @@ class ChatService:
                 "人物事实读取失败（本轮不注入人物事实块）: persona_id={}", state.persona_id
             )
             return []
+
+    async def _current_relationship(
+        self, state: ChatSessionStateModel
+    ) -> RelationshipSummaryModel | None:
+        """派生本轮关系进展摘要（compose 关系进展块注入面）。
+
+        运行判定：持久化会话已落库 + 事实读取面已接线（与人物事实同轴——
+        关系摘要依赖事实库；纯内存形态零附加 I/O，未接线形态整块跳过）。
+        读取面经 ``facts_reader.list_facts`` 取关系类现行事实（类别 =
+        ``relationship``、状态 = ``active``、页大小 = 阈值表扫描上限），
+        聚合由 :func:`~packages.harness.persona.relationship.
+        build_relationship_summary` 完成（确定性纯函数，``now_ms`` 在此处
+        注入——模块内不读系统时钟）。
+
+        降级语义（锁定）：读取 / 派生异常记 warning 并降级为空摘要
+        （stranger / 0 / 零事件）——关系摘要不阻断回复；空事实同样产出
+        空摘要并照常注入（关系状态是恒注入面）。
+
+        Args:
+            state: 会话状态。
+
+        Returns:
+            关系进展摘要；读取面未接线 / 未落库时为 None（组装链跳过整块）。
+        """
+        if self._facts_reader is None or self._session_service is None or state.session_id is None:
+            return None
+        now_ms = time_utils.now_ms()
+        try:
+            async with session_scope() as db_session, bind_persona_context(state.persona_id):
+                page = await self._facts_reader.list_facts(
+                    db_session,
+                    FactQueryDTO(
+                        category=RELATIONSHIP_FACT_CATEGORY,
+                        status=PersonaFactStatus.ACTIVE,
+                        limit=self._relationship_thresholds.event_scan_limit,
+                    ),
+                )
+            return build_relationship_summary(
+                page.items,
+                now_ms=now_ms,
+                thresholds=self._relationship_thresholds,
+            )
+        except Exception:  # best-effort：关系摘要失败不阻断回复链路（降级空摘要）
+            logger.opt(exception=True).warning(
+                "关系进展派生失败（本轮降级为空摘要）: persona_id={}", state.persona_id
+            )
+            return build_relationship_summary(
+                (),
+                now_ms=now_ms,
+                thresholds=self._relationship_thresholds,
+            )
 
     async def _current_core_memory(
         self, state: ChatSessionStateModel

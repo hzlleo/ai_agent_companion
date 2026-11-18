@@ -84,18 +84,19 @@
 | 切片 | 内容 | 状态 |
 |---|---|---|
 | R2a 地基与感官 | ①admin Bearer 鉴权（豁免 health/QQ webhook）②人格多激活重构（is_primary_marker 唯一键/迁移0008/真引擎重验）③ConfigSectionAdmin 通用基座 ④搜索双 provider（博查+智谱）+chat 工具循环+预算闸+usage search ⑤browser-sidecar 独立树（七工具/SSRF 链/漂移门36项）⑥rhythm 节律层+意图快径 ⑦通道协议 v2（attachments/silent/synthetic） | ✅ merged（PR #10，`fef2b0e`） |
-| R2b 人格表达 | ①世界书高级（depth/recursive/groups/probability/cooldown）②性格组件库（33组件×8原型预设+导入API+冲突UI，DTO 68组）③内心独白协议+轻情绪引擎（8维/M层）④swipes 变体（迁移0010）⑤提醒（ff_reminders 迁移0011+扫描作业）+常备指令 | ✅ 代码完成，**PR #11 OPEN（未合并）**，分支 `feat/r2b-persona-expression` 最新 `c65b930` |
-| R2c 记忆关系 | c1 管线闭环+生命周期（迁移0012/索引真接线/归档/审计二审整改）✅`99317c6`；c2 人物画像事实链（迁移0013/facts 域/梦境提取阶段/纠错闭环）✅`0880cc1`；c2b provenance 分级紧急修（PEER 枚举/群聊 peer 落档/梦境双排除/skipped_peer 统计/证据面纵深防御）✅ 已实现并全量验收；c3 SKILL层+历史挖矿（迁移 0014 `ff_persona_skills` / `SkillsService` / 梦境 skills 提取阶段 / compose 相关技能块 / API+面板+文档）✅ 代码完成、全门禁绿；c4 自编辑核心记忆+溯源闸（迁移 0015 `ff_core_memory_blocks` / `ff_core_memory_revisions` / `CoreMemoryService` / `edit_core_memory` 工具 + 发送者来源分级结构性工具闸 / compose【自我认知】块 / API+面板+文档）✅ 代码完成、全门禁绿（含活 SeekDB 0015 round-trip）；c5 终验PR —— **待做** | 🔄 进行中 |
-| R2-defense | 丙+丁：D1 结构隔离 + 宪章五条 + nonce 定界、D2 注入检测 + 角色内反击（毒舌 / 温柔 / 傲娇）、D3 peer 记忆免疫与来源标注、D4 38 条红队回归集 | ✅ 代码完成、全门禁绿（2026-11；`INJECTION_*` 示例模板生成待主 Agent 补齐） |
-| R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | ⏳ 排 R2-defense 后 |
-| R2d 心流社交 | 心流门控/群聊多人格/声纹/表情包库+VLM标注 | ⏳ |
+| R2b 人格表达 | ①世界书高级（depth/recursive/groups/probability/cooldown）②性格组件库（33组件×8原型预设+导入API+冲突UI，DTO 68组）③内心独白协议+轻情绪引擎（8维/M层）④swipes 变体（迁移0010）⑤提醒（ff_reminders 迁移0011+扫描作业）+常备指令 | ✅ merged（PR #11 → main `6b54b2a`） |
+| R2c 记忆关系 | c1 管线闭环+生命周期（迁移0012/索引真接线/归档/审计二审整改）；c2 人物画像事实链（迁移0013/facts 域/梦境提取阶段/纠错闭环）；c2b provenance 分级紧急修（PEER 枚举/群聊 peer 落档/梦境双排除/skipped_peer 统计/证据面纵深防御）；c3 SKILL层+历史挖矿（迁移 0014 `ff_persona_skills` / `SkillsService` / 梦境 skills 提取阶段 / compose 相关技能块 / API+面板+文档）；c4 自编辑核心记忆+溯源闸（迁移 0015 `ff_core_memory_blocks` / `ff_core_memory_revisions` / `CoreMemoryService` / `edit_core_memory` 工具 + 发送者来源分级结构性工具闸 / compose【自我认知】块 / API+面板+文档，含活 SeekDB 0015 round-trip）；c5 终验 PR | ✅ merged（PR #12 → main `3872504`） |
+| R2-defense | 丙+丁：D1 结构隔离 + 宪章五条 + nonce 定界、D2 注入检测 + 角色内反击（毒舌 / 温柔 / 傲娇）、D3 peer 记忆免疫与来源标注、D4 38 条红队回归集 | ✅ merged（PR #13 → main `7fe68a0`；`INJECTION_*` 与 compliance 示例模板生成已并入主线） |
+| R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | ✅ 代码完成、PR #15 OPEN（`b5846c0`）；甲套件 core + 组件库A/成熟度分层 + 关系连续性A + 乙分轨已全门禁绿；**剩余仅「示例台词 few-shot」** |
+| R2d 心流社交 | R2d-1 心流门控（`FLOW_` env 面——判定矩阵 / 连发合并 / 延迟批次经调度器 / 关系与节律输入）+ 群聊多人格（`GROUP_PERSONA_` env 面——轮转 / 冷却 / 重复抑制 / 人格会话归属）；声纹 / 表情包库+VLM标注待后续 | 🔄 R2d-1 代码完成（本分支；全门禁见第 5 节） |
 | R2e 通道扩展 | 企微智能机器人（长连接）/GUI 微信容器化（PoC 门）/抖音 web（同底座）/表情包收发/Canvas | ⏳ |
 | R2f 实时语音 | 独立全双工会话（VAD+流式ASR+句级TTS+打断），允许溢出 R3 | ⏳ |
 | R3 | 安全/防穿透/性能深度审计版（独立版本）：admin 鉴权已前置完成，余项：提示注入纵深/SSRF/SeekDB DSL 注入/密钥治理/限流背压/性能基线 | ⏳ |
 
 **当前分支状态**：
-- `feat/r2b-persona-expression`（`c65b930`，PR #11 OPEN）
-- `feat/r2c-memory-relationships`（基于 `c65b930` 的堆叠分支；`99317c6` c1、`0880cc1` c2 已推送；c2b / c3 / c4 在工作区未提交）—— PR #11 合并后需 `git rebase main` 收敛再开 R2c PR。
+- main：R2b（PR #11 → `6b54b2a`）、R2c（PR #12 → `3872504`）、R2-defense（PR #13 → `7fe68a0`）、logprobs 通道（PR #14 → `1305420`）已合并。
+- `feat/r2b-plus-intimacy`：PR #15 OPEN（`b5846c0`），承载 R2b+ 甲/乙/组件库/关系连续性；剩余仅示例台词 few-shot。
+- 本机工作区在 `feat/r2b-plus-intimacy` 分支上堆叠 R2d-1 改动（未提交/未推送，以本台账第 5 节为准）。
 
 ## 4. 全部拍板记录（原文语义）
 
@@ -130,25 +131,25 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2106 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 2385 passed）
 cd backend && pixi run coverage-gates       # 23 组 ≥80% enforce
 cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 6 用例（迁移链/并发唯一键/行锁/混合检索）
-cd frontend && pixi run test / coverage / lint / build   # 555 passed
+cd frontend && pixi run test / coverage / lint / build   # 564 passed
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
 根级：pixi run gen-examples（三件套再生成）、pixi run gates
 ```
 - SeekDB 本地容器：`docker run -d --name seekdb-smoke -p 2881:2881 oceanbase/seekdb:1.4.0-100000172026082615`（root 空密码；就绪约 5-60s；网络中断后需重启）。
-- DTO 契约门：`scripts/export_dto_schemas.py` + `frontend/src/test/contract/dtoSchemas.json`（当前 78 组）；改后端 wire DTO 必须 `pixi run export-dto-schemas` 再提交，改前端 types 契约测试即红。
+- DTO 契约门：`scripts/export_dto_schemas.py` + `frontend/src/test/contract/dtoSchemas.json`（当前 79 组）；改后端 wire DTO 必须 `pixi run export-dto-schemas` 再提交，改前端 types 契约测试即红。
 - 漂移门：`scripts/check_sandbox_dtos_drift.py`（36 项，三树镜像契约 byte 级）。
 - 沙盒树：`docker/tool-sandbox-agent`、`docker/browser-sidecar`（独立 pixi；CI 有对应 job；browser 镜像 ~2GB 不在 CI 构建）。
 - 模型子模组：`models/`（ModelScope；权重 lfs 延迟拉取；ModelScope UA 墙：`git config http.https://www.modelscope.cn/.userAgent "git/2.47.0"`）。
 - 测试环境：全异步 asyncio_mode=auto；SQLite 共享 fixture；不依赖真实配置；conftest 硬覆盖 env。
 - 关键模块坐标：harness/{core,config,database,pools,llm,usage,persona,chat,memory,channels,tools,duty,scheduler,voice,multimodal,search,emotion,intent,rhythm,reminders}、app/api/{personas,memories,usage,models,voice,look_at,facts,reminders,directives,skills,core_memory,health,channels_qq}、前台 pages/{personas,memories,usage,models}。
 
-**LLM 网关强制 logprobs 字段**：新版 vLLM 仅在请求显式携带 `logprobs/top_logprobs/prompt_logprobs` 时回传 logprob 数据（置信度计算输入面）——网关全请求（含流式/工具）固定携带（缺省 20/20，构造旋钮 None 可省略）；响应侧解析为 `content_logprobs/prompt_logprobs` 并派生 `mean_token_logprob/confidence`（exp 均值，观测信号）。
+**LLM 网关强制 logprobs 字段**：新版 vLLM 仅在请求显式携带 `logprobs/top_logprobs/prompt_logprobs` 时回传 logprob 数据（置信度计算输入面）——网关全请求（含流式/工具）固定携带（缺省 20/20，构造旋钮 None 可省略）；响应侧解析为 `content_logprobs/prompt_logprobs` 并派生 `mean_token_logprob/confidence`（exp 均值，观测信号）。已实现于 `feat/llm-confidence-logprobs`（`08dd81e`）；请求构造测试 7 例（含流式 / 工具分支 / 旋钮略省）全异步。
 
-### 当前切片：强制 logprobs 字段修正（feat/llm-confidence-logprobs）
+### 已完成切片：R2c 记忆能力（核心记忆 + 关系进展 + 前端面板）——已合并（PR#12，`3872504`）
 **已完成**：
 1. 迁移 0015：`ff_core_memory_blocks`（四块唯一键 + persona 索引）与 `ff_core_memory_revisions`（block_id 级联外键 + block_id / ts_ms 索引；append-only）；降级先删修订表，block_id 索引随表清理（5320 方言面已真引擎验证）。
 2. `harness/persona/core_memory.py` / `core_memory_models.py` / `core_memory_orm.py`：四块懒建种子 / 主人编辑（版本 + 修订 + 锁定开关）/ 人格自编辑（锁定与目标全文超限可读拒绝、append 换行追加）/ 修订倒序读取 / `register_core_memory_tools`（`edit_core_memory` + `core_memory_session_id_var`）。
@@ -157,7 +158,47 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 5. 前端 `CoreMemoryPanel`（四块编辑卡 + 锁定 + 修订抽屉）+ types/api/hooks/msw/测试；DTO fixture 78 组双侧重生成。
 6. docs：persona.md 核心记忆一节 / chat.md 链路与工具闸 / README 行 / 本台账。
 **验证**：后端 2106 passed / 23 组覆盖率 / mypy 148 文件零问题 / ruff / 门禁集（36 项漂移 + noqa 冻结 + 注释门 + 棘轮）/ 活 SeekDB 6 用例；前端 555 passed / coverage / lint / build。
-**剩余**：c5 终验 PR（分支收敛 + PR 描述）。
+**剩余**：无。合并后堆叠分支已按 `rebase --onto origin/main <base>` 收敛：R2-defense 并入 main `7fe68a0`、logprobs 并入 main `1305420`、R2b+ 为 PR #15（`b5846c0`，OPEN）。
+
+### 已完成切片：R2b+ 关系连续性 A（关系进展摘要注入）
+**已完成**：
+1. `harness/persona/relationship_models.py` / `relationship.py`：关系进展 Model Classes（阶段 / 事件 / 摘要 / 锁定阈值表）与确定性纯逻辑——证据唯一来源为事实层 `category=relationship` 且 `status=active` 的现行记录（读 `facts_models` 现成类别 / 置信度 / `updated_at`，不新增存储、不迁移、不改 DTO）；`importance = confidence × 10`、`score = Σ importance × 衰减(年龄分档：≤7d 1.0 / ≤30d 0.75 / ≤90d 0.5 / ≤365d 0.25 / 更早 0.1)`、阶段阶梯 stranger<2.0≤familiar<10.0≤close<24.0≤intimate、`intimacy_level` 夹取 0-3；时间一律由调用方注入 `now_ms`（模块内不读系统时钟）；人格 / 预设 `intimacy_level` 仅存在于生成期，运行期只输出事实派生值（构建函数保留 `intimacy_ceiling` 形参，决策与边界写进模块文档）。
+2. `chat/prompts.py`：`RELATIONSHIP_BLOCK_TEMPLATE` + 事件标题 / 事件行 / 边界行模板 + `render_relationship_block`（中文阶段称谓、最近 5 条事件、边界行、1200 字符硬帽与确定性截断）；`PROMPTS_VERSION` 1.7.0 → 1.8.0，既有模板字节零变更（byte-lock 仅增补四条新模板）。
+3. `chat/service.py`：compose 链在【自我认知】之后、【相关技能】之前恒注入【关系进展】块（后续块序号顺移，链路十六段）；`reply` / `stream_reply` / 工具循环 / 合规重试分支全部一致携带；关系事实经既有 `FactsService.list_facts` 读取（公共池 + 既有异步面），派生失败记 warning 并降级为空摘要（初识）、不阻断回复；`ChatService` 可注入 `RelationshipThresholdsModel`（缺省 = 锁定表），无新 env 键。
+4. 测试：`test_relationship_summary.py`（派生矩阵 31 例（23 个用例含参数化）：空事实 / 混类与历史过滤 / 阶梯上下沿 / 衰减档边界与未来时间戳 / 夹取与阶段回落 / 事件裁剪顺序 / 边界上限 / 确定性 / 时间轴拒绝 / 阈值表不变式）+ `test_chat_relationship.py`（渲染 7 例 / 链序 2 例 / 服务集成 8 例：正常注入 / 阈值注入 / 读失败降级 / 未接线 / 纯内存零 I/O / 流式 / 工具循环 / 合规重试）+ prompts byte-lock 增补。
+5. docs：persona.md 关系进展摘要一节（来源 / 公式与阈值表 / 衰减档 / 夹取语义 / 注入位置 / 降级行为 / JSON 示例）、chat.md 组装链十六段完整重写与关系进展块示例、backend README 行、本台账状态行。
+**验证**：见下方门禁节（定向用例 + 全量测试 + 覆盖率 + lint / mypy / 门禁链）。
+
+### 已完成切片：R2b+ 组件库 A + 成熟度分层（亲密补强）
+**已完成**：
+1. `harness/persona/trait_library.py`：`TraitMaturity`（safe/suggestive/explicit）+ 分类值域扩至十二类；组件新增 `maturity` / `sample_lines`（3-5 条 × 1-120 字符）与 `sample_speech` 装载期折叠归一；`SceneScriptSetModel`（日常/暧昧/亲密/冲突四态 × ≤6 条 × 1-200 字符）+ 预设 `intimacy_level` 0-3；`allowed_maturities_for_intimacy_level` 过滤映射 + `render_scene_scripts` 命名段渲染；生成面过滤超限组件、mes_example 24 条上限、场景脚本并入 system 提示；装载期新增示例台词条数与预设成熟度上限校验。
+2. `presets/components.yaml`：126 组件 × 十二类目（每类 ≥10）× 3 条示例台词；分布 safe 78 / suggestive 33 / explicit 15。`presets/presets.yaml`：11 预设（8 既有 + 同窗旧友 / 合租室友两个 SFW 原型 + 旧识恋人 explicit 亲密包）× 四态场景脚本 × intimacy_level（10 个 ≤2，亲密包为 3）。
+3. `dtos.py` / `app/api/personas.py`：导入请求新增 `intimacy_level_override`（0-3，越界 422）并接入生成期覆盖；不新增人格字段。
+4. 前端：类型 / msw / 画廊组件成熟度徽章 + 预设亲密等级上限 + 生成对话框亲密等级选择器（默认预设值、中文提示、过滤预览、提交携带 override）+ 测试。
+5. docs：persona.md 组件 schema（含 `sample_speech` 迁移说明）/ 成熟度映射表 / 场景脚本语义 / 计数；README / 本台账；DTO fixture 79 组双侧重生成。
+**验证**：后端 2258 passed / 23 组覆盖率（harness/persona 94.9%）/ mypy 153 文件零问题 / ruff / 门禁链全绿（注释门 + noqa 冻结 + 沙盒漂移 36 + sync 棘轮 0）/ DTO fixture 79 组；前端 559 passed / coverage（96.23% statements）/ lint / build。
+**剩余**：示例台词 few-shot 注入（chat 提示面）/ 乙分轨 roles:intimate 端点 / 关系连续性 A。
+
+### 已完成切片：R2b+ 乙分轨（亲密回复独立模型通道 roles:intimate）
+**已完成**：
+1. `harness/llm/intimate_models.py`：`IntimateChannelConfig`（`LLM_INTIMATE_` env 面：enabled / base_url / api_key / model / temperature / min_intimacy_level；默认关闭、必填项判定与缺项清单）+ `IntimateRouteReason` / `IntimateRouteDecisionModel`（裁决契约，模型与逻辑分文件、禁裸 dict）。
+2. `harness/llm/intimate_router.py`：确定性纯函数——`evaluate_intimate_route`（开关 → 配置齐全 → 摘要可用 → 阈值，先命中者结论）/ `build_intimate_entry`（条目键 `llm-intimate-channel`）/ `build_intimate_request_params`（通道温度只补调用方未设置的字段）/ `log_incomplete_intimate_config`（半配置单次告警文案）。
+3. `harness/llm/gateway.py`：`chat_by_role` / `stream_by_role` 新增 `intimacy_level` 输入并按裁决切换端点；命中路径复用公共 HTTP 池 + 条目池（专属信号量 / 熔断器 / 用量条目名），wire 凭据直接取通道配置不回落全局密钥；半配置 warning 单次闩；调用失败按既有 `LLM_*` 映射上抛，不静默换道。
+4. `harness/chat/service.py`：`reply` / `stream_reply` / 工具循环（含收尾调用）/ 合规强化重试一致传递本轮关系摘要等级；摘要未接线传 None、读取失败降级空摘要传 0——两者均回退默认通道。
+5. 配置面：`scripts/generate_examples_env.py` 新增 LLM.INTIMATE 分节并再生成 `backend/.env.example`；`wizard_generators.py` 新增「亲密回复通道配置」步骤（前缀重合按定义顺序首次命中归属，模板键不在两步重复）。
+6. 测试：`test_llm_intimate_channel.py`（配置面 / 九格路由矩阵 / 阈值覆盖 / 越界拒绝 / 未启用请求字节一致 / 双端点命中与消息工具面不变 / 温度优先级 / 流式命中 / 半配置单次 warning / 失败不换道）+ `test_chat_intimate_channel.py`（reply / stream / 工具循环 / 合规重试一致性、读取失败降级、未接线与纯内存 None）。
+7. docs：llm.md「亲密通道」整节（键表 / 启用与半配置策略 / 路由矩阵 / 链路 / 请求示例 / 失败语义 / 默认关闭）、chat.md 路由输入说明、backend README 行、本台账。
+**验证**：后端 2339 passed / 23 组覆盖率（harness/llm 98.5%）/ mypy 157 文件零问题 / ruff / 门禁链全绿（注释门 + noqa 冻结 + 沙盒漂移 36 + sync 棘轮 0）；示例模板再生成 byte-stable（改动仅 LLM.INTIMATE 分节）；既有测试仅两处假网关补 `**kwargs`（红队 / chat_service 的调用面契约同步）。
+
+### 已完成切片：R2b+ 甲套件 core（人格输出契约 + 合规守卫）
+**已完成**：
+1. `chat/prompts.py`：`PERSONA_CONTRACT_TEMPLATE`（角色契约五条）+ `COMPLIANCE_NUDGE_TEMPLATE`（重试提醒）+ 渲染函数与独立版本常量；PROMPTS_VERSION 1.7.0（1.6.0 → 1.7.0）；既有模板字节零变更。
+2. `chat/compliance_models.py` / `compliance_guard.py`：助手腔四类规则表（AI 自我声明 2.0 / 客服话术 1.5 / 道歉开场 1.0 / 短回复总结腔 1.0；阈值 2.0）+ 加权检测（确定性、命中片段截断留证）+ 重试采样参数构建（0.8 基线、2.0 夹取、克隆保留其余字段）+ `COMPLIANCE_` env 面（enabled / threshold / temperature_bump / max_retries）。
+3. `chat/service.py`：compose 链宪章之后、心情块之前恒注入角色契约（后续块序号顺移一位）；`reply` 在网关响应后、输出协议解析前检测助手腔并做一次强化重试（末尾角色提醒 system 块 + 提升温度、结果无条件采用、不循环；工具循环分支重试不带工具面与 tool 轮；`max_retries=0` 只记日志）；`stream_reply` 不重试（流式边界文档化）。
+4. 测试：`test_compliance_guard.py`（25 用例：四类信号矩阵 / 保守阈值 / 正常台词零误报 / 协议标签之后的开场判定 / 重试参数 / env 面）+ `test_chat_compliance.py`（11 用例：契约链位置 / 一次重试携带提醒与提升温度 / 两次违规只重试一次 / 停用与零重试 / 重试文本走协议解析 / 工具循环分支 / 流式不重试）+ prompts byte-lock 增补两条。
+5. docs：chat.md「人格输出契约与合规守卫」整节（契约五条 / 规则矩阵 / 重试语义 / 请求 JSON / 流式边界 / `COMPLIANCE_` env 表）+ backend README 行 + 本台账。
+**验证**（主 Agent 终验）：后端 2232 passed / 23 组覆盖率（harness/chat 95.9%）/ mypy 153 文件零问题 / ruff / 门禁链全绿（注释门 + noqa 冻结 + 沙盒漂移 36 + sync 棘轮 0）/ 活 SeekDB 6 用例 / DTO fixture 零变更（78 组）；既有测试零改动（prompts 锁仅增补）。
+**办结**：`COMPLIANCE_*` 四键已由主 Agent 纳入 `.env.example` / Setup Wizard 生成器（+15 行，闭包测试 51 绿）；`test_llm_logprobs.py` 4 条同步用例已在 logprobs 分支修正（等量重写 + 原文语义不动）。已提交并推送 `feat/r2b-plus-intimacy`（`60eee37`，堆叠于 `08dd81e` → `82cb052`）。
 
 ### 已完成切片：R2-defense（丙+丁——提示注入防线）
 **已完成**：
@@ -168,7 +209,21 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 5. 测试：`test_injection_guard.py`（机制）+ `test_prompt_injection_red_team.py`（38 条模板 / 20 阳性 / 18 阴性 + 服务层开关与流式）+ prompts byte-lock 增补；既有测试仅按新契约更新 3 处断言（tool 反馈包裹正文、resume 续聊当轮包裹）。
 6. docs：`backend/defense.md`（攻击面 × 防线 × 缺口矩阵 / 包裹格式 / 检测矩阵 / JSON 示例 / env 表）、chat.md / channels.md / backend README。
 **验证**：后端 2189 passed / 23 组覆盖率（harness/chat 95.5%）/ mypy 151 文件 / ruff / 注释门 + 棘轮 + noqa 冻结 + 漂移 36 / 活 SeekDB 6 用例；前端未改（DTO fixture 零变更）。
-**剩余**：`INJECTION_*` 四键纳入 `.env.example` / Setup Wizard 生成器（脚本不在本切片允许清单）；R2b+ 的 compliance_guard 联动按排期衔接。
+**办结**：`INJECTION_*` 四键已由主 Agent 纳入 `.env.example` / Setup Wizard 生成器（已验证两处各 4 键）；R2b+ 的 compliance_guard 联动已落地（见上节）。
+
+### 已完成切片：R2d-1 心流门控 + 群聊多人格（未提交工作区）
+**已完成**：
+1. `chat/flow_models.py` / `chat/flow_gate.py`：门控 Model Classes（`FLOW_` env 面：连发窗口 / 合并静默与上限 / 回复最小间隔 / 积压阶梯与封顶 / 排程丢失宽限）与全纯函数判定——裁决 `reply | defer | merge | skip`、理由枚举、`now_ms` 由调用方注入；判定矩阵锁定（机器事件不回复、睡眠窗口延迟、连发合并、密度节流、积压延迟、亲近 / 亲密关系优先、节律拟人延迟），连发合并保留最近条目并报告丢弃条数。
+2. `chat/persona_rotation_models.py` / `chat/persona_rotation.py`：群聊多人格 Model Classes（`GROUP_PERSONA_` env 面：开关 / 应答人数上限 / 冷却）与确定性选择纯函数——冷却排除、上一轮未发言者优先（轮转）、重复兜底、全冷却选最早应答者；单聊与功能关闭返回空选择。
+3. `channels/channel_service.py`：门控接入入站回复管线（判定 → 即时回复 / 调度器一次性作业排程 / 不回复）；延迟批次在同一 per-chat 锁内执行，静默窗口未满或睡眠窗口未结束按剩余时长重排，排程失败与调度器缺失降级立即回复；群聊多人格选择接线（`list_addressable` → 逐人格独立会话 `channel:<ch>:<chat>:persona:<id>` → 逐条投递，逐人格失败隔离）；单聊与非启用形态保持既有单人格即时回复语义。
+4. `scheduler.py`：新增一次性延迟作业面 `schedule_once(name, factory, delay_ms)`（到期先移除再执行——不重复触发、同名可复用；负延迟 / 在途重名 fail loud）。
+5. app 装配：`Settings.flow` / `Settings.group_persona` 分节；`_startup_channels` 注入节律门面 / 群聊配置 / 调度器提供者 / 关系摘要查询（关系类现行事实派生）；`_startup_scheduler` 在仅 `FLOW_ENABLED` 需要延迟面时也启动调度器。
+6. 配置面：`scripts/generate_examples_env.py` 新增 FLOW / GROUP_PERSONA 分节并再生成 `backend/.env.example`；`wizard_generators.py` 新增「心流门控配置」「群聊多人格配置」步骤。
+7. 前端：会话页对群聊多人格人格会话显示「群聊多人格 · 人格#N」徽标（会话标题解析 helper + msw/测试）；类型面零 wire 变更（未新增 DTO）。
+8. 测试：`test_flow_gate.py`（判定矩阵 / 合并裁剪 / 状态迁移）、`test_persona_rotation.py`（轮转 / 冷却 / 兜底 / 上限）、`test_scheduler_once.py`（一次性作业）、`test_channel_router_flow.py`（延迟 / 合并 / 降级 / 关系优先 / 失败隔离）、`test_channel_router_group.py`（轮转 / 多应答 / 冷却 / 失败隔离 / 回退）。
+9. docs：chat.md 心流门控与群聊多人格两节（矩阵 / 配置 / JSON 示例 / 链路）、channels.md 接线段落与归属语义、rhythm.md 消费面、persona.md 选址说明、config.md 分节、backend README、本台账。
+
+**验证**：后端 2385 passed / 23 组覆盖率（harness/channels 96.5%、harness/chat 96.4%）/ mypy 161 文件零问题 / ruff / 门禁链全绿（注释门 + noqa 冻结 + 沙盒漂移 36 + sync 棘轮 0）；前端 564 passed / coverage 96.24% statements / lint / build；示例模板再生成 byte-stable。
 
 ## 6. 遗留与部署台账（非阻塞）
 

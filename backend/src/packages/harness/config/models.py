@@ -66,6 +66,8 @@ from urllib.parse import quote_plus
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from packages.harness.chat.flow_models import FlowGateSettings
+from packages.harness.chat.persona_rotation_models import GroupPersonaSettings
 from packages.harness.config.model_entry import LlmModelEntry, ModelRole
 from packages.harness.core.logging_models import LoggingConfig
 from packages.harness.intent.intent_models import IntentSettings
@@ -1000,6 +1002,13 @@ class Settings(BaseSettings):
         rhythm: 拟人节律配置（默认关闭——RHYTHM_ env 面；物理定义在
             :class:`packages.harness.rhythm.rhythm_models.RhythmSettings`，
             此处聚合引用——models 与 logic 分离约定不变）。
+        flow: 心流门控配置（默认关闭——FLOW_ env 面；物理定义在
+            :class:`packages.harness.chat.flow_models.FlowGateSettings`，
+            此处聚合引用）。
+        group_persona: 群聊多人格应答配置（默认关闭——GROUP_PERSONA_
+            env 面；物理定义在
+            :class:`packages.harness.chat.persona_rotation_models.
+            GroupPersonaSettings`，此处聚合引用）。
         intent: 意图快径配置（默认开启——INTENT_ env 面；物理定义在
             :class:`packages.harness.intent.intent_models.IntentSettings`，
             此处聚合引用）。
@@ -1021,6 +1030,8 @@ class Settings(BaseSettings):
     voice: VoiceSettings = VoiceSettings()
     search: WebSearchSettings = WebSearchSettings()
     rhythm: RhythmSettings = RhythmSettings()
+    flow: FlowGateSettings = FlowGateSettings()
+    group_persona: GroupPersonaSettings = GroupPersonaSettings()
     intent: IntentSettings = IntentSettings()
     env: str = Field(default="local", description="运行环境标识（local / dev / prod）")
 

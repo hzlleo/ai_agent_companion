@@ -138,6 +138,7 @@ from packages.harness.persona.dtos import (
     TraitLibraryDTO,
 )
 from packages.harness.persona.trait_library import (
+    SceneScriptSetModel,
     TraitComponentModel,
     TraitPresetModel,
 )
@@ -243,6 +244,7 @@ def build_manifest() -> list[SchemaExportEntry]:
         # persona 域——特质组件库与导入面（R2b-2）。
         SchemaExportEntry("TraitComponentModel", TraitComponentModel, "TraitComponent", _FRONTEND_PERSONA),
         SchemaExportEntry("TraitPresetModel", TraitPresetModel, "TraitPreset", _FRONTEND_PERSONA),
+        SchemaExportEntry("SceneScriptSetModel", SceneScriptSetModel, "TraitSceneScriptSet", _FRONTEND_PERSONA),
         SchemaExportEntry("TraitLibraryDTO", TraitLibraryDTO, "TraitLibrary", _FRONTEND_PERSONA),
         SchemaExportEntry("PersonaImportRequestDTO", PersonaImportRequestDTO, "PersonaImportRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("PersonaImportResultModel", PersonaImportResultModel, "PersonaImportResult", _FRONTEND_PERSONA),

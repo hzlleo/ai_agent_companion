@@ -20,6 +20,7 @@ import { formatEpochMs } from '@/lib/datetime'
 import { useDeleteSession, useSessionsList } from '@/hooks/useMemoriesApi'
 import type { ChatSessionSummary } from '@/types/memory'
 import { SessionDetailDialog } from './SessionDetailDialog'
+import { parseGroupSessionTitle } from './groupSessionDisplay'
 
 export interface SessionsTabProps {
   /** 目标人格主键（undefined = 当前激活人格）。 */
@@ -84,10 +85,19 @@ export function SessionsTab({ personaId }: SessionsTabProps) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sessions.map((session) => (
+              {sessions.map((session) => {
+                const groupLane = parseGroupSessionTitle(session.title)
+                return (
                 <TableRow key={session.id} data-testid={`session-row-${session.id}`}>
                   <TableCell>{session.id}</TableCell>
-                  <TableCell className="font-medium">{session.title}</TableCell>
+                  <TableCell className="font-medium">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span>{session.title}</span>
+                      {groupLane.isGroupLane && (
+                        <Badge variant="secondary">群聊多人格 · 人格#{groupLane.personaId}</Badge>
+                      )}
+                    </div>
+                  </TableCell>
                   <TableCell>
                     <Badge variant="secondary">{session.message_count} 条</Badge>
                   </TableCell>
@@ -117,7 +127,8 @@ export function SessionsTab({ personaId }: SessionsTabProps) {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                )
+              })}
             </TableBody>
           </Table>
           <div className="flex items-center justify-center border-t border-[var(--color-border)] p-4">

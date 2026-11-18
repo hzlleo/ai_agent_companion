@@ -78,6 +78,7 @@ class FakeGateway:
         persona_id: str | None = None,
         purpose: str | None = None,
         request_id: str | None = None,
+        **kwargs: Any,
     ) -> ChatResponseModel:
         """非流式假调用（记录参数）。"""
         self.chat_calls.append(
@@ -87,6 +88,7 @@ class FakeGateway:
                 "persona_id": persona_id,
                 "purpose": purpose,
                 "request_id": request_id,
+                **kwargs,
             }
         )
         if self.error is not None:
@@ -102,6 +104,7 @@ class FakeGateway:
         persona_id: str | None = None,
         purpose: str | None = None,
         request_id: str | None = None,
+        **kwargs: Any,
     ) -> AsyncIterator[ChatStreamChunkModel]:
         """流式假调用（记录参数 + 逐块产出）。"""
         self.stream_calls.append(
@@ -111,6 +114,7 @@ class FakeGateway:
                 "persona_id": persona_id,
                 "purpose": purpose,
                 "request_id": request_id,
+                **kwargs,
             }
         )
         if self.error is not None:

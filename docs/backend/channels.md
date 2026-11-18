@@ -28,12 +28,16 @@ TelegramChannelRunner（telegram/tg_runner.py）
 ChannelRouter.handle_inbound（channel_service.py）
     ① 适配器寻址（未注册 → CHANNEL_DISABLED，仅记录不抛）
     ①′ per-chat 串行化锁（asyncio.Lock——同聊天全链路串行 / 不同聊天互不阻塞）
-    ② 每聊天会话懒建（身份键 channel:chat_id——见「会话语义」）
-    ③ bind_persona_context(state.persona_id)
-    ④ ChatService.reply(state, text)          组装 → LlmGateway（role=chat）
+    ② 心流门控（FLOW_ENABLED——verdict=reply 继续；defer/merge 经中央调度器
+       一次性作业排程后返回空投递；skip 直接返回；见「心流门控」一节）
+    ③ 每聊天会话懒建（身份键 channel:chat_id——见「会话语义」）
+    ③′ 群聊多人格选择（GROUP_PERSONA_ENABLED——见「群聊多人格」一节；
+       每个应答人格使用自己的会话 channel:chat_id:persona:<id>）
+    ④ bind_persona_context(persona_id)
+    ⑤ ChatService.reply(state, text)          组装 → LlmGateway（role=chat）
                                               → 用量记账自动发生（零通道侧
                                               额外用量行——通道层不重复记账）
-    ⑤ 适配器发送 OutboundMessageModel
+    ⑥ 适配器发送 OutboundMessageModel（多人格逐条发送）
 TelegramChannelRunner.send_message（发送面适配）
     ↓ 4096 分段（见「分段规则」）
 TelegramClient（telegram/tg_client.py）
@@ -63,7 +67,102 @@ TELEGRAM_ENABLED=false 且 QQ_ENABLED=false（缺省）：no-op——零通道�
 
 ## 人格语义（锁定决策）
 
-**主人格应答缺省通道会话（多激活可寻址模型）**：会话懒建经 `ChatService.create_session(db_session=...)` 内部解析当前主人格（persona 域注册表的事务性切换不变式消费面）；已建会话按 `persona_id` 保持在位（会话级寻址——通道消息不因主人格切换而换人格）；按聊天绑定人格 / 多人格路由属后续多通道扩展交付面。`reply` 全程经 `bind_persona_context(state.persona_id)` 绑定人格上下文（PersonaMixin 表作用域——与 chat 域会话持久化同语义）。
+**主人格应答缺省通道会话（多激活可寻址模型）**：会话懒建经 `ChatService.create_session(db_session=...)` 内部解析当前主人格（persona 域注册表的事务性切换不变式消费面）；已建会话按 `persona_id` 保持在位（会话级寻址——通道消息不因主人格切换而换人格）。**群聊多人格**（`GROUP_PERSONA_ENABLED`，默认关闭）在同一群会话内按轮转 / 冷却 / 重复抑制选择应答者；每个应答人格拥有自己的持久化会话，会话行人格主键即消息应答归属（`replied_by`）。单聊语义不受影响。`reply` 全程经 `bind_persona_context(state.persona_id)` 绑定人格上下文（PersonaMixin 表作用域——与 chat 域会话持久化同语义）。
+
+## 心流门控（`FLOW_ENABLED`——被延迟 / 合并的消息走中央调度器）
+
+门控是聊天生成前的判定层：入站先经 `evaluate_flow_gate` 得到
+`reply | defer | merge | skip` 与延迟毫秒 / 理由枚举（矩阵与配置见
+[chat.md](chat.md#心流门控heartflow-gate)）。本层只负责把裁决映射到运行面：
+
+```
+FLOW_ENABLED=true
+    ↓ 入站记录（FlowChatStateModel：到达时刻 / 积压 / 待回复缓冲）
+    ↓ 节律门快照（RhythmService.gate_reply——睡眠 / 拟人延迟）
+    ↓ 关系摘要（关系类现行事实派生——仅门控启用时读取）
+    ↓ evaluate_flow_gate → verdict / delay_ms / reason
+    ├─ reply  → 继续会话路由与即时投递
+    ├─ skip   → 返回空投递结果（机器事件不落回复）
+    └─ defer / merge
+          ↓ scheduler_provider() → Scheduler.schedule_once(job, delay_ms)
+          ↓ 返回空投递结果（本消息已被排程接管）
+```
+
+延迟批次执行（`_run_flow_batch`）在**同一 per-chat 锁**内运行：睡眠窗口
+未结束或合并静默窗口未满时按剩余时长重排；否则按
+`FLOW_MERGE_MAX_MESSAGES` 保留最近条目、换行连接后进入会话路由，投递
+成功后清零积压与缓冲。调度器未就绪 / 排程失败时延迟裁决降级立即回复
+（fail-safe，记 warning）；排程标记超过 `FLOW_PENDING_GRACE_MS` 未执行
+视为任务丢失，后续入站重新排程。单条消息的所有失败仍走既有兜底隔离。
+
+门控裁决 JSON 示例：
+
+```json
+{
+  "verdict": "defer",
+  "delay_ms": 27000000,
+  "reason": "sleep_window"
+}
+```
+
+延迟批次排程观测（日志面字段）：`key`（会话身份键）、`job`（一次性作业
+名）、`delay_ms`、`used`（合并实际条数）、`dropped`（超上限丢弃条数）。
+
+## 群聊多人格（`GROUP_PERSONA_ENABLED`——选择 / 轮转 / 冷却 / 归属）
+
+启用后，群聊消息在启用人格集合（`PersonaService.list_addressable`）内
+按确定性规则选择应答者；选择逻辑在 `chat/persona_rotation.py`（纯函数，
+时间注入），本层负责会话 / 人格上下文 / 投递：
+
+```
+群聊入站
+    ↓ list_addressable（主人格在前、其余主键升序）
+    ↓ select_group_responders（冷却排除 → 上一轮未发言者优先 → 上限截断）
+    ├─ 空选择 → 回退主人格单人格路径
+    └─ 应答者列表
+          ↓ 逐人格：会话键 channel:chat_id:persona:<id> 懒建（落库标题同值）
+          ↓ bind_persona_context(persona_id) → ChatService.reply(peer)
+          ↓ 适配器逐条发送（仅首条引用原消息；其余不引用）
+          ↓ 应答记忆更新（最近应答时刻 + 上一轮应答者）
+```
+
+选择规则（锁定）：
+
+| 条件 | 结论 | 理由枚举 |
+|---|---|---|
+| 功能关闭 / 单聊 | 空选择（既有单人格路径） | `disabled` / `not_group` |
+| 无启用人格 | 空选择（回退主人格路径） | `no_candidates` |
+| 冷却外且上一轮未发言者存在 | 优先该人格 | `rotation` |
+| 可用者都刚发过言 | 允许重复（轮转退化） | `repeat_fallback` |
+| 全部处于冷却 | 选最近应答时刻最早者 | `all_cooling_fallback` |
+
+归属语义（`replied_by`）：群聊多人格模式下每个应答人格的会话标题带
+`:persona:<id>` 后缀，`ff_chat_sessions.persona_id` 即该会话全部消息的
+应答归属；消息行经会话外键归属，无需消息级冗余列，无迁移。单人格会话
+标题保持 `channel:chat_id`（管理台会话页对多人格会话显示「群聊多人格 ·
+人格#N」徽标）。
+
+配置（`GROUP_PERSONA_` env 面）：
+
+| 字段 | env 键 | 默认 | 说明 |
+|---|---|---|---|
+| `enabled` | `GROUP_PERSONA_ENABLED` | `false` | 群聊多人格开关 |
+| `max_responders` | `GROUP_PERSONA_MAX_RESPONDERS` | `1` | 单条群消息应答人数上限（1-4） |
+| `cooldown_ms` | `GROUP_PERSONA_COOLDOWN_MS` | `60000` | 同一人格两次应答的最小间隔毫秒 |
+
+选择结论 JSON 示例：
+
+```json
+{
+  "responder_persona_ids": [1, 3],
+  "reason": "rotation",
+  "cooling_persona_ids": [2]
+}
+```
+
+失败语义：逐人格隔离——单人格回复 / 投递失败记日志并继续其余人格；
+全部失败时抛首个异常，由 `handle_inbound` 既有兜底回发短中文提示
+（不因一个模型故障吞掉整轮群聊应答）。
 
 ## 会话语义（每聊天懒建 + 持久化）
 

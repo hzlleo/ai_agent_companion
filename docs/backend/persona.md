@@ -9,7 +9,7 @@
 | `models.py` | 值域枚举（可用性状态 / L-M-S 状态层 / 导入冲突策略与原因） | `PersonaStatus` / `PersonaStateLayer` / `PersonaImportConflictStrategy` / `PersonaImportReason` |
 | `chara_card.py` | chara card v2 规格模型（卡片 + 世界书，Unit 文件） | `CharaCardModel` / `CharaBookModel` / `CharaBookEntryModel` / `CharaBookPosition` |
 | `trait_library.py` | 特质组件库（组件 / 预设模型 + 确定性卡片生成 + 官方库装载，Unit 文件） | `TraitComponentModel` / `TraitPresetModel` / `generate_card_from_preset` / `load_official_presets` / `load_official_components` |
-| `presets/` | 官方库数据面（仓库数据非代码：`components.yaml` 33 组件 + `presets.yaml` 8 预设） | — |
+| `presets/` | 官方库数据面（仓库数据非代码：`components.yaml` 126 组件 × 十二类目 + `presets.yaml` 11 预设 × 四态场景脚本） | — |
 | `orm.py` | 注册表 ORM（`ff_personas` + `ff_persona_states`） | `PersonaRow` / `PersonaStateRow` |
 | `dtos.py` | 创建 / 更新 / 复制 / 记录 / 卡片 / 状态 / 查询 / 批量 / 导入 / 特质库 DTO（Unit 文件） | `PersonaCreateDTO` / `PersonaUpdateDTO` / `PersonaCopyDTO` / `PersonaRecordDTO` / `PersonaCardDTO` / `PersonaStateUpsertDTO` / `PersonaStateDTO` / `PersonaQueryDTO` / `PersonaBatchDelete*` / `PersonaImportRequestDTO` / `PersonaImportResultModel` / `PersonaImportBatch*` / `TraitLibraryDTO` |
 | `service.py` | 注册 CRUD / 事务性主人格切换 / 可寻址集 / 状态层读写 / 批量删除 / 导入（幂等 + 冲突策略）+ `bind_persona_context` 运行期绑定 | `PersonaService` / `bind_persona_context` / `canonical_card_hash` |
@@ -17,8 +17,9 @@
 | `facts.py` / `facts_models.py` / `facts_orm.py` | 人物事实（结构化事实 / 证据链 / 更正循环）服务、DTO 与 `ff_persona_facts` ORM（R2c） | `FactsService` / `FactCreateDTO` / `FactCorrectDTO` / `FactRecordDTO` / `FactQueryDTO` / `PersonaFactRow` / `PersonaFactCategory` |
 | `skills.py` / `skills_models.py` / `skills_orm.py` | 程序性技能（触发短语 / 原地版本 / 启用状态 / compose 匹配 / 梦境合并）服务、DTO 与 `ff_persona_skills` ORM（R2c） | `SkillsService` / `SkillCreateModel` / `SkillUpdateModel` / `SkillRecordDTO` / `SkillQueryDTO` / `PersonaSkillRow` / `SkillStatus` |
 | `core_memory.py` / `core_memory_models.py` / `core_memory_orm.py` | 自编辑核心记忆（四块自我模型 / 主人锁定 / append-only 修订 / 工具注册）服务、DTO 与 `ff_core_memory_blocks` / `ff_core_memory_revisions` ORM（R2c） | `CoreMemoryService` / `register_core_memory_tools` / `CoreMemoryBlockDTO` / `CoreMemoryRevDTO` / `OwnerEditModel` / `AgentEditModel` / `CoreMemoryBlockRow` / `CoreBlockKey` |
+| `relationship.py` / `relationship_models.py` | 关系进展摘要（关系类事实派生 / 时间衰减得分 / 阶段阶梯 / 边界识别，Unit 文件——无独立存储与 API） | `build_relationship_summary` / `empty_relationship_summary` / `decay_weight` / `derive_stage` / `RelationshipSummaryModel` / `RelationshipEventModel` / `RelationshipThresholdsModel` / `RelationshipStage` / `DEFAULT_RELATIONSHIP_THRESHOLDS` |
 
-依赖方向：persona → core（dtos 分页 / errors / context）+ database（Base Mixins / get_async_db）+ voice（预设建议语音 `VoiceProfileModel`）+ memory（人物事实的证据校验复用 `MemoryService.get_episode` 与检索层取段规则；梦境编排反向消费 `FactsService` / `SkillsService`——见 memory.md 夜间梦境）+ tools（核心记忆工具注册复用 `ToolRegistry` / `ToolSpecModel`）；app 层（api/personas + api/directives + api/facts + api/skills + api/core_memory + middleware/error_handler）→ persona + core + database。**`ff_personas` / `ff_persona_states` 两张表非 PersonaMixin**（见下）；**`ff_persona_facts` / `ff_persona_skills` / `ff_core_memory_blocks` 是 PersonaMixin 人格作用域表**（画像 / 做事方式 / 自我模型都属某个人格对主人的认知；`ff_core_memory_revisions` 经 `block_id` 外键间接归属，见该表说明）。
+依赖方向：persona → core（dtos 分页 / errors / context）+ database（Base Mixins / get_async_db）+ voice（预设建议语音 `VoiceProfileModel`）+ memory（人物事实的证据校验复用 `MemoryService.get_episode` 与检索层取段规则；梦境编排反向消费 `FactsService` / `SkillsService`——见 memory.md 夜间梦境）+ tools（核心记忆工具注册复用 `ToolRegistry` / `ToolSpecModel`）；app 层（api/personas + api/directives + api/facts + api/skills + api/core_memory + middleware/error_handler）→ persona + core + database。**`ff_personas` / `ff_persona_states` 两张表非 PersonaMixin**（见下）；**`ff_persona_facts` / `ff_persona_skills` / `ff_core_memory_blocks` 是 PersonaMixin 人格作用域表**（画像 / 做事方式 / 自我模型都属某个人格对主人的认知；`ff_core_memory_revisions` 经 `block_id` 外键间接归属，见该表说明）。关系进展摘要（`relationship.py` / `relationship_models.py`）只依赖事实值域与标准库——纯派生、无存储、无 API，由 chat 域消费。
 
 ## L / M / S 三层心理状态模型
 
@@ -40,9 +41,23 @@ L 层不入状态表的理由：身份正典与可变状态的生命周期不同
 6. **无乐观锁版本列**：本工程 ORM 无版本计数约定（database/base.py 仅 BigIntIdMixin / TimestampMixin / PersonaMixin，usage 域表亦无）——遵循既有约定不引入 `version` 列；注册表写路径低频（管理面操作），冲突面由 name 唯一约束 + 主人格标记唯一键 + 单事务切换兜底。
 7. **运行期绑定 `bind_persona_context(persona_id)`**：注册表主键为 BigInt，而上下文轴 `persona_id_var` / PersonaMixin 均为字符串——绑定 helper 接受 `int | str` 并经 `str()` 归一（chat 会话等运行期入口消费，见 `core.context.bind_context`）。
 
-> **前向注（R2d）**：当前「按上下文寻址」的消费面已具备数据模型基础（可寻址集 + 会话级 persona 绑定——通道会话按 `persona_id` 保持在位、resumed 会话保留其记录人格）；R2d 将在此之上交付 per-context 绑定（心流 / 群聊 / 多会话显式选择人格，主人格仅作缺省解析目标）。
+> **上下文寻址现状**：可寻址集（`list_addressable`）已被群聊多人格应答消费——同一群会话内按轮转 / 冷却 / 重复抑制选择应答人格，每个应答人格持有自己的持久化会话（会话行人格主键即消息应答归属）。主人格仍是非群聊多人格场景的缺省解析目标；心流门控的 per-persona 节律覆写解析仍待接线（当前门控使用全局面）。
 
 ## 链路顺序
+### 群聊多人格选址（`GROUP_PERSONA_` env 面）
+
+群聊消息的应答者从 `list_addressable()`（enabled 人格、主键升序）中
+确定性选择：冷却外且上一轮未发言者优先（轮转），可用者都刚发过言时
+允许重复，全部冷却时选最近应答时刻最早者兜底；`max_responders` 限制
+单条消息的应答人数（1 = 轮流单人格，>1 = 多人格接续）。单聊不参与
+轮转；功能关闭 / 选择为空时回退主人格路径。
+
+每个应答人格的会话标题为 `channel:<channel>:<chat_id>:persona:<id>`，
+`ff_chat_sessions.persona_id` 即该会话全部消息的应答归属（`replied_by`）
+——助手回合归属经会话外键确定，无需消息级冗余列。选择算法与配置说明见
+[chat.md](chat.md#群聊多人格应答group-multi-persona-routing)，通道接线
+与失败隔离见 [channels.md](channels.md#群聊多人格group_persona_enabled选择--轮转--冷却--归属)。
+
 
 **创建 → 设主 → 会话绑定**：
 
@@ -347,27 +362,68 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 
 官方预设库以**纯特质组合集**形态发行：零角色名 / 零背景故事 / 零既有形象引用（版权洁净由「只发行可组合特质」保证）；用户经导入端点私有导入自己的完整 chara card v2 卡片文件。两层结构：
 
-- **组件**（`TraitComponentModel`，`presets/components.yaml`，33 个）：最小可复用人格碎片——`description_zh`（落入卡片 `personality` 的短句）+ 六类分类（温性 / 言语风格 / 习惯癖性 / 价值取向 / 社交风格 / 幽默感）+ `tone_directives`（进入 system 提示的短指令行）+ `sample_speech`（示例台词——拼入 `mes_example`）+ `conflicts`（不宜共存的组件 id——组合时软警告不拒绝）。
-- **预设**（`TraitPresetModel`，`presets/presets.yaml`，8 个原型：大家闺秀 / 小家碧玉 / 绿茶 / 傲娇 / 温柔治愈 / 高冷御姐 / 元气少女 / 毒舌损友）：组件 id 组合集（声明序即组合序）+ 可选覆写片段（`name_suffix` 名字后缀 / `personality` / `mes_example` / `system_prompt_fragment`）+ `suggested_voice`（导入时随人格落库）+ `suggested_book`（生成时并入卡片世界书）。
+- **组件**（`TraitComponentModel`，`presets/components.yaml`，126 个）：最小可复用人格碎片——`description_zh`（落入卡片 `personality` 的短句）+ 十二类分类（温性 / 言语风格 / 习惯癖性 / 价值取向 / 社交风格 / 幽默感 / 言语体系 / 情绪表达 / 主动性 / 亲密风格 / 互动仪礼 / 边界；每类至少 8 个）+ `maturity`（成熟度分档：`safe` 安全 / `suggestive` 暧昧 / `explicit` 亲密直白）+ `tone_directives`（进入 system 提示的短指令行）+ `sample_lines`（3-5 条示例台词，每条 1-120 字符——生成时各成 `mes_example` 的 `<START>` 块）+ `conflicts`（不宜共存的组件 id——组合时软警告不拒绝）。
+- **预设**（`TraitPresetModel`，`presets/presets.yaml`，11 个原型：大家闺秀 / 小家碧玉 / 绿茶 / 傲娇 / 温柔治愈 / 高冷御姐 / 元气少女 / 毒舌损友 / 同窗旧友 / 合租室友 / 旧识恋人）：组件 id 组合集（声明序即组合序）+ `intimacy_level`（推荐亲密等级上限 0-3）+ `scene_scripts`（四态场景脚本）+ 可选覆写片段（`name_suffix` 名字后缀 / `personality` / `mes_example` / `system_prompt_fragment`）+ `suggested_voice`（导入时随人格落库）+ `suggested_book`（生成时并入卡片世界书）。
+
+**`sample_speech` 迁移说明**：该字段是单条示例台词的遗留形态（`str | None`，上限 120 字符）。装载时若 `sample_lines` 为空，`sample_speech` 会被归一为首条示例台词；两字段并存时以 `sample_lines` 为准，遗留值不参与生成。新数据一律写 `sample_lines`，遗留字段仅为旧数据文件与既有序列化形态保留。
+
+**成熟度与亲密等级映射**（生成期组件过滤的唯一口径，`allowed_maturities_for_intimacy_level`）：
+
+| `intimacy_level` | 允许参与组合的组件成熟度 | 语义 |
+|---|---|---|
+| 0 | `safe` | 日常陪伴基线（默认值） |
+| 1 | `safe` | 温和靠近，不含暧昧桥段 |
+| 2 | `safe` + `suggestive` | 允许调情、心动与若即若离 |
+| 3 | `safe` + `suggestive` + `explicit` | 含拥抱、亲吻等亲密直白表达（措辞自然克制） |
+
+官方发行基线为 SFW：十个日常向预设 `intimacy_level ≤ 2`（最多到「暧昧」）；唯一的亲密包预设「旧识恋人」为 `intimacy_level 3`，导入它才纳入 `explicit` 组件，也可用覆盖等级降到 0-2 收窄。当前组件分布：`safe` 78（61.9%）/ `suggestive` 33（26.2%）/ `explicit` 15（11.9%）。
+
+**四态场景脚本**（`SceneScriptSetModel`，预设级、可选）：`daily` 日常 / `flirty` 暧昧 / `intimate` 亲密 / `conflict` 冲突四个字段，各为至多 6 条短中文行为指令（每条 1-200 字符）。生成时渲染为 system 提示的命名段，段序固定为日常 → 暧昧 → 亲密 → 冲突，空状态不生成段名：
+
+```yaml
+scene_scripts:
+  daily:
+    - 用克制的关心过问起居，叮嘱落在具体的小事上
+  flirty:
+    - 心动时先移开视线，用一句家常把话题接过去
+  intimate:
+    - 亲近一步需要对方先给出明确的信号
+  conflict:
+    - 争执时不抬高音量，先把礼数摆正再讲道理
+```
 
 **生成面是纯函数**（`generate_card_from_preset`——确定性组合，逐字段锁定）：
 
+- 生效亲密等级 = 请求的 `intimacy_level_override`（提供时）否则 `preset.intimacy_level`；成熟度超出该等级的组件在组合前被过滤（映射见上表）；
 - `name` = 基础名 + `name_suffix`（存在时；基础名 = 期望名或预设中文名）；
-- `personality` = 预设描述 → 预设级补充 → 组件碎片，`；` 拼接；
-- `system_prompt` = 组件语气指令行（声明序）→ 预设级补充行，换行拼接；
-- `mes_example` = 预设级示例 → 组件示例台词（各成 `<START>\n{name}: 台词` 块）；
+- `personality` = 预设描述 → 预设级补充 → 保留组件碎片，`；` 拼接；
+- `system_prompt` = 保留组件的语气指令行（声明序）→ 预设级补充行 → 场景脚本命名段，换行拼接；
+- `mes_example` = 预设级示例 → 保留组件的示例台词（各成 `<START>\n{name}: 台词` 块；组件台词合计至多 24 条，超出截断）；
 - `character_book` = 建议条目非空时建书（名 = `{预设id}-book`），否则 None；
-- 组合集命中冲突声明 → `GenerationWarningModel` 列表**返回不抛错**（调用方并入导入结果 `warnings` 呈现）。
+- 保留组件命中冲突声明 → `GenerationWarningModel` 列表**返回不抛错**（调用方并入导入结果 `warnings` 呈现）；被过滤掉的组件不参与冲突判定。
 
-**装载面**（`load_official_components` / `load_official_presets`）：路径相对资源加载（`presets/` 数据文件）+ 模型校验 + 模块级缓存——**模块导入期零副作用**，首次调用（端点）即校验，非法数据文件 fail loud（`ValueError` → 端点映射 500）。官方库不变式（装载期校验拒绝违约数据）：预设引用组件恒存在、id 唯一、组合集内无重复、**官方预设自身零冲突**（命中冲突声明 = 发行数据作者错误）、冲突引用指向已知组件。显式传入数据目录（测试合成数据）绕过缓存。
+**装载面**（`load_official_components` / `load_official_presets`）：路径相对资源加载（`presets/` 数据文件）+ 模型校验 + 模块级缓存——**模块导入期零副作用**，首次调用（端点）即校验，非法数据文件 fail loud（`ValueError` → 端点映射 500）。官方库不变式（装载期校验拒绝违约数据）：预设引用组件恒存在、id 唯一、组合集内无重复、**官方预设自身零冲突**（命中冲突声明 = 发行数据作者错误）、冲突引用指向已知组件、每个组件示例台词 3-5 条、**预设组件成熟度不越过该预设自身亲密等级上限**。显式传入数据目录（测试合成数据）绕过缓存。
 
 ### 导入端点（P2——内容哈希幂等 + 名称冲突三策略）
 
 `POST /api/v1/personas/import` 双载荷形态（JSON 或 multipart——stdlib `email` 解析器解析，与 voice.asr 同模式零新增依赖；请求体上限为模块级常量 2MB，不引入新 settings 键）：
 
-- `{preset_id}`——服务端按官方预设 + 组件库确定性生成卡片（期望名缺省 = 预设中文名；生成软警告并入结果 `warnings`；预设建议语音随创建落库；未知预设 404）；
+- `{preset_id}`——服务端按官方预设 + 组件库确定性生成卡片（期望名缺省 = 预设中文名；可选 `intimacy_level_override` 覆盖预设推荐亲密等级；生成软警告并入结果 `warnings`；预设建议语音随创建落库；未知预设 404）；
 - `{card}`（JSON）或 `file`（multipart 卡片 JSON 文件）——用户自有卡片文档直载；
-- `conflict_strategy`（skip 缺省 / rename / overwrite）+ `desired_name` 对两种载荷通用。
+- `conflict_strategy`（skip 缺省 / rename / overwrite）+ `desired_name` 对两种载荷通用；
+- `intimacy_level_override`（0-3，可选，越界 422）只作用于预设生成路径，不落库为独立人格字段——生效等级体现在生成卡片的 `system_prompt` 命名段与组件选取结果中。
+
+预设生成请求示例：
+
+```json
+{
+  "preset_id": "green-tea",
+  "card": null,
+  "conflict_strategy": "skip",
+  "desired_name": "小满",
+  "intimacy_level_override": 1
+}
+```
 
 **冲突判定序（锁定语义，`PersonaService.import_persona`）**：
 
@@ -377,7 +433,7 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 
 `POST /api/v1/personas/import/batch`（multipart `files` 多文件）：逐文件独立事务部分成功——解析失败记 `VALIDATION_ERROR` 失败项；**幂等跳过与名称冲突（skip 策略）是合法结果**（`success=true, imported=false`，`reason` 呈现原因）；计数面 `{total, succeeded, failed, imported_count}`。
 
-前端消费面（`frontend/src/pages/personas/`）：预设画廊（`/personas/presets`——卡片网格 + 组件芯片 + 生成流）与列表页导入按钮（`PersonaImportButton`——单文件冲突三选一重问（跳过 / 改名 / 覆盖）+ 批量结果对话框）；共享三选一对话框 `PersonaImportConflictDialog`。multipart 请求体由前端**手工 RFC 2046 序列化**（卡片文档恒 UTF-8 文本——确定性 wire 形态，规避 axios JSON 实例头对 FormData 的改写与拦截器链对跨实现 File 对象的文件名丢失）。
+前端消费面（`frontend/src/pages/personas/`）：预设画廊（`/personas/presets`——卡片网格 + 组件芯片（含成熟度徽章）+ 预设亲密等级上限 + 生成对话框的亲密等级选择器与过滤预览）与列表页导入按钮（`PersonaImportButton`——单文件冲突三选一重问（跳过 / 改名 / 覆盖）+ 批量结果对话框）；共享三选一对话框 `PersonaImportConflictDialog`。multipart 请求体由前端**手工 RFC 2046 序列化**（卡片文档恒 UTF-8 文本——确定性 wire 形态，规避 axios JSON 实例头对 FormData 的改写与拦截器链对跨实现 File 对象的文件名丢失）。
 
 ## PersonaService API
 
@@ -526,6 +582,92 @@ lines = await service.top_facts_for_compose(session)                # compose �
 前端消费面（`frontend/src/pages/personas/FactsPanel.tsx`）：人格编辑页「了解 TA」
 卡片——按类别分组的事实列表（置信度 / 来源徽章、证据展开器含逐字摘录与情景
 回链）、新建 / 更正 / 驳回 / 删除。
+
+## 关系进展摘要（R2b+——关系类事实派生 / 注入面）
+
+关系进展摘要回答「我们之间走到哪一步」：它是人物事实层里**关系类
+（`category=relationship`）现行事实**的派生视图——不新增表、不迁移、不改
+DTO、不改前端，也不提供独立 API。对话组装时由 `ChatService` 经既有
+`FactsService.list_facts` 读取事实记录，再用纯函数
+`build_relationship_summary` 聚合为摘要并注入【关系进展】块（注入位置与链路
+顺序见 [chat.md](chat.md) 提示词组装链）。
+
+| 项 | 取值 | 说明 |
+|---|---|---|
+| 证据来源 | 现行（`status=active`）关系类事实 | 唯一来源；读取面为既有 `list_facts`（类别 + 状态过滤），不新增存储 |
+| `importance` | `confidence × 10`（0-10） | 事实表无独立重要度列——置信度是唯一强度信号，映射系数集中在阈值表 |
+| 事件时间 | 事实行 `updated_at` | 最近确认 / 更正时刻（epoch 毫秒），作为衰减参考轴 |
+| `score` | `Σ importance × decay(age)` | 确定性纯函数；同一输入同一 `now_ms` 逐字段可复现（模块内不读系统时钟） |
+| 阶段阶梯 | stranger < 2.0 ≤ familiar < 10.0 ≤ close < 24.0 ≤ intimate | 得分达到下限即入该段（含边界）；`intimacy_level` 与阶段同轴（0-3） |
+| 衰减分档 | ≤7 天 1.0 / ≤30 天 0.75 / ≤90 天 0.5 / ≤365 天 0.25 / 更早 0.1 | 年龄按天分档、上限含边界；未来时间戳按年龄 0 处理（时钟回拨不打到底档） |
+| 最近事件 | 5 条上限、时间倒序 | 单条摘要 ≤80 字符（空白折叠后截断）；`event_count` 计全部参与事实 |
+| 边界约定 | 3 条上限、命中边界短语者 | 短语表 `RELATIONSHIP_BOUNDARY_MARKERS`（「不要 / 不许 / 不能说 / 说好 / 约定 / 边界」等明确措辞）——宁窄勿宽 |
+| 块字符帽 | 1200 | 模板 + 阶段行 + 事件行 + 边界行合计；确定性截断（放不下即截断当前行并停止追加） |
+
+**等级夹取语义（锁定）**：`intimacy_level` 恒夹取 0-3（阈值表的
+`max_intimacy_level` 上界同样生效，阶段随夹取后的等级回落）。人格 / 预设的
+`intimacy_level` 只存在于生成期（组件成熟度过滤的输入），不落在人格记录或
+卡片里——**运行期聊天上下文拿不到该值**，因此摘要只输出事实派生值；构建函数
+保留 `intimacy_ceiling` 形参，未来拿到人格侧上限时可直接接线（传值即按 0-3
+夹取，`score` 保留原始得分不回写）。空事实 = stranger / 0 / 零事件。
+
+事实记录示例（派生输入）与摘要输出示例：
+
+```json
+{
+  "input_facts": [
+    {
+      "id": 12,
+      "category": "relationship",
+      "content": "说好每天都要说晚安",
+      "confidence": 0.9,
+      "status": "active",
+      "updated_at": 1762939200000
+    },
+    {
+      "id": 9,
+      "category": "relationship",
+      "content": "主人开始叫我小鱼",
+      "confidence": 0.7,
+      "status": "active",
+      "updated_at": 1762852800000
+    }
+  ],
+  "summary": {
+    "stage": "close",
+    "intimacy_level": 2,
+    "score": 16.0,
+    "event_count": 2,
+    "recent_events": [
+      {
+        "fact_id": 12,
+        "summary": "说好每天都要说晚安",
+        "importance": 9.0,
+        "ts_ms": 1762939200000
+      },
+      {
+        "fact_id": 9,
+        "summary": "主人开始叫我小鱼",
+        "importance": 7.0,
+        "ts_ms": 1762852800000
+      }
+    ],
+    "boundaries": ["说好每天都要说晚安"],
+    "generated_at_ms": 1762939200000
+  }
+}
+```
+
+派生参数集中在 `RelationshipThresholdsModel`（锁定缺省值
+`DEFAULT_RELATIONSHIP_THRESHOLDS`）：不新增 env 键；`ChatService` 构造可注入
+替换表（测试 / 运营调参），阶段下限、衰减分档与各条上限因此无需散落魔数。
+阈值表校验不变式在构造期 fail loud（阶段下限严格递增、分档年龄严格递增、
+权重非递增、只有末档可无上限、扫描上限不超过事实分页上界 200）。
+
+**降级行为（锁定）**：事实读取 / 派生异常记 warning 并降级为空摘要
+（stranger / 0 / 零事件），回复链路照常——关系摘要不阻断回复；读取面未接线
+（CLI / 纯内存直调形态）时整块跳过，既有行为零变更。纯内存形态（无持久化
+会话）零附加 I/O。
 
 ## 程序性技能（R2c——触发短语 / 原地版本 / 启用状态）
 
@@ -774,7 +916,7 @@ PUT 请求与响应示例：
 | POST | `/api/v1/personas/{id}/disable` | 停用（生命周期；主人格守卫 409） |
 | GET | `/api/v1/personas/primary` | 当前主人格（无主人格 404——清晰中文错误） |
 | GET | `/api/v1/personas/presets` | 官方特质库读取（`{presets, components}` 画廊载荷；装载失败 500） |
-| POST | `/api/v1/personas/import` | 导入（JSON：`{preset_id}` 官方预设生成 / `{card}` 用户卡片 + `conflict_strategy` + `desired_name`；multipart：`file` + 同名表单字段） |
+| POST | `/api/v1/personas/import` | 导入（JSON：`{preset_id}` 官方预设生成（可带 `intimacy_level_override` 0-3）/ `{card}` 用户卡片 + `conflict_strategy` + `desired_name`；multipart：`file` + 同名表单字段） |
 | POST | `/api/v1/personas/import/batch` | 批量导入（multipart `files` 多文件 + `conflict_strategy`；部分成功形态） |
 | GET | `/api/v1/personas/{id}/card` | 卡片读取 |
 | PUT | `/api/v1/personas/{id}/card` | 卡片整体替换（body 为完整卡片） |
@@ -785,7 +927,7 @@ PUT 请求与响应示例：
 
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_facts_service.py`（人物事实：归一化 / 身份指纹 / 创建与元数据刷新 / provenance 配对 / 证据校验丢弃 / 更正链与证据追加 / 驳回幂等 / 删除引用清理 / 列表过滤与游标 / compose 裁剪 / 人格隔离）/ `test_facts_api.py`（人物事实 HTTP 面：CRUD + 驳回 + 过滤 / 游标 + 隔离 404）/ `test_migration_persona_facts.py`（迁移 0013 SQLite round-trip）/ `test_skills_service.py`（技能：slug 归一 / 创建与同名冲突 / 触发短语归一 / 原地编辑与冲突 / 状态切换幂等 / 删除 / 列表过滤与游标 / compose 字面与描述命中 / 条数帽与排序 / 使用计数写入 / 梦境元数据合并与并集上限 / 人格隔离）/ `test_skills_api.py`（技能 HTTP 面：CRUD + 启停 + 同名 409 + 边界 / 游标 + 隔离 404）/ `test_migration_persona_skills.py`（迁移 0014 SQLite round-trip）/ `test_core_memory_service.py`（核心记忆：懒建四块 / 主人编辑与修订 / 锁定切换无修订 / 零变更幂等 / 构造上限 / 人格 replace 与 append / 锁定可读拒绝 / 目标全文超限不改行 / 修订倒序与截断 / append-only / 人格隔离）/ `test_core_memory_tool.py`（edit_core_memory：工具规格与 enum / 执行落会话归属 / 锁定可读拒绝 / 人格上下文缺失 / 非法块键）/ `test_core_memory_api.py`（核心记忆 HTTP 面：四块 / 编辑 / 修订 / 上限 400 / 非法块键 400 / 无主人格 404 / 跨人格隔离）/ `test_migration_core_memory.py`（迁移 0015 SQLite round-trip——两表 / 唯一键 / 级联外键 / 索引）/ `test_chat_core_memory.py`（见 chat.md）/ `test_chat_skills.py`（见 chat.md）/ `test_dreaming_skills.py`（见 memory.md）/ `src/tests/unit/test_directives_service.py`（长期指令：topic 派生 / 同文收敛 / 显式 topic 覆盖 / 边界 / 命名空间收窄 / 注入帽 / 链更新 / 删除 / 人格隔离）/ `test_directives_api.py`（长期指令 HTTP 面：CRUD + 隔离 404）/ `src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元：v2 基础校验 + R2b 高级字段界校验 / include_group 归一 / recursive 总开关规格一致性 / 加性字段 JSON 往返）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_trait_library.py`（R2b-2 特质库：组件 / 预设模型规格（kebab / 分类值域 / 空组合拒绝）+ 纯函数生成（后缀拼接 / 分号拼接序 / 指令行拼接 / `<START>` 台词块 / 建议世界书并入 / 冲突软警告双向去重 / 未知组件 fail loud）+ 官方库装载（真实随包 YAML——8 预设名单序 / 全引用合法 / 发行零冲突 / 缓存命中）+ 显式目录违约形态 fail loud（缺失 / 结构 / 重复 id / 未知引用 / 发行冲突预设 / 空库））/ `test_persona_import_service.py`（R2b-2 导入服务：判定序（内容同卡三策略恒幂等）+ 名称冲突三策略矩阵（skip / rename 自动后缀链 / overwrite 保状态保标记保语音）+ 期望名 / 载荷恰一 + 批量部分成功（合法跳过成功项 / 解析失败失败项 / 计数面））/ `test_persona_import_api.py`（R2b-2 导入 HTTP 面：预设库读取 + JSON / multipart 双面矩阵（预设生成 / 期望名 + 后缀 / 同卡幂等 / 冲突三策略 / 未知预设 404 / 载荷恰一 422 / 策略非法 422 / 空体 400 / 非法 JSON 400/422）+ 批量部分成功（rename 策略表单字段）+ 处理器直调契约面）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；世界书选择算法链的运行语义测试在 chat 域 `test_chat_world_book.py`（见 chat.md）；
+- 测试位置：`src/tests/unit/test_facts_service.py`（人物事实：归一化 / 身份指纹 / 创建与元数据刷新 / provenance 配对 / 证据校验丢弃 / 更正链与证据追加 / 驳回幂等 / 删除引用清理 / 列表过滤与游标 / compose 裁剪 / 人格隔离）/ `test_facts_api.py`（人物事实 HTTP 面：CRUD + 驳回 + 过滤 / 游标 + 隔离 404）/ `test_migration_persona_facts.py`（迁移 0013 SQLite round-trip）/ `test_skills_service.py`（技能：slug 归一 / 创建与同名冲突 / 触发短语归一 / 原地编辑与冲突 / 状态切换幂等 / 删除 / 列表过滤与游标 / compose 字面与描述命中 / 条数帽与排序 / 使用计数写入 / 梦境元数据合并与并集上限 / 人格隔离）/ `test_skills_api.py`（技能 HTTP 面：CRUD + 启停 + 同名 409 + 边界 / 游标 + 隔离 404）/ `test_migration_persona_skills.py`（迁移 0014 SQLite round-trip）/ `test_core_memory_service.py`（核心记忆：懒建四块 / 主人编辑与修订 / 锁定切换无修订 / 零变更幂等 / 构造上限 / 人格 replace 与 append / 锁定可读拒绝 / 目标全文超限不改行 / 修订倒序与截断 / append-only / 人格隔离）/ `test_core_memory_tool.py`（edit_core_memory：工具规格与 enum / 执行落会话归属 / 锁定可读拒绝 / 人格上下文缺失 / 非法块键）/ `test_core_memory_api.py`（核心记忆 HTTP 面：四块 / 编辑 / 修订 / 上限 400 / 非法块键 400 / 无主人格 404 / 跨人格隔离）/ `test_migration_core_memory.py`（迁移 0015 SQLite round-trip——两表 / 唯一键 / 级联外键 / 索引）/ `test_chat_core_memory.py`（见 chat.md）/ `test_chat_skills.py`（见 chat.md）/ `test_relationship_summary.py`（关系进展派生：空事实 / 混类与历史过滤 / 阶段阶梯上下沿 / 衰减档边界与未来时间戳 / 等级上限夹取与阶段回落 / 事件条数·倒序·摘要截断 / 边界短语识别与上限 / 确定性 / 时间轴拒绝 / 阈值表不变式）/ `test_chat_relationship.py`（见 chat.md）/ `test_dreaming_skills.py`（见 memory.md）/ `src/tests/unit/test_directives_service.py`（长期指令：topic 派生 / 同文收敛 / 显式 topic 覆盖 / 边界 / 命名空间收窄 / 注入帽 / 链更新 / 删除 / 人格隔离）/ `test_directives_api.py`（长期指令 HTTP 面：CRUD + 隔离 404）/ `src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元：v2 基础校验 + R2b 高级字段界校验 / include_group 归一 / recursive 总开关规格一致性 / 加性字段 JSON 往返）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_trait_library.py`（特质库：组件 / 预设模型规格（kebab / 十二类分类值域 / 成熟度分档 / 示例台词与场景脚本界 / 空组合拒绝）+ 纯函数生成（后缀拼接 / 分号拼接序 / 指令行 + 场景脚本命名段 / `<START>` 台词块与条数上限 / 建议世界书并入 / 冲突软警告双向去重 / 未知组件 fail loud）+ 成熟度过滤矩阵（等级 0-3 × 三档成熟度 / 覆盖升降 / 预设缺省）+ 遗留 sample_speech 折叠 + 官方库装载（真实随包 YAML——126 组件十二类目覆盖与成熟度分布 / 11 预设名单序与亲密等级上限 / 全引用合法 / 发行零冲突 / 缓存命中）+ 显式目录违约形态 fail loud（缺失 / 结构 / 重复 id / 未知引用 / 发行冲突预设 / 示例台词越界 / 成熟度越级 / 空库））/ `test_persona_import_service.py`（R2b-2 导入服务：判定序（内容同卡三策略恒幂等）+ 名称冲突三策略矩阵（skip / rename 自动后缀链 / overwrite 保状态保标记保语音）+ 期望名 / 载荷恰一 + 批量部分成功（合法跳过成功项 / 解析失败失败项 / 计数面））/ `test_persona_import_api.py`（R2b-2 导入 HTTP 面：预设库读取 + JSON / multipart 双面矩阵（预设生成 / 期望名 + 后缀 / 同卡幂等 / 冲突三策略 / 未知预设 404 / 载荷恰一 422 / 策略非法 422 / 空体 400 / 非法 JSON 400/422）+ 批量部分成功（rename 策略表单字段）+ 处理器直调契约面）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；世界书选择算法链的运行语义测试在 chat 域 `test_chat_world_book.py`（见 chat.md）；
 - 全部 `async def test_`；引擎经共享会话级 SQLite fixture（StaticPool 单连接 + 每测试自动清表）；HTTP 面零真实网络（ASGITransport 本地装配 app）；预设库装载测试用真实随包 YAML（仓库数据即 hermetic）；
 - 覆盖率（scoped 实测）：harness/persona ≥95%（含人物事实 / 技能 / 核心记忆面）、app/api ≥85%、app/middleware **100%**；
 - 运行：`cd backend && pixi run tests-unit`。

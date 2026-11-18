@@ -333,6 +333,8 @@ class PersonaImportRequestDTO(BaseModel):
         conflict_strategy: 名称冲突策略（缺省 skip——内容同卡恒幂等，
             策略不适用）。
         desired_name: 期望注册名（None = 卡片名 / 预设名；1-128 字符）。
+        intimacy_level_override: 覆盖预设推荐的亲密等级（0-3；None =
+            沿用预设值；只影响生成期组件过滤，不落库为人格字段）。
 
     Raises:
         ValueError: ``preset_id`` 与 ``card`` 同时提供或均未提供（载荷
@@ -350,6 +352,12 @@ class PersonaImportRequestDTO(BaseModel):
     )
     desired_name: str | None = Field(
         default=None, min_length=1, max_length=128, description="期望注册名（None = 卡片名）"
+    )
+    intimacy_level_override: int | None = Field(
+        default=None,
+        ge=0,
+        le=3,
+        description="覆盖预设推荐亲密等级（0-3；None = 预设值）",
     )
 
     @model_validator(mode="after")

@@ -8,7 +8,9 @@
 |---|---|---|
 | `llm_models.py` | 消息 / 参数 / 响应 / embeddings / wire DTO / 用量事件 Model Classes（含原生工具调用与多模态内容分块契约） | `ChatMessageModel` / `ChatRequestParams` / `ChatResponseModel` / `ChatStreamChunkModel` / `EmbeddingsResponseModel` / `LlmUsageEvent` / `ToolDefinitionModel` / `ToolCallModel` / `TextContentPart` / `ImageContentPart` / `ContentPartModel` / `build_chat_request_body` / `messages_have_content_parts` |
 | `client.py` | OpenAI 兼容客户端（非流式 + SSE 流式 + embeddings + tenacity 重试 + 错误映射） | `LlmHttpClient` / `LlmRetryableError` / `parse_retry_after_seconds` |
-| `gateway.py` | 角色路由门面（wire 构建 → entry_gate → client → 用量发射；chat 与 embed 双面） | `LlmGateway` / `UsageRecorder` / `wire_default_usage_recorder` |
+| `gateway.py` | 角色路由门面（wire 构建 → entry_gate → client → 用量发射；chat 与 embed 双面；含亲密通道路由） | `LlmGateway` / `UsageRecorder` / `wire_default_usage_recorder` |
+| `intimate_models.py` | 亲密通道 Model Classes：`LLM_INTIMATE_*` 配置面 / 路由裁决契约（Unit 文件） | `IntimateChannelConfig` / `IntimateRouteReason` / `IntimateRouteDecisionModel` / `INTIMATE_CHANNEL_ENTRY_NAME` |
+| `intimate_router.py` | 亲密通道纯函数：配置裁决 / 条目构建 / 采样温度合并 / 半配置告警（Unit 文件） | `evaluate_intimate_route` / `build_intimate_entry` / `build_intimate_request_params` / `log_incomplete_intimate_config` |
 
 依赖方向：llm → config（model_resolver / llm_wire / Settings）+ pools（entry_gate / 共享 HTTP 池）+ core（errors / context / time_utils）；**不硬依赖 usage 域**（经注入式记录器 + 惰性接线，见下文）。
 
@@ -25,6 +27,7 @@ chat_by_role(role, messages, params)
 chat_for_entry(entry, ...)        条目直连（跳过 ①；look_at 回退链 / 显式条目调用面）
 stream_by_role / _stream_for_entry  流式同构（异步生成器；角色解析在首个迭代步发生）
 embed_by_role(texts, ...)         向量化（①角色解析恒 embed → ③门控 → POST /embeddings → ⑤purpose="embed" 用量发射）
+chat_by_role(..., intimacy_level=N)  亲密通道路由（裁决见「亲密通道」节；未命中走上面的角色链）
 ```
 
 熔断结果上报（pools llm_pool 文档化契约）：④ 成功 → `breaker.record_success()`；失败 → `breaker.record_failure()`。流式消费方提前终止（GeneratorExit）不落用量（无终态结果——文档化决策）。角色未绑定（含 embed 角色未绑定）在传输前失败——`MODEL_NOT_FOUND`，无条目可归属不落用量行（与 chat_by_role 同语义）。
@@ -42,10 +45,114 @@ gateway = LlmGateway(
     retry_attempts=3,         # 传输重试总次数上限（含首次）
     retry_wait_seconds=0.5,   # 指数退避基数秒（Retry-After 缺失时）
     retry_after_max_seconds=30.0,  # Retry-After 等待封顶
+    intimate_config=None,     # None = 按 LLM_INTIMATE_* env 构造（默认关闭形态）
 )
 ```
 
 `wire_default_usage_recorder()` 是 llm → usage 的唯一接线点（函数体内惰性 import——llm 模块导入期零耦合；app 装配调用）。
+
+## 亲密通道（roles:intimate）
+
+长期陪伴对话允许把一个**独立的 OpenAI 兼容端点**接成亲密回复通道：运营可
+为该端点单独调模型 / 采样温度 / 输出策略，而主对话端点（`roles:chat`）
+保持原样。该通道**默认关闭**，未开启时全部请求走既有 chat 角色通道，请求
+字节零变化。
+
+通道标识 `roles:intimate` 只存在于本 env 面，**不进入** config.yaml 的
+模型注册表（`ModelRole` 维持 chat / duty / dream / look_at / embed 五角色，
+注册表管理 API 面不变）。
+
+### 配置键表（`.env.example` / Setup Wizard「亲密回复通道配置」步骤同源）
+
+| 环境变量 | 配置字段 | 默认 | 说明 |
+|---|---|---|---|
+| `LLM_INTIMATE_ENABLED` | `enabled` | `false` | 全局开关；与配置齐全性同时为真才可能被路由选中 |
+| `LLM_INTIMATE_BASE_URL` | `base_url` | 空 | 亲密端点根路径（含 `/v1`；空 = 未配置） |
+| `LLM_INTIMATE_API_KEY` | `api_key` | 空 | 亲密端点凭据（`SecretStr`；空 = 未配置；**不回落**全局 `LLM_API_KEY`） |
+| `LLM_INTIMATE_MODEL` | `model` | 空 | 亲密端点模型名（空 = 未配置） |
+| `LLM_INTIMATE_TEMPERATURE` | `temperature` | 空 | 通道缺省采样温度（0-2；空 = 不注入；调用方显式 temperature 优先） |
+| `LLM_INTIMATE_MIN_INTIMACY_LEVEL` | `min_intimacy_level` | `2` | 触发通道的最低亲密等级（0-3，与关系摘要 `intimacy_level` 同轴） |
+
+配置类：`packages.harness.llm.intimate_models.IntimateChannelConfig`
+（`env_prefix="LLM_INTIMATE_"`，不经 config 域 `Settings` 聚合——与
+`COMPLIANCE_` / `INJECTION_` 同形态）。
+
+### 启用条件与半配置策略
+
+- 通道可用 = `LLM_INTIMATE_ENABLED=true` **且** `base_url` / `api_key` /
+  `model` 三项全部非空；
+- **半配置（锁定）**：开关为真但必填项缺任一项时，整通道视为未启用，
+  网关在首次裁决时记**一条** warning（列出缺失的 `LLM_INTIMATE_*` 变量名），
+  本进程后续裁决不再重复记录；不因半配置抛错阻断回复；
+- 未配置任何 `LLM_INTIMATE_*`（默认部署形态）等同于关闭——不产生 warning。
+
+### 路由矩阵
+
+调用方（chat 域）只传本轮关系摘要的 `intimacy_level`（0-3；摘要缺失 /
+读取降级传 `None` / 0）；端点、模型、凭据与阈值判定全部在
+`llm.intimate_router.evaluate_intimate_route` 完成。判定顺序固定，先命中
+者即结论：
+
+| 开关 | 配置齐全 | 本轮等级 | 裁决原因 | 实际通道 |
+|---|---|---|---|---|
+| 关 | 任意 | 任意 | `disabled` | 默认（chat 角色条目） |
+| 开 | 否 | 任意 | `incomplete_config` | 默认（并记一条 warning） |
+| 开 | 是 | `None`（摘要不可用） | `relationship_unavailable` | 默认 |
+| 开 | 是 | 低于 `min_intimacy_level` | `below_threshold` | 默认 |
+| 开 | 是 | ≥ `min_intimacy_level` | `selected` | 亲密通道 |
+
+关系摘要读取失败时 chat 域降级为空摘要（stranger / 0），因此该回合按
+`below_threshold` 回退默认通道——亲密通道不自行读库、不猜关系状态。
+
+### 命中时链路
+
+```
+chat_by_role(role, messages, params, intimacy_level=N)
+    ↓ ① evaluate_intimate_route(IntimateChannelConfig, N)    纯函数裁决
+    ↓ ② build_intimate_entry(config)                         条目键 = llm-intimate-channel
+    ↓ ③ build_intimate_request_params(config, params)        通道温度仅补调用方未设置的字段
+    ↓ ④ pools.entry_gate(条目)                               公共池：专属信号量 + 熔断器
+    ↓ ⑤ llm.client.chat / stream                             共享 HTTP 池；wire 凭据 = LLM_INTIMATE_API_KEY
+    ↓ ⑥ 用量发射（purpose 保持调用方用途，model_entry=llm-intimate-channel）
+```
+
+消息序列、原生工具面、输出协议与合规重试语义完全复用——只有端点 / 模型 /
+凭据 / 缺省温度被替换。流式路径同一判据；`stream_reply` 的增量块形态不变。
+
+请求体示例（命中形态；messages / tools 与默认通道一致，仅 model 变化）：
+
+```json
+{
+  "model": "intimate-glm",
+  "messages": [
+    {"role": "system", "content": "你是大肥鱼……"},
+    {"role": "user", "content": "今天想抱抱"}
+  ],
+  "temperature": 1.1,
+  "max_tokens": 512,
+  "logprobs": true,
+  "top_logprobs": 20,
+  "prompt_logprobs": 20
+}
+```
+
+### 失败语义（不做静默换道）
+
+- 通道未配置 / 未开启 / 等级不足 / 摘要缺失 → 默认通道（不是失败）；
+- **已配置且被选中的通道调用失败**（连接、5xx、超时、响应解析）按既有
+  `LLM_*` 错误映射原样上抛，不自动重试默认通道——调用方看到的是同一
+  回合的失败，而不是被悄悄换成一个语气不同的端点；
+- 条目熔断 / 半开语义与注册表条目一致（独立条目键
+  `llm-intimate-channel`，不污染 chat 条目健康信号）；
+- 本地校验错误（流式携带多模态分块等）与默认通道同语义，在门控前拒绝。
+
+### 默认关闭说明
+
+- 代码默认 `enabled=False` 且三项必填为空；`config.example.yaml` 与
+  `.env.example` 均以关闭形态生成；
+- 未注入 `intimate_config` 的网关按 env 现场构造；测试 / 装配可显式注入
+  `LlmGateway(intimate_config=...)` 覆盖（隔离配置，不依赖真实 `.env`）；
+- 关闭形态的请求体与「从未提供该功能」逐字节一致（回归测试覆盖）。
 
 ## 传输客户端（client.py）
 

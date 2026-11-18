@@ -156,7 +156,14 @@ from packages.harness.persona.core_memory import (
 from packages.harness.persona.directives import DirectivesService
 from packages.harness.persona.directives_models import DirectiveCreateDTO
 from packages.harness.persona.facts import FactsService
-from packages.harness.persona.service import PersonaService
+from packages.harness.persona.facts_models import FactQueryDTO, PersonaFactStatus
+from packages.harness.persona.relationship import build_relationship_summary
+from packages.harness.persona.relationship_models import (
+    RELATIONSHIP_EVENT_SCAN_LIMIT,
+    RELATIONSHIP_FACT_CATEGORY,
+    RelationshipSummaryModel,
+)
+from packages.harness.persona.service import PersonaService, bind_persona_context
 from packages.harness.persona.skills import SkillsService
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
 from packages.harness.reminders.job import (
@@ -646,9 +653,43 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
             episode_sink=episode_sink,
         )
 
+    persona_service = PersonaService()
+
+    async def _relationship_lookup(
+        persona_id: int, now_ms: int
+    ) -> RelationshipSummaryModel | None:
+        """心流门控关系摘要查询（关系类现行事实派生——失败返回 None）。
+
+        门控启用时才被调用：按人格上下文开短事务读取关系类现行事实，
+        经 ``build_relationship_summary`` 纯函数聚合。读取失败按「无关系
+        数据」处理（门控照常判定，不阻断消息）。
+        """
+        try:
+            async with session_scope() as db_session, bind_persona_context(persona_id):
+                page = await facts_service.list_facts(
+                    db_session,
+                    FactQueryDTO(
+                        category=RELATIONSHIP_FACT_CATEGORY,
+                        status=PersonaFactStatus.ACTIVE,
+                        limit=RELATIONSHIP_EVENT_SCAN_LIMIT,
+                    ),
+                )
+            return build_relationship_summary(page.items, now_ms=now_ms)
+        except Exception:  # 门控输入失败不阻断消息——按无关系数据处理
+            logger.opt(exception=True).warning(
+                "心流门控关系摘要查询失败（按无关系数据处理）: persona_id={}", persona_id
+            )
+            return None
+
     router = ChannelRouter(
         chat_service_factory=_chat_service_factory,
         session_factory=session_scope,
+        flow_settings=settings.flow,
+        group_settings=settings.group_persona,
+        rhythm_service=app.state.rhythm_service,
+        scheduler_provider=lambda: getattr(app.state, "scheduler", None),
+        persona_service=persona_service,
+        relationship_lookup=_relationship_lookup,
     )
     if telegram.enabled:
         client = TelegramClient(
@@ -801,10 +842,16 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
         and telegram.owner_chat_id is not None
         and app.state.channels_router is not None
     )
-    if not duty_enabled and not dream_enabled and not reminder_delivery_ready:
+    flow_delivery_ready = settings.flow.enabled and app.state.channels_router is not None
+    if (
+        not duty_enabled
+        and not dream_enabled
+        and not reminder_delivery_ready
+        and not flow_delivery_ready
+    ):
         logger.info(
-            "中央调度器未启用（DUTY_ENABLED / DREAM_SCHEDULE_ENABLED 关闭且提醒投递面"
-            "不可用）——跳过装配"
+            "中央调度器未启用（DUTY_ENABLED / DREAM_SCHEDULE_ENABLED / FLOW_ENABLED 关闭"
+            "且提醒投递面不可用）——跳过装配"
         )
         return
     store = app.state.memory_store

@@ -141,9 +141,10 @@ class _FakeGateway:
         persona_id: str | None = None,
         purpose: str | None = None,
         request_id: str | None = None,
+        **kwargs: Any,
     ) -> ChatResponseModel:
         """记录请求并返回固定回复。"""
-        self.chat_calls.append({"role": role, "messages": list(messages)})
+        self.chat_calls.append({"role": role, "messages": list(messages), **kwargs})
         return ChatResponseModel(content=self._reply)
 
     async def stream_by_role(
@@ -155,9 +156,10 @@ class _FakeGateway:
         persona_id: str | None = None,
         purpose: str | None = None,
         request_id: str | None = None,
+        **kwargs: Any,
     ) -> AsyncIterator[ChatStreamChunkModel]:
         """记录请求并逐块产出固定回复。"""
-        self.stream_calls.append({"role": role, "messages": list(messages)})
+        self.stream_calls.append({"role": role, "messages": list(messages), **kwargs})
         yield ChatStreamChunkModel(content=self._reply)
 
 

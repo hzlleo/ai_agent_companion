@@ -6,12 +6,18 @@
 
 | 模块 | 职责 | 关键导出 |
 |---|---|---|
-| `prompts.py` | **全部 LLM 提示词文本的唯一存放地**（Unit 文件）：模板 + 逐模板版本常量 + 纯渲染函数 | `CHARTER_TEMPLATE` / `CONSTITUTION_TEMPLATE` / `UNTRUSTED_WRAP_*_TEMPLATE` / `INJECTION_HINT_TEMPLATE` / `PERSONA_*_SECTION_TEMPLATE` / `WORLD_BOOK_ENTRY_TEMPLATE` / `POST_HISTORY_TEMPLATE` / `FIRST_GREETING_FALLBACK_TEMPLATE` / `render_*` |
+| `prompts.py` | **全部 LLM 提示词文本的唯一存放地**（Unit 文件）：模板 + 逐模板版本常量 + 纯渲染函数 | `CHARTER_TEMPLATE` / `CONSTITUTION_TEMPLATE` / `PERSONA_CONTRACT_TEMPLATE` / `COMPLIANCE_NUDGE_TEMPLATE` / `UNTRUSTED_WRAP_*_TEMPLATE` / `INJECTION_HINT_TEMPLATE` / `PERSONA_*_SECTION_TEMPLATE` / `WORLD_BOOK_ENTRY_TEMPLATE` / `POST_HISTORY_TEMPLATE` / `FIRST_GREETING_FALLBACK_TEMPLATE` / `RELATIONSHIP_BLOCK_TEMPLATE` / `render_*` |
+| `compliance_models.py` | 人格输出合规 Model Classes（Unit 文件）：助手腔种类 / 命中原因 / 检测结果 / 规则表 / `COMPLIANCE_` 配置 | `ComplianceKind` / `ComplianceSignalModel` / `COMPLIANCE_RULES` / `ComplianceGuardSettings` |
+| `compliance_guard.py` | 人格输出合规纯函数（Unit 文件）：助手腔加权检测 / 重试采样参数构建 | `detect_assistant_violation` / `build_retry_params` / `COMPLIANCE_RETRY_BASELINE_TEMPERATURE` |
 | `injection_models.py` | 注入防御 Model Classes（Unit 文件）：信号种类 / 命中原因 / 检测结果 / 规则表 / 包裹结果 / 反击风格 / `INJECTION_` 配置 | `InjectionKind` / `InjectionSignalModel` / `INJECTION_RULES` / `WrappedContentModel` / `CounterStyle` / `InjectionGuardSettings` |
 | `injection_guard.py` | 注入防御纯函数（Unit 文件）：不可信内容 nonce 定界包裹 / 规则表加权检测 / 提示块构建 | `wrap_untrusted_content` / `detect_injection` / `build_injection_hint` |
 | `injection_counter_texts.py` | 角色内反击台词表（Unit 文件——毒舌 / 温柔 / 傲娇；确定性选句） | `COUNTER_TEXTS` / `pick_counter_text` |
 | `output_protocol.py` | 输出协议解析（R2b——纯函数 Unit）：前导 ``<心声>`` / ``<情绪>`` 标签 → 可见正文 / 心声 / 情绪增量；流式起始前缀 best-effort 剥离器 | `parse_assistant_output` / `ParsedAssistantOutputModel` / `StreamTagStripper` / `strip_leading_protocol_prefix` |
 | `chat_models.py` | 会话回合 / 会话状态 / 组装结果 Model Classes（Unit 文件；含世界书回合状态——冷却追踪） | `ChatTurnModel` / `ChatSessionStateModel` / `MessageCompositionResult` |
+| `flow_models.py` | 心流门控 Model Classes（Unit 文件）：`FLOW_` 配置 / 裁决与理由枚举 / 节律快照 / 会话节拍状态 / 判定输入输出 / 合并结果 | `FlowGateSettings` / `FlowVerdict` / `FlowReason` / `FlowChatStateModel` / `FlowGateInputModel` / `FlowGateDecisionModel` / `MergedBurstModel` |
+| `flow_gate.py` | 心流门控纯函数（判定矩阵 / 入站记录 / 连发合并 / 静默窗口与状态迁移——时间全部注入） | `evaluate_flow_gate` / `record_inbound` / `merge_buffered_texts` / `remaining_quiet_ms` / `mark_pending` / `clear_pending` / `clear_backlog` / `rhythm_state_from_gate` |
+| `persona_rotation_models.py` | 群聊多人格 Model Classes（Unit 文件）：`GROUP_PERSONA_` 配置 / 选择理由枚举 / 应答候选 / 应答记忆 / 选择结论 | `GroupPersonaSettings` / `GroupSelectionReason` / `GroupResponderCandidateModel` / `GroupResponderStateModel` / `GroupPersonaSelectionModel` |
+| `persona_rotation.py` | 群聊多人格选择纯函数（轮转 / 冷却 / 重复抑制 / 全冷却兜底——确定性） | `select_group_responders` |
 | `world_book.py` | 世界书高级选择算法链（R2b——纯函数 Unit 文件；rng / 回合状态可注入）+ token 近似估算 | `select_world_book_entries` / `SelectedEntryModel` / `WorldBookTurnStateModel` / `WorldBookSelectionResult` / `RECURSION_HOP_CAP` / `estimate_text_tokens` |
 | `service.py` | 消息组装（消费选择结果）+ `ChatService` 会话循环（回合状态回存 / 可选工具循环与发送者来源分级工具闸） | `compose_messages` / `ChatService` |
 | `cli.py` | 控制台 REPL（启动 / 停机序列 + 命令面 + 流式直写） | `run_chat_cli` / `main` |
@@ -31,61 +37,71 @@
         └─ 否则 name 自称头 + 非空叙事段（description / personality / scenario，
            空字段段跳过）
     ④ render_constitution()                            宪章（注入面防护五条：
-                                                       身份 / 规则 / 引用 /
-                                                       标签 / 挑衅应对——见
-                                                       [defense.md](defense.md)）
-    ⑤ 心情状态块（emotion_summary 非空时）              R2b 轻情绪——M 态
-                                                       非中性摘要（见
-                                                       [emotion.md](emotion.md)）
-    ⑥ 长期指令块（directives 非空时）                   R2b D7-14 USER.md
-                                                       式常备指令（见
-                                                       [persona.md](persona.md)
-                                                       长期指令一节）
-    ⑦ 人物事实块（facts 非空时）                        R2c「关于对方」——
-                                                       现行高置信事实（见
-                                                       [persona.md](persona.md)
-                                                       人物画像一节）
-    ⑧ 核心记忆块（core_memory 非空时）                 R2c「自我认知」——
-                                                       四块自编辑自我模型
-                                                       的非空块（见
-                                                       [persona.md](persona.md)
-                                                       核心记忆一节）
-    ⑨ 相关技能块（skills 命中时）                       R2c「相关技能」——
-                                                       仅命中本轮用户文本的
-                                                       技能（见
-                                                       [persona.md](persona.md)
-                                                       程序性技能一节）
-    ⑩ render_output_protocol()                          R2b 输出格式协议
-                                                       （心声 / 情绪标签指令）
-    ⑪ 世界书 after_char 条目块                          检索增强（行为补充）
+                                                        身份 / 规则 / 引用 /
+                                                        标签 / 挑衅应对——见
+                                                        [defense.md](defense.md)）
+    ⑤ render_persona_contract(card.name)               人格输出契约五条
+                                                        （见下方「人格输出
+                                                        契约与合规守卫」）
+    ⑥ 心情状态块（emotion_summary 非空时）              R2b 轻情绪——M 态
+                                                        非中性摘要（见
+                                                        [emotion.md](emotion.md)）
+    ⑦ 长期指令块（directives 非空时）                   R2b D7-14 USER.md
+                                                        式常备指令（见
+                                                        [persona.md](persona.md)
+                                                        长期指令一节）
+    ⑧ 人物事实块（facts 非空时）                        R2c「关于对方」——
+                                                        现行高置信事实（见
+                                                        [persona.md](persona.md)
+                                                        人物画像一节）
+    ⑨ 核心记忆块（core_memory 非空时）                 R2c「自我认知」——
+                                                        四块自编辑自我模型
+                                                        的非空块（见
+                                                        [persona.md](persona.md)
+                                                        核心记忆一节）
+    ⑩ 关系进展块（relationship 非空时）                R2b+「关系进展」——
+                                                        关系类事实派生的阶段 /
+                                                        最近变化 / 边界约定
+                                                        （恒注入——空事实渲染
+                                                        「初识」；见
+                                                        [persona.md](persona.md)
+                                                        关系进展摘要一节）
+    ⑪ 相关技能块（skills 命中时）                       R2c「相关技能」——
+                                                        仅命中本轮用户文本的
+                                                        技能（见
+                                                        [persona.md](persona.md)
+                                                        程序性技能一节）
+    ⑫ render_output_protocol()                          R2b 输出格式协议
+                                                        （心声 / 情绪标签指令）
+    ⑬ 世界书 after_char 条目块                          检索增强（行为补充）
 [历史回合]
-    ⑫ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合；当轮入站
+    ⑭ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合；当轮入站
        回合在注入防御启用时被 nonce 定界包裹——历史回合保持原文）
 [system 注入提示]
-    ⑬ render_injection_hint(...)                       仅检测命中且提示开关
-                                                       开启时（紧接包裹回合；
-                                                       见 [defense.md](defense.md)）
+    ⑮ render_injection_hint(...)                       仅检测命中且提示开关
+                                                        开启时（紧接包裹回合；
+                                                        见 [defense.md](defense.md)）
 [system 末块]
-    ⑭ render_post_history_message(card)                历史后再注入（deep
-                                                       anti-drift nudge——
-                                                       卡片声明 post_history_instructions 时）
+    ⑯ render_post_history_message(card)                历史后再注入（deep
+                                                        anti-drift nudge——
+                                                        卡片声明 post_history_instructions 时）
 ```
 
-各块以 `\n\n` 连接；⑭ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
+各块以 `\n\n` 连接；⑮ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
 
-长期指令块（⑤）的渲染语义（`render_directives_block`）：每条指令一行
+长期指令块（⑦）的渲染语义（`render_directives_block`）：每条指令一行
 `- 正文`；最多 20 条且总字符 ≤ 2000（含列表符号）——超帽追加
 「（其余长期指令已省略）」说明行；无有效指令时整块跳过。块文本模板
 （`DIRECTIVES_BLOCK_TEMPLATE`）与截断说明行（`DIRECTIVES_TRUNCATION_NOTE`）
 同属 prompt Unit 文件 byte-lock 面（版本常量 `DIRECTIVES_BLOCK_TEMPLATE_VERSION`）。
 
-人物事实块（⑥）的渲染语义（`render_facts_block`）：每条事实一行
+人物事实块（⑧）的渲染语义（`render_facts_block`）：每条事实一行
 `- 【类别标签】正文`；注入行由 `FactsService.top_facts_for_compose` 提供并按
 置信度降序裁剪（12 条 / 1500 字符帽——含类别标签与行符号），无现行事实时整块
 跳过。块文本模板（`FACTS_BLOCK_TEMPLATE`）属 prompt Unit 文件 byte-lock 面
 （版本常量 `FACTS_BLOCK_TEMPLATE_VERSION`）。
 
-核心记忆块（⑦）的渲染语义（`render_core_memory_block`）：块记录由
+核心记忆块（⑨）的渲染语义（`render_core_memory_block`）：块记录由
 `CoreMemoryService.list_blocks` 提供（固定四块序），**仅非空块**进入注入；
 每块渲染为 `### 块名称` 标题行 + 正文，锁定块标题追加「（锁定）」标识，块间
 空行分隔，累计字符（含标题 / 换行 / 分隔）≤ 2400——预算不足时截断当前块正文
@@ -93,7 +109,50 @@
 （`CORE_MEMORY_BLOCK_TEMPLATE`）属 prompt Unit 文件 byte-lock 面（版本常量
 `CORE_MEMORY_BLOCK_TEMPLATE_VERSION`）。
 
-相关技能块（⑧）的渲染语义（`render_skills_block`）：**仅当命中本轮用户文本
+关系进展块（⑩）的渲染语义（`render_relationship_block`）：摘要由
+`ChatService` 经 `FactsService.list_facts`（类别 `relationship`、状态 `active`）
+读取关系类事实，再用 `build_relationship_summary` 派生（来源 / 公式 / 阈值表 /
+衰减档 / 夹取语义见 [persona.md](persona.md) 关系进展摘要一节）。渲染为
+「【关系进展】+ 当前阶段（中文称谓 + 亲密等级）」恒注入行，有最近事件时追加
+「最近的变化：」与逐条 `- 摘要` 行，有边界约定时追加「相处边界：…」行；累计
+字符 ≤ 1200，事件按时间倒序逐条追加，放不下即截断当前行并停止追加后续事件与
+边界行（确定性截断）。空事实摘要渲染「当前阶段：初识（亲密等级 0/3）」——
+关系状态是恒注入面，不是「有内容才注入」。块文本模板
+（`RELATIONSHIP_BLOCK_TEMPLATE` / `RELATIONSHIP_EVENTS_HEADER` /
+`RELATIONSHIP_EVENT_LINE_TEMPLATE` / `RELATIONSHIP_BOUNDARY_LINE_TEMPLATE`）属
+prompt Unit 文件 byte-lock 面（版本常量 `RELATIONSHIP_BLOCK_TEMPLATE_VERSION`）。
+读取失败降级为空摘要（初识）并记 warning，回复照常；读取面未接线（CLI / 纯内存
+直调形态）整块跳过。
+
+关系进展块示例（派生摘要 JSON + 渲染文本）：
+
+```json
+{
+  "relationship": {
+    "stage": "close",
+    "intimacy_level": 2,
+    "score": 16.0,
+    "event_count": 2,
+    "recent_events": [
+      {"fact_id": 12, "summary": "说好每天都要说晚安", "importance": 9.0, "ts_ms": 1762939200000},
+      {"fact_id": 9, "summary": "主人开始叫我小鱼", "importance": 7.0, "ts_ms": 1762852800000}
+    ],
+    "boundaries": ["说好每天都要说晚安"],
+    "generated_at_ms": 1762939200000
+  }
+}
+```
+
+```
+【关系进展】
+当前阶段：亲近（亲密等级 2/3）
+最近的变化：
+- 说好每天都要说晚安
+- 主人开始叫我小鱼
+相处边界：说好每天都要说晚安
+```
+
+相关技能块（⑪）的渲染语义（`render_skills_block`）：**仅当命中本轮用户文本
 时**注入——命中由 `SkillsService.match_for_compose` 按启用技能的触发短语字面
 包含（NFKC + casefold）或描述关键词片段判定，条数帽 2 条在读取面施加；每条
 技能渲染为 `### 名称` 标题行 + markdown 正文，技能之间空行分隔，总字符
@@ -104,15 +163,18 @@
 写入（回复链路不等待、计数失败只告警）。
 
 注：`compose_messages(state, rng=None, emotion_summary=None, directives=None,
-facts=None, core_memory=None, skills=None, wrap_current_message=False,
-current_message_label="", injection_hint=None)` 仍是纯函数——M 态读取 / 衰减、常备
-指令、人物事实、核心记忆与技能匹配均在 `ChatService` 侧（仅持久化会话已落库
-且对应服务已接线时激活），纯内存形态 / 无持久化测试面零附加 I/O。长期指令 /
-人物事实 / 核心记忆 / 技能读取失败均不阻断回复（日志 + 空块——增强面语义；
-读取面协议见 `FactsReaderFace` / `CoreMemoryReaderFace` /
-`SkillsReaderFace`）。
+facts=None, core_memory=None, relationship=None, skills=None,
+wrap_current_message=False, current_message_label="", injection_hint=None)`
+仍是纯函数——M 态读取 / 衰减、常备指令、人物事实、核心记忆、关系进展派生与
+技能匹配均在 `ChatService` 侧（仅持久化会话已落库且对应服务已接线时激活），
+纯内存形态 / 无持久化测试面零附加 I/O。长期指令 / 人物事实 / 核心记忆 / 技能
+读取失败均不阻断回复（日志 + 空块——增强面语义；关系进展读取失败降级为空摘要
+并同样不阻断回复）；读取面协议见 `FactsReaderFace` / `CoreMemoryReaderFace` /
+`SkillsReaderFace`（关系进展复用 `FactsReaderFace.list_facts`）。
 
-宪章块（④）恒注入且紧跟人格正典——五条规则先于一切记忆层与对话内容生效。
+宪章块（④）恒注入且紧跟人格正典——五条规则先于一切记忆层与对话内容生效；
+角色契约块（⑤）紧随宪章之后：宪章管身份与规则从哪来，契约管说出来的话像不像
+这个人（逐条见下方「人格输出契约与合规守卫」）。
 当轮入站包裹（`wrap_current_message=True` → 只包裹最后一条 user 回合）与注入
 提示块（`injection_hint` 非空且确实发生包裹时追加）由 `ChatService` 按
 `INJECTION_` 配置驱动；包裹格式、检测矩阵、来源标签与攻击面缺口见
@@ -173,6 +235,15 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 
 网关调用参数恒定：`role=chat`、`purpose="chat"`、`persona_id=str(persona_id)` 显式直传（与 `bind_persona_context` 上下文语义等价；选直传为可测性）。
 
+**亲密通道路由输入（可选独立端点，默认关闭）**：`reply` / `stream_reply` 把本轮
+关系摘要的 `intimacy_level`（0-3）作为 `intimacy_level` 关键字传给网关；开关、
+配置齐全性、阈值与端点 / 模型 / 凭据选择全部在 llm 网关完成（键表、路由矩阵与
+失败语义见 [llm.md](llm.md)「亲密通道」一节）。一致性锁定：`reply` 的单次调用、
+工具循环每一步与收尾调用、合规强化重试、`stream_reply` 的全部网关调用携带同一
+输入——同一回合不会被换到另一条通道。关系摘要未接线（纯内存 / CLI 形态）传
+`None`，读取失败降级为空摘要（stranger / 0）——两者都回退默认通道；亲密通道
+调用失败沿用既有网关错误语义上抛，本域不做静默换道。
+
 **工具循环（可选工具面——R2a-4）与自编辑写入闸（R2c）**：构造注入
 `tools` + `tool_executor` 后，`reply` 走有界工具循环（机械镜像 duty 域：
 gateway `chat_by_role(..., tools=specs)` → assistant 工具调用轮回放 →
@@ -193,6 +264,13 @@ nonce 定界帧（标签按 `sender_provenance`：主人消息 / 群友消息）
 回灌的 tool 轮正文同样定界包裹（「工具结果」）。检测只记 debug 日志与提示，
 不拦截回合；`INJECTION_ENABLED=false` 回到未包裹、未检测形态。完整格式、
 规则矩阵与缺口见 [defense.md](defense.md)。
+
+**人格输出合规守卫（助手腔检测 + 单次强化重试）**：`reply` 在网关响应之后、
+输出协议解析之前对原始回复跑 `detect_assistant_violation`，命中助手腔
+（AI 自我声明 / 道歉开场 / 短回复总结腔 / 客服话术）时按 `COMPLIANCE_` 配置
+做一次强化重试（末尾追加角色提醒块 + 温度提升），重试结果无条件采用；
+`stream_reply` 不重试。契约块、检测矩阵、重试语义与配置表见下节「人格输出
+契约与合规守卫」。
 
 **输出协议（R2b——`reply` 面）**：模型原始输出先经
 `output_protocol.parse_assistant_output` 解析——返回 / 落回合 / 进历史 /
@@ -225,6 +303,110 @@ nonce 定界帧（标签按 `sender_provenance`：主人消息 / 群友消息）
 未注入 sink（CLI / 单元测试 / 未装配记忆服务的形态）行为与既有完全一致。
 
 **锁定决策（保持）**：会话创建时快照卡片（运行期管理面编辑不热更到在途会话；resume 按当前正典重取）。
+
+## 人格输出契约与合规守卫
+
+### 角色契约（compose 常驻块）
+
+`prompts.py` 的 `PERSONA_CONTRACT_TEMPLATE`（版本常量
+`PERSONA_CONTRACT_TEMPLATE_VERSION`；套件总版本 `PROMPTS_VERSION` 随之为
+1.8.0——关系进展块模板加入后的当前套件版本）在 compose 链第 ⑤ 步注入，紧跟宪章之后、先于一切记忆层与格式协议。
+五条约束：① 你是 `{persona}`，是角色不是助手——不用「作为 AI / 作为一个语言
+模型」的腔调；② 不道歉式开场（抱歉 / 对不起 / 不好意思），除非真的做错了事；
+③ 不自我审查式软化（「不过其实」「希望这对你有帮助」这类总结腔能省则省）；
+④ 场景变亲密或动情时保持人物语气直接续写——不升维、不突然端正、不总结陈词；
+⑤ 被纠正或调侃时用角色口吻接住，不辩论。
+
+契约块恒注入、与 `COMPLIANCE_ENABLED` 无关（它是提示面约束，不是运行时
+补救）。`render_persona_contract` 对空白人格名抛 `ValueError`——装配期缺陷
+不应产出「你是，是角色不是助手」这类断句文本。
+
+### 助手腔检测（`detect_assistant_violation`）
+
+`compliance_guard.detect_assistant_violation(text, threshold=2.0)` 按
+`COMPLIANCE_RULES` 逐条匹配并加权求和；每条规则对全文最多计一次权重，原因
+按规则表顺序输出（确定性），命中片段截断 40 字符留证。规则矩阵：
+
+| 种类 | 命中样例（正则要点） | 权重 | 触发条件 |
+|---|---|---|---|
+| `ai_disclaimer` | `作为…AI/语言模型/助手`、`我只是一个程序`、`我不是真正的人类`、`as an AI` | 2.0 | 单条即达阈值（说了「作为 AI」，人设已经降级成工具） |
+| `persona_break` | `我是来帮助你的`、`有什么可以帮到你`、`请问还有什么`、`如果你还有其他问题` | 1.5 | 单条不达；两条叠加、或与任一其他信号叠加触发 |
+| `apology_opening` | 正文（剥离开头 `<心声>` / `<情绪>` 标签后）以 `抱歉` / `对不起` / `不好意思` 开头 | 1.0 | 单条不达（角色也会真的道歉，句中道歉不算开场） |
+| `hedge_softening` | `不过(，)?我?其实`、`希望能帮到你`、`希望这对你有帮助`、`总的来说`、`需要说明的是`，且全文 ≤ 300 字 | 1.0 | 单条不达；短回复连用两句即叠加触发（长回复里的正常收束句不算） |
+
+阈值缺省 2.0（`COMPLIANCE_THRESHOLD` 可覆盖）。检测结果示例：
+
+```json
+{
+  "violated": true,
+  "score": 3.0,
+  "reasons": [
+    {"kind": "ai_disclaimer", "matched": "作为一个AI"},
+    {"kind": "hedge_softening", "matched": "希望能帮到你"}
+  ]
+}
+```
+
+### 强化重试（仅非流式 `reply`）
+
+命中后的处理顺序（`ChatService.reply`：网关响应 → 合规检测 → 输出协议解析 →
+回合落库）：
+
+1. 记一条 warning（`persona_id` + 命中种类 + 总分；**不含回复正文**）；
+2. `COMPLIANCE_MAX_RETRIES=1`（缺省）时重试一次：请求消息 = 原组装消息 + 末尾
+   `COMPLIANCE_NUDGE_TEMPLATE` 渲染的 system 提醒块（版本常量
+   `COMPLIANCE_NUDGE_TEMPLATE_VERSION`）；采样参数经 `build_retry_params`
+   构建——请求未携带参数时以 `COMPLIANCE_RETRY_BASELINE_TEMPERATURE=0.8`
+   为基线叠加 `COMPLIANCE_TEMPERATURE_BUMP`（缺省 0.2，合计 1.0），请求自带
+   温度时以其为基线，结果一律夹取 2.0 上限，`max_tokens` / `top_p` / `extra`
+   原样保留；
+3. 重试结果**无条件采用**：不再检测、不循环，重试后仍失守也照常进入协议
+   解析与回合落库（一次重试是成本上限——反复重写会把对话拖成拉锯）；
+4. 工具循环分支的重试请求只带组装消息与提醒块、不携带工具面与 tool 轮
+   （重写的是最终可见文本，不需要重跑工具）。
+
+重试请求片段（命中后的第二次网关调用）：
+
+```json
+{
+  "model": "glm-5.3",
+  "temperature": 1.0,
+  "messages": [
+    {"role": "system", "content": "【会话章程】…\n\n【宪章】…\n\n【角色契约】…\n\n【回复格式协议】…"},
+    {"role": "user", "content": "今天好累呀"},
+    {"role": "system", "content": "【角色提醒】\n你刚才那句不太像「大肥鱼」在说话，倒像在念一份说明。\n重来一次：你就是 大肥鱼 本人，别解释自己的身份，别客套总结，直接接着这段对话往下说。"}
+  ]
+}
+```
+
+### 流式边界（锁定）
+
+`stream_reply` **不重试**：增量块已经逐块交给消费方，无法回头重说一遍，检测
+面因此只覆盖非流式 `reply`；重试文本一旦产出才进行协议解析的既有次序也不变
+（心声 / 情绪照常只进 meta）。流式通道维持 content-only + 起始前缀标签剥离的
+既有契约（见「stream_reply 边界」）。
+
+### `COMPLIANCE_` 配置面
+
+| 键 | 缺省 | 说明 |
+|---|---|---|
+| `COMPLIANCE_ENABLED` | `true` | 守卫总开关；`false` 时检测与重试全关（角色契约块仍恒注入） |
+| `COMPLIANCE_THRESHOLD` | `2.0` | 触发重试的加权总分阈值 |
+| `COMPLIANCE_TEMPERATURE_BUMP` | `0.2` | 重试温度增量（0–1；叠加结果夹取 2.0 上限） |
+| `COMPLIANCE_MAX_RETRIES` | `1` | 命中后的重试次数（0 = 只记日志不重试；上限 1——重试结果无条件采用） |
+
+`.env` 示例：
+
+```
+COMPLIANCE_ENABLED=true
+COMPLIANCE_THRESHOLD=2.0
+COMPLIANCE_TEMPERATURE_BUMP=0.2
+COMPLIANCE_MAX_RETRIES=1
+```
+
+四个键由 `ComplianceGuardSettings`（chat 域本地 `BaseSettings`，
+`env_prefix=COMPLIANCE_`）读取；`.env.example` / Setup Wizard 的示例模板由根
+脚本统一生成。
 
 ## 输出协议（`<心声>` / `<情绪>`——R2b）
 
@@ -270,6 +452,133 @@ nonce 定界帧（标签按 `sender_provenance`：主人消息 / 群友消息）
 标签原样放行；未闭合标签在流结束时剥离开标签标记、其后文本原样交还）；
 **心声 / 情绪不落 meta、不推进 M 态**（流式通道是操作员可见面——诚实边界，
 不引入逐块语义解析复杂度）。落库正文 = 已放行（客户端实际可见）文本。
+
+## 心流门控（Heartflow gate）
+
+入站消息进入聊天生成前的判定层：把节律层现状、会话消息密度与间隔、
+未读积压、关系进展摘要折算为一条结构化裁决——**立即回复 / 延迟回复 /
+连发合并 / 不回复**。判定与模型分文件（`flow_models.py` 只承载数据，
+`flow_gate.py` 为纯函数），时间由调用方注入 `now_ms`（epoch 毫秒）。
+门控关闭（`FLOW_ENABLED=false`，缺省）时回复链路与引入前完全一致。
+
+### 判定矩阵（顺序锁定）
+
+| 序 | 输入信号 | 裁决 | 理由枚举 | 延迟 |
+|---|---|---|---|---|
+| ① | `FLOW_ENABLED=false` | `reply` | `disabled` | 0 |
+| ② | 入站 `synthetic=true`（机器事件） | `skip` | `synthetic_event` | 0 |
+| ③ | 节律门不允许（睡眠窗口） | `defer` | `sleep_window` | 节律门给出的距醒来毫秒 |
+| ④ | 连发窗口内条数 ≥ `FLOW_BURST_COUNT` | `merge` | `burst_merge` | 静默窗口剩余毫秒 |
+| ⑤ | 连续两条消息间隔 < `FLOW_MIN_REPLY_GAP_MS`，且关系非亲近 / 亲密 | `defer` | `density_pacing` | 补齐最小间隔毫秒 |
+| ⑥ | 未读积压 ≥ `FLOW_BACKLOG_DEFER_THRESHOLD`，且关系非亲近 / 亲密 | `defer` | `backlog_defer` | `step × 超出条数`，封顶 `FLOW_BACKLOG_DEFER_MAX_MS` |
+| ⑦ | 关系阶段为 `close` / `intimate`，且本应触发 ⑤ 或 ⑥ | `reply` | `relationship_priority` | 0 |
+| ⑧ | 节律允许但拟人延迟 > 0 | `defer` | `rhythm_delay` | 节律门延迟 |
+| ⑨ | 其余 | `reply` | `normal` | 0 |
+
+睡眠窗口优先于关系优先（人在睡，关系再近也不叫醒）；关系优先只跳过
+密度与积压节流，不跳过睡眠。
+
+### 会话节拍状态与缓冲
+
+`FlowChatStateModel` 按会话身份键保存在通道路由器内存中：最近入站时刻
+（最多 32 条）、未读积压条数、待回复缓冲（最多 32 条）、排程标记与计划
+执行时刻。判定前的入站记录经 `record_inbound` 追加；回复成功后
+`clear_backlog` 清零积压与缓冲（到达时刻历史保留供密度判定）。
+
+连发合并按 `FLOW_MERGE_MAX_MESSAGES` 保留**最近**条目（最新几句承载当前
+诉求），丢弃最老条目并记录条数；合并文本按入站顺序以换行连接。延迟 /
+合并批次一律经中央调度器的 `schedule_once` 一次性作业排程（禁止自建
+线程 / 定时器）；批次执行前若静默窗口未满或仍在睡眠窗口，作业按剩余
+时长重排，不在进程内等待。调度器不可用时延迟裁决降级立即回复
+（fail-safe，记 warning）。
+
+### 配置（`FLOW_` env 面）
+
+| 字段 | env 键 | 默认 | 说明 |
+|---|---|---|---|
+| `enabled` | `FLOW_ENABLED` | `false` | 门控开关（false = 直通形态） |
+| `burst_window_ms` | `FLOW_BURST_WINDOW_MS` | `4000` | 连发窗口毫秒 |
+| `burst_count` | `FLOW_BURST_COUNT` | `3` | 连发合并阈值（窗口内条数，2-20） |
+| `merge_quiet_ms` | `FLOW_MERGE_QUIET_MS` | `2500` | 合并静默毫秒（最后入站后的等待） |
+| `merge_max_messages` | `FLOW_MERGE_MAX_MESSAGES` | `5` | 单次合并承载上限（1-20） |
+| `min_reply_gap_ms` | `FLOW_MIN_REPLY_GAP_MS` | `1200` | 两条回复之间的最小间隔毫秒 |
+| `backlog_defer_threshold` | `FLOW_BACKLOG_DEFER_THRESHOLD` | `6` | 未读积压转延迟阈值 |
+| `backlog_defer_step_ms` | `FLOW_BACKLOG_DEFER_STEP_MS` | `8000` | 每条超出阈值的追加延迟 |
+| `backlog_defer_max_ms` | `FLOW_BACKLOG_DEFER_MAX_MS` | `90000` | 积压延迟上限 |
+| `pending_grace_ms` | `FLOW_PENDING_GRACE_MS` | `60000` | 排程任务丢失判定宽限 |
+
+### 裁决 JSON 示例
+
+```json
+{
+  "verdict": "merge",
+  "delay_ms": 2400,
+  "reason": "burst_merge"
+}
+```
+
+判定输入（路由器内部构造，不落库）：
+
+```json
+{
+  "now_ms": 1700000000200,
+  "is_synthetic": false,
+  "rhythm": {"allowed": true, "suggested_delay_ms": 0},
+  "relationship": {
+    "stage": "familiar",
+    "intimacy_level": 1,
+    "score": 4.5,
+    "event_count": 3,
+    "recent_events": [],
+    "boundaries": [],
+    "generated_at_ms": 1700000000200
+  },
+  "state": {
+    "recent_arrival_ms": [1700000000000, 1700000000100, 1700000000200],
+    "backlog_count": 3,
+    "buffered_texts": ["在吗", "看看这个", "喂"],
+    "pending": false,
+    "pending_due_ms": null
+  }
+}
+```
+
+## 群聊多人格应答（Group multi-persona routing）
+
+群聊消息在启用人格集合内按确定性规则选择应答者：轮转（上一轮发言者
+让位）、冷却（`GROUP_PERSONA_COOLDOWN_MS` 内不重复）、重复抑制（可用者
+都刚发过言时允许重复并标注 `repeat_fallback`）、全冷却兜底（选最近应答
+时刻最早者，保证群里有回应）。`GROUP_PERSONA_MAX_RESPONDERS` 控制单条
+消息的应答人数：1 = 轮流单人格应答，>1 = 多人格依次接续同一轮对话；
+同一轮内一人至多应答一次（去重互斥）。
+
+归属语义：每个应答人格拥有**自己的持久化会话**（标题
+`channel:<channel>:<chat_id>:persona:<persona_id>`），会话行
+`ff_chat_sessions.persona_id` 即该会话全部消息的应答归属
+（`replied_by`）——助手回合无需消息级冗余列，无迁移。单聊消息不参与
+轮转；功能关闭 / 选择为空 / 无启用人格时回退主人格单人格路径。
+
+配置（`GROUP_PERSONA_` env 面）：
+
+| 字段 | env 键 | 默认 | 说明 |
+|---|---|---|---|
+| `enabled` | `GROUP_PERSONA_ENABLED` | `false` | 群聊多人格开关 |
+| `max_responders` | `GROUP_PERSONA_MAX_RESPONDERS` | `1` | 单条群消息应答人数上限（1-4） |
+| `cooldown_ms` | `GROUP_PERSONA_COOLDOWN_MS` | `60000` | 同一人格两次应答的最小间隔 |
+
+选择结论 JSON 示例：
+
+```json
+{
+  "responder_persona_ids": [3, 5],
+  "reason": "rotation",
+  "cooling_persona_ids": [1]
+}
+```
+
+链路位置：通道路由器在门控裁决为 `reply`（或延迟批次到期）后读取
+启用人格集合并选择应答者，再逐人格经 `bind_persona_context` 进入
+`ChatService.reply`；逐人格失败隔离，全部失败才走通用兜底文案。
 
 ## 来源分级参数
 
@@ -366,11 +675,13 @@ nonce 定界帧（标签按 `sender_provenance`：主人消息 / 群友消息）
 
 ## prompt 版本与 byte-lock
 
-prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本——注入面防护模板
-加入后为 1.6.0）+ 逐模板 `*_TEMPLATE_VERSION`（含
-`CONSTITUTION_TEMPLATE_VERSION` / `UNTRUSTED_WRAP_TEMPLATE_VERSION` /
+prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本——关系进展块
+模板加入后为 1.8.0）+ 逐模板 `*_TEMPLATE_VERSION`（含
+`CONSTITUTION_TEMPLATE_VERSION` / `PERSONA_CONTRACT_TEMPLATE_VERSION` /
+`COMPLIANCE_NUDGE_TEMPLATE_VERSION` / `UNTRUSTED_WRAP_TEMPLATE_VERSION` /
 `INJECTION_HINT_TEMPLATE_VERSION` / `OUTPUT_PROTOCOL_TEMPLATE_VERSION` /
 `EMOTION_STATE_TEMPLATE_VERSION` / `CORE_MEMORY_BLOCK_TEMPLATE_VERSION` /
+`RELATIONSHIP_BLOCK_TEMPLATE_VERSION` /
 `SKILLS_BLOCK_TEMPLATE_VERSION`）。模板文本变更 = 行为变更，须同步：① 上调版本常量；② 更新 `tests/unit/test_chat_prompts.py` 的 sha256 摘要锁（`_BYTE_LOCKS`）——测试红即「知情确认」关卡。
 
 ## 控制台 CLI（pixi run chat）
@@ -455,7 +766,9 @@ lifespan                                          上述函数对的 asynccontex
 `compose_messages` 产出的请求消息序列（两轮对话后；此处为直调缺省形态——
 `wrap_current_message=False`，当轮消息不包裹。经 `ChatService.reply` /
 `stream_reply` 且注入防御启用时，最后一条 user 回合会被 nonce 定界帧替换、
-命中时其后追加【注入提示】system 块——见 [defense.md](defense.md)）：
+命中时其后追加【注入提示】system 块——见 [defense.md](defense.md)；关系进展
+块只在 `ChatService` 接上事实读取面且会话已落库时出现——系统首块此时另含
+【关系进展】段，格式见上方「关系进展块示例」，直调缺省形态不出现）：
 
 ```json
 {
@@ -510,11 +823,22 @@ lifespan                                          上述函数对的 asynccontex
   注入四块 / 全空跳过 / 未接线与纯内存形态零 I/O / 读取失败退化 / 工具列表按
   发送者来源裁剪（owner 全量、peer 剔除 edit_core_memory、仅剩该工具时工具面
   为空）/ 工具执行期会话主键绑定与循环后复位；
+- `tests/unit/test_chat_relationship.py`——关系进展注入：块渲染（未接线空串 /
+  空摘要阶段行 / 中文阶段称谓与事件·边界行 / 1200 帽确定性截断）/ 链位置
+  （自我认知之后、相关技能之前）/ 持久化会话经事实读面派生注入 / 阈值表构造
+  注入 / 读取失败降级为空摘要且回复照常 / 未接线与纯内存形态零 I/O / 流式·
+  工具循环·合规重试请求一致携带；
+- `tests/unit/test_relationship_summary.py`——关系进展派生纯函数：空事实 /
+  混类与历史过滤 / 阶段阶梯上下沿 / 衰减档边界与未来时间戳 / 等级上限夹取与
+  阶段回落 / 事件条数与顺序·摘要截断 / 边界识别与上限 / 确定性 / 时间轴拒绝 /
+  阈值表不变式；
 - `tests/unit/test_chat_swipe.py`——消息变体全语义（候选落库形态 / 脊柱-only 上下文 / 序号续编 / 空正文零残留 / 父回合校验 / 选定替换 + 单次 M 态推进 + 注记 / include_variants 读侧 / 引擎停用零推进）；
 - `tests/unit/test_chat_swipe_api.py`——变体端点（ASGITransport）：重生成 / 详情嵌套 / 选定 / 错误面（父回合语义 / 数量边界 / 缺失资源）；
 - `tests/unit/test_migration_chat_message_variants.py`——迁移 0010 SQLite 升 / 降 / 复升 + 复合唯一键语义；
 - `tests/unit/test_injection_guard.py`——注入防御机制：包裹保真 / nonce 碰撞规避与重试上限 / 标签边界 / 检测规则逐种类可达 / 保守阈值边界 / 台词确定性；
 - `tests/unit/test_prompt_injection_red_team.py`——38 条红队模板检测矩阵 + 阳性模板组装面防线（宪章 / 包裹 / 提示 / 风格台词）+ 阴性零误报 + owner / peer 标签 / 开关 / 流式；
+- `tests/unit/test_compliance_guard.py`——人格输出合规机制：四类助手腔逐条可达 / AI 自我声明单条触发 / 道歉与话术单条不触发 / 短回复总结腔限定与长回复豁免 / 协议标签之后的开场判定 / 正常角色台词零误报 / 阈值覆盖 / 重试参数（基线、克隆保留字段、2.0 夹取）/ `COMPLIANCE_` env 面；
+- `tests/unit/test_chat_compliance.py`——守卫接入：契约块链位置（宪章之后、记忆层之前）/ 违规首次 + 合规重试（提醒块 + 提升温度 + 参数直通）/ 两次违规只重试一次 / 停用与零重试单调用 / 合规首次不重试 / 重试文本走输出协议 / 工具循环分支重试不带 tool 轮与工具面 / 流式不重试；
 - `tests/unit/test_chat_persistence.py`——持久化集成：落库 / 网关失败保留用户回合 / resume 全链路（历史原文 + 当轮包裹边界）/ 持久化关闭兼容纯内存形态 / CLI `/new` `/sessions` `/resume` 命令（真实启动栈 + tmp SQLite + 假网关）；
 - `tests/unit/test_chat_cli.py`——注入式 I/O 驱动全流程（真实启动栈 + tmp SQLite + 假网关，never real stdin）：命令面 / 无主人格指引（退出码 1）/ 业务异常不崩 REPL / main 入口；
 - `tests/unit/test_app_main.py`——create_app 路由注册 / startup-shutdown 函数对（真实组件 + LIFO 追踪）/ health 与 personas 经 ASGITransport 走真实 app / lifespan 全周期 / 外部引擎治理；

@@ -16,6 +16,10 @@ from generate_examples_helpers import (
 )
 from pydantic_settings import BaseSettings
 
+from packages.harness.chat.compliance_models import ComplianceGuardSettings
+from packages.harness.chat.flow_models import FlowGateSettings
+from packages.harness.chat.injection_models import InjectionGuardSettings
+from packages.harness.chat.persona_rotation_models import GroupPersonaSettings
 from packages.harness.config.models import (
     AsrSettings,
     DatabaseConfig,
@@ -36,8 +40,8 @@ from packages.harness.config.models import (
     WebSearchSettings,
 )
 from packages.harness.emotion.emotion_models import EmotionSettings
-from packages.harness.chat.injection_models import InjectionGuardSettings
 from packages.harness.intent.intent_models import IntentSettings
+from packages.harness.llm.intimate_models import IntimateChannelConfig
 from packages.harness.rhythm.rhythm_models import RhythmSettings
 
 # .env.example 分节标题: (section_title, config_classes)
@@ -47,6 +51,7 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("LOG — 日志配置（三 sink：console + 文本 + JSON）", [LogConfig]),
     ("POOLS — 共享池配置（线程池 / HTTP 池 / LLM 信号量 / 熔断）", [PoolsConfig]),
     ("LLM — 默认端点 env 面（模型注册表经 config.yaml 配置）", [LlmEndpointConfig]),
+    ("LLM.INTIMATE — 亲密回复独立通道（默认关闭；base_url / api_key / model 三项齐全且开关开启才生效）", [IntimateChannelConfig]),
     ("SEEKDB — 检索存储配置（enabled=False 走 SQLite 回退；密码经 SEEKDB_PASSWORD 间接）", [SeekDBSettings]),
     ("CHANNELS.TELEGRAM — Telegram 通道配置（机器人令牌经 TELEGRAM_BOT_TOKEN 间接）", [TelegramSettings]),
     ("CHANNELS.QQ — QQ 通道配置（NapCat OneBot v11；令牌经 QQ_ACCESS_TOKEN / QQ_WEBHOOK_TOKEN 间接）", [QqChannelSettings]),
@@ -59,9 +64,12 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("VOICE.ASR — 语音识别配置（Qwen3-ASR 服务端点）", [AsrSettings]),
     ("SEARCH.WEB — 联网搜索运营配置（默认关闭；密钥经 SEARCH_BOCHA_API_KEY / SEARCH_ZHIPU_API_KEY 间接——条目表在 config.yaml search 节管理）", [WebSearchSettings]),
     ("RHYTHM — 拟人节律层配置（默认关闭；HH:MM 为 naive 本地时间——调度器同口径）", [RhythmSettings]),
+    ("FLOW — 心流门控配置（默认关闭；延迟 / 合并批次经中央调度器一次性作业排程）", [FlowGateSettings]),
+    ("GROUP_PERSONA — 群聊多人格应答配置（默认关闭；单人格应答保持既有语义）", [GroupPersonaSettings]),
     ("INTENT — 意图快径配置（默认开启——纯本地零成本罐头意图，绕过主 LLM）", [IntentSettings]),
     ("EMOTION — 轻情绪引擎配置（默认开启——协议解析宽容降级；驱动 M 层情绪状态）", [EmotionSettings]),
     ("INJECTION — 提示词注入防御配置（默认开启——保守阈值；反击风格可选）", [InjectionGuardSettings]),
+    ("COMPLIANCE — 人格输出合规守卫配置（默认开启——一次强化重试）", [ComplianceGuardSettings]),
 ]
 
 
