@@ -154,6 +154,13 @@ from packages.harness.multimodal.sticker_models import (
     StickerUpdateModel,
     StickerUploadItemModel,
 )
+from packages.harness.canvas.canvas_models import (
+    CanvasCreateDTO,
+    CanvasDeleteResultModel,
+    CanvasQueryDTO,
+    CanvasRecordDTO,
+    CanvasUpdateDTO,
+)
 from packages.harness.reminders.models import (
     ReminderBatchCancelItemDTO,
     ReminderBatchCancelRequest,
@@ -194,6 +201,7 @@ _FRONTEND_REMINDERS = "frontend/src/types/reminders.ts"
 _FRONTEND_USAGE = "frontend/src/types/usage.ts"
 _FRONTEND_REGISTRY = "frontend/src/types/model-registry.ts"
 _FRONTEND_STICKER = "frontend/src/types/stickers.ts"
+_FRONTEND_CANVAS = "frontend/src/types/canvas.ts"
 
 
 @dataclass(frozen=True)
@@ -367,6 +375,12 @@ def build_manifest() -> list[SchemaExportEntry]:
         SchemaExportEntry("StickerBatchUploadResultModel", StickerBatchUploadResultModel, "StickerBatchUploadResult", _FRONTEND_STICKER),
         SchemaExportEntry("StickerBatchDeleteResultModel", StickerBatchDeleteResultModel, "StickerBatchDeleteResult", _FRONTEND_STICKER),
         SchemaExportEntry("StickerAnnotationResultModel", StickerAnnotationResultModel, "StickerAnnotationResult", _FRONTEND_STICKER),
+        # canvas 域——渲染产物（创建 / 修订 / 列表 / 记录 / 删除结果）。
+        SchemaExportEntry("CanvasCreateDTO", CanvasCreateDTO, "CanvasCreateRequest", _FRONTEND_CANVAS),
+        SchemaExportEntry("CanvasUpdateDTO", CanvasUpdateDTO, "CanvasUpdateRequest", _FRONTEND_CANVAS),
+        SchemaExportEntry("CanvasQueryDTO", CanvasQueryDTO, "CanvasListParams", _FRONTEND_CANVAS),
+        SchemaExportEntry("CanvasRecordDTO", CanvasRecordDTO, "CanvasRecord", _FRONTEND_CANVAS),
+        SchemaExportEntry("CanvasDeleteResultModel", CanvasDeleteResultModel, "CanvasDeleteResult", _FRONTEND_CANVAS),
         # model-registry 域。
         SchemaExportEntry("ModelEntryCreateDTO", ModelEntryCreateDTO, "ModelEntryCreateRequest", _FRONTEND_REGISTRY),
         SchemaExportEntry("ModelEntryUpdateDTO", ModelEntryUpdateDTO, "ModelEntryUpdateRequest", _FRONTEND_REGISTRY),

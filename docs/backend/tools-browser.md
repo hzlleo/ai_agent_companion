@@ -1,6 +1,6 @@
 # 浏览器 sidecar（browser sidecar）— JS 渲染回退执行面
 
-`docker/browser-sidecar/`（独立 pixi 项目 + playwright 加固镜像——sidecar 树）+ `backend/src/packages/harness/tools/browser_models.py` / `browser.py`（后端侧客户端 + 注册接线）+ `docker/docker-compose.yml`（部署编排），共同构成「需要真实浏览器运行时的工具」的隔离执行面：后端把七浏览器工具（`navigate` / `read_text` / `screenshot` / `click` / `fill` / `list_tabs` / `close_tab`）代理到 sidecar 进程执行——**直接页面抓取失败或需要 JS 渲染时的回退面**。
+`docker/browser-sidecar/`（独立 pixi 项目 + playwright 加固镜像——sidecar 树）+ `backend/src/packages/harness/tools/browser_models.py` / `browser.py`（后端侧客户端 + 注册接线）+ `docker/docker-compose.yml`（部署编排），共同构成「需要真实浏览器运行时的工具」的隔离执行面：后端把八浏览器工具（`navigate` / `read_text` / `screenshot` / `click` / `fill` / `list_tabs` / `close_tab` / `evaluate`）代理到 sidecar 进程执行——**直接页面抓取失败或需要 JS 渲染时的回退面**；`evaluate` 同时是通道采集面的执行底座（抖音 web 通道经它读取 / 写入页面内的会话 DOM，见 channels.md）。
 
 ## 为什么独立成树（架构决策）
 
@@ -22,7 +22,7 @@ duty / chat 轮 tool_calls
     ↓ 共享 httpx 池 → http://127.0.0.1:8766      docker/browser-sidecar（compose 部署）
     ↓ ASGI /invoke（token 恒时比较）             sidecar 树 server.py
     ↓ BrowserSidecarRuntime.invoke              sidecar 树 runtime.py（寻址 → 参数校验 → 执行 → 计时；恒不抛）
-    ↓ 浏览器执行器                               sidecar 树 browser.py（策略链 + 七工具 + 资源护栏）
+    ↓ 浏览器执行器                               sidecar 树 browser.py（策略链 + 八工具 + 资源护栏）
 ```
 
 失败语义（三层恒不抛，与沙盒同构）：客户端层——token 缺失 / sidecar 不可达 / 非成功状态 / wire 破坏 → `ToolResultModel(ok=False)`；代理层——客户端 ok=False 转 `INTERNAL_ERROR` 业务异常；registry 层——异常归一 ok=False（既有隔离面）。**工具循环恒不见异常。**
@@ -37,7 +37,7 @@ duty / chat 轮 tool_calls
 - 端点**恒 200** 携带成败终态；非 200 = 401（鉴权失败）/ 422（请求形态非法）——客户端按传输层失败归一；
 - `InvokeRequestModel` 为 `extra=forbid` 严格面；`latency_ms` 为 sidecar 侧执行时延。
 
-## 工具面（七工具——JSON 示例）
+## 工具面（八工具——JSON 示例）
 
 | 工具 | 参数 | 结果示例 | 说明 |
 |---|---|---|---|
@@ -48,6 +48,7 @@ duty / chat 轮 tool_calls
 | `fill` | `{"selector": "#input", "value": "文本"}` | `{"filled": true, "selector": "#input"}` | 填充表单字段（空值 = 清空） |
 | `list_tabs` | `{}` | `{"count": 1, "tabs": [{"index": 0, "url": "...", "title": "..."}]}` | 列举标签页（上限 4） |
 | `close_tab` | `{"tab_index": 0}` | `{"closed_tab_index": 0}` | 按索引关闭标签页 |
+| `evaluate` | `{"script": "() => document.title", "max_chars": 262144, "timeout_ms": 15000}` | `{"result": "Example", "char_count": 11}` | 页面上下文 JS 求值（结果 JSON 序列化规模超 `max_chars` 即受控失败——不静默截断；超时受控失败） |
 
 read_text 的后端包裹形态（不可信标注——记忆域 provenance 语义镜像）：
 
@@ -85,7 +86,7 @@ navigate(url)
 
 ## 双树镜像面（drift 门禁覆盖）
 
-wire 三模型（`InvokeRequestModel` / `InvokeResponseModel` / `HealthResponseModel`）+ 七参数模型（`NavigateArgsModel` / `ReadTextArgsModel` / `ScreenshotArgsModel` / `ClickArgsModel` / `FillArgsModel` / `ListTabsArgsModel` / `CloseTabArgsModel`）+ 七工具名常量行 + 三部署契约常量行（`BROWSER_SIDECAR_INVOKE_PATH` / `BROWSER_SIDECAR_HEALTH_PATH` / `BROWSER_SIDECAR_TOKEN_ENV_DEFAULT`——backend `browser.py` ↔ sidecar 树 `server.py`）与 sidecar 树 **byte 级镜像**。仓库根漂移门禁（`scripts/check_sandbox_dtos_drift.py`）在既有 16 项沙盒比对之上**追加 20 项浏览器比对（共 36 项）**；改任一侧必须同步另一侧后重跑门禁。
+wire 三模型（`InvokeRequestModel` / `InvokeResponseModel` / `HealthResponseModel`）+ 八参数模型（`NavigateArgsModel` / `ReadTextArgsModel` / `ScreenshotArgsModel` / `ClickArgsModel` / `FillArgsModel` / `ListTabsArgsModel` / `CloseTabArgsModel` / `EvaluateArgsModel`）+ 八工具名常量行 + 三部署契约常量行（`BROWSER_SIDECAR_INVOKE_PATH` / `BROWSER_SIDECAR_HEALTH_PATH` / `BROWSER_SIDECAR_TOKEN_ENV_DEFAULT`——backend `browser.py` ↔ sidecar 树 `server.py`）与 sidecar 树 **byte 级镜像**。仓库根漂移门禁（`scripts/check_sandbox_dtos_drift.py`）在既有 16 项沙盒比对之上**追加 22 项浏览器比对（共 38 项）**；改任一侧必须同步另一侧后重跑门禁。
 
 ## 模块一览（两侧）
 
@@ -95,7 +96,7 @@ wire 三模型（`InvokeRequestModel` / `InvokeResponseModel` / `HealthResponseM
 | sidecar | `browser_sidecar/wire_models.py` | wire 契约 Model Classes（镜像源） |
 | sidecar | `browser_sidecar/runtime.py` | sidecar 工具运行时（注册 / 隔离执行 / 计时——镜像两侧 registry 语义） |
 | sidecar | `browser_sidecar/policy.py` | 导航 / 子资源策略纯函数面（允许清单 + 私网拒绝 + 协议面） |
-| sidecar | `browser_sidecar/browser.py` | playwright 运行时（context-per-profile + 路由拦截 + 七工具执行器 + 资源护栏 + face 协议注入面） |
+| sidecar | `browser_sidecar/browser.py` | playwright 运行时（context-per-profile + 路由拦截 + 八工具执行器 + 资源护栏 + face 协议注入面） |
 | 后端 | `harness/tools/browser_models.py` | Unit 文件：wire 契约（镜像副本）+ `BrowserSidecarSettingsFace` / `BrowserSidecarClientFace` 协议 + 七参数模型（镜像）+ 七 `build_*_spec` |
 | 后端 | `harness/tools/browser.py` | `BrowserSidecarClient`（共享池 + Bearer + 恒不抛）+ `build_browser_sidecar_client` + `wrap_untrusted_page_text` + `register_browser_sidecar_tools`（registry 代理注册 + 结果格式化） |
 | 后端 | `app/main.py` `_startup_browser_sidecar` / `_register_browser_sidecar_tools` | 启动接线（enabled → token 检查 → /health 探测 → chat 注册 + duty 注册） |
@@ -127,13 +128,13 @@ startup_app_state
         ↓ probe_health() 失败（bounded 超时 request_timeout_seconds）→ 跳过 + 告警
         ↓ 客户端上挂 app.state.browser_sidecar_client（duty 装配复用——零二次探测）
         ↓ chat 注册表接线（镜像 web_search 双注册形态）：
-            搜索 chat 注册表已建 → 七工具并入（search_tool_specs 追加）
+            搜索 chat 注册表已建 → 八工具并入（search_tool_specs 追加）
             否则 → 独立 browser 槽位（browser_tool_registry / browser_tool_specs——
                    通道工厂按「搜索槽位优先、浏览器槽位兜底」消费）
     ↓ _startup_channels（chat 工厂消费上述槽位）
     ↓ _startup_scheduler（duty 分支）：
         ↓ _register_browser_sidecar_tools(app, settings, registry)：
-            客户端就绪 → register_browser_sidecar_tools(registry, client)（七工具）
+            客户端就绪 → register_browser_sidecar_tools(registry, client)（八工具）
             槽位 None（未启用 / 探测失败）→ 零注册（告警已在启动期落日志）
 ```
 
@@ -141,11 +142,11 @@ startup_app_state
 
 | duty | chat（搜索） | tools_browser_sidecar | 探测 / token | duty / chat 工具面 |
 |---|---|---|---|---|
-| off | off | on | 成功 | chat 仅浏览器七工具（browser 槽位） |
-| off | on | on | 成功 | chat = web_search + 浏览器七工具（并入搜索注册表） |
+| off | off | on | 成功 | chat 仅浏览器八工具（browser 槽位） |
+| off | on | on | 成功 | chat = web_search + 浏览器八工具（并入搜索注册表） |
 | on | 任意 | off | —— | duty 工具面不含浏览器工具 |
 | on | 任意 | on | 失败 / token 缺失 | 既有工具集（告警——warn-and-continue） |
-| on | 任意 | on | 成功 | 既有工具集 + 浏览器七工具（duty + chat 双注册） |
+| on | 任意 | on | 成功 | 既有工具集 + 浏览器八工具（duty + chat 双注册） |
 
 ## 部署（compose——后端不进 compose）
 
@@ -163,7 +164,7 @@ docker compose up -d browser-sidecar               # 127.0.0.1:8766 → 容器 8
 
 ## 扩展路径
 
-1. 新浏览器工具按七工具范式接入 sidecar 树（参数 Model Class + 受控失败 + face 注入面）；后端侧镜像参数模型 + `build_<tool>_spec` + 结果格式化（需要标注的工具在 `_format_browser_tool_result` 分派）；
+1. 新浏览器工具按八工具范式接入 sidecar 树（参数 Model Class + 受控失败 + face 注入面）；后端侧镜像参数模型 + `build_<tool>_spec` + 结果格式化（需要标注的工具在 `_format_browser_tool_result` 分派）；
 2. 写入类浏览器操作（表单提交后的网络副作用等）属 safety 审批面（须过审批红线后才接入——不预设）；
 3. wire 契约演进：两树同步改 + 漂移门禁基线同步（36 项计数更新）。
 
@@ -174,7 +175,7 @@ docker compose up -d browser-sidecar               # 127.0.0.1:8766 → 容器 8
 | 测试文件（后端） | 覆盖 |
 |---|---|
 | `tests/unit/test_tools_browser_sidecar_client.py` | MockTransport 客户端：token 间接 / 鉴权头形状 / ok-error 映射 / 传输异常 / 非成功状态 / wire 破坏 / 健康探测矩阵 / 工厂 face 构造 |
-| `tests/unit/test_tools_browser_sidecar_registry.py` | 代理回路（fake 客户端 ok / 失败归一）/ 本地校验 fail-fast / 默认值物化经 wire / read_text 不可信包裹 / screenshot 视觉提示 / 规格呈现面 |
+| `tests/unit/test_tools_browser_sidecar_registry.py` | 代理回路（fake 客户端 ok / 失败归一）/ 本地校验 fail-fast / 默认值物化经 wire / read_text 不可信包裹 / screenshot 视觉提示 / evaluate 结果与参数面 / 规格呈现面 |
 | `tests/unit/test_tools_browser_sidecar_settings.py` | env 面映射 / 默认值 / 校验 / 聚合 + 隔离构造 / conftest 硬覆盖锚点 |
 | `tests/unit/test_app_browser_sidecar_lifespan.py` | 装配矩阵（disabled / healthy / unhealthy / token 缺失 / duty 开关 / chat 并入 vs 独立槽位）+ 代理回路 |
 
@@ -183,5 +184,5 @@ docker compose up -d browser-sidecar               # 127.0.0.1:8766 → 容器 8
 | `src/tests/unit/test_wire_models.py` | wire 契约模型校验面 |
 | `src/tests/unit/test_runtime.py` | 运行时四类隔离 + 计时（注入时钟）+ 默认值物化 |
 | `src/tests/unit/test_policy.py` | 允许清单矩阵 / 私网拒绝矩阵（字面量 + 解析产物 fail-closed）/ 协议面 / 路由拦截判定 |
-| `src/tests/unit/test_browser.py` | playwright 适配层（fake playwright 对象）/ 路由拦截 / 弹出页上限 / DNS 解析辅助 / 会话（活动页 / 上限 / 空闲收割）/ 管理器生命周期 / 七工具执行器全矩阵 / env 读取面 |
+| `src/tests/unit/test_browser.py` | playwright 适配层（fake playwright 对象）/ 路由拦截 / 弹出页上限 / DNS 解析辅助 / 会话（活动页 / 上限 / 空闲收割）/ 管理器生命周期 / 八工具执行器全矩阵 / env 读取面 |
 | `src/tests/unit/test_server.py` | ASGI 手写调用：鉴权矩阵 / 端点面 / 422 / 默认运行时全链 / fail-fast / lifespan 接线 / 恒时比较 / 绑定解析 |

@@ -4,7 +4,7 @@
 契约常量行）以文本镜像方式耦合——本脚本对两侧定义做文本比对：任一侧
 漂移即红（红灯输出首个差异的 unified diff 上下文）。
 
-比对项（18 模型块 + 18 常量行，共 36 项）：
+比对项（19 模型块 + 19 常量行，共 38 项）：
 
     - ``InvokeRequestModel`` / ``InvokeResponseModel`` /
       ``HealthResponseModel``（backend ``harness/tools/sandbox_models.py``
@@ -23,11 +23,11 @@
       ``InvokeResponseModel`` / ``HealthResponseModel``（backend
       ``harness/tools/browser_models.py`` ↔ sidecar 树
       ``browser_sidecar/wire_models.py``——REST 同构镜像，独立比对项）；
-    - 浏览器七工具参数模型 ``NavigateArgsModel`` / ``ReadTextArgsModel`` /
+    - 浏览器八工具参数模型 ``NavigateArgsModel`` / ``ReadTextArgsModel`` /
       ``ScreenshotArgsModel`` / ``ClickArgsModel`` / ``FillArgsModel`` /
-      ``ListTabsArgsModel`` / ``CloseTabArgsModel``（backend
-      ``browser_models.py`` ↔ sidecar 树 ``browser_sidecar/browser.py``）；
-    - 七个 ``*_TOOL_NAME`` 浏览器工具名常量行（同上文件）；
+      ``ListTabsArgsModel`` / ``CloseTabArgsModel`` / ``EvaluateArgsModel``
+      （backend ``browser_models.py`` ↔ sidecar 树 ``browser_sidecar/browser.py``）；
+    - 八个 ``*_TOOL_NAME`` 浏览器工具名常量行（同上文件）；
     - ``BROWSER_SIDECAR_INVOKE_PATH`` / ``BROWSER_SIDECAR_HEALTH_PATH`` /
       ``BROWSER_SIDECAR_TOKEN_ENV_DEFAULT`` 部署契约常量行（backend
       ``harness/tools/browser.py`` ↔ sidecar 树 ``server.py``）。
@@ -275,6 +275,7 @@ def main() -> int:
             "FillArgsModel",
             "ListTabsArgsModel",
             "CloseTabArgsModel",
+            "EvaluateArgsModel",
         )
     )
     items.extend(
@@ -291,6 +292,7 @@ def main() -> int:
             "FILL_TOOL_NAME",
             "LIST_TABS_TOOL_NAME",
             "CLOSE_TAB_TOOL_NAME",
+            "EVALUATE_TOOL_NAME",
         )
     )
     items.extend(

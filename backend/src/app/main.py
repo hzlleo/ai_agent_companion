@@ -100,10 +100,12 @@ from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
+import packages.harness.canvas.canvas_orm as canvas_orm
 import packages.harness.multimodal.sticker_orm as sticker_orm
 import packages.harness.persona.orm as persona_orm
 import packages.harness.usage.orm as usage_orm
 import packages.harness.voice.voiceprint_orm as voiceprint_orm
+from app.api.canvas import router as canvas_router
 from app.api.channels_qq import router as qq_channels_router
 from app.api.core_memory import router as core_memory_router
 from app.api.directives import router as directives_router
@@ -132,6 +134,8 @@ from packages.harness.channels.channel_models import (
     ChannelType,
 )
 from packages.harness.channels.channel_service import ChannelRouter
+from packages.harness.channels.douyin.douyin_client import DouyinWebClient
+from packages.harness.channels.douyin.douyin_runner import DouyinChannelRunner
 from packages.harness.channels.qq.qq_adapter import NapCatQQAdapter
 from packages.harness.channels.qq.qq_client import NapCatOneBotClient
 from packages.harness.channels.telegram.tg_client import TelegramClient
@@ -215,12 +219,14 @@ from packages.harness.tools.sandbox_models import (
 from packages.harness.usage.service import UsageService
 
 # ORM 模型注册（导入副作用——见模块 docstring「ORM 注册」一节）。
-_ORM_REGISTRY = (persona_orm, usage_orm, sticker_orm, voiceprint_orm)
+_ORM_REGISTRY = (persona_orm, usage_orm, sticker_orm, voiceprint_orm, canvas_orm)
 
 #: CORS 显式放行方法面（管理面全操作集）。
 _CORS_ALLOW_METHODS: list[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 #: CORS 显式放行请求头面（JSON API 最小集 + 鉴权）。
 _CORS_ALLOW_HEADERS: list[str] = ["Accept", "Authorization", "Content-Type"]
+#: CORS 暴露给脚本的响应头面（画布导出需要读 Content-Disposition 取文件名）。
+_CORS_EXPOSE_HEADERS: list[str] = ["Content-Disposition"]
 #: 通道 runner 优雅停机等待秒数（在途长轮询最多一个窗口——超时 cancel 兜底）。
 _CHANNELS_STOP_TIMEOUT_SECONDS: float = 5.0
 #: 调度器优雅停机等待秒数（tick 收尾 + 在途作业排水——超时 cancel 兜底）。
@@ -456,7 +462,7 @@ async def _startup_browser_sidecar(app: FastAPI, settings: Settings) -> None:
     （bounded 超时 = ``request_timeout_seconds``）。
 
     chat 注册表接线（镜像 web_search 的双注册形态——文档化决策）：
-    搜索装配已建 chat 注册表（``search_tool_registry``）时浏览器七工具
+    搜索装配已建 chat 注册表（``search_tool_registry``）时浏览器八工具
     **并入该注册表**（规格追加到 ``search_tool_specs``——单一 chat 工具
     注册表面）；否则独立建 browser 槽位（``browser_tool_registry`` /
     ``browser_tool_specs``——通道工厂按「搜索槽位优先、浏览器槽位兜底」
@@ -524,7 +530,7 @@ async def _startup_browser_sidecar(app: FastAPI, settings: Settings) -> None:
 
 
 async def _startup_channels(app: FastAPI, settings: Settings) -> None:
-    """装配通道层（Telegram 长轮询 runner / QQ 适配器 / 企微长连接 runner）。
+    """装配通道层（Telegram 长轮询 runner / QQ 适配器 / 企微长连接 / 抖音 web runner）。
 
     装配链（单一 ChannelRouter 服务全部通道——会话按 ``channel:chat_id``
     维度天然隔离）：任一通道启用时先装配 rhythm / intent 会话性组件
@@ -533,7 +539,9 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     读写面 + 快径面注入）；telegram 启用时再装配 TelegramClient +
     TelegramChannelRunner → create_task + ``background_task_manager``
     托管；QQ 启用时装配 NapCatOneBotClient + NapCatQQAdapter →
-    ``router.register_adapter`` + 启动校验 get_login_info。全部关闭时
+    ``router.register_adapter`` + 启动校验 get_login_info；企微启用时装配长连接
+    runner；抖音 web 启用时装配轮询 runner（消费浏览器 sidecar 底座——底座
+    未就绪即跳过该通道，见 ``_startup_douyin_channel``）。全部关闭时
     no-op（零通道对象构造——rhythm / intent 槽位同样 None：二者的
     R2a 消费面是通道 ChatService 工厂，通道关闭即无消费面）。
 
@@ -577,6 +585,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     app.state.channels_task = None
     app.state.channels_wecom_runner = None
     app.state.channels_wecom_task = None
+    app.state.channels_douyin_runner = None
+    app.state.channels_douyin_task = None
     app.state.channels_router = None
     app.state.rhythm_service = None
     app.state.intent_shortcut = None
@@ -584,9 +594,11 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     telegram = settings.channels.telegram
     qq = settings.channels.qq
     wecom = settings.channels.wecom
-    if not telegram.enabled and not qq.enabled and not wecom.enabled:
+    douyin = settings.channels.douyin
+    if not telegram.enabled and not qq.enabled and not wecom.enabled and not douyin.enabled:
         logger.info(
-            "通道层未启用（TELEGRAM_ENABLED / QQ_ENABLED / WECOM_ENABLED 均关闭）——跳过装配"
+            "通道层未启用（TELEGRAM_ENABLED / QQ_ENABLED / WECOM_ENABLED / "
+            "DOUYIN_ENABLED 均关闭）——跳过装配"
         )
         return
     manager = get_pool_manager()
@@ -818,6 +830,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
         )
     if wecom.enabled:
         await _startup_wecom_channel(app, settings, router, manager.get_http_client())
+    if douyin.enabled:
+        await _startup_douyin_channel(app, settings, router)
     app.state.channels_router = router
 
 
@@ -912,6 +926,72 @@ async def _startup_wecom_channel(
     )
 
 
+async def _startup_douyin_channel(
+    app: FastAPI,
+    settings: Settings,
+    router: ChannelRouter,
+) -> None:
+    """装配抖音 web 通道（复用浏览器 sidecar 底座——底座未就绪即跳过该通道）。
+
+    装配链：``DouyinWebClient``（注入 ``app.state.browser_sidecar_client``——
+    共享池 + Bearer + 持久化 profile 的已登录页面）→ ``DouyinChannelRunner``
+    （轮询采集 / 去重 / 归一 / 出站投递）→ ``router.register_adapter(DOUYIN,
+    runner)`` → ``create_task(runner.run())`` + ``background_task_manager``
+    托管。
+
+    **失败语义（与企微同范式）**：底座未就绪（``TOOLS_BROWSER_SIDECAR_ENABLED``
+    关闭 / token 缺失 / 健康探测失败）时记 ERROR 并**跳过该通道**——抖音 web
+    是依赖浏览器底座的新增通道，其底座瑕疵不应连带杀掉已在工作的其他通道。
+    运行期轮询失败由 runner 的指数退避消化。
+
+    Args:
+        app: 待装配的 FastAPI 应用（``channels_douyin_runner`` /
+            ``channels_douyin_task`` 槽位上挂）。
+        settings: 生效 Settings（读取 ``settings.channels.douyin`` 分节）。
+        router: 通道路由器（注册抖音适配器发送面）。
+    """
+    douyin = settings.channels.douyin
+    sidecar_client = getattr(app.state, "browser_sidecar_client", None)
+    if sidecar_client is None:
+        logger.error(
+            "抖音 web 通道未装配（浏览器 sidecar 底座未就绪——请检查 "
+            "TOOLS_BROWSER_SIDECAR_ENABLED / 令牌 / 健康探测；其余通道继续工作）"
+        )
+        return
+    try:
+        client = DouyinWebClient(
+            invoker=sidecar_client,
+            chat_url=douyin.chat_url,
+        )
+        runner = DouyinChannelRunner(
+            client=client,
+            router=router,
+            conversation_id=douyin.conversation_id,
+            poll_interval_seconds=douyin.poll_interval_seconds,
+            backoff_base_seconds=douyin.backoff_base_seconds,
+            backoff_max_seconds=douyin.backoff_max_seconds,
+            max_messages_per_poll=douyin.max_messages_per_poll,
+        )
+    except ValueError as exc:
+        logger.error(
+            "抖音 web 通道未装配（配置不变式失败——其余通道继续工作）: {}", exc
+        )
+        return
+    router.register_adapter(ChannelType.DOUYIN, runner)
+    task = asyncio.create_task(runner.run(), name="douyin-channel-runner")
+    background_task_manager.register(task)
+    task.add_done_callback(_log_channel_task_termination)
+    app.state.channels_douyin_runner = runner
+    app.state.channels_douyin_task = task
+    logger.info(
+        "抖音 web 通道 runner 已启动（managed background task）: chat_url={!r}, "
+        "conversation_id={!r}, poll_interval_s={}",
+        douyin.chat_url,
+        douyin.conversation_id,
+        douyin.poll_interval_seconds,
+    )
+
+
 async def _shutdown_channels(app: FastAPI) -> None:
     """停机通道层（先于公共池——通道组件消费共享 HTTP client；幂等）。
 
@@ -925,7 +1005,8 @@ async def _shutdown_channels(app: FastAPI) -> None:
     Args:
         app: 待收尾的 FastAPI 应用（``channels_router`` / ``channels_runner``
             / ``channels_task`` / ``channels_wecom_runner`` /
-            ``channels_wecom_task`` / ``rhythm_service`` / ``intent_shortcut``
+            ``channels_wecom_task`` / ``channels_douyin_runner`` /
+            ``channels_douyin_task`` / ``rhythm_service`` / ``intent_shortcut``
             槽位复位 None）。
     """
     runner: TelegramChannelRunner | None = getattr(app.state, "channels_runner", None)
@@ -934,10 +1015,18 @@ async def _shutdown_channels(app: FastAPI) -> None:
         app.state, "channels_wecom_runner", None
     )
     wecom_task: asyncio.Task[None] | None = getattr(app.state, "channels_wecom_task", None)
+    douyin_runner: DouyinChannelRunner | None = getattr(
+        app.state, "channels_douyin_runner", None
+    )
+    douyin_task: asyncio.Task[None] | None = getattr(
+        app.state, "channels_douyin_task", None
+    )
     app.state.channels_runner = None
     app.state.channels_task = None
     app.state.channels_wecom_runner = None
     app.state.channels_wecom_task = None
+    app.state.channels_douyin_runner = None
+    app.state.channels_douyin_task = None
     app.state.channels_router = None
     # rhythm / intent 槽位复位（服务无自有资源——随机源随实例丢弃）。
     app.state.rhythm_service = None
@@ -945,6 +1034,7 @@ async def _shutdown_channels(app: FastAPI) -> None:
     app.state.sticker_service = None
     await _stop_managed_channel_task(runner, task, label="Telegram 通道")
     await _stop_managed_channel_task(wecom_runner, wecom_task, label="企微长连接通道")
+    await _stop_managed_channel_task(douyin_runner, douyin_task, label="抖音 web 通道")
 
 
 async def _stop_managed_channel_task(
@@ -1192,7 +1282,7 @@ async def _register_browser_sidecar_tools(
     Args:
         app: 待装配的 FastAPI 应用（读取 ``browser_sidecar_client`` 槽位）。
         settings: 生效 Settings（``settings.tools_browser_sidecar`` 分节）。
-        registry: duty 工具注册表（浏览器七工具追加装配目标）。
+        registry: duty 工具注册表（浏览器八工具追加装配目标）。
     """
     client = getattr(app.state, "browser_sidecar_client", None)
     if client is None:
@@ -1286,6 +1376,7 @@ def _install_cors(app: FastAPI, settings: Settings) -> None:
         allow_credentials=True,
         allow_methods=_CORS_ALLOW_METHODS,
         allow_headers=_CORS_ALLOW_HEADERS,
+        expose_headers=_CORS_EXPOSE_HEADERS,
     )
 
 
@@ -1322,7 +1413,7 @@ def _include_routers(app: FastAPI) -> None:
 
         - **受保护路由集**：personas / memories / usage / voice /
           voiceprints / look_at / stickers / models / search / reminders /
-          directives / facts / skills / core-memory 十四个管理路由统一挂
+          directives / facts / skills / core-memory / canvas 十五个管理路由统一挂
           ``require_admin_token``
           依赖——经单一 ``APIRouter(dependencies=[...])`` 包装路由**一次
           注册**（依赖定义在 ``app/middleware/admin_auth``；token 经
@@ -1356,6 +1447,7 @@ def _include_routers(app: FastAPI) -> None:
     admin_api.include_router(facts_router)
     admin_api.include_router(skills_router)
     admin_api.include_router(core_memory_router)
+    admin_api.include_router(canvas_router)
     app.include_router(admin_api)
     # 豁免面（见本函数 docstring 豁免契约——不挂 require_admin_token）。
     app.include_router(qq_channels_router)

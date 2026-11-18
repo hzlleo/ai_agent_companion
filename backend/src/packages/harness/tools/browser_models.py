@@ -14,15 +14,16 @@ Unit 文件）。
     - :class:`BrowserSidecarClientFace` —— sidecar 客户端注入面协议
       （真实 :class:`~packages.harness.tools.browser.BrowserSidecarClient` /
       测试 fake 均满足）；
-    - 七浏览器工具参数面 :class:`NavigateArgsModel` /
+    - 八浏览器工具参数面 :class:`NavigateArgsModel` /
       :class:`ReadTextArgsModel` / :class:`ScreenshotArgsModel` /
       :class:`ClickArgsModel` / :class:`FillArgsModel` /
-      :class:`ListTabsArgsModel` / :class:`CloseTabArgsModel`
+      :class:`ListTabsArgsModel` / :class:`CloseTabArgsModel` /
+      :class:`EvaluateArgsModel`
       （**DUPLICATED**：与 sidecar 树 ``browser_sidecar/browser.py`` 的参数
       模型人为镜像——后端侧用于 registry 本地校验 + 默认值物化
       （fail-fast，免网络往返）；sidecar 侧为权威执行面，双侧校验为有意
       冗余）；
-    - ``build_<tool>_spec`` 七工厂 —— 浏览器工具规格（后端侧 LLM 呈现面）。
+    - ``build_<tool>_spec`` 八工厂 —— 浏览器工具规格（后端侧 LLM 呈现面）。
 
 wire 契约（HTTP 端点 ↔ 载荷；REST 同构镜像 tool-sandbox——非新协议）：
 
@@ -62,6 +63,7 @@ __all__ = [
     "FILL_TOOL_NAME",
     "LIST_TABS_TOOL_NAME",
     "CLOSE_TAB_TOOL_NAME",
+    "EVALUATE_TOOL_NAME",
     "BROWSER_TOOL_NAMES",
     "NavigateArgsModel",
     "ReadTextArgsModel",
@@ -70,6 +72,7 @@ __all__ = [
     "FillArgsModel",
     "ListTabsArgsModel",
     "CloseTabArgsModel",
+    "EvaluateArgsModel",
     "build_navigate_spec",
     "build_read_text_spec",
     "build_screenshot_spec",
@@ -77,6 +80,7 @@ __all__ = [
     "build_fill_spec",
     "build_list_tabs_spec",
     "build_close_tab_spec",
+    "build_evaluate_spec",
 ]
 
 
@@ -84,7 +88,7 @@ class InvokeRequestModel(BaseModel):
     """浏览器 sidecar 工具调用请求（backend → sidecar wire 契约——POST /invoke 载荷）。
 
     Attributes:
-        tool: 工具名（sidecar 运行时内唯一标识——七工具面见 browser.py）。
+        tool: 工具名（sidecar 运行时内唯一标识——八工具面见 browser.py）。
         arguments: 调用参数（JSON 对象——sidecar 侧经工具参数 Model Class
             校验 + 默认值物化后进入执行器）。
     """
@@ -180,11 +184,11 @@ class BrowserSidecarClientFace(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# 浏览器七工具（参数面与 sidecar 树 browser_sidecar/browser.py 人为镜像）
+# 浏览器八工具（参数面与 sidecar 树 browser_sidecar/browser.py 人为镜像）
 # ---------------------------------------------------------------------------
 # 块边界约定（镜像 HttpFetchArgsModel / B 站参数模型范式——漂移门禁块
-# 提取口径）：七个参数模型类**连续排布**，其前可以有注释 / 常量；
-# CloseTabArgsModel（末位模型）到下一顶层定义行（首个 build_*_spec 工厂）
+# 提取口径）：八个参数模型类**连续排布**，其前可以有注释 / 常量；
+# EvaluateArgsModel（末位模型）到下一顶层定义行（首个 build_*_spec 工厂）
 # 之间**只隔空行**——保证按「类定义行 → 下一顶层定义行」提取的块在两树
 # byte 级一致。
 
@@ -209,6 +213,9 @@ LIST_TABS_TOOL_NAME: str = "list_tabs"
 #: close_tab 工具名（同上）。
 CLOSE_TAB_TOOL_NAME: str = "close_tab"
 
+#: evaluate 工具名（同上——页面上下文 JS 求值；通道采集面与 LLM 工具面共用）。
+EVALUATE_TOOL_NAME: str = "evaluate"
+
 #: 全部浏览器工具名（装配 / 日志面消费——顺序即注册序）。
 BROWSER_TOOL_NAMES: tuple[str, ...] = (
     NAVIGATE_TOOL_NAME,
@@ -218,6 +225,7 @@ BROWSER_TOOL_NAMES: tuple[str, ...] = (
     FILL_TOOL_NAME,
     LIST_TABS_TOOL_NAME,
     CLOSE_TAB_TOOL_NAME,
+    EVALUATE_TOOL_NAME,
 )
 
 #: 允许的 URL 协议面（参数模型校验——与 sidecar 树 browser.py 同值镜像）。
@@ -314,6 +322,35 @@ _LIST_TABS_SCHEMA: ToolParametersSchema = ToolParametersSchema.model_validate(
     {
         "type": "object",
         "properties": {},
+        "additionalProperties": False,
+    }
+)
+
+#: evaluate 参数 JSON Schema（与 EvaluateArgsModel 字段对齐）。
+_EVALUATE_SCHEMA: ToolParametersSchema = ToolParametersSchema.model_validate(
+    {
+        "type": "object",
+        "properties": {
+            "script": {
+                "type": "string",
+                "description": "JS 表达式（页面上下文执行）",
+                "minLength": 1,
+                "maxLength": 20000,
+            },
+            "max_chars": {
+                "type": "integer",
+                "description": "结果 JSON 序列化字符上限（1024-1048576，默认 262144）",
+                "minimum": 1024,
+                "maximum": 1048576,
+            },
+            "timeout_ms": {
+                "type": "integer",
+                "description": "求值超时毫秒（100-120000，默认 15000）",
+                "minimum": 100,
+                "maximum": 120000,
+            },
+        },
+        "required": ["script"],
         "additionalProperties": False,
     }
 )
@@ -439,6 +476,36 @@ class CloseTabArgsModel(BaseModel):
     tab_index: int = Field(ge=0, description="标签页索引（list_tabs 报告的 index）")
 
 
+class EvaluateArgsModel(BaseModel):
+    """evaluate 参数面（页面上下文 JS 求值——sidecar 侧校验锚点）。
+
+    ``script`` 直接交给 playwright ``page.evaluate``，在**页面上下文**执行
+    （自执行函数 / 单表达式字符串）；返回值必须是 JSON 可序列化结构。
+    结果规模由 ``max_chars`` 封顶：序列化后超限即受控失败，**不做静默
+    截断**——需要大规模数据时由脚本自身收敛（分页 / 只取增量）。
+
+    Attributes:
+        script: JS 表达式（1-20000 字符）。
+        max_chars: 结果 JSON 序列化字符上限（1024-1048576，默认 262144）。
+        timeout_ms: 求值超时毫秒（100-120000，默认 15000——超时受控失败）。
+    """
+
+    model_config = {"extra": "forbid"}
+
+    script: str = Field(
+        min_length=1, max_length=20000, description="JS 表达式（页面上下文执行）"
+    )
+    max_chars: int = Field(
+        default=262144,
+        ge=1024,
+        le=1048576,
+        description="结果 JSON 序列化字符上限（1024-1048576，默认 262144）",
+    )
+    timeout_ms: int = Field(
+        default=15000, ge=100, le=120000, description="求值超时毫秒（100-120000，默认 15000）"
+    )
+
+
 def build_navigate_spec() -> ToolSpecModel:
     """构建 navigate 工具规格（后端侧 LLM 呈现面）。
 
@@ -536,4 +603,19 @@ def build_close_tab_spec() -> ToolSpecModel:
         description="按索引关闭浏览器标签页（经隔离 sidecar 执行；标签页上限 4）。",
         args_schema=_CLOSE_TAB_SCHEMA,
         args_model=CloseTabArgsModel,
+    )
+
+
+def build_evaluate_spec() -> ToolSpecModel:
+    """构建 evaluate 工具规格（后端侧 LLM 呈现面）。
+
+    Returns:
+        工具规格（页面上下文 JS 求值——结果 JSON 规模由 max_chars 封顶，
+        超限受控失败；通道采集面与 LLM 工具面共用同一 sidecar 执行器）。
+    """
+    return ToolSpecModel(
+        name=EVALUATE_TOOL_NAME,
+        description="在浏览器页面上下文执行 JS 表达式（经隔离 sidecar 执行；返回 JSON 结果，序列化规模受 max_chars 封顶）。",
+        args_schema=_EVALUATE_SCHEMA,
+        args_model=EvaluateArgsModel,
     )

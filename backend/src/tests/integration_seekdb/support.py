@@ -85,16 +85,18 @@ _MISSING_ENV_MESSAGE = (
     "未注入测试服务 env 的本地运行。"
 )
 
-#: alembic 迁移链 head 版本戳（0016——声纹 / 同意 / 表情包表迁移）。
-HEAD_REVISION = "000000000016"
+#: alembic 迁移链 head 版本戳（0017——画布产物表迁移）。
+HEAD_REVISION = "000000000017"
 
-#: 升级 head 后的全量表集（alembic_version + 16 张 ff_* 域表——0011 新增
+#: 升级 head 后的全量表集（alembic_version + 17 张 ff_* 域表——0011 新增
 #: ff_reminders；0013 新增 ff_persona_facts；0014 新增 ff_persona_skills；
 #: 0015 新增 ff_core_memory_blocks / ff_core_memory_revisions；0016 新增
-#: ff_voiceprint_samples / ff_voiceprint_consents / ff_stickers）。
+#: ff_voiceprint_samples / ff_voiceprint_consents / ff_stickers；0017 新增
+#: ff_canvas_documents）。
 EXPECTED_HEAD_TABLES: frozenset[str] = frozenset(
     {
         "alembic_version",
+        "ff_canvas_documents",
         "ff_chat_messages",
         "ff_chat_sessions",
         "ff_core_memory_blocks",

@@ -883,11 +883,104 @@ class WecomChannelSettings(BaseSettings):
         return self
 
 
+class DouyinChannelSettings(BaseSettings):
+    """抖音 web 通道配置（env_prefix=``DOUYIN_``——channels 域）。
+
+    锁定决策：``enabled=False``（默认）——零配置开发可用、测试 hermetic；
+    ``enabled=True`` 时 app lifespan 装配轮询 runner（后台任务，见
+    docs/backend/channels.md「抖音 web 通道」）。
+
+    底座依赖（同底座约束）：抖音 web 通道**不自建浏览器**——它消费浏览器
+    sidecar 的已登录页面（``TOOLS_BROWSER_SIDECAR_*`` 分节 + 持久化 profile
+    里的抖音登录态），经 ``evaluate`` / ``navigate`` 工具读写会话。因此本分节
+    不重复 sidecar 的地址与令牌配置；``DOUYIN_ENABLED=true`` 而 sidecar 未
+    启用 / 未就绪时，装配期记 ERROR 并只跳过本通道（其余通道不受影响）。
+
+    凭据面：登录态是浏览器 cookie（存在 sidecar 的 profiles 卷），**没有
+    独立 token / secret env 键**——这是与 telegram / QQ / 企微的差别，也是
+    「同底座」的直接结果。
+
+    Attributes:
+        enabled: 是否启用抖音 web 通道（False = 零轮询任务 / 零页面操作）。
+        chat_url: 会话页 URL（空串 = 不导航，沿用 sidecar 当前页面——人工
+            把页面停在抖音会话页的部署形态）。非空时经 sidecar ``navigate``
+            打开一次，域名必须在 ``BROWSER_SIDECAR_ALLOWLIST`` 内。
+        conversation_id: 目标会话标识（空串 = 由页面 URL 参数推断，仍为空时
+            按 ``default`` 兜底——单会话部署形态）。
+        poll_interval_seconds: 采集轮询间隔秒数（出站请求量的唯一闸）。
+        max_messages_per_poll: 单次采集消息上限（1-100——脚本取时间序末尾）。
+        backoff_base_seconds: 轮询失败退避基数秒。
+        backoff_max_seconds: 退避封顶秒数（不得小于基数）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用抖音 web 通道")
+    chat_url: str = Field(
+        default="",
+        description="会话页 URL（空 = 不导航，沿用 sidecar 当前页面）",
+    )
+    conversation_id: str = Field(
+        default="",
+        description="目标会话标识（空 = 由页面 URL 推断 / default 兜底）",
+    )
+    poll_interval_seconds: float = Field(
+        default=5.0, gt=0, description="采集轮询间隔秒数"
+    )
+    max_messages_per_poll: int = Field(
+        default=20, ge=1, le=100, description="单次采集消息上限（1-100）"
+    )
+    backoff_base_seconds: float = Field(default=2.0, gt=0, description="轮询失败退避基数秒")
+    backoff_max_seconds: float = Field(default=60.0, gt=0, description="退避封顶秒数")
+
+    model_config = SettingsConfigDict(
+        env_prefix="DOUYIN_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @field_validator("chat_url")
+    @classmethod
+    def _validate_chat_url(cls, value: str) -> str:
+        """校验会话页 URL（空串合法 = 不导航；非空必须 http/https）。
+
+        Args:
+            value: 原始配置值。
+
+        Returns:
+            去除首尾空白后的值。
+
+        Raises:
+            ValueError: 非空且协议不是 http/https（navigate 工具会拒绝，
+                此处提前在配置面 fail fast）。
+        """
+        cleaned = value.strip()
+        if cleaned and not cleaned.startswith(("http://", "https://")):
+            raise ValueError("DOUYIN_CHAT_URL 必须是 http/https URL（空串 = 不导航）")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _verify_backoff_bounds(self) -> DouyinChannelSettings:
+        """校验退避边界（封顶不得小于基数）。
+
+        Returns:
+            校验通过的实例。
+
+        Raises:
+            ValueError: ``backoff_max_seconds < backoff_base_seconds``。
+        """
+        if self.backoff_max_seconds < self.backoff_base_seconds:
+            raise ValueError(
+                f"backoff_max_seconds({self.backoff_max_seconds}) 不得小于 "
+                f"backoff_base_seconds({self.backoff_base_seconds})"
+            )
+        return self
+
+
 class ChannelsSettings(BaseModel):
     """通道域配置分节（``Settings.channels``——多平台通道聚合容器）。
 
-    当前含 telegram、qq（NapCat / OneBot v11）与企业微信智能机器人长连接
-    三个子模型；多通道扩展（B站等）在此追加同级子模型（各自独立
+    当前含 telegram、qq（NapCat / OneBot v11）、企业微信智能机器人长连接与
+    抖音 web 四个子模型；多通道扩展（B站等）在此追加同级子模型（各自独立
     env_prefix 的 ``BaseSettings``——本工程约定：env 面子配置为
     BaseSettings，聚合容器为普通 BaseModel）。
 
@@ -895,6 +988,7 @@ class ChannelsSettings(BaseModel):
         telegram: Telegram 通道配置（默认关闭）。
         qq: QQ 通道配置（默认关闭——NapCat OneBot v11）。
         wecom: 企业微信智能机器人长连接配置（默认关闭）。
+        douyin: 抖音 web 通道配置（默认关闭——浏览器 sidecar 底座）。
     """
 
     telegram: TelegramSettings = Field(
@@ -903,6 +997,9 @@ class ChannelsSettings(BaseModel):
     qq: QqChannelSettings = Field(default_factory=QqChannelSettings, description="QQ 通道配置")
     wecom: WecomChannelSettings = Field(
         default_factory=WecomChannelSettings, description="企业微信智能机器人长连接配置"
+    )
+    douyin: DouyinChannelSettings = Field(
+        default_factory=DouyinChannelSettings, description="抖音 web 通道配置"
     )
 
 

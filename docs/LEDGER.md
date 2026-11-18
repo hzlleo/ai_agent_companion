@@ -89,7 +89,7 @@
 | R2-defense | 丙+丁：D1 结构隔离 + 宪章五条 + nonce 定界、D2 注入检测 + 角色内反击（毒舌 / 温柔 / 傲娇）、D3 peer 记忆免疫与来源标注、D4 38 条红队回归集 | ✅ merged（PR #13 → main `7fe68a0`；`INJECTION_*` 与 compliance 示例模板生成已并入主线） |
 | R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | ✅ 代码完成、PR #15 OPEN（`b5846c0`）；甲套件 core + 组件库A/成熟度分层 + 关系连续性A + 乙分轨已全门禁绿；**剩余仅「示例台词 few-shot」** |
 | R2d 心流社交 | R2d-1 心流门控（`FLOW_` env 面——判定矩阵 / 连发合并 / 延迟批次经调度器 / 关系与节律输入）+ 群聊多人格（`GROUP_PERSONA_` env 面——轮转 / 冷却 / 重复抑制 / 人格会话归属）；R2d-2 声纹（`VOICEPRINT_` env 面——PIPL 告知 / 同意记录 / 注册 / 校验 / 撤回删除 / 保存期）+ 表情包库与 VLM 标注（`STICKER_` env 面——哈希去重 / 来源授权备注 / 标注状态机 / 通道附件 v2 收发桥 / 前端面板），迁移 0016 | ✅ R2d-1 + R2d-2 代码完成（本分支；全门禁见第 5 节） |
-| R2e 通道扩展 | R2e-1 企微智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 去重 / 回复上下文 / 文本分段 / 素材分片上传 / 配置面 / 装配 / 文档）；余项：GUI 微信容器化（PoC 门）/抖音 web（同底座）/Canvas | 🔄 R2e-1 ✅ 代码完成、全门禁绿（本分支，验证数值见第 5 节）；余项 ⏳ |
+| R2e 通道扩展 | R2e-1 企微智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 去重 / 回复上下文 / 文本分段 / 素材分片上传 / 配置面 / 装配 / 文档）；R2e-2 抖音 web 通道（浏览器 sidecar 底座：页面采集 / 发送脚本、去重、synthetic、图片附件、指数退避、配置面、装配、文档）+ 画布产物面（迁移 0017 / 服务 / API / 沙箱预览面板 / 导出）；余项：GUI 微信容器化（PoC 门——部署机未跑） | 🔄 R2e-1 ✅ 代码完成、全门禁绿；R2e-2 ✅ 代码完成、全门禁绿（本分支，验证数值见第 5 节）；GUI 微信容器化 ⏳（部署机 PoC 门） |
 | R2f 实时语音 | 独立全双工会话（VAD+流式ASR+句级TTS+打断），允许溢出 R3 | ⏳ |
 | R3 | 安全/防穿透/性能深度审计版（独立版本）：admin 鉴权已前置完成，余项：提示注入纵深/SSRF/SeekDB DSL 注入/密钥治理/限流背压/性能基线 | ⏳ |
 
@@ -125,27 +125,27 @@
 - 微信=企微智能机器人主轨+GUI 微信实验轨（D2-A）；抖音=GUI/浏览器底座（D4）；短信=SmsForwarder 记账推迟（D3）。
 - TTS=CosyVoice3-0.5B、ASR=Qwen3-ASR-0.6B、Embedding=Qwen3-Embedding-0.6B 主+bge-m3 备、look_at=Qwen3-VL（GGUF）。
 - 管理台鉴权=owner Bearer（ADMIN_AUTH_TOKEN env；空=禁用+启动提示）。
-- 数据库迁移链 0001..0016；0012=curated lifecycle；0013=persona facts；0014=persona skills；0015=core memory（blocks + append-only revisions）；0016=voiceprint samples/consents + sticker library。
+- 数据库迁移链 0001..0017；0012=curated lifecycle；0013=persona facts；0014=persona skills；0015=core memory（blocks + append-only revisions）；0016=voiceprint samples/consents + sticker library；0017=canvas documents。
 
 ## 5. 工程实现事实（恢复续跑所需）
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2457 passed）
-cd backend && pixi run coverage-gates       # 23 组 ≥80% enforce
+cd backend && pixi run tests-all            # 全量后端测试（当前 2630 passed）
+cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
 cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 6 用例（迁移链/并发唯一键/行锁/混合检索）
-cd frontend && pixi run test / coverage / lint / build   # 596 passed
+cd frontend && pixi run test / coverage / lint / build   # 623 passed
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
 根级：pixi run gen-examples（三件套再生成）、pixi run gates
 ```
 - SeekDB 本地容器：`docker run -d --name seekdb-smoke -p 2881:2881 oceanbase/seekdb:1.4.0-100000172026082615`（root 空密码；就绪约 5-60s；网络中断后需重启）。
-- DTO 契约门：`scripts/export_dto_schemas.py` + `frontend/src/test/contract/dtoSchemas.json`（当前 79 组）；改后端 wire DTO 必须 `pixi run export-dto-schemas` 再提交，改前端 types 契约测试即红。
-- 漂移门：`scripts/check_sandbox_dtos_drift.py`（36 项，三树镜像契约 byte 级）。
+- DTO 契约门：`scripts/export_dto_schemas.py` + `frontend/src/test/contract/dtoSchemas.json`（当前 94 组）；改后端 wire DTO 必须 `pixi run export-dto-schemas` 再提交，改前端 types 契约测试即红。
+- 漂移门：`scripts/check_sandbox_dtos_drift.py`（38 项，三树镜像契约 byte 级）。
 - 沙盒树：`docker/tool-sandbox-agent`、`docker/browser-sidecar`（独立 pixi；CI 有对应 job；browser 镜像 ~2GB 不在 CI 构建）。
 - 模型子模组：`models/`（ModelScope；权重 lfs 延迟拉取；ModelScope UA 墙：`git config http.https://www.modelscope.cn/.userAgent "git/2.47.0"`）。
 - 测试环境：全异步 asyncio_mode=auto；SQLite 共享 fixture；不依赖真实配置；conftest 硬覆盖 env。
-- 关键模块坐标：harness/{core,config,database,pools,llm,usage,persona,chat,memory,channels,tools,duty,scheduler,voice（含 voiceprint_*）,multimodal（含 sticker_*）,search,emotion,intent,rhythm,reminders}、app/api/{personas,memories,usage,models,voice,voiceprints,look_at,stickers,facts,reminders,directives,skills,core_memory,health,channels_qq}、前台 pages/{personas,memories,usage,models,stickers}。
+- 关键模块坐标：harness/{core,config,database,pools,llm,usage,persona,chat,memory,channels（含 douyin）,canvas,tools,duty,scheduler,voice（含 voiceprint_*）,multimodal（含 sticker_*）,search,emotion,intent,rhythm,reminders}、app/api/{personas,memories,usage,models,voice,voiceprints,look_at,stickers,facts,reminders,directives,skills,core_memory,canvas,health,channels_qq}、前台 pages/{personas,memories,usage,models,stickers,canvas}。
 
 **LLM 网关强制 logprobs 字段**：新版 vLLM 仅在请求显式携带 `logprobs/top_logprobs/prompt_logprobs` 时回传 logprob 数据（置信度计算输入面）——网关全请求（含流式/工具）固定携带（缺省 20/20，构造旋钮 None 可省略）；响应侧解析为 `content_logprobs/prompt_logprobs` 并派生 `mean_token_logprob/confidence`（exp 均值，观测信号）。已实现于 `feat/llm-confidence-logprobs`（`08dd81e`）；请求构造测试 7 例（含流式 / 工具分支 / 旋钮略省）全异步。
 
@@ -252,9 +252,33 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **验证**（主 Agent 终验，全部经 pixi）：后端 2573 passed（新增 116 条企微用例）/ 23 组覆盖率门禁（harness/channels 97.0%、app/main 89.8%）/ mypy 175 文件零问题 / ruff 零问题 / 门禁链全绿（注释门 violations=0、同步测试棘轮 +0、noqa 冻结 0、沙盒漂移 36 项一致）/ `gen-examples` 再生成 byte-stable（仅 CHANNELS.WECOM 分节 39 行）。示意命令：`cd backend && pixi run tests-all`、`pixi run coverage-gates`、`pixi run lint`、`pixi run typecheck`、根 `pixi run gates`、根 `pixi run gen-examples`。
 
+### 已完成切片：R2e-2 抖音 web 通道（浏览器底座）+ 画布产物面（本分支未提交工作区）
+
+**拍板覆盖度与取舍（拍板未覆盖部分在此定性，不改写拍板原文）**：
+
+- 抖音：拍板为「GUI/浏览器底座」与「抖音 web（同底座）」。落地为**复用既有浏览器 sidecar**（playwright 持久化 profile + 允许清单 + 路由拦截），并在该底座上补一个通用 `evaluate` 工具（页面上下文 JS 求值，结果规模封顶）——抖音 web 的采集 / 发送是本通道自己的页面脚本，sidecar 不承载任何抖音专有语义。不另起浏览器进程、不新增依赖（playwright / websockets 均在既有树内）。
+- Canvas：拍板只给了名称（通道协议 v2 的「贴纸 / Canvas 媒体」语境）。本切片按**渲染 / 导出面**落地（自包含 HTML / SVG / Markdown 产物的持久化 + 沙箱预览 + 单文件导出）——理由是协议 v2 把 Canvas 与「媒体」并列，产物是可投递的媒体面；「会话画布可视化」读法未采用（会在会话 API 之上另建展示层，且无存储需求）。取舍已写入 docs/backend/canvas.md「能力边界」。
+
+**已完成**：
+1. `docker/browser-sidecar`：新增第八工具 `evaluate`（`EvaluateArgsModel` script / max_chars / timeout_ms；页面上下文执行；结果 JSON 序列化规模超 `max_chars` 受控失败不截断；超时受控失败）+ `PageFace.evaluate` / `PlaywrightPage.evaluate` + 运行时注册；sidecar 单元测试补 5 例（成功 / 超限 / 脚本异常 / 超时 / 参数边界）。
+2. 后端 `harness/tools/browser_models.py` / `browser.py`：镜像 `EvaluateArgsModel` 与 `EVALUATE_TOOL_NAME`（byte 级，漂移门 +2 项 = 38 项）、`build_evaluate_spec` + 注册（duty / chat 双面，八工具）；`scripts/check_sandbox_dtos_drift.py` 与 tools-browser.md 同步。
+3. `harness/channels/douyin/`：`douyin_models`（会话键 `im:<conversation_id>` grammar / wire 快照 / 归一：自身回声剔除、系统消息 synthetic、群聊标记、图片 URL 附件、缺失时间兜底、批内重复与已去重过滤、上限截断）、`douyin_scripts`（采集 / 发送 JS 表达式构造——参数 JSON 嵌入、候选选择器与文本哈希兜底、受控 input 事件与发送按钮 / 回车回落）、`douyin_client`（注入 `DouyinBrowserInvoker`——生产为 sidecar 客户端；采集 / 发送 / 打开会话页；失败归一 `CHANNEL_API_ERROR`）、`douyin_runner`（轮询 / 去重窗口 1024 / 逐消息路由隔离 / 指数退避可被停机打断 / 单实例不变式 / 出站文本 + 附件逐条不支持承载）。
+4. 配置与装配：`ChannelType.DOUYIN`；`DouyinChannelSettings`（`DOUYIN_` env 面 7 键：enabled / chat_url / conversation_id / poll_interval / max_messages_per_poll / backoff_base / backoff_max；chat_url 协议校验与退避不变式）并聚合进 `ChannelsSettings`；`app/main.py` `_startup_douyin_channel`（底座未就绪只跳过该通道）+ 停机槽位与传导；`.env.example` CHANNELS.DOUYIN 分节再生成；Setup Wizard「抖音 web 通道配置」步骤；conftest 硬覆盖。
+5. 画布：迁移 0017 `ff_canvas_documents`（人格作用域 / 标题 / 类型 / 内容 / 修订号 / 时间戳 + 人格 × 更新时间索引）；`harness/canvas/{canvas_models,canvas_orm,canvas_service}`（类型值域 / 上限 / 创建 / 列举 / 读取 / 修订递增 / 幂等删除 / 导出命名与 MIME）；`app/api/canvas.py`（列表 / 创建 / 读取 / 修订 / 删除 / 导出）挂管理面鉴权；CORS 暴露 `Content-Disposition`（前端读导出文件名）。
+6. 前端：`/canvas` 面板（人格与类型过滤、沙箱 iframe 预览（无 allow-scripts）、创建、内联修订、导出下载、删除确认、错误面）+ types / api / hooks / msw / 路由 / 导航 / 测试；DTO 契约 5 组导出（fixture 94 组）双侧重生成。
+7. 测试：后端 douyin（模型 12 例 / 客户端 7 例 / runner 13 例 / 设置 6 例 / 装配 3 例，fake 基建 `tests/douyin_fakes.py`）+ canvas（服务 8 例 / API 9 例 / 迁移 1 例）+ 浏览器 evaluate（sidecar 5 例 + registry / lifespan 既有断言同步）；SeekDB 迁移链断言扩到 0017。前端 canvas（api 9 例 / hooks 5 例 / 页面 12 例）。
+8. docs：channels.md「抖音 web 通道」整节（底座分工 / 装配 / 入站链路与字段表 / 归一 JSON / 出站脚本与边界 / 去重退避 / 错误码 / Settings / 部署五步 / 测试面）、canvas.md 整节（决策 / 模型 / API JSON / 校验 / 安全边界 / 面板 / 测试 / 扩展路径）、config.md 行、backend README 行、根 README 行、LEDGER。
+
+**依赖边界（诚实标注，未验证项）**：
+
+- **GUI 微信容器化 PoC 门与本切片无耦合**：抖音依赖的是浏览器 sidecar（在 CI 与本地均有 hermetic 测试），不是 GUI 微信的 Xorg + uinput 栈。因此本切片不阻塞在该门上；GUI 微信轨道仍待部署机 PoC。
+- **真实抖音页面的选择器命中率未在本机验证**（本机测试全部经 fake 调用面）：部署侧需按 channels.md「部署要点 4」执行一次性真网验证（先采集非空、再发送 `{"ok": true}`）。这是本切片唯一未能在开发机闭环的面，已在文档中标注。
+
+**验证**（主 Agent 终验，全部经 pixi）：后端 2630 passed / 24 组覆盖率门禁（harness/canvas 98.7%、harness/channels 97.3%、app/api 81.7%、app/main.py 89.9%）/ mypy 183 文件零问题 / ruff 零问题 / 门禁链全绿（注释门 violations=0、同步测试棘轮 +0、noqa 冻结 0、沙盒漂移 38 项一致）/ 活 SeekDB 6 用例（迁移链 0017 升 / 降 base / 复升）；DTO fixture 94 组双侧重生成；前端 623 passed / coverage perFile（96.08% statements / 92.60% branches）/ lint / build。示意命令：`cd backend && pixi run tests-all`、`pixi run coverage-gates`、`pixi run lint`、`pixi run typecheck`、根 `pixi run gates`、`SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto`、`cd frontend && pixi run test / coverage / lint / build`。
+
 ## 6. 遗留与部署台账（非阻塞）
 
-- Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
+- Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
 - SmsForwarder 短信通道（D3 记账推迟）；WhatsApp/其他平台未列入 R2。
 - 声纹（PIPL 合规）与表情包素材法律边界提示义务已随 R2d-2 交付（默认关闭，部署侧按需配置 `VOICEPRINT_*` / `STICKER_*` 并起说话人向量服务）。
 - 已知部署机注意：开发机无 NVIDIA GPU（Iris Xe）；GPU/模型项一律在 Clevo 机执行。

@@ -50,6 +50,7 @@ from packages.harness.tools.browser_models import (
     InvokeResponseModel,
     build_click_spec,
     build_close_tab_spec,
+    build_evaluate_spec,
     build_fill_spec,
     build_list_tabs_spec,
     build_navigate_spec,
@@ -324,11 +325,11 @@ def _format_browser_tool_result(tool: str, result: dict[str, Any]) -> dict[str, 
 
 
 def build_browser_specs() -> tuple[ToolSpecModel, ...]:
-    """构建全部浏览器工具规格（七工具——注册 / 装配面共用）。
+    """构建全部浏览器工具规格（八工具——注册 / 装配面共用）。
 
     Returns:
         规格元组（注册序——navigate / read_text / screenshot / click /
-            fill / list_tabs / close_tab）。
+            fill / list_tabs / close_tab / evaluate）。
     """
     return (
         build_navigate_spec(),
@@ -338,13 +339,14 @@ def build_browser_specs() -> tuple[ToolSpecModel, ...]:
         build_fill_spec(),
         build_list_tabs_spec(),
         build_close_tab_spec(),
+        build_evaluate_spec(),
     )
 
 
 def register_browser_sidecar_tools(
     registry: ToolRegistry, client: BrowserSidecarClientFace
 ) -> None:
-    """注册全部浏览器代理工具（七工具——duty / chat 注册表共用入口）。
+    """注册全部浏览器代理工具（八工具——duty / chat 注册表共用入口）。
 
     失败语义（与 ``register_sandbox_tool`` 同范式）：客户端恒不抛
     （ok=False 终态）；代理执行器把 ok=False 转 ``INTERNAL_ERROR`` 业务

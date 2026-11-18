@@ -179,6 +179,18 @@ os.environ["WECOM_REPLY_WINDOW_SECONDS"] = "86400"
 os.environ["WECOM_TEST_SECRET"] = "test-only-wecom-secret"
 os.environ["WECOM_SECRET"] = "test-only-wecom-secret"
 
+# --- 抖音 web 通道（DOUYIN_ 前缀 → DouyinChannelSettings；默认关闭 → 测试零
+#     轮询任务 / 零页面操作；S3 硬覆盖模式——开发者 shell 导出的同名真实配置
+#     不得泄入测试。登录态是浏览器 sidecar 的 profile cookie，本分节没有独立
+#     密钥键） ---
+os.environ["DOUYIN_ENABLED"] = "false"
+os.environ["DOUYIN_CHAT_URL"] = ""
+os.environ["DOUYIN_CONVERSATION_ID"] = ""
+os.environ["DOUYIN_POLL_INTERVAL_SECONDS"] = "5"
+os.environ["DOUYIN_MAX_MESSAGES_PER_POLL"] = "20"
+os.environ["DOUYIN_BACKOFF_BASE_SECONDS"] = "2.0"
+os.environ["DOUYIN_BACKOFF_MAX_SECONDS"] = "60.0"
+
 # --- 值班轮（DUTY_ 前缀 → DutySettings；默认关闭 → 测试零调度副作用；
 #     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试） ---
 os.environ["DUTY_ENABLED"] = "false"

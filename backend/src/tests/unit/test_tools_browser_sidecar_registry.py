@@ -1,6 +1,6 @@
 """harness/tools 浏览器 sidecar 代理注册测试——fake 客户端回路 + 结果格式化。
 
-覆盖矩阵：七工具注册序；代理回路（ok 透传 / 失败归一 INTERNAL_ERROR）；
+覆盖矩阵：八工具注册序；代理回路（ok 透传 / 失败归一 INTERNAL_ERROR）；
 本地校验 fail-fast（非法参数零网络往返）；默认值物化经 wire
 （read_text max_chars=8000）；read_text 不可信平台内容包裹（标注前缀 +
 provenance 字段——记忆域语义镜像）；screenshot 视觉提示（look_at 配对）；
@@ -68,8 +68,8 @@ def _registry_with_fake() -> tuple[ToolRegistry, FakeBrowserSidecarClient]:
 
 
 class TestRegistration:
-    async def test_seven_tools_in_order(self) -> None:
-        """注册序：七工具按约定顺序（navigate → close_tab）。"""
+    async def test_all_tools_in_order(self) -> None:
+        """注册序：八工具按约定顺序（navigate → evaluate）。"""
         registry, _ = _registry_with_fake()
         assert registry.tool_names == list(BROWSER_TOOL_NAMES)
 
@@ -169,7 +169,7 @@ class TestProxyLoop:
 
 class TestSpecPresentation:
     async def test_spec_names_and_descriptions(self) -> None:
-        """规格呈现面：七工具名 + 描述含隔离执行说明（LLM 呈现锚点）。"""
+        """规格呈现面：八工具名 + 描述含隔离执行说明（LLM 呈现锚点）。"""
         for spec in build_browser_specs():
             assert "经隔离 sidecar 执行" in spec.description or "sidecar" in spec.description
             assert spec.args_model is not None

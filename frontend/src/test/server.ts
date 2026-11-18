@@ -43,6 +43,7 @@ import type {
   StickerBatchUploadResult,
   StickerRecord,
 } from '@/types/stickers'
+import type { CanvasDeleteResult, CanvasKind, CanvasRecord } from '@/types/canvas'
 
 /** 后端 URL 前缀（handlers 统一经此拼接，与 api client 同源）。 */
 export const BACKEND_ORIGIN = `${API_BASE_URL}${API_PREFIX}`
@@ -1961,6 +1962,71 @@ export const stickerHandlers = [
   }),
 ]
 
+/** 画布记录铺底（可覆写任意字段）。 */
+export function mockCanvas(overrides: Partial<CanvasRecord> = {}): CanvasRecord {
+  return {
+    id: 1,
+    title: '今日心情卡',
+    kind: 'html',
+    content: '<div>今天很好</div>',
+    revision: 1,
+    created_at_ms: 1731000000000,
+    updated_at_ms: 1731000000000,
+    ...overrides,
+  }
+}
+
+/** canvas 域默认 handlers（成功形态；错误面由测试覆写）。 */
+export const canvasHandlers = [
+  http.get(`${BACKEND_ORIGIN}/canvas`, () => {
+    return HttpResponse.json(okResult([mockCanvas()]))
+  }),
+  http.post(`${BACKEND_ORIGIN}/canvas`, async ({ request }) => {
+    const body = (await request.json()) as {
+      title: string
+      kind: CanvasKind
+      content: string
+    }
+    return HttpResponse.json(
+      okResult(
+        mockCanvas({ title: body.title, kind: body.kind, content: body.content }),
+        '画布已创建',
+      ),
+    )
+  }),
+  http.patch(`${BACKEND_ORIGIN}/canvas/:canvasId`, async ({ request, params }) => {
+    const body = (await request.json()) as {
+      title: string | null
+      content: string | null
+    }
+    return HttpResponse.json(
+      okResult(
+        mockCanvas({
+          id: Number(params.canvasId),
+          title: body.title ?? '今日心情卡',
+          content: body.content ?? '<div>今天很好</div>',
+          revision: 2,
+        }),
+        '画布已修订',
+      ),
+    )
+  }),
+  http.delete(`${BACKEND_ORIGIN}/canvas/:canvasId`, ({ params }) => {
+    const result: CanvasDeleteResult = {
+      deleted_ids: [Number(params.canvasId)],
+    }
+    return HttpResponse.json(okResult(result, '画布删除结果'))
+  }),
+  http.get(`${BACKEND_ORIGIN}/canvas/:canvasId/export`, ({ params }) => {
+    return new HttpResponse('<div>今天很好</div>', {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Disposition': `attachment; filename="canvas-${String(params.canvasId)}-r1.html"`,
+      },
+    })
+  }),
+]
+
 /** 共享 msw 服务器（setup.ts 管理生命周期）。 */
 export const server = setupServer(
   ...personaHandlers,
@@ -1973,4 +2039,5 @@ export const server = setupServer(
   ...skillHandlers,
   ...coreMemoryHandlers,
   ...stickerHandlers,
+  ...canvasHandlers,
 )

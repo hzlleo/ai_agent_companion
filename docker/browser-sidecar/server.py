@@ -3,7 +3,7 @@
 职责边界（本文件只做「入口」——工具语义全部在 ``browser_sidecar`` 包内）：
 
     - :func:`create_app`  —— FastAPI 工厂（token 鉴权依赖 + ``/health`` /
-      ``/invoke`` 两端点 + 默认运行时装配七浏览器工具 + lifespan 承接
+      ``/invoke`` 两端点 + 默认运行时装配八浏览器工具 + lifespan 承接
       管理器生命周期）；
     - :func:`main`        —— uvicorn 启动（host/port 经 env 覆写）。
 
@@ -126,7 +126,7 @@ def create_app(*, runtime: BrowserSidecarRuntime | None = None) -> FastAPI:
     """构造 FastAPI 应用（token 鉴权 + 两端点 + 默认工具装配 + lifespan）。
 
     Args:
-        runtime: sidecar 工具运行时（None = 生产形态——七浏览器工具 +
+        runtime: sidecar 工具运行时（None = 生产形态——八浏览器工具 +
             env 驱动管理器；测试注入 stub 运行时隔离工具语义且不建
             管理器——lifespan no-op）。
 

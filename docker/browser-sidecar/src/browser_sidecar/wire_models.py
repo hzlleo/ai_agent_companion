@@ -38,7 +38,7 @@ class InvokeRequestModel(BaseModel):
     """浏览器 sidecar 工具调用请求（backend → sidecar wire 契约——POST /invoke 载荷）。
 
     Attributes:
-        tool: 工具名（sidecar 运行时内唯一标识——七工具面见 browser.py）。
+        tool: 工具名（sidecar 运行时内唯一标识——八工具面见 browser.py）。
         arguments: 调用参数（JSON 对象——sidecar 侧经工具参数 Model Class
             校验 + 默认值物化后进入执行器）。
     """
