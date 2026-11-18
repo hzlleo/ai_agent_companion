@@ -586,3 +586,72 @@ export interface SkillUpdateRequest {
   /** 新置信度（undefined = 保留）。 */
   confidence?: number
 }
+
+// ---------------------------------------------------------------------------
+// 核心记忆（core memory——四块自编辑自我模型 / 修订链）
+// ---------------------------------------------------------------------------
+
+/** 核心记忆块键（自我认知 / 关于对方 / 我们的故事 / 备忘——封闭四元组）。 */
+export type CoreBlockKey =
+  | 'self_identity'
+  | 'owner_profile'
+  | 'relationship_story'
+  | 'open_notes'
+
+/** 核心记忆写入者（owner 主人 / agent 人格自身）。 */
+export type CoreMemoryActor = 'owner' | 'agent'
+
+/** 核心记忆修订来源（admin 管理面 / chat 对话内工具调用）。 */
+export type CoreMemorySource = 'admin' | 'chat'
+
+/** 核心记忆块记录（四块固定集合——内容 / 锁定态 / 版本）。 */
+export interface CoreMemoryBlock {
+  /** 块主键（修订列表的归属锚点）。 */
+  id: number
+  /** 块键。 */
+  block: CoreBlockKey
+  /** 块正文（0-2000 字符；空块不进入 compose 注入）。 */
+  content: string
+  /** 是否锁定（true = 仅主人可改写）。 */
+  locked: boolean
+  /** 编辑版本号（首版 1）。 */
+  version: number
+  /** 最近一次写入者（owner / agent）。 */
+  updated_by: CoreMemoryActor
+  /** 最近一次对话内编辑的会话主键（管理面编辑为 null）。 */
+  last_edited_session_id: number | null
+  /** 落库时间（epoch 毫秒）。 */
+  created_at: number
+  /** 行更新时间（epoch 毫秒）。 */
+  updated_at: number
+}
+
+/** 核心记忆修订记录（append-only 历史——面板抽屉读取面）。 */
+export interface CoreMemoryRevision {
+  /** 修订主键（越大越新）。 */
+  id: number
+  /** 修订所属块键。 */
+  block: CoreBlockKey
+  /** 修订产生时的块版本号。 */
+  version: number
+  /** 修订后的块全文。 */
+  content: string
+  /** 写入者（owner / agent）。 */
+  provenance: CoreMemoryActor
+  /** 写入来源（admin / chat）。 */
+  source: CoreMemorySource
+  /** 对话内编辑的会话主键（管理面修订为 null）。 */
+  session_id: number | null
+  /** 修订时刻（epoch 毫秒）。 */
+  ts_ms: number
+  /** 落库时间（epoch 毫秒）。 */
+  created_at: number
+}
+
+/** 核心记忆主人编辑请求（0-2000 字符；锁定开关可缺省保留）。 */
+export interface CoreMemoryOwnerUpdateRequest {
+  /** 新块正文（0-2000 字符；空串 = 清空）。 */
+  content: string
+  /** 锁定开关（undefined = 保持不变）。 */
+  locked?: boolean
+}

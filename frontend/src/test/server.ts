@@ -13,6 +13,8 @@ import { http, HttpResponse } from 'msw'
 import { API_BASE_URL, API_PREFIX } from '@/api/client'
 import type { ResultDTO } from '@/types/common'
 import type {
+  CoreMemoryBlock,
+  CoreMemoryRevision,
   DirectiveRecord,
   FactRecord,
   PersonaRecord,
@@ -1691,6 +1693,120 @@ export const skillHandlers = [
   }),
 ]
 
+// ---------------------------------------------------------------------------
+// core-memory 域（自编辑核心记忆——四块自我模型 / 锁定 / 修订历史）
+// ---------------------------------------------------------------------------
+
+/** 测试用核心记忆块记录（wire 形态——默认「自我认知」块）。 */
+export function mockCoreMemoryBlock(overrides: Partial<CoreMemoryBlock> = {}): CoreMemoryBlock {
+  return {
+    id: 1,
+    block: 'self_identity',
+    content: '我是一条会写字的鱼',
+    locked: false,
+    version: 2,
+    updated_by: 'agent',
+    last_edited_session_id: 5,
+    created_at: 1731000000000,
+    updated_at: 1731000000000,
+    ...overrides,
+  }
+}
+
+/** 测试用核心记忆修订记录（wire 形态）。 */
+export function mockCoreMemoryRevision(
+  overrides: Partial<CoreMemoryRevision> = {},
+): CoreMemoryRevision {
+  return {
+    id: 11,
+    block: 'self_identity',
+    version: 3,
+    content: '我更正了自我认知',
+    provenance: 'owner',
+    source: 'admin',
+    session_id: null,
+    ts_ms: 1731000000000,
+    created_at: 1731000000000,
+    ...overrides,
+  }
+}
+
+/** 四块默认夹具（固定块序——与后端懒建顺序一致）。 */
+function defaultCoreMemoryBlocks(): CoreMemoryBlock[] {
+  return [
+    mockCoreMemoryBlock(),
+    mockCoreMemoryBlock({
+      id: 2,
+      block: 'owner_profile',
+      content: '主人喜欢无糖乌龙茶',
+      locked: true,
+      version: 3,
+      updated_by: 'owner',
+      last_edited_session_id: null,
+    }),
+    mockCoreMemoryBlock({
+      id: 3,
+      block: 'relationship_story',
+      content: '我们一起看过海。',
+      version: 2,
+      updated_by: 'owner',
+      last_edited_session_id: null,
+    }),
+    mockCoreMemoryBlock({
+      id: 4,
+      block: 'open_notes',
+      content: '',
+      version: 1,
+      updated_by: 'owner',
+      last_edited_session_id: null,
+    }),
+  ]
+}
+
+/** core-memory 域默认 handlers（成功形态 + 非法块键 400 面）。 */
+export const coreMemoryHandlers = [
+  http.get(`${BACKEND_ORIGIN}/core-memory/blocks`, () => {
+    return HttpResponse.json(okResult(defaultCoreMemoryBlocks()))
+  }),
+  http.put(`${BACKEND_ORIGIN}/core-memory/blocks/:block`, async ({ request, params }) => {
+    const block = String(params.block)
+    if (!['self_identity', 'owner_profile', 'relationship_story', 'open_notes'].includes(block)) {
+      return HttpResponse.json(errorResult('非法核心记忆块键', 'VALIDATION_ERROR'), { status: 400 })
+    }
+    const body = (await request.json()) as { content: string; locked?: boolean }
+    return HttpResponse.json(
+      okResult(
+        mockCoreMemoryBlock({
+          block: block as CoreMemoryBlock['block'],
+          content: body.content,
+          locked: body.locked ?? false,
+          version: 4,
+          updated_by: 'owner',
+          last_edited_session_id: null,
+        }),
+        '核心记忆已保存',
+      ),
+    )
+  }),
+  http.get(`${BACKEND_ORIGIN}/core-memory/blocks/:block/revisions`, ({ params }) => {
+    const block = String(params.block)
+    return HttpResponse.json(
+      okResult([
+        mockCoreMemoryRevision({ id: 12, block: block as CoreMemoryBlock['block'] }),
+        mockCoreMemoryRevision({
+          id: 11,
+          block: block as CoreMemoryBlock['block'],
+          version: 2,
+          content: '我是一条会写字的鱼',
+          provenance: 'agent',
+          source: 'chat',
+          session_id: 5,
+        }),
+      ]),
+    )
+  }),
+]
+
 /** 共享 msw 服务器（setup.ts 管理生命周期）。 */
 export const server = setupServer(
   ...personaHandlers,
@@ -1701,4 +1817,5 @@ export const server = setupServer(
   ...directiveHandlers,
   ...factHandlers,
   ...skillHandlers,
+  ...coreMemoryHandlers,
 )

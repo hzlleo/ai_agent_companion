@@ -10,7 +10,8 @@
     - enabled + provider + 工具面开：chat 工具注册表 / 规格列表装配 +
       通道 ChatService 工厂绑定工具面（Recording ChatService 断言）+
       duty 注册表在 look_at 后追加 web_search（链路顺序）；
-    - 通道工厂零工具形态：搜索工具面关闭时工厂产出零工具 ChatService；
+    - 通道工厂核心记忆工具形态：搜索 / 浏览器工具面均关闭时工厂仍携带
+      核心记忆自编辑工具（自编辑能力不依赖外部工具装配）；
     - 停机：搜索槽位复位 None（幂等）。
 
 零真实网络：FakeScheduler / FakeRunner 注入（与 test_app_duty_lifespan
@@ -38,6 +39,7 @@ from packages.harness.config.models import (
 )
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.core.errors import BusinessException, ErrorCode
+from packages.harness.persona.core_memory_models import CORE_MEMORY_TOOL_NAME
 from packages.harness.search.tool import WEB_SEARCH_TOOL_NAME
 
 
@@ -235,7 +237,9 @@ class TestEnabledWiring:
             assert app.state.search_service is not None
             chat_registry = app.state.search_tool_registry
             assert chat_registry is not None
-            assert chat_registry.tool_names == [WEB_SEARCH_TOOL_NAME]
+            # 通道装配把核心记忆自编辑工具并入同一 chat 注册表（单一注册
+            # 表面——工具列表逐轮按发送者来源分级裁剪）。
+            assert chat_registry.tool_names == [WEB_SEARCH_TOOL_NAME, CORE_MEMORY_TOOL_NAME]
             assert app.state.search_tool_specs is not None
             assert [spec.name for spec in app.state.search_tool_specs] == [
                 WEB_SEARCH_TOOL_NAME
@@ -260,10 +264,10 @@ class TestEnabledWiring:
         assert app.state.search_tool_registry is None
         assert app.state.search_tool_specs is None
 
-    async def test_chat_factory_zero_tool_when_search_disabled(
+    async def test_chat_factory_core_memory_tool_when_search_disabled(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """通道工厂零工具形态：搜索关闭时工厂产出零工具 ChatService。"""
+        """通道工厂核心记忆工具形态：搜索关闭时仍携带自编辑工具。"""
         monkeypatch.setattr(app_main, "Scheduler", FakeScheduler)
         monkeypatch.setattr(app_main, "TelegramChannelRunner", FakeRunner)
         created: list[dict[str, Any]] = []
@@ -287,7 +291,7 @@ class TestEnabledWiring:
             assert router is not None
             router._chat_service_factory()
             assert created
-            assert "tools" not in created[-1]
-            assert "tool_executor" not in created[-1]
+            assert [spec.name for spec in created[-1]["tools"]] == [CORE_MEMORY_TOOL_NAME]
+            assert created[-1]["tool_executor"] is not None
         finally:
             await shutdown_app_state(app)

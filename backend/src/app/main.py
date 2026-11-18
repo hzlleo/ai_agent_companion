@@ -95,6 +95,7 @@ from loguru import logger
 import packages.harness.persona.orm as persona_orm
 import packages.harness.usage.orm as usage_orm
 from app.api.channels_qq import router as qq_channels_router
+from app.api.core_memory import router as core_memory_router
 from app.api.directives import router as directives_router
 from app.api.facts import router as facts_router
 from app.api.health import APP_VERSION
@@ -147,6 +148,11 @@ from packages.harness.memory.service import (
     MemoryService,
 )
 from packages.harness.multimodal.look_at import LookAtService, register_look_at_tool
+from packages.harness.persona.core_memory import (
+    CoreMemoryService,
+    core_memory_session_id_var,
+    register_core_memory_tools,
+)
 from packages.harness.persona.directives import DirectivesService
 from packages.harness.persona.directives_models import DirectiveCreateDTO
 from packages.harness.persona.facts import FactsService
@@ -497,8 +503,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     装配链（单一 ChannelRouter 服务全部通道——会话按 ``channel:chat_id``
     维度天然隔离）：任一通道启用时先装配 rhythm / intent 会话性组件
     （共享随机源——见下方），再构造 ChannelRouter（逐消息 ChatService
-    工厂闭包 ``app.state.gateway`` + ``session_scope`` 持久化 + 快径面
-    注入）；telegram 启用时再装配 TelegramClient +
+    工厂闭包 ``app.state.gateway`` + ``session_scope`` 持久化 + 核心记忆
+    读写面 + 快径面注入）；telegram 启用时再装配 TelegramClient +
     TelegramChannelRunner → create_task + ``background_task_manager``
     托管；QQ 启用时装配 NapCatOneBotClient + NapCatQQAdapter →
     ``router.register_adapter`` + 启动校验 get_login_info。全部关闭时
@@ -597,46 +603,45 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     app.state.intent_shortcut = intent_shortcut
 
     episode_sink = getattr(app.state, "episode_sink", None)
+    core_memory_service = CoreMemoryService()
+
+    def _core_memory_session_id() -> int | None:
+        """当前对话会话主键（工具执行期由 ChatService 绑定——无会话为 None）。"""
+        return core_memory_session_id_var.get()
+
+    # 聊天工具注册表（单一注册表面）：搜索槽位优先、浏览器槽位兜底、皆无
+    # 则独立建表；核心记忆自编辑工具恒并入——通道 ChatService 逐轮消费，
+    # 工具列表在 ChatService 内按发送者来源分级裁剪（peer 回合看不到它）。
+    chat_tool_specs = list(getattr(app.state, "search_tool_specs", None) or [])
+    chat_tool_registry = getattr(app.state, "search_tool_registry", None)
+    if chat_tool_registry is None:
+        chat_tool_specs = list(getattr(app.state, "browser_tool_specs", None) or [])
+        chat_tool_registry = getattr(app.state, "browser_tool_registry", None)
+    if chat_tool_registry is None:
+        chat_tool_specs = []
+        chat_tool_registry = ToolRegistry()
+    chat_tool_specs.append(
+        register_core_memory_tools(
+            chat_tool_registry, core_memory_service, _core_memory_session_id
+        )
+    )
+    logger.info(
+        "通道路径聊天工具面已装配: tools=[{}]（核心记忆自编辑工具仅聊天注册表——duty 不自编辑）",
+        ", ".join(spec.name for spec in chat_tool_specs),
+    )
 
     def _chat_service_factory() -> ChatService:
-        """逐消息 ChatService 工厂（工具面按当前装配态收缩——搜索工具
-        注册表 + 规格列表就绪时绑定 chat 工具循环；浏览器槽位兜底；
-        两者皆无时零工具形态；快径面按 INTENT_ENABLED 注入——通道
-        专属消费面）。"""
-        tool_specs = getattr(app.state, "search_tool_specs", None)
-        tool_registry = getattr(app.state, "search_tool_registry", None)
-        if tool_specs and tool_registry is not None:
-            return ChatService(
-                gateway=gateway,
-                session_service=ChatSessionService(),
-                tools=tool_specs,
-                tool_executor=tool_registry,
-                intent_shortcut=intent_shortcut,
-                directive_service=directives_service,
-                facts_reader=facts_service,
-                skills_reader=skills_service,
-                episode_sink=episode_sink,
-            )
-        browser_specs = getattr(app.state, "browser_tool_specs", None)
-        browser_registry = getattr(app.state, "browser_tool_registry", None)
-        if browser_specs and browser_registry is not None:
-            return ChatService(
-                gateway=gateway,
-                session_service=ChatSessionService(),
-                tools=browser_specs,
-                tool_executor=browser_registry,
-                intent_shortcut=intent_shortcut,
-                directive_service=directives_service,
-                facts_reader=facts_service,
-                skills_reader=skills_service,
-                episode_sink=episode_sink,
-            )
+        """逐消息 ChatService 工厂（聊天工具面 + 核心记忆读写面 + 快径面
+        ——通道专属消费面；工具列表按发送者来源分级由 ChatService 施加）。"""
         return ChatService(
             gateway=gateway,
             session_service=ChatSessionService(),
+            tools=chat_tool_specs,
+            tool_executor=chat_tool_registry,
             intent_shortcut=intent_shortcut,
             directive_service=directives_service,
             facts_reader=facts_service,
+            core_memory_reader=core_memory_service,
             skills_reader=skills_service,
             episode_sink=episode_sink,
         )
@@ -1093,7 +1098,7 @@ def _include_routers(app: FastAPI) -> None:
 
         - **受保护路由集**：personas / memories / usage / voice /
           look_at / models / search / reminders / directives / facts /
-          skills 十一个管理路由统一挂 ``require_admin_token``
+          skills / core-memory 十二个管理路由统一挂 ``require_admin_token``
           依赖——经单一 ``APIRouter(dependencies=[...])`` 包装路由**一次
           注册**（依赖定义在 ``app/middleware/admin_auth``；token 经
           ``ServerConfig.admin_token_env`` env 间接，空 = 鉴权关闭）；
@@ -1123,6 +1128,7 @@ def _include_routers(app: FastAPI) -> None:
     admin_api.include_router(directives_router)
     admin_api.include_router(facts_router)
     admin_api.include_router(skills_router)
+    admin_api.include_router(core_memory_router)
     app.include_router(admin_api)
     # 豁免面（见本函数 docstring 豁免契约——不挂 require_admin_token）。
     app.include_router(qq_channels_router)

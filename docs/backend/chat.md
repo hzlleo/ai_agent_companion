@@ -10,10 +10,10 @@
 | `output_protocol.py` | 输出协议解析（R2b——纯函数 Unit）：前导 ``<心声>`` / ``<情绪>`` 标签 → 可见正文 / 心声 / 情绪增量；流式起始前缀 best-effort 剥离器 | `parse_assistant_output` / `ParsedAssistantOutputModel` / `StreamTagStripper` / `strip_leading_protocol_prefix` |
 | `chat_models.py` | 会话回合 / 会话状态 / 组装结果 Model Classes（Unit 文件；含世界书回合状态——冷却追踪） | `ChatTurnModel` / `ChatSessionStateModel` / `MessageCompositionResult` |
 | `world_book.py` | 世界书高级选择算法链（R2b——纯函数 Unit 文件；rng / 回合状态可注入）+ token 近似估算 | `select_world_book_entries` / `SelectedEntryModel` / `WorldBookTurnStateModel` / `WorldBookSelectionResult` / `RECURSION_HOP_CAP` / `estimate_text_tokens` |
-| `service.py` | 消息组装（消费选择结果）+ `ChatService` 会话循环（回合状态回存） | `compose_messages` / `ChatService` |
+| `service.py` | 消息组装（消费选择结果）+ `ChatService` 会话循环（回合状态回存 / 可选工具循环与发送者来源分级工具闸） | `compose_messages` / `ChatService` |
 | `cli.py` | 控制台 REPL（启动 / 停机序列 + 命令面 + 流式直写） | `run_chat_cli` / `main` |
 
-依赖方向：chat → persona（chara card / PersonaRecordDTO / PersonaService）+ llm（LlmGateway / 消息模型）+ config / database / pools（CLI 启动栈）+ core（errors / time_utils）。prompt 文本与逻辑分离（模板全在 prompts.py；service / cli 禁止内联 prompt 字符串）。`world_book` 只依赖 persona 卡片模型（不导入 chat 其他 Unit——依赖无环；`service` 再导出 `estimate_text_tokens` 供既有测试面）。
+依赖方向：chat → persona（chara card / PersonaRecordDTO / PersonaService / 核心记忆读取面与工具） + llm（LlmGateway / 消息模型）+ config / database / pools（CLI 启动栈）+ core（errors / time_utils）。prompt 文本与逻辑分离（模板全在 prompts.py；service / cli 禁止内联 prompt 字符串）。`world_book` 只依赖 persona 卡片模型（不导入 chat 其他 Unit——依赖无环；`service` 再导出 `estimate_text_tokens` 供既有测试面）。
 
 ## 提示词组装链（单一真相）
 
@@ -38,23 +38,28 @@
                                                        现行高置信事实（见
                                                        [persona.md](persona.md)
                                                        人物画像一节）
-    ⑦ 相关技能块（skills 命中时）                       R2c「相关技能」——
+    ⑦ 核心记忆块（core_memory 非空时）                 R2c「自我认知」——
+                                                       四块自编辑自我模型
+                                                       的非空块（见
+                                                       [persona.md](persona.md)
+                                                       核心记忆一节）
+    ⑧ 相关技能块（skills 命中时）                       R2c「相关技能」——
                                                        仅命中本轮用户文本的
                                                        技能（见
                                                        [persona.md](persona.md)
                                                        程序性技能一节）
-    ⑧ render_output_protocol()                          R2b 输出格式协议
+    ⑨ render_output_protocol()                          R2b 输出格式协议
                                                        （心声 / 情绪标签指令）
-    ⑨ 世界书 after_char 条目块                          检索增强（行为补充）
+    ⑩ 世界书 after_char 条目块                          检索增强（行为补充）
 [历史回合]
-    ⑩ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合）
+    ⑪ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合）
 [system 末块]
-    ⑪ render_post_history_message(card)                历史后再注入（deep
+    ⑫ render_post_history_message(card)                历史后再注入（deep
                                                        anti-drift nudge——
                                                        卡片声明 post_history_instructions 时）
 ```
 
-各块以 `\n\n` 连接；⑪ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
+各块以 `\n\n` 连接；⑫ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
 
 长期指令块（⑤）的渲染语义（`render_directives_block`）：每条指令一行
 `- 正文`；最多 20 条且总字符 ≤ 2000（含列表符号）——超帽追加
@@ -68,7 +73,15 @@
 跳过。块文本模板（`FACTS_BLOCK_TEMPLATE`）属 prompt Unit 文件 byte-lock 面
 （版本常量 `FACTS_BLOCK_TEMPLATE_VERSION`）。
 
-相关技能块（⑦）的渲染语义（`render_skills_block`）：**仅当命中本轮用户文本
+核心记忆块（⑦）的渲染语义（`render_core_memory_block`）：块记录由
+`CoreMemoryService.list_blocks` 提供（固定四块序），**仅非空块**进入注入；
+每块渲染为 `### 块名称` 标题行 + 正文，锁定块标题追加「（锁定）」标识，块间
+空行分隔，累计字符（含标题 / 换行 / 分隔）≤ 2400——预算不足时截断当前块正文
+并停止追加后续块（块序即优先级）。四块全空时整块跳过。块文本模板
+（`CORE_MEMORY_BLOCK_TEMPLATE`）属 prompt Unit 文件 byte-lock 面（版本常量
+`CORE_MEMORY_BLOCK_TEMPLATE_VERSION`）。
+
+相关技能块（⑧）的渲染语义（`render_skills_block`）：**仅当命中本轮用户文本
 时**注入——命中由 `SkillsService.match_for_compose` 按启用技能的触发短语字面
 包含（NFKC + casefold）或描述关键词片段判定，条数帽 2 条在读取面施加；每条
 技能渲染为 `### 名称` 标题行 + markdown 正文，技能之间空行分隔，总字符
@@ -79,10 +92,11 @@
 写入（回复链路不等待、计数失败只告警）。
 
 注：`compose_messages(state, rng=None, emotion_summary=None, directives=None,
-facts=None, skills=None)` 仍是纯函数——M 态读取 / 衰减、常备指令、人物事实
-与技能匹配均在 `ChatService` 侧（仅持久化会话已落库且对应服务已接线时激活），
-纯内存形态 / 无持久化测试面零附加 I/O。长期指令 / 人物事实 / 技能读取失败均
-不阻断回复（日志 + 空块——增强面语义；读取面协议见 `FactsReaderFace` /
+facts=None, core_memory=None, skills=None)` 仍是纯函数——M 态读取 / 衰减、常备
+指令、人物事实、核心记忆与技能匹配均在 `ChatService` 侧（仅持久化会话已落库
+且对应服务已接线时激活），纯内存形态 / 无持久化测试面零附加 I/O。长期指令 /
+人物事实 / 核心记忆 / 技能读取失败均不阻断回复（日志 + 空块——增强面语义；
+读取面协议见 `FactsReaderFace` / `CoreMemoryReaderFace` /
 `SkillsReaderFace`）。
 
 ### 意图快径（含 DIRECTIVE 常备指令捕获——R2b D7-14）
@@ -139,6 +153,19 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 ```
 
 网关调用参数恒定：`role=chat`、`purpose="chat"`、`persona_id=str(persona_id)` 显式直传（与 `bind_persona_context` 上下文语义等价；选直传为可测性）。
+
+**工具循环（可选工具面——R2a-4）与自编辑写入闸（R2c）**：构造注入
+`tools` + `tool_executor` 后，`reply` 走有界工具循环（机械镜像 duty 域：
+gateway `chat_by_role(..., tools=specs)` → assistant 工具调用轮回放 →
+`tool_call_id` 配对执行 → tool 反馈轮；步数上限
+`CHAT_TOOL_STEP_CAP=5`，超限追加收尾指令并无工具面终调；工具中间态不进入
+会话回合 / 持久化，只有最终可见文本落回合）。**工具列表逐轮按
+`sender_provenance` 裁剪**：非 `owner` 回合（群聊 `peer` / 平台
+`untrusted`）从列表里移除 `edit_core_memory`——自我模型只能由主人交互触发
+改写；剔除后为空时网关请求不携带工具面。工具执行期把会话主键绑定到
+`core_memory_session_id_var`（核心记忆修订的 `session_id` 归属面），循环结束
+（含异常路径）复位。duty 注册表不注册该工具（无头计划任务不自编辑）；
+CLI 不注入工具面，行为零变化。
 
 **输出协议（R2b——`reply` 面）**：模型原始输出先经
 `output_protocol.parse_assistant_output` 解析——返回 / 落回合 / 进历史 /
@@ -221,7 +248,9 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 
 ``reply`` / ``stream_reply`` 接受 ``sender_provenance``（缺省 owner——
 私聊语义；群聊通道传 peer）：user 回合的情景落档按该分级，assistant 回合
-恒为 agent。群聊同侪的发言因此不进入策展记忆晋升面与人物事实证据面。
+恒为 agent。群聊同侪的发言因此不进入策展记忆晋升面与人物事实证据面；同一
+分级还驱动**工具面结构性写入闸**（非 owner 回合的工具列表不含
+`edit_core_memory`——见「会话流（ChatService）」工具循环一节）。
 
 ## 消息变体（swipes——R2b D7-5）
 
@@ -308,10 +337,10 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 
 ## prompt 版本与 byte-lock
 
-prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本——相关技能块加入后
-为 1.4.0）+ 逐模板 `*_TEMPLATE_VERSION`（含
+prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本——核心记忆块加入后
+为 1.5.0）+ 逐模板 `*_TEMPLATE_VERSION`（含
 `OUTPUT_PROTOCOL_TEMPLATE_VERSION` / `EMOTION_STATE_TEMPLATE_VERSION` /
-`SKILLS_BLOCK_TEMPLATE_VERSION`）。模板文本变更 = 行为变更，须同步：① 上调版本常量；② 更新 `tests/unit/test_chat_prompts.py` 的 sha256 摘要锁（`_BYTE_LOCKS`）——测试红即「知情确认」关卡。
+`CORE_MEMORY_BLOCK_TEMPLATE_VERSION` / `SKILLS_BLOCK_TEMPLATE_VERSION`）。模板文本变更 = 行为变更，须同步：① 上调版本常量；② 更新 `tests/unit/test_chat_prompts.py` 的 sha256 摘要锁（`_BYTE_LOCKS`）——测试红即「知情确认」关卡。
 
 ## 控制台 CLI（pixi run chat）
 
@@ -345,6 +374,12 @@ create_app() → FastAPI(title/version/lifespan)
     ├─ include_router(voice_router)              /api/v1/voice*（语音合成 / 识别）
     ├─ include_router(look_at_router)            /api/v1/look_at（图像理解 multipart 上传）
     ├─ include_router(models_router)             /api/v1/models*（LLM 注册表管理面）
+    ├─ include_router(search_router)             /api/v1/search*（搜索 provider 注册表）
+    ├─ include_router(reminders_router)          /api/v1/reminders*（持久化提醒）
+    ├─ include_router(directives_router)         /api/v1/directives*（长期指令）
+    ├─ include_router(facts_router)              /api/v1/facts*（人物事实）
+    ├─ include_router(skills_router)             /api/v1/skills*（程序性技能）
+    ├─ include_router(core_memory_router)        /api/v1/core-memory*（自编辑核心记忆）
     ├─ include_router(qq_channels_router)        /api/v1/channels/qq*（QQ webhook 入站）
     └─ include_router(health_router)             /api/v1/health（零依赖存活面）
 
@@ -434,6 +469,11 @@ lifespan                                          上述函数对的 asynccontex
   正文 / 字符帽截断 / 双技能分隔）/ 链位置（事实之后、协议之前）/ 持久化会话
   按本轮用户文本命中注入 / 无命中不注入 / 未接线与纯内存形态零 I/O / 读取
   失败退化；
+- `tests/unit/test_chat_core_memory.py`——核心记忆注入与写入闸：块渲染（空跳过 /
+  标题与锁定标识 / 字符帽截断）/ 链位置（事实之后、技能之前）/ 持久化会话
+  注入四块 / 全空跳过 / 未接线与纯内存形态零 I/O / 读取失败退化 / 工具列表按
+  发送者来源裁剪（owner 全量、peer 剔除 edit_core_memory、仅剩该工具时工具面
+  为空）/ 工具执行期会话主键绑定与循环后复位；
 - `tests/unit/test_chat_swipe.py`——消息变体全语义（候选落库形态 / 脊柱-only 上下文 / 序号续编 / 空正文零残留 / 父回合校验 / 选定替换 + 单次 M 态推进 + 注记 / include_variants 读侧 / 引擎停用零推进）；
 - `tests/unit/test_chat_swipe_api.py`——变体端点（ASGITransport）：重生成 / 详情嵌套 / 选定 / 错误面（父回合语义 / 数量边界 / 缺失资源）；
 - `tests/unit/test_migration_chat_message_variants.py`——迁移 0010 SQLite 升 / 降 / 复升 + 复合唯一键语义；

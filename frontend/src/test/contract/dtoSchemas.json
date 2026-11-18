@@ -179,6 +179,21 @@
         "schema_key": "SkillRecordDTO"
       },
       {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "CoreMemoryBlock",
+        "schema_key": "CoreMemoryBlockDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "CoreMemoryRevision",
+        "schema_key": "CoreMemoryRevDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "CoreMemoryOwnerUpdateRequest",
+        "schema_key": "OwnerEditModel"
+      },
+      {
         "frontend_file": "frontend/src/types/memory.ts",
         "frontend_type": "EpisodeCreateRequest",
         "schema_key": "EpisodeCreateDTO"
@@ -1862,6 +1877,194 @@
         "variant_id"
       ],
       "title": "ChatVariantSelectRequestDTO",
+      "type": "object"
+    },
+    "CoreMemoryBlockDTO": {
+      "$defs": {
+        "CoreBlockKey": {
+          "description": "核心记忆块键值域（ff_core_memory_blocks.block_key）。\n\n- ``self_identity``：自我认知（人格对自己身份 / 性格 / 处境的稳定理解）；\n- ``owner_profile``：关于对方（对主人的稳定认知——称呼 / 习惯 / 边界）；\n- ``relationship_story``：我们的故事（共同经历与关系里程碑）；\n- ``open_notes``：备忘（尚未归入前三块的长期事项）。",
+          "enum": [
+            "self_identity",
+            "owner_profile",
+            "relationship_story",
+            "open_notes"
+          ],
+          "title": "CoreBlockKey",
+          "type": "string"
+        },
+        "CoreMemoryActor": {
+          "description": "核心记忆的写入者值域（块的 ``updated_by`` 与修订的 ``provenance``）。\n\n- ``owner``：主人（管理面编辑——含锁定开关）；\n- ``agent``：人格自身（对话内 ``edit_core_memory`` 工具调用）。\n\n修订来源 ``source`` 与之强制配对（admin ↔ owner、chat ↔ agent），\n由服务层在写入前校验。",
+          "enum": [
+            "owner",
+            "agent"
+          ],
+          "title": "CoreMemoryActor",
+          "type": "string"
+        }
+      },
+      "description": "核心记忆块读取 DTO（ORM 行归一——管理面 / 面板 / compose 读取面）。\n\nAttributes:\n    id: 块主键（修订列表的归属锚点）。\n    block: 块键（封闭四元组）。\n    content: 块正文（0-2000 字符；空块不进入 compose 注入）。\n    locked: 是否锁定（True = 仅主人可改写）。\n    version: 编辑版本号（首版 1，任何内容 / 锁定状态变更递增）。\n    updated_by: 最近一次写入者（owner / agent）。\n    last_edited_session_id: 最近一次对话内编辑的会话主键（管理面编辑\n        为 None）。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒）。",
+      "properties": {
+        "block": {
+          "$ref": "#/$defs/CoreBlockKey",
+          "description": "块键（封闭四元组）"
+        },
+        "content": {
+          "description": "块正文（0-2000 字符；空块不注入）",
+          "title": "Content",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "落库时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "id": {
+          "description": "块主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "last_edited_session_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "最近一次对话内编辑的会话主键（管理面为 None）",
+          "title": "Last Edited Session Id"
+        },
+        "locked": {
+          "description": "是否锁定（True = 仅主人可改写）",
+          "title": "Locked",
+          "type": "boolean"
+        },
+        "updated_at": {
+          "description": "行更新时间（epoch 毫秒）",
+          "title": "Updated At",
+          "type": "integer"
+        },
+        "updated_by": {
+          "$ref": "#/$defs/CoreMemoryActor",
+          "description": "最近一次写入者（owner/agent）"
+        },
+        "version": {
+          "description": "编辑版本号（首版 1）",
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "block",
+        "content",
+        "locked",
+        "version",
+        "updated_by",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "CoreMemoryBlockDTO",
+      "type": "object"
+    },
+    "CoreMemoryRevDTO": {
+      "$defs": {
+        "CoreBlockKey": {
+          "description": "核心记忆块键值域（ff_core_memory_blocks.block_key）。\n\n- ``self_identity``：自我认知（人格对自己身份 / 性格 / 处境的稳定理解）；\n- ``owner_profile``：关于对方（对主人的稳定认知——称呼 / 习惯 / 边界）；\n- ``relationship_story``：我们的故事（共同经历与关系里程碑）；\n- ``open_notes``：备忘（尚未归入前三块的长期事项）。",
+          "enum": [
+            "self_identity",
+            "owner_profile",
+            "relationship_story",
+            "open_notes"
+          ],
+          "title": "CoreBlockKey",
+          "type": "string"
+        },
+        "CoreMemoryActor": {
+          "description": "核心记忆的写入者值域（块的 ``updated_by`` 与修订的 ``provenance``）。\n\n- ``owner``：主人（管理面编辑——含锁定开关）；\n- ``agent``：人格自身（对话内 ``edit_core_memory`` 工具调用）。\n\n修订来源 ``source`` 与之强制配对（admin ↔ owner、chat ↔ agent），\n由服务层在写入前校验。",
+          "enum": [
+            "owner",
+            "agent"
+          ],
+          "title": "CoreMemoryActor",
+          "type": "string"
+        },
+        "CoreMemorySource": {
+          "description": "核心记忆修订的来源值域（ff_core_memory_revisions.source）。\n\n- ``admin``：管理面 API（主人编辑）；\n- ``chat``：对话内工具调用（人格自编辑）。",
+          "enum": [
+            "admin",
+            "chat"
+          ],
+          "title": "CoreMemorySource",
+          "type": "string"
+        }
+      },
+      "description": "核心记忆修订记录 DTO（append-only 历史——面板抽屉读取面）。\n\nAttributes:\n    id: 修订主键（倒序游标——越大越新）。\n    block: 修订所属块键。\n    version: 修订产生时的块版本号（与块行当时版本一致）。\n    content: 修订后的块全文（逐字留存——历史不可变）。\n    provenance: 写入者（owner / agent）。\n    source: 写入来源（admin / chat）。\n    session_id: 对话内编辑的会话主键（管理面修订为 None）。\n    ts_ms: 修订时刻（epoch 毫秒——倒序排序的第二键）。\n    created_at: 落库时间（epoch 毫秒）。",
+      "properties": {
+        "block": {
+          "$ref": "#/$defs/CoreBlockKey",
+          "description": "修订所属块键"
+        },
+        "content": {
+          "description": "修订后的块全文",
+          "title": "Content",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "落库时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "id": {
+          "description": "修订主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "provenance": {
+          "$ref": "#/$defs/CoreMemoryActor",
+          "description": "写入者（owner/agent）"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "对话内编辑的会话主键（管理面为 None）",
+          "title": "Session Id"
+        },
+        "source": {
+          "$ref": "#/$defs/CoreMemorySource",
+          "description": "写入来源（admin/chat）"
+        },
+        "ts_ms": {
+          "description": "修订时刻（epoch 毫秒）",
+          "title": "Ts Ms",
+          "type": "integer"
+        },
+        "version": {
+          "description": "修订产生时的块版本号",
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "block",
+        "version",
+        "content",
+        "provenance",
+        "source",
+        "ts_ms",
+        "created_at"
+      ],
+      "title": "CoreMemoryRevDTO",
       "type": "object"
     },
     "CuratedQueryDTO": {
@@ -4366,6 +4569,36 @@
         }
       },
       "title": "ModelEntryUpdateDTO",
+      "type": "object"
+    },
+    "OwnerEditModel": {
+      "additionalProperties": false,
+      "description": "主人编辑入参（管理面——可清空正文 / 可切换锁定）。\n\nAttributes:\n    content: 新块正文（0-2000 字符——空串表示清空该块）。\n    locked: 锁定开关（None = 保持不变；True = 仅主人可改写；False =\n        解锁，人格可再次自编辑）。",
+      "properties": {
+        "content": {
+          "description": "新块正文（0-2000 字符；空串 = 清空）",
+          "maxLength": 2000,
+          "title": "Content",
+          "type": "string"
+        },
+        "locked": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "锁定开关（None = 保持不变）",
+          "title": "Locked"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "title": "OwnerEditModel",
       "type": "object"
     },
     "PageResponse": {

@@ -12,13 +12,16 @@
              注入，20 条 / 2000 字符帽截断；无指令跳过）
         ↓ ⑥ 人物事实块（render_facts_block——R2c；【关于对方】现行高置信
              事实注入，12 条 / 1500 字符帽由读取面裁剪；无事实跳过）
-        ↓ ⑦ 相关技能块（render_skills_block——R2c；【相关技能】仅当命中
+        ↓ ⑦ 核心记忆块（render_core_memory_block——R2c；【自我认知】四块
+             自编辑自我模型的非空块注入，锁定块带锁定标识，总字符 2400
+             帽由渲染面截断；全空跳过）
+        ↓ ⑧ 相关技能块（render_skills_block——R2c；【相关技能】仅当命中
              本轮用户文本时注入，2 条 / 2000 字符帽；无命中跳过）
-        ↓ ⑧ prompts.render_output_protocol()               输出格式协议（心声 /
+        ↓ ⑨ prompts.render_output_protocol()               输出格式协议（心声 /
              情绪标签指令——R2b）
-        ↓ ⑨ 世界书 after_char 条目块                       检索增强（后段）
-        ↓ ⑩ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合）
-        ↓ ⑪ prompts.render_post_history_message(card)      历史后再注入（末块）
+        ↓ ⑩ 世界书 after_char 条目块                       检索增强（后段）
+        ↓ ⑪ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合）
+        ↓ ⑫ prompts.render_post_history_message(card)      历史后再注入（末块）
 
 世界书筛选语义（chara card v2 规格 + R2b 高级触发——算法链全文见
 ``world_book`` 模块文档，此处为消费面摘要）：
@@ -112,6 +115,21 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
       跳过；命中后的使用计数写入由服务层 fire-and-forget 调度（回复
       链路不等待、不因计数失败而失败）。
 
+核心记忆注入与自编辑工具闸（R2c——构造注入 ``core_memory_reader`` 后）：
+
+    - compose 链在人物事实块之后、相关技能块之前注入【自我认知】块
+      （``render_core_memory_block``——四块自编辑自我模型的非空块按固定
+      块序渲染，锁定块标题带「（锁定）」标识；总字符 2400 帽由渲染函数
+      截断停止）；注入面与人物事实同轴：仅在持久化会话已落库时读取，
+      读取失败不阻断回复（日志 + 空块），四块全空时整块跳过；
+    - **自编辑工具的结构性写入闸**：``edit_core_memory`` 工具注册在聊
+      天工具注册表（app 装配——duty 不注册，见 docs/backend/persona.md
+      装配一节），每轮工具列表按 ``sender_provenance`` 过滤——仅
+      ``owner`` 回合保留该工具；群聊 ``peer`` 回合的工具列表里根本没有
+      它（模型无从忘记不调用——peer 的临时插话不会污染人格自我模型）。
+      工具执行期的会话主键经 ``core_memory_session_id_var`` 绑定（修订
+      行的 ``session_id`` 归属），循环结束即复位。
+
 意图快径前钩（R2a-6——构造注入 ``intent_shortcut`` 后，``reply`` 前端
 先试快径；缺省 ``intent_shortcut=None`` 保持既有零快径形态）：
 
@@ -183,6 +201,7 @@ from packages.harness.chat.output_protocol import (
 from packages.harness.chat.prompts import (
     WORLD_BOOK_SECTION_SEPARATOR,
     render_charter,
+    render_core_memory_block,
     render_directives_block,
     render_emotion_state_block,
     render_facts_block,
@@ -216,6 +235,11 @@ from packages.harness.memory.service import ChatSessionService
 from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
     CharaBookPosition,
+)
+from packages.harness.persona.core_memory import core_memory_session_id_var
+from packages.harness.persona.core_memory_models import (
+    CORE_MEMORY_TOOL_NAME,
+    CoreMemoryBlockDTO,
 )
 from packages.harness.persona.directives import DirectivesService
 from packages.harness.persona.dtos import PersonaRecordDTO
@@ -309,6 +333,7 @@ def compose_messages(
     emotion_summary: str | None = None,
     directives: Sequence[str] | None = None,
     facts: Sequence[str] | None = None,
+    core_memory: Sequence[CoreMemoryBlockDTO] | None = None,
     skills: Sequence[SkillRecordDTO] | None = None,
 ) -> MessageCompositionResult:
     """组装完整请求消息序列（纯函数——无 I/O / 无网关调用 / 无会话回写）。
@@ -316,8 +341,8 @@ def compose_messages(
     消息序列结构::
 
         [system]  章程 + 世界书 before 段 + 人格正典 + 心情状态块 +
-                  长期指令块 + 人物事实块 + 相关技能块 + 输出格式协议块 +
-                  世界书 after 段
+                  长期指令块 + 人物事实块 + 核心记忆块 + 相关技能块 +
+                  输出格式协议块 + 世界书 after 段
         [user/assistant ...]  全部历史回合（含刚追加的用户回合）
         [system]  历史后再注入（卡片声明 post_history_instructions 时；
                   位于**最后一条历史回合之后**——deep anti-drift 位置）
@@ -328,10 +353,12 @@ def compose_messages(
     DirectivesService 读取；20 条 / 2000 字符帽由
     ``render_directives_block`` 施加）；人物事实块仅在 ``facts`` 有有效
     条目时注入（【关于对方】——由 ChatService 经事实读取面提供；条数 /
-    字符帽在读取面施加）；相关技能块仅在 ``skills`` 有命中条目时注入
-    （【相关技能】——由 ChatService 经技能读取面按本轮用户文本匹配；
-    条数帽在读取面、字符帽在 ``render_skills_block`` 施加）；输出格式
-    协议块恒注入（心声 / 情绪标签指令——解析面见
+    字符帽在读取面施加）；核心记忆块仅在 ``core_memory`` 有非空块时注入
+    （【自我认知】——由 ChatService 经核心记忆读取面提供；总字符帽在
+    ``render_core_memory_block`` 施加）；相关技能块仅在 ``skills`` 有命中
+    条目时注入（【相关技能】——由 ChatService 经技能读取面按本轮用户文本
+    匹配；条数帽在读取面、字符帽在 ``render_skills_block`` 施加）；输出
+    格式协议块恒注入（心声 / 情绪标签指令——解析面见
     ``chat/output_protocol``）。
 
     世界书选择经 ``world_book.select_world_book_entries``（算法链与
@@ -350,6 +377,9 @@ def compose_messages(
         facts: 现行人物事实注入行列表（``【类别标签】正文``——None / 空 =
             不注入人物事实块；读取与裁剪在调用方——本函数保持纯函数无
             I/O）。
+        core_memory: 核心记忆块记录列表（None / 空 / 全空正文 = 不注入
+            核心记忆块；读取在调用方、总字符帽在
+            ``render_core_memory_block`` ——本函数保持纯函数无 I/O）。
         skills: 命中本轮用户文本的技能记录列表（None / 空 = 不注入相关
             技能块；匹配与条数帽在调用方、字符帽在 ``render_skills_block``
             ——本函数保持纯函数无 I/O）。
@@ -382,6 +412,9 @@ def compose_messages(
     facts_block = render_facts_block(facts or [])
     if facts_block:
         system_parts.append(facts_block)
+    core_memory_block = render_core_memory_block(core_memory or [])
+    if core_memory_block:
+        system_parts.append(core_memory_block)
     skills_block = render_skills_block(skills or [])
     if skills_block:
         system_parts.append(skills_block)
@@ -515,6 +548,27 @@ class SkillsReaderFace(Protocol):
         ...
 
 
+class CoreMemoryReaderFace(Protocol):
+    """compose 核心记忆读取面协议（persona 域核心记忆服务的结构化消费契约）。
+
+    结构化类型：真实 :class:`~packages.harness.persona.core_memory.CoreMemoryService`
+    天然满足（``list_blocks``——四块自我模型的读取，首次读取懒建空行）；
+    测试注入 fake 同形态。注入面与人物事实同轴：仅在持久化会话已落库时
+    读取（见模块 docstring「核心记忆注入与自编辑工具闸」）。
+    """
+
+    async def list_blocks(self, session: AsyncSession) -> list[CoreMemoryBlockDTO]:
+        """读取四个核心记忆块（固定块序——空块正文为空串）。
+
+        Args:
+            session: 注入的异步 Session（人格上下文已绑定）。
+
+        Returns:
+            四块记录列表。
+        """
+        ...
+
+
 class ChatService:
     """人格感知聊天会话服务（组装 + 网关调用 + 会话内存态维护 + 可选持久化）。
 
@@ -537,6 +591,7 @@ class ChatService:
         emotion_service: EmotionService | None = None,
         directive_service: DirectivesService | None = None,
         facts_reader: FactsReaderFace | None = None,
+        core_memory_reader: CoreMemoryReaderFace | None = None,
         skills_reader: SkillsReaderFace | None = None,
         episode_sink: EpisodeSinkFace | None = None,
     ) -> None:
@@ -567,6 +622,10 @@ class ChatService:
                 与既有完全一致；注入后持久化会话回合在 compose 前读取
                 现行高置信事实——纯内存形态零附加 I/O，见模块
                 docstring「人物事实注入」）。
+            core_memory_reader: 核心记忆读取面（None = 不注入核心记忆块——
+                行为与既有完全一致；注入后持久化会话回合在 compose 前读取
+                四块自我模型——纯内存形态零附加 I/O，见模块
+                docstring「核心记忆注入与自编辑工具闸」）。
             skills_reader: 技能读取面（None = 不注入相关技能块——行为与
                 既有完全一致；注入后持久化会话回合在 compose 前按本轮
                 用户文本匹配现行技能——纯内存形态零附加 I/O，见模块
@@ -591,6 +650,8 @@ class ChatService:
         self._directive_service = directive_service
         #: 人物事实读取面绑定（None = 不注入——纯内存 / 未接线形态零 I/O）。
         self._facts_reader = facts_reader
+        #: 核心记忆读取面绑定（None = 不注入——纯内存 / 未接线形态零 I/O）。
+        self._core_memory_reader = core_memory_reader
         #: 技能读取面绑定（None = 不注入——纯内存 / 未接线形态零 I/O）。
         self._skills_reader = skills_reader
         #: 情景落库面绑定（None = 零情景写入——记忆管道未接线形态）。
@@ -776,7 +837,10 @@ class ChatService:
 
         工具面分派：``tools`` 绑定时走有界工具循环（步数上限 + 收尾
         forcing——见模块 docstring「可选工具循环」；工具步为循环内部
-        消息，不进入会话回合 / 持久化）；未绑定为既有单次调用形态。
+        消息，不进入会话回合 / 持久化）；未绑定为既有单次调用形态。工具
+        列表按 ``sender_provenance`` 裁剪：群聊 ``peer`` 回合不携带
+        ``edit_core_memory``（自编辑写入闸——见模块 docstring「核心记忆
+        注入与自编辑工具闸」）。
 
         失败语义：网关异常原样上抛（用户回合保留在历史——调用方决定
         重试或提示）。重试语义（文档化决策）：调用方对 ``reply`` 的任何
@@ -824,12 +888,14 @@ class ChatService:
         emotion_summary = await self._current_emotion_summary(state)
         directives = await self._current_directives(state)
         facts = await self._current_facts(state)
+        core_memory = await self._current_core_memory(state)
         skills = await self._current_skills(state, user_text)
         result = compose_messages(
             state,
             emotion_summary=emotion_summary,
             directives=directives,
             facts=facts,
+            core_memory=core_memory,
             skills=skills,
         )
         # 功能式回合状态回存：组装纯函数不回写会话态，冷却时钟推进由
@@ -837,7 +903,12 @@ class ChatService:
         # 组装回合）。
         state.world_book_state = result.world_book_state
         if self._tools_binding is not None:
-            raw_content = await self._tool_loop(result.messages, state, self._tools_binding)
+            raw_content = await self._tool_loop(
+                result.messages,
+                state,
+                self._tools_binding,
+                sender_provenance=sender_provenance,
+            )
         else:
             response: ChatResponseModel = await self._gateway.chat_by_role(
                 ModelRole.CHAT,
@@ -897,12 +968,14 @@ class ChatService:
         emotion_summary = await self._current_emotion_summary(state)
         directives = await self._current_directives(state)
         facts = await self._current_facts(state)
+        core_memory = await self._current_core_memory(state)
         skills = await self._current_skills(state, user_text)
         result = compose_messages(
             state,
             emotion_summary=emotion_summary,
             directives=directives,
             facts=facts,
+            core_memory=core_memory,
             skills=skills,
         )
         # 功能式回合状态回存（与 reply 同构——冷却时钟只度量真实组装回合）。
@@ -970,6 +1043,8 @@ class ChatService:
         messages: Sequence[ChatMessageModel],
         state: ChatSessionStateModel,
         binding: tuple[list[ToolDefinitionModel], ToolExecutorFace],
+        *,
+        sender_provenance: MemoryProvenance = MemoryProvenance.OWNER,
     ) -> str:
         """有界工具循环（返回最终回复文本；机械镜像 duty_service._tool_loop）。
 
@@ -977,10 +1052,21 @@ class ChatService:
         反馈轮）——**不进入 ``state.turns`` / 持久化**（仅最终 assistant
         文本由 ``reply`` 落回合）。
 
+        工具列表按本轮发送者来源分级（**结构性写入闸**）：仅 ``owner``
+        回合携带完整工具面；``peer`` / ``untrusted`` 回合从列表里剔除
+        ``edit_core_memory``——群成员的插话不能改写人格的自我模型（模型
+        看不到该工具，无从「忘记不调用」）。剔除后若列表为空，网关请求
+        不携带工具面（与零工具形态同 wire 语义）。
+
+        工具执行期把会话主键绑定到 ``core_memory_session_id_var``（修订行
+        的会话归属面），循环结束（含异常路径）复位。
+
         Args:
             messages: 组装结果消息序列（system + 历史 + 历史后再注入）。
-            state: 会话状态（persona_id 归属面）。
+            state: 会话状态（persona_id 归属面 + 会话主键绑定源）。
             binding: 工具面绑定（定义列表 + 执行面——reply 分派传入）。
+            sender_provenance: 本轮发送者来源分级（缺省 owner——私聊 /
+                本地入口；群聊 peer 会剔除自编辑工具）。
 
         Returns:
             最终回复文本（空串 = 模型未产出——调用方归
@@ -991,47 +1077,75 @@ class ChatService:
             ``tool_executor.execute_call`` 自身恒不抛）。
         """
         definitions, executor = binding
+        active_definitions = self._definitions_for_provenance(
+            definitions, sender_provenance
+        )
         loop_messages: list[ChatMessageModel] = list(messages)
         persona_id = str(state.persona_id)
-        for _ in range(CHAT_TOOL_STEP_CAP):
-            response = await self._gateway.chat_by_role(
+        session_token = core_memory_session_id_var.set(state.session_id)
+        try:
+            for _ in range(CHAT_TOOL_STEP_CAP):
+                response = await self._gateway.chat_by_role(
+                    ModelRole.CHAT,
+                    loop_messages,
+                    tools=active_definitions or None,
+                    persona_id=persona_id,
+                    purpose=CHAT_PURPOSE,
+                )
+                if not response.tool_calls:
+                    return response.content.strip()
+                loop_messages.append(
+                    ChatMessageModel(
+                        role=ChatMessageRole.ASSISTANT,
+                        content=response.content,
+                        tool_calls=response.tool_calls,
+                    )
+                )
+                for call in response.tool_calls:
+                    result = await executor.execute_call(
+                        ToolCallRequestModel(name=call.name, arguments=call.arguments)
+                    )
+                    loop_messages.append(
+                        ChatMessageModel(
+                            role=ChatMessageRole.TOOL,
+                            content=_render_tool_result_content(result),
+                            tool_call_id=call.id,
+                        )
+                    )
+            # 步数上限触发：收尾指令 + 无工具面最终调用（final-report forcing）。
+            loop_messages.append(
+                ChatMessageModel(role=ChatMessageRole.SYSTEM, content=_TOOL_LOOP_FINAL_INSTRUCTION)
+            )
+            final_response = await self._gateway.chat_by_role(
                 ModelRole.CHAT,
                 loop_messages,
-                tools=definitions,
                 persona_id=persona_id,
                 purpose=CHAT_PURPOSE,
             )
-            if not response.tool_calls:
-                return response.content.strip()
-            loop_messages.append(
-                ChatMessageModel(
-                    role=ChatMessageRole.ASSISTANT,
-                    content=response.content,
-                    tool_calls=response.tool_calls,
-                )
-            )
-            for call in response.tool_calls:
-                result = await executor.execute_call(
-                    ToolCallRequestModel(name=call.name, arguments=call.arguments)
-                )
-                loop_messages.append(
-                    ChatMessageModel(
-                        role=ChatMessageRole.TOOL,
-                        content=_render_tool_result_content(result),
-                        tool_call_id=call.id,
-                    )
-                )
-        # 步数上限触发：收尾指令 + 无工具面最终调用（final-report forcing）。
-        loop_messages.append(
-            ChatMessageModel(role=ChatMessageRole.SYSTEM, content=_TOOL_LOOP_FINAL_INSTRUCTION)
-        )
-        final_response = await self._gateway.chat_by_role(
-            ModelRole.CHAT,
-            loop_messages,
-            persona_id=persona_id,
-            purpose=CHAT_PURPOSE,
-        )
-        return final_response.content.strip()
+            return final_response.content.strip()
+        finally:
+            core_memory_session_id_var.reset(session_token)
+
+    @staticmethod
+    def _definitions_for_provenance(
+        definitions: Sequence[ToolDefinitionModel], sender_provenance: MemoryProvenance
+    ) -> list[ToolDefinitionModel]:
+        """按发送者来源分级裁剪工具列表（自编辑工具的结构性写入闸）。
+
+        语义（锁定）：``owner`` 回合原样返回；其余分级（群聊 ``peer`` /
+        平台 ``untrusted``）剔除 ``edit_core_memory``——自我模型只能由
+        主人交互触发改写，群成员 / 平台内容只用不能改。
+
+        Args:
+            definitions: 装配期绑定的工具定义列表。
+            sender_provenance: 本轮发送者来源分级。
+
+        Returns:
+            本轮实际进入 LLM 工具面的定义列表（可能为空）。
+        """
+        if sender_provenance == MemoryProvenance.OWNER:
+            return list(definitions)
+        return [definition for definition in definitions if definition.name != CORE_MEMORY_TOOL_NAME]
 
     async def _reply_via_shortcut(
         self,
@@ -1242,6 +1356,38 @@ class ChatService:
         except Exception:  # best-effort：事实读取失败不阻断回复链路
             logger.opt(exception=True).warning(
                 "人物事实读取失败（本轮不注入人物事实块）: persona_id={}", state.persona_id
+            )
+            return []
+
+    async def _current_core_memory(
+        self, state: ChatSessionStateModel
+    ) -> list[CoreMemoryBlockDTO]:
+        """读取核心记忆四块（compose 核心记忆块注入面）。
+
+        运行判定：持久化会话已落库 + 读取面已接线（与人物事实同轴——自我
+        模型依赖数据库；纯内存形态零附加 I/O）。读取失败不阻断回复（日志
+        + 空列表——核心记忆是增强面）；四块全空时渲染函数返回空串、组装
+        链跳过整块。
+
+        Args:
+            state: 会话状态。
+
+        Returns:
+            四块记录列表（固定块序）；未接线 / 未落库 / 读取失败时为空
+            列表。
+        """
+        if (
+            self._core_memory_reader is None
+            or self._session_service is None
+            or state.session_id is None
+        ):
+            return []
+        try:
+            async with session_scope() as db_session, bind_persona_context(state.persona_id):
+                return await self._core_memory_reader.list_blocks(db_session)
+        except Exception:  # best-effort：核心记忆读取失败不阻断回复链路
+            logger.opt(exception=True).warning(
+                "核心记忆读取失败（本轮不注入核心记忆块）: persona_id={}", state.persona_id
             )
             return []
 

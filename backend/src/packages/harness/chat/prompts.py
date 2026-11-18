@@ -30,6 +30,8 @@
       常备指令注入——R2b D7-14；截断说明见 :data:`DIRECTIVES_TRUNCATION_NOTE`）；
     - :data:`FACTS_BLOCK_TEMPLATE`            —— 人物事实块（【关于对方】
       结构化事实注入——高置信事实按类别标签逐行列出；无事实不注入）；
+    - :data:`CORE_MEMORY_BLOCK_TEMPLATE`      —— 核心记忆块（【自我认知】
+      四块自编辑自我模型的非空块注入——锁定块带锁定标识；总字符 2400 帽）；
     - :data:`SKILLS_BLOCK_TEMPLATE`           —— 相关技能块（【相关技能】
       命中当前用户文本的程序性技能注入——命中才注入，总字符 2000 帽）。
 
@@ -45,6 +47,12 @@ from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
     CharaCardModel,
 )
+from packages.harness.persona.core_memory_models import (
+    CORE_BLOCK_LABELS,
+    CORE_MEMORY_COMPOSE_MAX_CHARS,
+    CORE_MEMORY_LOCKED_SUFFIX,
+    CoreMemoryBlockDTO,
+)
 from packages.harness.persona.skills_models import SKILL_COMPOSE_MAX_CHARS, SkillRecordDTO
 
 __all__ = [
@@ -58,10 +66,12 @@ __all__ = [
     "EMOTION_STATE_TEMPLATE_VERSION",
     "DIRECTIVES_BLOCK_TEMPLATE_VERSION",
     "FACTS_BLOCK_TEMPLATE_VERSION",
+    "CORE_MEMORY_BLOCK_TEMPLATE_VERSION",
     "SKILLS_BLOCK_TEMPLATE_VERSION",
     "DIRECTIVES_MAX_ENTRIES",
     "DIRECTIVES_MAX_CHARS",
     "SKILL_COMPOSE_MAX_CHARS",
+    "CORE_MEMORY_COMPOSE_MAX_CHARS",
     "CHARTER_TEMPLATE",
     "PERSONA_NAME_HEADER_TEMPLATE",
     "PERSONA_DESCRIPTION_SECTION_TEMPLATE",
@@ -76,9 +86,11 @@ __all__ = [
     "DIRECTIVES_BLOCK_TEMPLATE",
     "DIRECTIVES_TRUNCATION_NOTE",
     "FACTS_BLOCK_TEMPLATE",
+    "CORE_MEMORY_BLOCK_TEMPLATE",
     "SKILLS_BLOCK_TEMPLATE",
     "render_directives_block",
     "render_facts_block",
+    "render_core_memory_block",
     "render_skills_block",
     "render_charter",
     "render_persona_system_prompt",
@@ -90,7 +102,7 @@ __all__ = [
 ]
 
 #: prompt 套件总版本（任一模板变更时同步上调）。
-PROMPTS_VERSION: str = "1.4.0"
+PROMPTS_VERSION: str = "1.5.0"
 
 # ---------------------------------------------------------------------------
 # 版本常量——逐模板独立版本（byte-lock 测试按模板分别锁定摘要）
@@ -114,6 +126,8 @@ EMOTION_STATE_TEMPLATE_VERSION: str = "1.0.0"
 DIRECTIVES_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
 #: 人物事实块模板版本（【关于对方】结构化事实注入）。
 FACTS_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
+#: 核心记忆块模板版本（【自我认知】四块自编辑自我模型注入）。
+CORE_MEMORY_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
 #: 相关技能块模板版本（【相关技能】程序性技能注入）。
 SKILLS_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
 
@@ -197,6 +211,11 @@ DIRECTIVES_TRUNCATION_NOTE: str = "（其余长期指令已省略）"
 #: 人物事实块（占位符 ``{facts}``——每条一行「- 【类别标签】正文」；
 #: 无现行事实不注入；条数 / 字符帽由读取面施加，见 persona.facts）。
 FACTS_BLOCK_TEMPLATE: str = "【关于对方】\n{facts}"
+
+#: 核心记忆块（占位符 ``{blocks}``——每个非空块以「### 名称 + 正文」渲染，
+#: 锁定块名称后带锁定标识；无内容不注入；总字符帽由
+#: :func:`render_core_memory_block` 施加，见 persona.core_memory）。
+CORE_MEMORY_BLOCK_TEMPLATE: str = "【自我认知】\n{blocks}"
 
 #: 相关技能块（占位符 ``{skills}``——命中技能逐条以「### 名称 + 正文」
 #: 渲染；无命中不注入；总字符帽由 :func:`render_skills_block` 施加）。
@@ -340,6 +359,54 @@ def render_facts_block(facts: Sequence[str]) -> str:
     if not lines:
         return ""
     return FACTS_BLOCK_TEMPLATE.format(facts="\n".join(lines))
+
+
+def render_core_memory_block(
+    blocks: Sequence[CoreMemoryBlockDTO],
+    *,
+    max_chars: int = CORE_MEMORY_COMPOSE_MAX_CHARS,
+) -> str:
+    """渲染核心记忆块（【自我认知】——人格自编辑自我模型的非空块注入）。
+
+    渲染语义（锁定）：每个非空块以 ``### 块名称`` 标题行 + 块正文渲染，
+    锁定块的标题行追加
+    :data:`~packages.harness.persona.core_memory_models.CORE_MEMORY_LOCKED_SUFFIX`
+    标识（让模型知道该块本轮不可改写）；块之间空行分隔；累计字符（含
+    标题、换行与分隔）不超过 ``max_chars``（缺省
+    :data:`~packages.harness.persona.core_memory_models.CORE_MEMORY_COMPOSE_MAX_CHARS`）。
+    预算不足时按块序截断：当前块正文截到剩余预算即停止（不继续追加后续
+    块——块序即优先级，先注入的块优先）。空白内容块跳过；全部为空返回
+    空串（组装链跳过空块）。
+
+    Args:
+        blocks: 核心记忆块记录（服务层按固定块序返回——调用方保证顺序）。
+        max_chars: 总字符预算（含标题与分隔；缺省 2400）。
+
+    Returns:
+        核心记忆块文本；无内容或预算容不下任何标题时返回空串。
+    """
+    sections: list[str] = []
+    used_chars = 0
+    for block in blocks:
+        body = block.content.strip()
+        if not body:
+            continue
+        label = CORE_BLOCK_LABELS[block.block]
+        suffix = CORE_MEMORY_LOCKED_SUFFIX if block.locked else ""
+        header = f"### {label}{suffix}\n"
+        separator_len = 2 if sections else 0
+        remaining = max_chars - used_chars - separator_len
+        if remaining <= len(header):
+            break
+        body_budget = remaining - len(header)
+        body_text = body[:body_budget]
+        sections.append(header + body_text)
+        used_chars += separator_len + len(header) + len(body_text)
+        if len(body_text) < len(body):
+            break
+    if not sections:
+        return ""
+    return CORE_MEMORY_BLOCK_TEMPLATE.format(blocks="\n\n".join(sections))
 
 
 def render_skills_block(

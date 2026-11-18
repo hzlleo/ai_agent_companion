@@ -85,7 +85,7 @@
 |---|---|---|
 | R2a 地基与感官 | ①admin Bearer 鉴权（豁免 health/QQ webhook）②人格多激活重构（is_primary_marker 唯一键/迁移0008/真引擎重验）③ConfigSectionAdmin 通用基座 ④搜索双 provider（博查+智谱）+chat 工具循环+预算闸+usage search ⑤browser-sidecar 独立树（七工具/SSRF 链/漂移门36项）⑥rhythm 节律层+意图快径 ⑦通道协议 v2（attachments/silent/synthetic） | ✅ merged（PR #10，`fef2b0e`） |
 | R2b 人格表达 | ①世界书高级（depth/recursive/groups/probability/cooldown）②性格组件库（33组件×8原型预设+导入API+冲突UI，DTO 68组）③内心独白协议+轻情绪引擎（8维/M层）④swipes 变体（迁移0010）⑤提醒（ff_reminders 迁移0011+扫描作业）+常备指令 | ✅ 代码完成，**PR #11 OPEN（未合并）**，分支 `feat/r2b-persona-expression` 最新 `c65b930` |
-| R2c 记忆关系 | c1 管线闭环+生命周期（迁移0012/索引真接线/归档/审计二审整改）✅`99317c6`；c2 人物画像事实链（迁移0013/facts 域/梦境提取阶段/纠错闭环）✅`0880cc1`；c2b provenance 分级紧急修（PEER 枚举/群聊 peer 落档/梦境双排除/skipped_peer 统计/证据面纵深防御）✅ 已实现并全量验收；c3 SKILL层+历史挖矿（迁移 0014 `ff_persona_skills` / `SkillsService` / 梦境 skills 提取阶段 / compose 相关技能块 / API+面板+文档）✅ 代码完成、全门禁绿；c4 自编辑核心记忆+溯源闸、c5 终验PR —— **待做** | 🔄 进行中 |
+| R2c 记忆关系 | c1 管线闭环+生命周期（迁移0012/索引真接线/归档/审计二审整改）✅`99317c6`；c2 人物画像事实链（迁移0013/facts 域/梦境提取阶段/纠错闭环）✅`0880cc1`；c2b provenance 分级紧急修（PEER 枚举/群聊 peer 落档/梦境双排除/skipped_peer 统计/证据面纵深防御）✅ 已实现并全量验收；c3 SKILL层+历史挖矿（迁移 0014 `ff_persona_skills` / `SkillsService` / 梦境 skills 提取阶段 / compose 相关技能块 / API+面板+文档）✅ 代码完成、全门禁绿；c4 自编辑核心记忆+溯源闸（迁移 0015 `ff_core_memory_blocks` / `ff_core_memory_revisions` / `CoreMemoryService` / `edit_core_memory` 工具 + 发送者来源分级结构性工具闸 / compose【自我认知】块 / API+面板+文档）✅ 代码完成、全门禁绿（含活 SeekDB 0015 round-trip）；c5 终验PR —— **待做** | 🔄 进行中 |
 | R2-defense | 丙+丁：D1 结构隔离+宪章五条+nonce 定界、D2 注入检测+角色内反击（毒舌）+compliance_guard 联动、D3 peer 记忆免疫全链、D4 30 条红队回归集 | ⏳ 排 R2c 后、R2b+ 前 |
 | R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | ⏳ 排 R2-defense 后 |
 | R2d 心流社交 | 心流门控/群聊多人格/声纹/表情包库+VLM标注 | ⏳ |
@@ -95,7 +95,7 @@
 
 **当前分支状态**：
 - `feat/r2b-persona-expression`（`c65b930`，PR #11 OPEN）
-- `feat/r2c-memory-relationships`（基于 `c65b930` 的堆叠分支；`99317c6` c1、`0880cc1` c2 已推送；c2b 未提交）—— PR #11 合并后需 `git rebase main` 收敛再开 R2c PR。
+- `feat/r2c-memory-relationships`（基于 `c65b930` 的堆叠分支；`99317c6` c1、`0880cc1` c2 已推送；c2b / c3 / c4 在工作区未提交）—— PR #11 合并后需 `git rebase main` 收敛再开 R2c PR。
 
 ## 4. 全部拍板记录（原文语义）
 
@@ -124,32 +124,38 @@
 - 微信=企微智能机器人主轨+GUI 微信实验轨（D2-A）；抖音=GUI/浏览器底座（D4）；短信=SmsForwarder 记账推迟（D3）。
 - TTS=CosyVoice3-0.5B、ASR=Qwen3-ASR-0.6B、Embedding=Qwen3-Embedding-0.6B 主+bge-m3 备、look_at=Qwen3-VL（GGUF）。
 - 管理台鉴权=owner Bearer（ADMIN_AUTH_TOKEN env；空=禁用+启动提示）。
-- 数据库迁移链 0001..0014；0012=curated lifecycle；0013=persona facts；0014=persona skills。
+- 数据库迁移链 0001..0015；0012=curated lifecycle；0013=persona facts；0014=persona skills；0015=core memory（blocks + append-only revisions）。
 
 ## 5. 工程实现事实（恢复续跑所需）
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2004 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 2106 passed）
 cd backend && pixi run coverage-gates       # 23 组 ≥80% enforce
 cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 6 用例（迁移链/并发唯一键/行锁/混合检索）
-cd frontend && pixi run test / coverage / lint / build   # 517 passed
+cd frontend && pixi run test / coverage / lint / build   # 555 passed
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
 根级：pixi run gen-examples（三件套再生成）、pixi run gates
 ```
 - SeekDB 本地容器：`docker run -d --name seekdb-smoke -p 2881:2881 oceanbase/seekdb:1.4.0-100000172026082615`（root 空密码；就绪约 5-60s；网络中断后需重启）。
-- DTO 契约门：`scripts/export_dto_schemas.py` + `frontend/src/test/contract/dtoSchemas.json`（当前 72 组）；改后端 wire DTO 必须 `pixi run export-dto-schemas` 再提交，改前端 types 契约测试即红。
+- DTO 契约门：`scripts/export_dto_schemas.py` + `frontend/src/test/contract/dtoSchemas.json`（当前 78 组）；改后端 wire DTO 必须 `pixi run export-dto-schemas` 再提交，改前端 types 契约测试即红。
 - 漂移门：`scripts/check_sandbox_dtos_drift.py`（36 项，三树镜像契约 byte 级）。
 - 沙盒树：`docker/tool-sandbox-agent`、`docker/browser-sidecar`（独立 pixi；CI 有对应 job；browser 镜像 ~2GB 不在 CI 构建）。
 - 模型子模组：`models/`（ModelScope；权重 lfs 延迟拉取；ModelScope UA 墙：`git config http.https://www.modelscope.cn/.userAgent "git/2.47.0"`）。
 - 测试环境：全异步 asyncio_mode=auto；SQLite 共享 fixture；不依赖真实配置；conftest 硬覆盖 env。
-- 关键模块坐标：harness/{core,config,database,pools,llm,usage,persona,chat,memory,channels,tools,duty,scheduler,voice,multimodal,search,emotion,intent,rhythm,reminders}、app/api/{personas,memories,usage,models,voice,look_at,facts,reminders,directives,health,channels_qq}、前台 pages/{personas,memories,usage,models}。
+- 关键模块坐标：harness/{core,config,database,pools,llm,usage,persona,chat,memory,channels,tools,duty,scheduler,voice,multimodal,search,emotion,intent,rhythm,reminders}、app/api/{personas,memories,usage,models,voice,look_at,facts,reminders,directives,skills,core_memory,health,channels_qq}、前台 pages/{personas,memories,usage,models}。
 
-### 当前进行中：R2c-2b（群聊 provenance 分级紧急修）
-**已完成编辑（未提交）**：
-1. `memory/models.py`：MemoryProvenance 新增 `PEER`；2. `channels/channel_models.py`：InboundMessageModel 新增 `is_group_chat`；3. `telegram/tg_runner.py`、`qq/qq_webhook.py`：入站填充 is_group_chat；4. `channel_service.handle_inbound`：群聊→PEER/私聊→OWNER 并透传 reply；5. `chat/service.py`：reply/stream_reply 增 `sender_provenance` 参数、_record_episode 透传 user_provenance（三个 user 回合调用点已改）；6. `memory/episode_sink.py`：Protocol+实现签名与 `_provenance_for_role(role, user_provenance)`；7. `memory/dreaming.py`：门排除 PEER（skipped_peer 计数）+ `_fact_evidence` 纵深防御过滤 PEER/UNTRUSTED；8. `dreaming_models.py`：DreamRunStatsModel 增 `skipped_peer`；9. `test_channel_router.py`：fake reply 接收 sender_provenance + 新增 TestSenderProvenance 两用例（**注意：`_inbound` helper 的 def 签名未加 `is_group_chat` 参数 → 当前 NameError，需补签名**）。
-**剩余步骤**：①修 test_channel_router `_inbound` 签名与 RaisingEpisodeSink fake 签名（`*, user_provenance=None`）；②`pixi run export-dto-schemas` 再生成 fixture（DreamRunStats 变化）+ 前端 `types/memory.ts` DreamRunStats 补 skipped_peer；③补 dreaming peer 排除测试与 sink peer 落档测试；④全量门禁+活 SeekDB 复验；⑤docs 更新（channels.md provenance 分级、memory.md taxonomy/门/stats、chat.md reply 参数、persona.md 证据面 owner-only）；⑥提交推送。
+### 当前切片：R2c-4（自编辑核心记忆 + 溯源闸）
+**已完成**：
+1. 迁移 0015：`ff_core_memory_blocks`（四块唯一键 + persona 索引）与 `ff_core_memory_revisions`（block_id 级联外键 + block_id / ts_ms 索引；append-only）；降级先删修订表，block_id 索引随表清理（5320 方言面已真引擎验证）。
+2. `harness/persona/core_memory.py` / `core_memory_models.py` / `core_memory_orm.py`：四块懒建种子 / 主人编辑（版本 + 修订 + 锁定开关）/ 人格自编辑（锁定与目标全文超限可读拒绝、append 换行追加）/ 修订倒序读取 / `register_core_memory_tools`（`edit_core_memory` + `core_memory_session_id_var`）。
+3. `chat/service.py`：compose 链⑦【自我认知】块（事实之后、技能之前）；工具列表按 `sender_provenance` 结构化裁剪（peer 回合剔除自编辑工具）；工具循环会话主键绑定与复位。`chat/prompts.py`：`CORE_MEMORY_BLOCK_TEMPLATE` + `render_core_memory_block`（2400 帽）+ PROMPTS_VERSION 1.5.0 + byte-lock。
+4. `app/api/core_memory.py`（GET blocks / PUT blocks/{key} / GET revisions）+ `app/main.py` 受保护路由与通道聊天注册表装配（duty 不注册）。
+5. 前端 `CoreMemoryPanel`（四块编辑卡 + 锁定 + 修订抽屉）+ types/api/hooks/msw/测试；DTO fixture 78 组双侧重生成。
+6. docs：persona.md 核心记忆一节 / chat.md 链路与工具闸 / README 行 / 本台账。
+**验证**：后端 2106 passed / 23 组覆盖率 / mypy 148 文件零问题 / ruff / 门禁集（36 项漂移 + noqa 冻结 + 注释门 + 棘轮）/ 活 SeekDB 6 用例；前端 555 passed / coverage / lint / build。
+**剩余**：c5 终验 PR（分支收敛 + PR 描述）。
 
 ## 6. 遗留与部署台账（非阻塞）
 

@@ -37,6 +37,7 @@ import { PersonaStatesPanel } from './PersonaStatesPanel'
 import { DirectivesPanel } from './DirectivesPanel'
 import { FactsPanel } from './FactsPanel'
 import { SkillsPanel } from './SkillsPanel'
+import { CoreMemoryPanel } from './CoreMemoryPanel'
 
 export interface PersonaFormPageProps {
   /** 表单模式：create = 新建；edit = 编辑既有人格。 */
@@ -449,6 +450,18 @@ export default function PersonaFormPage({ mode }: PersonaFormPageProps) {
             </CardHeader>
             <CardContent>
               <FactsPanel personaId={parsedId} />
+            </CardContent>
+          </Card>
+        )}
+
+        {/* 自我认知（仅编辑模式——核心记忆四块自编辑面板） */}
+        {isEditMode && Number.isInteger(parsedId) && (
+          <Card>
+            <CardHeader>
+              <CardTitle>自我认知</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CoreMemoryPanel personaId={parsedId} />
             </CardContent>
           </Card>
         )}

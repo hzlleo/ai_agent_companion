@@ -97,6 +97,11 @@ from packages.harness.persona.directives_models import (
     DirectiveRecordDTO,
     DirectiveUpdateDTO,
 )
+from packages.harness.persona.core_memory_models import (
+    CoreMemoryBlockDTO,
+    CoreMemoryRevDTO,
+    OwnerEditModel,
+)
 from packages.harness.persona.facts_models import (
     FactCorrectDTO,
     FactCreateDTO,
@@ -256,6 +261,12 @@ def build_manifest() -> list[SchemaExportEntry]:
         SchemaExportEntry("SkillCreateModel", SkillCreateModel, "SkillCreateRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("SkillUpdateModel", SkillUpdateModel, "SkillUpdateRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("SkillRecordDTO", SkillRecordDTO, "SkillRecord", _FRONTEND_PERSONA),
+        # persona 域——核心记忆（R2c；四块自编辑自我模型 / 修订链 / 主人编辑）。
+        SchemaExportEntry("CoreMemoryBlockDTO", CoreMemoryBlockDTO, "CoreMemoryBlock", _FRONTEND_PERSONA),
+        SchemaExportEntry("CoreMemoryRevDTO", CoreMemoryRevDTO, "CoreMemoryRevision", _FRONTEND_PERSONA),
+        SchemaExportEntry(
+            "OwnerEditModel", OwnerEditModel, "CoreMemoryOwnerUpdateRequest", _FRONTEND_PERSONA
+        ),
         # memory 域——情景事件。
         SchemaExportEntry("EpisodeCreateDTO", EpisodeCreateDTO, "EpisodeCreateRequest", _FRONTEND_MEMORY),
         SchemaExportEntry("EpisodeRecordDTO", EpisodeRecordDTO, "EpisodeRecord", _FRONTEND_MEMORY),
