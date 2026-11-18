@@ -1,9 +1,9 @@
-"""迁移链真引擎 round-trip（SeekDB MySQL 方言——0001→0016 全链升 / 降级）。
+"""迁移链真引擎 round-trip（SeekDB MySQL 方言——0001→0017 全链升 / 降级）。
 
 验证面（SQLite 方言永不暴露、只有真引擎能锁定的迁移序语义）：
 
-    - 升级 head 后 ``SHOW TABLES`` 收敛到 17 表集（``alembic_version`` +
-      16 张 ``ff_*`` 域表）且版本戳为 head（0016）；0009 的
+    - 升级 head 后 ``SHOW TABLES`` 收敛到 18 表集（``alembic_version`` +
+      17 张 ``ff_*`` 域表）且版本戳为 head（0017）；0009 的
       ``ff_chat_messages.meta`` 列、0010 的变体列
       （``variant_of_id`` / ``variant_index``）、0011 的
       ``ff_reminders`` 列、0012 的 ``ff_curated_memory`` 生命周期列
@@ -20,7 +20,8 @@
       ``duration_ms`` / ``sample_rate_hz`` / ``embedding`` /
       ``embedding_dim``；同意 ``consent_text_version`` / ``granted_at_ms`` /
       ``revoked_at_ms``；表情包 ``sha256`` / ``content_type`` /
-      ``storage_path`` / ``source_note`` / ``annotation_status``）在真引擎
+      ``storage_path`` / ``source_note`` / ``annotation_status``）与 0017 的
+      画布列（``title`` / ``kind`` / ``content`` / ``revision``）在真引擎
       上存在；
     - **降级 base**：MySQL 系引擎（含 SeekDB）要求外键列必须保有索引
       ——降级须先删外键约束再删其索引，否则报错误 5320（「索引被外键
@@ -55,7 +56,7 @@ async def test_migration_chain_round_trip(
         run_alembic: 进程内 alembic 命令运行器（conftest 提供——
             ``asyncio.to_thread`` 桥接的异步 callable）。
     """
-    # 1. 升级 head：0001→0016 全链（env.py 异步引擎在线迁移）。
+    # 1. 升级 head：0001→0017 全链（env.py 异步引擎在线迁移）。
     await run_alembic("head")
     tables_upgraded = await support.fetch_table_names(seekdb_scratch)
     assert tables_upgraded == support.EXPECTED_HEAD_TABLES
@@ -185,6 +186,16 @@ async def test_migration_chain_round_trip(
         "annotation_error",
         "annotation_model_entry",
         "annotated_at_ms",
+        "created_at",
+        "updated_at",
+    }
+    assert await support.fetch_column_names(seekdb_scratch, "ff_canvas_documents") >= {
+        "id",
+        "persona_id",
+        "title",
+        "kind",
+        "content",
+        "revision",
         "created_at",
         "updated_at",
     }

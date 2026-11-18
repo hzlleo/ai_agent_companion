@@ -68,8 +68,12 @@ class FakePage:
         self.click_calls: list[str] = []
         self.fill_calls: list[tuple[str, str]] = []
         self.screenshot_clips: list[tuple[int, int]] = []
+        self.evaluate_scripts: list[str] = []
+        self.evaluate_result: Any = {"ok": True}
+        self.evaluate_delay_seconds: float = 0.0
         self.goto_error: Exception | None = None
         self.click_error: Exception | None = None
+        self.evaluate_error: Exception | None = None
 
     async def goto(self, url: str, *, timeout_ms: int) -> None:
         """记录导航（可选注入失败）。"""
@@ -108,6 +112,15 @@ class FakePage:
         """记录裁剪并返回图片字节。"""
         self.screenshot_clips.append((clip_width, clip_height))
         return self._image
+
+    async def evaluate(self, script: str) -> Any:
+        """记录脚本并返回注入结果（可选延迟 / 异常——超时与失败面）。"""
+        self.evaluate_scripts.append(script)
+        if self.evaluate_delay_seconds:
+            await asyncio.sleep(self.evaluate_delay_seconds)
+        if self.evaluate_error is not None:
+            raise self.evaluate_error
+        return self.evaluate_result
 
     async def close(self) -> None:
         """关闭（存活标记翻转）。"""
@@ -309,7 +322,7 @@ def _build_runtime(
     resolver_error: Exception | None = None,
     nav_timeout_ms: int = 5000,
 ) -> BrowserSidecarRuntime:
-    """构造装配好的运行时（七工具 + 全注入面——hermetic）。
+    """构造装配好的运行时（八工具 + 全注入面——hermetic）。
 
     Args:
         context: fake context（会话页面承载）。
@@ -319,7 +332,7 @@ def _build_runtime(
         nav_timeout_ms: 导航超时注入。
 
     Returns:
-        已注册七工具的运行时（经 runtime.invoke 驱动）。
+        已注册八工具的运行时（经 runtime.invoke 驱动）。
     """
 
     async def _factory(profile: str) -> FakeContext:
@@ -711,7 +724,7 @@ async def _never_sleep(seconds: float) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 七工具执行器（经 runtime.invoke——wire 面全链）
+# 八工具执行器（经 runtime.invoke——wire 面全链）
 # ---------------------------------------------------------------------------
 
 
@@ -934,6 +947,67 @@ class TestClickFillTabs:
         assert "参数校验失败" in (response.error or "")
 
 
+class TestEvaluate:
+    async def test_evaluate_returns_result_and_size(self) -> None:
+        """求值成功：脚本透传 + 结果 JSON 原样 + 序列化字符数。"""
+        page = FakePage()
+        page.evaluate_result = {"messages": [{"id": "m-1", "text": "你好"}]}
+        context = FakeContext(pages=[page])
+        runtime = _build_runtime(context)
+        script = "() => ({messages: []})"
+        response = await _invoke(runtime, "evaluate", {"script": script})
+        assert response.ok is True
+        assert response.result["result"] == {"messages": [{"id": "m-1", "text": "你好"}]}
+        assert response.result["char_count"] == len(
+            '{"messages":[{"id":"m-1","text":"你好"}]}'
+        )
+        assert page.evaluate_scripts == [script]
+
+    async def test_evaluate_rejects_oversized_result(self) -> None:
+        """结果规模封顶：序列化超 max_chars 即受控失败（不静默截断）。"""
+        page = FakePage()
+        page.evaluate_result = "x" * 2000
+        context = FakeContext(pages=[page])
+        runtime = _build_runtime(context)
+        response = await _invoke(
+            runtime, "evaluate", {"script": "() => 'x'", "max_chars": 1024}
+        )
+        assert response.ok is False
+        assert "超出 max_chars" in (response.error or "")
+
+    async def test_evaluate_error_wrapped(self) -> None:
+        """脚本异常归一：页面上下文抛错转受控失败（类型名可读）。"""
+        page = FakePage()
+        page.evaluate_error = RuntimeError("页面里的异常")
+        context = FakeContext(pages=[page])
+        runtime = _build_runtime(context)
+        response = await _invoke(runtime, "evaluate", {"script": "() => boom()"})
+        assert response.ok is False
+        assert "页面 JS 求值失败" in (response.error or "")
+        assert "RuntimeError" in (response.error or "")
+
+    async def test_evaluate_timeout_wrapped(self) -> None:
+        """求值超时：超时上限内未返回即受控失败。"""
+        page = FakePage()
+        page.evaluate_delay_seconds = 0.2
+        context = FakeContext(pages=[page])
+        runtime = _build_runtime(context)
+        response = await _invoke(
+            runtime, "evaluate", {"script": "() => sleep()", "timeout_ms": 100}
+        )
+        assert response.ok is False
+        assert "页面 JS 求值失败" in (response.error or "")
+        assert "TimeoutError" in (response.error or "")
+
+    async def test_evaluate_script_validation(self) -> None:
+        """参数边界：空脚本拒绝（fail-fast 免浏览器触达）。"""
+        context = FakeContext()
+        runtime = _build_runtime(context)
+        response = await _invoke(runtime, "evaluate", {"script": ""})
+        assert response.ok is False
+        assert "参数校验失败" in (response.error or "")
+
+
 # ---------------------------------------------------------------------------
 # 环境变量读取面 + 默认构建
 # ---------------------------------------------------------------------------
@@ -981,10 +1055,10 @@ class TestEnvReaders:
 
 
 class TestBuildDefault:
-    async def test_build_default_registers_seven_tools(
+    async def test_build_default_registers_all_tools(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """默认构建：七工具注册 + 管理器 env 驱动（fake context 工厂注入）。"""
+        """默认构建：全部工具注册 + 管理器 env 驱动（fake context 工厂注入）。"""
         monkeypatch.setenv("BROWSER_SIDECAR_PROFILE", "work")
 
         async def _fake_launch(

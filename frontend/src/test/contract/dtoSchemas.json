@@ -424,6 +424,31 @@
         "schema_key": "StickerAnnotationResultModel"
       },
       {
+        "frontend_file": "frontend/src/types/canvas.ts",
+        "frontend_type": "CanvasCreateRequest",
+        "schema_key": "CanvasCreateDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/canvas.ts",
+        "frontend_type": "CanvasUpdateRequest",
+        "schema_key": "CanvasUpdateDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/canvas.ts",
+        "frontend_type": "CanvasListParams",
+        "schema_key": "CanvasQueryDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/canvas.ts",
+        "frontend_type": "CanvasRecord",
+        "schema_key": "CanvasRecordDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/canvas.ts",
+        "frontend_type": "CanvasDeleteResult",
+        "schema_key": "CanvasDeleteResultModel"
+      },
+      {
         "frontend_file": "frontend/src/types/model-registry.ts",
         "frontend_type": "ModelEntryCreateRequest",
         "schema_key": "ModelEntryCreateDTO"
@@ -451,6 +476,196 @@
     ]
   },
   "schemas": {
+    "CanvasCreateDTO": {
+      "$defs": {
+        "CanvasKind": {
+          "description": "画布产物类型值域（html / svg / markdown）。\n\n继承 ``StrEnum`` 保持与字符串比较兼容（与 ``ChannelType`` 同约定）。\n类型决定管理台预览的渲染方式（iframe 文档 / SVG 文档 / 纯文本）与导出\n的 MIME 与扩展名。",
+          "enum": [
+            "html",
+            "svg",
+            "markdown"
+          ],
+          "title": "CanvasKind",
+          "type": "string"
+        }
+      },
+      "description": "创建画布请求（标题 / 类型 / 自包含内容）。\n\nAttributes:\n    title: 标题（1-120 字符，去首尾空白后非空）。\n    kind: 产物类型（html / svg / markdown）。\n    content: 自包含内容（1-262144 字符，不得为纯空白——HTML fragment /\n        SVG 文档 / Markdown 文本）。",
+      "properties": {
+        "content": {
+          "description": "自包含内容（HTML / SVG / Markdown）",
+          "maxLength": 262144,
+          "title": "Content",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/CanvasKind",
+          "description": "产物类型"
+        },
+        "title": {
+          "description": "标题",
+          "maxLength": 120,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "kind",
+        "content"
+      ],
+      "title": "CanvasCreateDTO",
+      "type": "object"
+    },
+    "CanvasDeleteResultModel": {
+      "description": "删除结果（缺失主键幂等报告——与表情包批量删除同语义）。\n\nAttributes:\n    deleted_ids: 实际删除的主键列表（空 = 目标不存在或不属于当前人格）。",
+      "properties": {
+        "deleted_ids": {
+          "description": "实际删除的主键列表",
+          "items": {
+            "type": "integer"
+          },
+          "title": "Deleted Ids",
+          "type": "array"
+        }
+      },
+      "title": "CanvasDeleteResultModel",
+      "type": "object"
+    },
+    "CanvasQueryDTO": {
+      "$defs": {
+        "CanvasKind": {
+          "description": "画布产物类型值域（html / svg / markdown）。\n\n继承 ``StrEnum`` 保持与字符串比较兼容（与 ``ChannelType`` 同约定）。\n类型决定管理台预览的渲染方式（iframe 文档 / SVG 文档 / 纯文本）与导出\n的 MIME 与扩展名。",
+          "enum": [
+            "html",
+            "svg",
+            "markdown"
+          ],
+          "title": "CanvasKind",
+          "type": "string"
+        }
+      },
+      "description": "画布列表查询（类型过滤 + 条数上限）。\n\nAttributes:\n    kind: 产物类型过滤（None = 全部）。\n    limit: 返回条数上限（1-200）。",
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CanvasKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "产物类型过滤（None = 全部）"
+        },
+        "limit": {
+          "default": 100,
+          "description": "返回条数上限（1-200）",
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "title": "CanvasQueryDTO",
+      "type": "object"
+    },
+    "CanvasRecordDTO": {
+      "$defs": {
+        "CanvasKind": {
+          "description": "画布产物类型值域（html / svg / markdown）。\n\n继承 ``StrEnum`` 保持与字符串比较兼容（与 ``ChannelType`` 同约定）。\n类型决定管理台预览的渲染方式（iframe 文档 / SVG 文档 / 纯文本）与导出\n的 MIME 与扩展名。",
+          "enum": [
+            "html",
+            "svg",
+            "markdown"
+          ],
+          "title": "CanvasKind",
+          "type": "string"
+        }
+      },
+      "description": "画布读取形态（管理台列表 / 详情 / 导出前置）。\n\nAttributes:\n    id: 主键。\n    title: 标题。\n    kind: 产物类型。\n    content: 自包含内容（列表端点同样携带——产物规模受 256K 上限约束，\n        单次列表可承载）。\n    revision: 修订号（创建为 1，每次内容 / 标题修改递增）。\n    created_at_ms: 创建时间（epoch 毫秒）。\n    updated_at_ms: 更新时间（epoch 毫秒）。",
+      "properties": {
+        "content": {
+          "title": "Content",
+          "type": "string"
+        },
+        "created_at_ms": {
+          "description": "创建时间（epoch 毫秒）",
+          "minimum": 0,
+          "title": "Created At Ms",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/CanvasKind"
+        },
+        "revision": {
+          "description": "修订号（创建为 1，修改递增）",
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "description": "更新时间（epoch 毫秒）",
+          "minimum": 0,
+          "title": "Updated At Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "kind",
+        "content",
+        "revision",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "title": "CanvasRecordDTO",
+      "type": "object"
+    },
+    "CanvasUpdateDTO": {
+      "description": "更新画布请求（标题 / 内容按需修改——类型创建后固定）。\n\nAttributes:\n    title: 新标题（None = 不修改）。\n    content: 新内容（None = 不修改）。",
+      "properties": {
+        "content": {
+          "anyOf": [
+            {
+              "maxLength": 262144,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新内容（None = 不修改）",
+          "title": "Content"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新标题（None = 不修改）",
+          "title": "Title"
+        }
+      },
+      "title": "CanvasUpdateDTO",
+      "type": "object"
+    },
     "CharaBookEntryModel": {
       "$defs": {
         "CharaBookPosition": {

@@ -23,6 +23,7 @@ from packages.harness.chat.persona_rotation_models import GroupPersonaSettings
 from packages.harness.config.models import (
     AsrSettings,
     DatabaseConfig,
+    DouyinChannelSettings,
     DreamScheduleSettings,
     DutySettings,
     LlmEndpointConfig,
@@ -59,6 +60,7 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("CHANNELS.TELEGRAM — Telegram 通道配置（机器人令牌经 TELEGRAM_BOT_TOKEN 间接）", [TelegramSettings]),
     ("CHANNELS.QQ — QQ 通道配置（NapCat OneBot v11；令牌经 QQ_ACCESS_TOKEN / QQ_WEBHOOK_TOKEN 间接）", [QqChannelSettings]),
     ("CHANNELS.WECOM — 企业微信智能机器人长连接配置（默认关闭；订阅凭据 = BotID + Secret，密钥经 WECOM_SECRET 间接）", [WecomChannelSettings]),
+    ("CHANNELS.DOUYIN — 抖音 web 通道配置（默认关闭；复用浏览器 sidecar 的已登录页面，登录态是 profile cookie，无独立密钥键）", [DouyinChannelSettings]),
     ("DUTY — 值班轮配置（charter 工具循环 + 报告属主投递）", [DutySettings]),
     ("DREAM_SCHEDULE — 夜间梦境定时触发配置", [DreamScheduleSettings]),
     ("SCHEDULER — 中央调度器配置（自研异步循环）", [SchedulerSettings]),

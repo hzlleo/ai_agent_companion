@@ -11,6 +11,7 @@ import MemoriesPage from '@/pages/memories/MemoriesPage'
 import UsagePage from '@/pages/usage/UsagePage'
 import ModelsPage from '@/pages/models/ModelsPage'
 import StickersPage from '@/pages/stickers/StickersPage'
+import CanvasPage from '@/pages/canvas/CanvasPage'
 
 /**
  * 应用路由（本工程约定）：
@@ -20,6 +21,7 @@ import StickersPage from '@/pages/stickers/StickersPage'
  * - /usage 用量观测（总览 / 聚合 / 记录）；
  * - /models 模型注册表（条目 / 角色绑定）；
  * - /stickers 表情包库（上传 / 标签 / 删除 / VLM 标注）；
+ * - /canvas 画布（渲染产物创建 / 预览 / 修订 / 导出）；
  * - 全部页面挂 AppShell（侧边栏导航）之下，ToastProvider 包裹根。
  */
 const routes: RouteObject[] = [
@@ -42,6 +44,7 @@ const routes: RouteObject[] = [
           { path: 'usage', element: <UsagePage /> },
           { path: 'models', element: <ModelsPage /> },
           { path: 'stickers', element: <StickersPage /> },
+          { path: 'canvas', element: <CanvasPage /> },
           { path: '*', element: <Navigate to="/personas" replace /> },
         ],
       },

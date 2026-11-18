@@ -1,6 +1,6 @@
 # channels — 平台通道层（Telegram 首个适配器；QQ / NapCat OneBot v11）
 
-`backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram——手写 Bot API 客户端 + 长轮询 runner；QQ——NapCat OneBot v11 客户端 + webhook 推送入站；企业微信——智能机器人长连接 WebSocket 客户端 + 回调 runner）。通道抽象保持类型可扩展（`ChannelType` StrEnum——B站等后续通道在此追加成员与同级子模型）。消息协议已升级 **v2**（附件 / 静默 / 合成事件——见「协议 v2」一节；v1 纯文本形态缺省保持，additive 向后兼容）。
+`backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram——手写 Bot API 客户端 + 长轮询 runner；QQ——NapCat OneBot v11 客户端 + webhook 推送入站；企业微信——智能机器人长连接 WebSocket 客户端 + 回调 runner；抖音——浏览器 sidecar 页面上轮询采集 / 发送的 web 会话通道）。通道抽象保持类型可扩展（`ChannelType` StrEnum——B站等后续通道在此追加成员与同级子模型）。消息协议已升级 **v2**（附件 / 静默 / 合成事件——见「协议 v2」一节；v1 纯文本形态缺省保持，additive 向后兼容）。
 
 ## 模块一览
 
@@ -18,6 +18,10 @@
 | `wecom/wecom_models.py` | 智能机器人长连接 wire 模型（Unit 文件）：订阅 / 心跳 / 回调 / 应答 / 回复 / 推送 / 素材上传命令 + 入站映射 + markdown 分段 | `WeComCallbackFrameModel` / `WeComCommandModel` / `map_wecom_callback_to_inbound` / `parse_wecom_chat_id` / `split_wecom_markdown_text` |
 | `wecom/wecom_client.py` | 长连接客户端（订阅 / req_id 应答关联 / 应用层心跳 / 指数退避重连 + 抖动 / 单连接不变式 / 被踢下线 / 优雅停机 / 素材分片上传） | `WeComLongConnectionClient` / `WeComConnectionState` / `WeComConnectionProtocol` |
 | `wecom/wecom_runner.py` | 企微 runner（回调去重 / 回复上下文 / 有界入站队列 + worker / 出站文本分段与附件投递 / 逐附件失败承载） | `WeComChannelRunner` / `WeComMessageDedupWindow` |
+| `douyin/douyin_models.py` | 抖音 web wire 子集 + 入站归一（会话键 grammar / 自身回声剔除 / 系统消息 synthetic / 图片附件 / 去重与截断） | `DouyinChatSnapshotModel` / `DouyinNormalizeParamsModel` / `build_douyin_chat_id` / `parse_douyin_chat_id` / `map_douyin_snapshot_to_inbound` |
+| `douyin/douyin_scripts.py` | 页面 JS 表达式（会话 DOM 采集 / 输入框写入并发送——参数 JSON 嵌入，零浏览器依赖） | `build_douyin_collect_script` / `build_douyin_send_script` / `DOUYIN_MESSAGE_NODE_SELECTORS` |
+| `douyin/douyin_client.py` | 浏览器底座客户端（经注入的 `evaluate` / `navigate` 调用面读写会话；失败归一可重试错误） | `DouyinWebClient` / `DouyinBrowserInvoker` |
+| `douyin/douyin_runner.py` | 抖音 runner（轮询采集 / 去重窗口 / 逐消息路由隔离 / 指数退避 / 出站文本发送与附件逐条不支持承载） | `DouyinChannelRunner` / `DouyinMessageDedupWindow` |
 
 依赖方向：channels → chat（ChatService）+ persona（bind_persona_context）+ config（Settings.channels）+ core（errors / time_utils）；HTTP 出站一律经 pools 共享 `httpx.AsyncClient`（硬规则：无私建连接）。锁定设计决策：**不引入 aiogram / python-telegram-bot / 任何 OneBot SDK**——按平台协议手写（与 llm 域「不引入 openai SDK」同约定）。
 
@@ -68,10 +72,18 @@ WECOM_ENABLED=true 时（同一 ChannelRouter）：
     → WeComChannelRunner → router.register_adapter(WECOM, runner)
     → asyncio.create_task(runner.run()) + background_task_manager.register
     （app.state.channels_wecom_runner / channels_wecom_task 槽位）
-TELEGRAM_ENABLED / QQ_ENABLED / WECOM_ENABLED 全为 false（缺省）：no-op——零通道对象构造
+DOUYIN_ENABLED=true 时（同一 ChannelRouter）：
+    app.state.browser_sidecar_client（浏览器底座——TOOLS_BROWSER_SIDECAR_* 装配面）
+    → DouyinWebClient（注入底座客户端；chat_url 非空时经 navigate 打开会话页）
+    → DouyinChannelRunner → router.register_adapter(DOUYIN, runner)
+    → asyncio.create_task(runner.run()) + background_task_manager.register
+    （底座未就绪 → 记 ERROR 并只跳过该通道）
+    （app.state.channels_douyin_runner / channels_douyin_task 槽位）
+TELEGRAM_ENABLED / QQ_ENABLED / WECOM_ENABLED / DOUYIN_ENABLED 全为 false（缺省）：
+    no-op——零通道对象构造
 ```
 
-停机 LIFO（`shutdown_app_state` 六步）：`_shutdown_channels`（先于公共池——runner 消费共享 HTTP client）→ 后台任务 drain（`background_task_manager.shutdown`——fire-and-forget 在途任务先于池关闭排空）→ `pool_manager.stop()` → `close_database()` → `shutdown_shared_thread_pool()`。通道停机链：`request_stop()`（优雅——轮询态在途长轮询最多再等一个窗口；退避态的退避睡眠最长 `backoff_max_seconds`（默认 60s）不可被 request_stop 中断）→ bounded 等待（5s）→ 超时 `cancel` 兜底（cancel 语义覆盖两种形态——优雅等待不保证收口，5s 上限后强制终止；offset 已逐批持久化，重启安全）。
+停机 LIFO（`shutdown_app_state` 六步）：`_shutdown_channels`（先于公共池——runner 消费共享 HTTP client）→ 后台任务 drain（`background_task_manager.shutdown`——fire-and-forget 在途任务先于池关闭排空）→ `pool_manager.stop()` → `close_database()` → `shutdown_shared_thread_pool()`。通道停机链（telegram / 企微 / 抖音逐通道一致）：`request_stop()`（优雅——轮询态在途长轮询最多再等一个窗口；退避态的退避睡眠最长 `backoff_max_seconds`（默认 60s）不可被 request_stop 中断；抖音的长轮询休眠可被停机即时打断）→ bounded 等待（5s）→ 超时 `cancel` 兜底（cancel 语义覆盖两种形态——优雅等待不保证收口，5s 上限后强制终止；offset 已逐批持久化，重启安全）。
 
 ## 人格语义（锁定决策）
 
@@ -290,17 +302,17 @@ v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语�
 
 ### 每适配器映射表（出站附件 kind → 平台发送面）
 
-| kind | Telegram | QQ（OneBot v11） | 企业微信（长连接） |
-|---|---|---|---|
-| `image` | `sendPhoto`（photo） | `image` 段 | 上传 `type=image` → `aibot_send_msg`（`msgtype=image`） |
-| `audio`（media_type 含 ogg/opus） | `sendVoice`（voice） | `record` 段 | 上传 `type=voice` → `msgtype=voice`（平台限 amr ≤2MB） |
-| `audio`（其余 / 无线索） | `sendAudio`（audio） | `record` 段 | 同上（格式不符按逐附件失败承载） |
-| `file` | `sendDocument`（document） | **不支持**（OneBot v11 无文件消息段——`ok=False` 逐附件结果承载，文本与其余附件照常投递） | 上传 `type=file` → `msgtype=file`（≤20MB） |
-| `sticker` | `sendSticker`（sticker；**无 caption 参数——caption 丢弃**） | `image` 段（QQ 无独立贴纸段——贴纸即图片形态） | 上传 `type=image` → `msgtype=image`（企微无贴纸消息类型） |
+| kind | Telegram | QQ（OneBot v11） | 企业微信（长连接） | 抖音（web 会话） |
+|---|---|---|---|---|
+| `image` | `sendPhoto`（photo） | `image` 段 | 上传 `type=image` → `aibot_send_msg`（`msgtype=image`） | 不支持（逐附件 `ok=False`——web 底座当前只发文本） |
+| `audio`（media_type 含 ogg/opus） | `sendVoice`（voice） | `record` 段 | 上传 `type=voice` → `msgtype=voice`（平台限 amr ≤2MB） | 不支持（同上） |
+| `audio`（其余 / 无线索） | `sendAudio`（audio） | `record` 段 | 同上（格式不符按逐附件失败承载） | 不支持（同上） |
+| `file` | `sendDocument`（document） | **不支持**（OneBot v11 无文件消息段——`ok=False` 逐附件结果承载，文本与其余附件照常投递） | 上传 `type=file` → `msgtype=file`（≤20MB） | 不支持（同上） |
+| `sticker` | `sendSticker`（sticker；**无 caption 参数——caption 丢弃**） | `image` 段（QQ 无独立贴纸段——贴纸即图片形态） | 上传 `type=image` → `msgtype=image`（企微无贴纸消息类型） | 不支持（同上——入站图片照常提附件） |
 
 出站媒体源形态：`url` → Telegram JSON 引用 / QQ 段 `file` 直传；`base64` → Telegram multipart 上传（httpx `files=`）/ QQ 段 `file="base64://<载荷>"` 包装；`path` → **仅接受 `tg-file://` 伪方案**（file_id 重发——适配器剥前缀透传），其余 path 形态 `VALIDATION_ERROR` 逐附件结果承载。QQ 侧 caption 无段级承载概念——丢弃（出站文本即伴随文本）。
 
-投递顺序（两通道一致）：**先文本后附件**。Telegram 文本与每个附件各自独立平台消息（逐附件独立成败）；QQ 段数组**同消息**投递（`params.message = [text 段, 媒体段...]`——段内附件无独立失败面，动作失败整条上抛走 v1 语义）。
+投递顺序（各通道一致）：**先文本后附件**。Telegram 文本与每个附件各自独立平台消息（逐附件独立成败）；QQ 段数组**同消息**投递（`params.message = [text 段, 媒体段...]`——段内附件无独立失败面，动作失败整条上抛走 v1 语义）。
 
 ### `tg-file://` 伪方案契约（入站方向——下载免取 v2）
 
@@ -850,6 +862,264 @@ settings = build_isolated_settings(
 5. **单实例约束**：同一机器人只跑一个进程的长连接（多实例会互踢，被踢实例按
    KICKED 停止重连并打 WARNING——高可用用主备切换而不是多活）。
 
+## 抖音 web 通道（DOUYIN——浏览器 sidecar 底座）
+
+### 为什么走 web 底座
+
+抖音开放平台的个人号消息能力不可用（开放平台的消息 / 评论接口绑定企业号与
+特定应用形态），因此本工程的抖音接入走**网页会话**：由浏览器 sidecar 持有
+已登录的抖音页面（持久化 profile 承载 cookie），通道层经 sidecar 的
+`evaluate` 工具在页面上下文读取会话 DOM、写入输入框并发送。这是与 GUI 微信
+实验轨**同一套浏览器底座**——不引入第二套浏览器进程、不新增依赖。
+
+底座职责划分（锁定）：
+
+| 层 | 职责 | 位置 |
+|---|---|---|
+| 浏览器运行时 | 启动 chromium / 持久化 profile / 允许清单与路由拦截 | `docker/browser-sidecar` 树 |
+| 页面协议（JS） | 会话 DOM 采集 / 输入框写入并发送 | `harness/channels/douyin/douyin_scripts.py` |
+| 通道客户端 | 工具调用编排 / wire 解析 / 失败归一 | `harness/channels/douyin/douyin_client.py` |
+| 通道路由 | 轮询节拍 / 去重 / 归一 / 人格会话 / 兜底 | `harness/channels/douyin/douyin_runner.py` + `channel_service.py` |
+
+登录态即凭据：抖音 web 通道**没有独立的 token / secret 配置键**——登录态是
+浏览器 profile 的 cookie（落 sidecar 的 profiles 卷）。因此本分节不含密钥
+本值变量，只有通道节奏与目标会话参数。
+
+### 装配（`app/main.py` 的 `_startup_douyin_channel`）
+
+```
+DOUYIN_ENABLED=true
+    ↓ 读取 app.state.browser_sidecar_client（TOOLS_BROWSER_SIDECAR_ENABLED
+      装配面产出的共享池客户端 + Bearer + 持久化 profile）
+      缺失（底座未启用 / token 缺失 / 健康探测失败）→ 记 ERROR 并跳过该通道
+    ↓ DouyinWebClient（invoker = 底座客户端；chat_url 来自 DOUYIN_CHAT_URL）
+    ↓ DouyinChannelRunner（轮询间隔 / 退避 / 采集上限 / 去重窗口）
+    ↓ router.register_adapter(ChannelType.DOUYIN, runner)
+    ↓ asyncio.create_task(runner.run()) + background_task_manager.register
+    （app.state.channels_douyin_runner / channels_douyin_task 槽位）
+DOUYIN_ENABLED=false（缺省）：no-op——零轮询任务 / 零页面操作
+```
+
+失败语义（与企微同范式，锁定）：**底座未就绪只跳过抖音通道**——它是依赖
+浏览器底座的并行通道，其底座瑕疵不应连带杀掉已在工作的 telegram / QQ /
+企微。运行期轮询失败（sidecar 不可达 / 页面停在登录页 / 选择器未命中）
+由 runner 的指数退避消化（`DOUYIN_BACKOFF_*`），不退出循环。
+
+### 入站链路（页面采集 → 路由）
+
+```
+轮询节拍（DOUYIN_POLL_INTERVAL_SECONDS）
+    ↓ 会话页就绪（DOUYIN_CHAT_URL 非空时经 navigate 工具打开一次；
+      域名必须在 BROWSER_SIDECAR_ALLOWLIST 内）
+    ↓ evaluate（douyin_scripts.build_douyin_collect_script）
+    ↓ DouyinChatSnapshotModel（wire 校验——extra=ignore 容忍页面脚本追加字段）
+    ↓ map_douyin_snapshot_to_inbound：
+      ① 自身回声剔除（is_self）
+      ② 无标识 / 已处理标识 / 批内重复剔除
+      ③ 系统消息归一 synthetic=True（心流门控据此不回复）
+      ④ 图片 URL → 通道附件（kind=image；data: 内联图剔除）
+      ⑤ 纯图片消息归一占位文本 [图片]
+      ⑥ 上限截断（保留时间序末尾——最新优先）
+    ↓ 去重窗口登记（message_id 有界 FIFO 1024——与 QQ / 企微同语义）
+ChannelRouter.handle_inbound（per-chat 锁 / 心流门控 / 群聊多人格 /
+    人格绑定 / ChatService.reply / 兜底回发——与其余通道完全同一套语义）
+```
+
+页面脚本返回的消息字段（与 `DouyinWebMessageModel` 对齐；脚本按「候选选择器
+逐个尝试 + `data-*` 属性 + 文本哈希兜底」提取）：
+
+| 字段 | 类型 | 脚本来源 | 本工程消费 |
+|---|---|---|---|
+| `message_id` | string | `data-message-id` / `data-id`；缺失时「发送者 + 时间 + 文本」哈希兜底 | 去重键 + 入站 `message_id` |
+| `sender_id` | string | `data-sender-id` / `data-uid`；缺失为 `unknown` | 入站 `sender_id` |
+| `text` | string | 消息节点正文（脚本裁剪空白） | 入站文本（为空且有图时用占位文本） |
+| `ts_ms` | number | `data-timestamp` / `data-ts` / `data-createTime`（秒级自动 ×1000）；缺失为 0 | 入站时间（0 按采集时刻兜底） |
+| `is_self` | bool | 自身气泡标记（`data-is-self` / self、right 类名） | True 不进路由（自己的回复回声） |
+| `is_system` | bool | `data-is-system` / system 类名 | 归一 `synthetic=True` |
+| `is_group` | bool | `data-is-group` | 归一 `is_group_chat`（群聊按 peer 落档） |
+| `image_urls` | string[] | 消息节点内 `img` 的 `currentSrc` / `src`（`data:` 过滤） | 图片附件（url 源） |
+
+页面脚本返回 JSON 示例：
+
+```json
+{
+  "conversation_id": "c-8899",
+  "messages": [
+    {
+      "message_id": "7391000000000000001",
+      "sender_id": "u-10086",
+      "text": "在吗",
+      "ts_ms": 1731000000000,
+      "is_self": false,
+      "is_system": false,
+      "is_group": false,
+      "image_urls": []
+    }
+  ]
+}
+```
+
+归一后的入站模型（通道中立）：
+
+```json
+{
+  "channel": "douyin",
+  "chat_id": "im:c-8899",
+  "message_id": "7391000000000000001",
+  "sender_id": "u-10086",
+  "text": "在吗",
+  "ts_ms": 1731000000000,
+  "attachments": [],
+  "synthetic": false,
+  "silent": false,
+  "is_group_chat": false
+}
+```
+
+会话键语法（锁定）：`im:<conversation_id>`——路由器身份键为
+`channel:douyin:im:<conversation_id>`；页面与配置都未报告会话标识时按
+`im:default` 兜底（单会话部署形态，文档化）。出站 chat_id 必须是同语法，
+前缀缺失 / 后缀为空归一 `VALIDATION_ERROR`（调用方 bug 面）。
+
+### 出站链路（文本发送）
+
+```
+OutboundMessageModel
+    ↓ chat_id grammar 解析（im:<conversation_id>）
+    ↓ evaluate（douyin_scripts.build_douyin_send_script）：
+      定位输入框（contenteditable / textarea 候选）→ 写入文本 → 派发 input
+      事件（受控输入框需要前端状态同步）→ 点发送按钮（候选选择器）或回落
+      输入框回车事件
+    ↓ 脚本返回 {ok:true} → 投递成功；{ok:false,error} → CHANNEL_API_ERROR
+    ↓ ChannelDeliveryResultModel（message_ids 恒空——DOM 侧没有平台回执 ID；
+      附件逐条 ok=False 承载「底座只支持文本」）
+```
+
+发送脚本返回示例：
+
+```json
+{"ok": true, "text": "晚安"}
+```
+
+```json
+{"ok": false, "error": "未找到输入框（会话面板未打开？）"}
+```
+
+出站边界（文档化）：
+
+- **附件不支持**：web 输入区只发文本——`image` / `audio` / `file` / `sticker`
+  均逐附件 `ok=False`（文本与其余附件语义保持 v2 契约：文本失败上抛、附件
+  失败承载）；入站图片照常提取为附件（供贴纸 / 视觉消费面）。
+- `reply_to_message_id` 不透传（web 输入区没有引用动作的稳定触发面）。
+- `silent` 优雅忽略（抖音 web 无免通知投递语义——与 QQ / 企微同约定）。
+- 出站依赖页面停留在入站会话（web 输入框是单会话 UI）；多会话并行收发属
+  后续交付面。
+
+### 去重与退避
+
+- **去重是正确性前提**（而非防重投优化）：采集是页面快照的重复读取，同一
+  消息会在每次轮询再次出现。窗口为 `message_id` 有界 FIFO 1024，超容淘汰
+  最旧；重启清零——页面仍停留在旧消息时会把最近一屏重消费一次（与 QQ /
+  企微的重启窗口语义一致）。
+- **退避**：连续失败按 `DOUYIN_BACKOFF_BASE_SECONDS × 2^(n-1)` 指数增长、
+  `DOUYIN_BACKOFF_MAX_SECONDS` 封顶；成功一轮即复位。退避等待可被停机请求
+  即时打断。
+- **逐消息隔离**：路由异常记日志并继续后续消息，失败消息不登记去重（下一
+  轮重试）；`asyncio.CancelledError` 原样上抛（停机 cancel 路径不被吞）。
+
+### 错误码映射（抖音面——复用 channels 域既有码表）
+
+| 失败类别 | 错误码 | HTTP | 可重试 |
+|---|---|---|---|
+| 会话页导航失败（允许清单拒绝 / 私网拒绝 / 超时 / sidecar 不可达） | `CHANNEL_API_ERROR` | 503 | 是（轮询退避） |
+| 采集 / 发送工具失败（sidecar 不可达 / 求值超时 / 结果超上限） | `CHANNEL_API_ERROR` | 503 | 轮询退避 / 出站逐消息隔离 |
+| 采集返回结构非法（脚本被改坏） | `CHANNEL_API_ERROR` | 503 | 是（退避——页面可能未加载完） |
+| 发送脚本报告失败（未找到输入框 / 发送按钮不可用） | `CHANNEL_API_ERROR` | 503 | 出站逐消息隔离 |
+| chat_id grammar 非法 / 文本为空 | `VALIDATION_ERROR` | 422 | 否（调用方 bug） |
+| 单附件不支持 | 不抛出 | — | 逐附件结果 `ok=False` 承载 |
+
+### Settings（抖音分节）
+
+env 面（`env_prefix=DOUYIN_`；嵌套覆写 `CHANNELS__DOUYIN__*` 亦可用）：
+
+| 字段 | env 变量 | 默认 | 说明 |
+|---|---|---|---|
+| `enabled` | `DOUYIN_ENABLED` | `false` | 是否装配轮询 runner（false = 零轮询任务） |
+| `chat_url` | `DOUYIN_CHAT_URL` | 空 | 会话页 URL（空 = 不导航，沿用 sidecar 当前页面；非空必须 http/https 且在 sidecar 允许清单内） |
+| `conversation_id` | `DOUYIN_CONVERSATION_ID` | 空 | 目标会话标识（空 = 由页面 URL 参数推断，仍为空按 `default` 兜底） |
+| `poll_interval_seconds` | `DOUYIN_POLL_INTERVAL_SECONDS` | `5` | 采集轮询间隔（出站页面请求量的唯一闸——不要低于 2 秒） |
+| `max_messages_per_poll` | `DOUYIN_MAX_MESSAGES_PER_POLL` | `20` | 单次采集消息上限（1-100） |
+| `backoff_base_seconds` | `DOUYIN_BACKOFF_BASE_SECONDS` | `2` | 轮询失败退避基数秒 |
+| `backoff_max_seconds` | `DOUYIN_BACKOFF_MAX_SECONDS` | `60` | 退避封顶秒数（不得小于基数） |
+
+```bash
+# .env 形态（分节 env 前缀；登录态在 sidecar profile 里，本分节无密钥变量）
+DOUYIN_ENABLED=true
+DOUYIN_CHAT_URL=https://www.douyin.com/im
+DOUYIN_CONVERSATION_ID=c-8899
+DOUYIN_POLL_INTERVAL_SECONDS=5
+DOUYIN_MAX_MESSAGES_PER_POLL=20
+DOUYIN_BACKOFF_BASE_SECONDS=2
+DOUYIN_BACKOFF_MAX_SECONDS=60
+```
+
+```yaml
+# config.yaml 不承载通道配置（env 面专属——与 telegram / QQ / 企微同约定）；
+# 嵌套覆写形态（进程环境变量，优先级高于 .env）：
+#   CHANNELS__DOUYIN__ENABLED=true
+#   CHANNELS__DOUYIN__CHAT_URL=https://www.douyin.com/im
+```
+
+隔离构造（测试 / 工具）：
+
+```python
+from packages.harness.config.models import ChannelsSettings, DouyinChannelSettings
+from packages.harness.config.settings import build_isolated_settings
+
+settings = build_isolated_settings(
+    channels=ChannelsSettings(
+        douyin=DouyinChannelSettings(enabled=True, conversation_id="c-isolated")
+    )
+)
+```
+
+> 注：`backend/.env.example` 键面以 `.env.example`（`pixi run gen-examples` 生成）
+> 为真源，本表为语义说明（`DOUYIN_*`）。
+
+### 部署要点（抖音侧 + 底座侧）
+
+1. **底座就绪**：按 [tools-browser.md](tools-browser.md) 起浏览器 sidecar
+   （`TOOLS_BROWSER_SIDECAR_ENABLED=true` + `BROWSER_SIDECAR_TOKEN`），并把
+   `douyin.com` 及其静态资源域名加入 `BROWSER_SIDECAR_ALLOWLIST`（空清单 =
+   拒绝一切导航；跨域 CDN 不放行会导致页面渲染残缺）。
+2. **登录态**：在 sidecar 的持久化 profile 中登录抖音网页版一次（cookie 落在
+   profiles 卷，跨重启留存）。容器形态可用 `docker exec` 之外的方式先在宿主
+   可见的 profile 目录完成登录，或临时开放 `screenshot` 工具观察页面。
+3. **会话页**：把页面停在私信会话页，`DOUYIN_CHAT_URL` 指向该页（留空则不
+   导航，运维自行维持页面状态）；`DOUYIN_CONVERSATION_ID` 可显式指定，也可以
+   让页面 URL 参数（`conversationId` / `cid`）推断。
+4. **一次性真网验证（部署侧）**：先在 sidecar 上 `evaluate` 执行
+   `build_douyin_collect_script(conversation_id="", limit=5)`，确认返回非空
+   `messages`；再发一条测试文本确认 `{"ok": true}`。**单元测试覆盖选择器之外
+   的全部语义；选择器命中率只能在真实页面验证**——页面改版时这里是最先坏的
+   一环（脚本候选项见 `douyin_scripts.DOUYIN_MESSAGE_NODE_SELECTORS`）。
+5. **节奏**：轮询间隔是页面请求量闸门（默认 5 秒）；单账号多开页面属未支持
+   形态（同一 profile 只有一个活动页）。
+
+### 测试面
+
+| 测试文件 | 覆盖 |
+|---|---|
+| `tests/unit/test_douyin_models.py` | 会话键 grammar / 归一矩阵（自身回声 / 系统消息 / 群聊 / 图片附件 / 缺失时间兜底 / 空消息 / 批内重复 / 已处理过滤 / 上限截断）/ wire 容错 |
+| `tests/unit/test_douyin_client.py` | 会话页打开（配置 / 未配置 / 失败归一）/ 采集脚本参数与 evaluate 旋钮 / 工具失败 / 返回结构非法 / 发送成功与脚本报告失败 |
+| `tests/unit/test_douyin_runner.py` | 轮询路由 + 跨轮去重 / 系统与自身消息语义 / 会话键兜底 / 路由异常隔离与重试 / 退避增长与封顶 / 停机收口 / 单实例不变式 / 出站文本与附件不支持承载 / grammar 与构造不变式 |
+| `tests/unit/test_douyin_settings.py` | DOUYIN_ env 面对齐 / 默认值 / chat_url 校验 / 退避与采集上限边界 / 隔离构造 |
+| `tests/unit/test_app_douyin_channels_lifespan.py` | 装配（enabled + 底座就绪）/ 底座缺失只跳过抖音 / 与企微共用路由器 / 停机传导 |
+| `tests/douyin_fakes.py` | 共享 fake：浏览器调用面（脚本化 evaluate 队列）/ fake 路由器（异常注入）/ 记录式休眠闸门 |
+
+零真实网络（浏览器调用面经协议注入 fake）；零真实等待（休眠注入记录式闸门）；
+全部 `async def test_*`。
+
 ## Settings（`Settings.channels`）——telegram 分节
 
 env 面（`env_prefix=TELEGRAM_`；嵌套覆写 `CHANNELS__TELEGRAM__*` 亦可用）：
@@ -921,5 +1191,6 @@ settings = build_isolated_settings(
 | `tests/unit/test_wecom_settings.py` | WECOM_ env 面对齐 / 默认值 / 不变式（BotID 必填 / 退避边界 / 心跳预算 / 抖动值域）/ 隔离构造 / 嵌套覆写 |
 | `tests/unit/test_app_wecom_channels_lifespan.py` | 企微 enabled / disabled 装配 / 凭据失败仅跳过该通道 / 双通道共用路由器 / 共享 HTTP 池注入 / 停机传导 |
 | `tests/wecom_fakes.py` | 共享 fake 基建：wire 级连接替身（自动应答 / 错误注入 / 断连注入）/ 连接工厂（失败窗口）/ 逐次放行伪休眠 / fake 客户端 / fake 路由器 |
+| `tests/douyin_fakes.py` | 共享 fake 基建：浏览器调用面（navigate 成败 / evaluate 脚本化队列）/ fake 路由器（逐消息异常注入）/ 记录式休眠闸门 |
 
 零真实网络（MockTransport / fake）；零真实配置（隔离 Settings + conftest 硬覆盖；测试 token 为专用假值）；全部 `async def test_*`。

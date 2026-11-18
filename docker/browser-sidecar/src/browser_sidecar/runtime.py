@@ -126,7 +126,7 @@ class _ToolEntry:
 class BrowserSidecarRuntime:
     """sidecar 工具运行时（注册 / 列举 / 隔离执行；invoke 恒不抛）。
 
-    无全局状态：条目经 :meth:`register` 逐个注入（七浏览器工具经
+    无全局状态：条目经 :meth:`register` 逐个注入（八浏览器工具经
     :func:`browser_sidecar.browser.register_browser_tools` 装配）；同名重复
     注册后写覆盖前写（与后端 registry 同语义——热装配覆盖面）。
 

@@ -2,7 +2,7 @@
 
 浏览器自动化的**隔离执行面**（JS 渲染回退）：后端把需要真实浏览器运行
 时的工具（`navigate` / `read_text` / `screenshot` / `click` / `fill` /
-`list_tabs` / `close_tab` 七工具）代理到本 sidecar 进程执行，与后端
+`list_tabs` / `close_tab` / `evaluate` 八工具）代理到本 sidecar 进程执行，与后端
 **零代码共享**——唯一的耦合点是人为镜像的 wire 契约 Model Classes 与
 工具名 / 部署契约常量（`src/browser_sidecar/wire_models.py` + `browser.py`
 ↔ 后端 `harness/tools/browser_models.py` + `browser.py`，byte 级一致，
@@ -98,7 +98,7 @@ POST /invoke {"tool": "navigate", "arguments": {"url": "https://example.com/x"}}
 - sidecar 侧运行时**恒不抛**：未知工具 / 参数校验失败 / 受控失败 /
   执行器异常四类失败均归一 `ok=false` + error（镜像 tool-sandbox 语义）。
 
-### 七工具
+### 八工具
 
 | 工具 | 参数 | 结果 | 说明 |
 |---|---|---|---|
@@ -109,6 +109,7 @@ POST /invoke {"tool": "navigate", "arguments": {"url": "https://example.com/x"}}
 | `fill` | `selector` + `value`（≤8192，空 = 清空） | `filled` / `selector` | 填充表单字段 |
 | `list_tabs` | （无） | `count` / `tabs[{index,url,title}]` | 列举标签页（上限 4） |
 | `close_tab` | `tab_index`（≥0） | `closed_tab_index` | 按索引关闭标签页 |
+| `evaluate` | `script`（JS 表达式，≤20000）+ `max_chars`（默认 262144）+ `timeout_ms`（默认 15000） | `result` / `char_count` | 页面上下文 JS 求值（结果 JSON 序列化规模超 `max_chars` 即受控失败——不静默截断） |
 
 ### 导航策略链（顺序锁定）
 
@@ -180,5 +181,5 @@ curl -s -X POST http://127.0.0.1:8766/invoke \
   分节）；
 - wire 契约在两树各持一份文本镜像——**修改任一侧必须同步另一侧**
   （byte 级一致；漂移门禁在后端侧看护）；
-- 七工具参数面同样双树各持一份（后端侧用于本地校验 + 默认值物化；
+- 八工具参数面同样双树各持一份（后端侧用于本地校验 + 默认值物化；
   sidecar 侧为权威执行面——双侧校验为有意冗余）。

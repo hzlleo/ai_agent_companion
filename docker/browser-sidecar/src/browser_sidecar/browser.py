@@ -1,4 +1,4 @@
-"""浏览器 sidecar playwright 运行时——七工具执行面（本树的核心模块）。
+"""浏览器 sidecar playwright 运行时——八工具执行面（本树的核心模块）。
 
 职责链（navigate 工具的完整策略链——顺序锁定，纯判定步在 policy.py）::
 
@@ -50,6 +50,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import json
 import os
 import time
 from collections.abc import Awaitable, Callable
@@ -83,6 +84,7 @@ __all__ = [
     "FILL_TOOL_NAME",
     "LIST_TABS_TOOL_NAME",
     "CLOSE_TAB_TOOL_NAME",
+    "EVALUATE_TOOL_NAME",
     "BROWSER_TOOL_NAMES",
     "NavigateArgsModel",
     "ReadTextArgsModel",
@@ -91,6 +93,7 @@ __all__ = [
     "FillArgsModel",
     "ListTabsArgsModel",
     "CloseTabArgsModel",
+    "EvaluateArgsModel",
     "TabInfoModel",
     "PageFace",
     "ContextFace",
@@ -131,6 +134,9 @@ LIST_TABS_TOOL_NAME: str = "list_tabs"
 #: close_tab 工具名（同上）。
 CLOSE_TAB_TOOL_NAME: str = "close_tab"
 
+#: evaluate 工具名（同上——页面上下文 JS 求值；通道采集面与 LLM 工具面共用）。
+EVALUATE_TOOL_NAME: str = "evaluate"
+
 #: 全部浏览器工具名（注册序——观测面）。
 BROWSER_TOOL_NAMES: tuple[str, ...] = (
     NAVIGATE_TOOL_NAME,
@@ -140,6 +146,7 @@ BROWSER_TOOL_NAMES: tuple[str, ...] = (
     FILL_TOOL_NAME,
     LIST_TABS_TOOL_NAME,
     CLOSE_TAB_TOOL_NAME,
+    EVALUATE_TOOL_NAME,
 )
 
 # ---------------------------------------------------------------------------
@@ -212,7 +219,7 @@ _T = TypeVar("_T")
 # 类定义块 byte 级一致；后端侧用于 registry 本地校验 + 默认值物化）；
 # 紧随其后为结果面 Model Classes 与 face 协议。块边界约定（漂移门禁块
 # 提取口径）：参数模型类**连续排布**，其前可以有注释 / 常量；
-# CloseTabArgsModel（末位模型）到下一顶层定义行（TabInfoModel）之间
+# EvaluateArgsModel（末位模型）到下一顶层定义行（TabInfoModel）之间
 # **只隔空行**——保证按「类定义行 → 下一顶层定义行」提取的块在两树
 # byte 级一致。
 # ---------------------------------------------------------------------------
@@ -322,6 +329,36 @@ class CloseTabArgsModel(BaseModel):
     tab_index: int = Field(ge=0, description="标签页索引（list_tabs 报告的 index）")
 
 
+class EvaluateArgsModel(BaseModel):
+    """evaluate 参数面（页面上下文 JS 求值——sidecar 侧校验锚点）。
+
+    ``script`` 直接交给 playwright ``page.evaluate``，在**页面上下文**执行
+    （自执行函数 / 单表达式字符串）；返回值必须是 JSON 可序列化结构。
+    结果规模由 ``max_chars`` 封顶：序列化后超限即受控失败，**不做静默
+    截断**——需要大规模数据时由脚本自身收敛（分页 / 只取增量）。
+
+    Attributes:
+        script: JS 表达式（1-20000 字符）。
+        max_chars: 结果 JSON 序列化字符上限（1024-1048576，默认 262144）。
+        timeout_ms: 求值超时毫秒（100-120000，默认 15000——超时受控失败）。
+    """
+
+    model_config = {"extra": "forbid"}
+
+    script: str = Field(
+        min_length=1, max_length=20000, description="JS 表达式（页面上下文执行）"
+    )
+    max_chars: int = Field(
+        default=262144,
+        ge=1024,
+        le=1048576,
+        description="结果 JSON 序列化字符上限（1024-1048576，默认 262144）",
+    )
+    timeout_ms: int = Field(
+        default=15000, ge=100, le=120000, description="求值超时毫秒（100-120000，默认 15000）"
+    )
+
+
 class TabInfoModel(BaseModel):
     """标签页信息（list_tabs 结果面——白名单字段）。
 
@@ -397,6 +434,17 @@ class PageFace(Protocol):
         Args:
             clip_width: 裁剪宽度。
             clip_height: 裁剪高度。
+        """
+        ...
+
+    async def evaluate(self, script: str) -> Any:
+        """在页面上下文执行 JS 表达式。
+
+        Args:
+            script: JS 表达式（自执行函数 / 单表达式）。
+
+        Returns:
+            JSON 可序列化的求值结果（结构由脚本决定）。
         """
         ...
 
@@ -487,6 +535,17 @@ class PlaywrightPage:
             full_page=False,
             clip={"x": 0, "y": 0, "width": clip_width, "height": clip_height},
         )
+
+    async def evaluate(self, script: str) -> Any:
+        """在页面上下文执行 JS 表达式（playwright ``page.evaluate``）。
+
+        Args:
+            script: JS 表达式（自执行函数 / 单表达式）。
+
+        Returns:
+            JSON 可序列化的求值结果（结构由脚本决定）。
+        """
+        return await self._page.evaluate(script)
 
     async def close(self) -> None:
         """关闭页面。"""
@@ -921,7 +980,7 @@ async def _run_playwright(action: str, operation: Awaitable[_T]) -> _T:
 
 
 # ---------------------------------------------------------------------------
-# 注册面（七工具——依赖构造注入；执行器恒不抛未受控异常）
+# 注册面（八工具——依赖构造注入；执行器恒不抛未受控异常）
 # ---------------------------------------------------------------------------
 
 
@@ -933,10 +992,10 @@ def register_browser_tools(
     resolver: Resolver | None = None,
     nav_timeout_ms: int | None = None,
 ) -> None:
-    """注册七浏览器工具（依赖构造注入——navigate 策略链在执行器内组装）。
+    """注册八浏览器工具（依赖构造注入——navigate 策略链在执行器内组装）。
 
     Args:
-        runtime: sidecar 工具运行时（七工具注册目标——同名后写覆盖前写）。
+        runtime: sidecar 工具运行时（八工具注册目标——同名后写覆盖前写）。
         manager: 浏览器上下文管理器（context-per-profile 池）。
         allowlist_provider: 允许清单读取注入（None = 环境变量
             ``BROWSER_SIDECAR_ALLOWLIST``——空 = 默认拒绝）。
@@ -1044,6 +1103,25 @@ def register_browser_tools(
         await session.close_tab(tab_index)
         return {"closed_tab_index": tab_index}
 
+    async def _execute_evaluate(args: dict[str, Any]) -> dict[str, Any]:
+        """执行页面 JS 求值（结果 JSON 规模封顶——超限受控失败不截断）。"""
+        script = str(args["script"])
+        max_chars = int(args["max_chars"])
+        timeout_seconds = int(args["timeout_ms"]) / 1000
+        session = await manager.session()
+        page = await session.active_page()
+        raw = await _run_playwright(
+            "页面 JS 求值",
+            asyncio.wait_for(page.evaluate(script), timeout=timeout_seconds),
+        )
+        rendered = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
+        if len(rendered) > max_chars:
+            raise BrowserSidecarError(
+                f"evaluate 结果超出 max_chars（{len(rendered)} > {max_chars}）——"
+                "请在脚本内收敛返回规模（分页 / 只取增量）"
+            )
+        return {"result": raw, "char_count": len(rendered)}
+
     runtime.register(
         BrowserSidecarToolSpec(
             name=NAVIGATE_TOOL_NAME,
@@ -1099,6 +1177,14 @@ def register_browser_tools(
             args_model=CloseTabArgsModel,
         ),
         _execute_close_tab,
+    )
+    runtime.register(
+        BrowserSidecarToolSpec(
+            name=EVALUATE_TOOL_NAME,
+            description="在页面上下文执行 JS 表达式（返回 JSON 结果；结果序列化规模受 max_chars 封顶）。",
+            args_model=EvaluateArgsModel,
+        ),
+        _execute_evaluate,
     )
 
 
@@ -1156,7 +1242,7 @@ def _profiles_dir_from_env() -> str:
 
 
 def build_default_browser_sidecar() -> tuple[BrowserSidecarRuntime, BrowserManager]:
-    """构建生产形态运行时（七工具 + env 驱动管理器——server 工厂消费）。
+    """构建生产形态运行时（八工具 + env 驱动管理器——server 工厂消费）。
 
     Returns:
         ``(runtime, manager)`` 二元组（manager 生命周期归 server lifespan：
