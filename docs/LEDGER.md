@@ -87,7 +87,7 @@
 | R2b 人格表达 | ①世界书高级（depth/recursive/groups/probability/cooldown）②性格组件库（33组件×8原型预设+导入API+冲突UI，DTO 68组）③内心独白协议+轻情绪引擎（8维/M层）④swipes 变体（迁移0010）⑤提醒（ff_reminders 迁移0011+扫描作业）+常备指令 | ✅ 代码完成，**PR #11 OPEN（未合并）**，分支 `feat/r2b-persona-expression` 最新 `c65b930` |
 | R2c 记忆关系 | c1 管线闭环+生命周期（迁移0012/索引真接线/归档/审计二审整改）✅`99317c6`；c2 人物画像事实链（迁移0013/facts 域/梦境提取阶段/纠错闭环）✅`0880cc1`；c2b provenance 分级紧急修（PEER 枚举/群聊 peer 落档/梦境双排除/skipped_peer 统计/证据面纵深防御）✅ 已实现并全量验收；c3 SKILL层+历史挖矿（迁移 0014 `ff_persona_skills` / `SkillsService` / 梦境 skills 提取阶段 / compose 相关技能块 / API+面板+文档）✅ 代码完成、全门禁绿；c4 自编辑核心记忆+溯源闸（迁移 0015 `ff_core_memory_blocks` / `ff_core_memory_revisions` / `CoreMemoryService` / `edit_core_memory` 工具 + 发送者来源分级结构性工具闸 / compose【自我认知】块 / API+面板+文档）✅ 代码完成、全门禁绿（含活 SeekDB 0015 round-trip）；c5 终验PR —— **待做** | 🔄 进行中 |
 | R2-defense | 丙+丁：D1 结构隔离 + 宪章五条 + nonce 定界、D2 注入检测 + 角色内反击（毒舌 / 温柔 / 傲娇）、D3 peer 记忆免疫与来源标注、D4 38 条红队回归集 | ✅ 代码完成、全门禁绿（2026-11；`INJECTION_*` 示例模板生成待主 Agent 补齐） |
-| R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | ⏳ 排 R2-defense 后 |
+| R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | 🔄 甲套件 core（角色契约 compose 常驻块 + 助手腔检测 + 1 次强化重试）✅ 代码完成、全门禁绿；余：示例台词 few-shot / 乙分轨 / 组件库A / 成熟度分层 / 关系连续性A |
 | R2d 心流社交 | 心流门控/群聊多人格/声纹/表情包库+VLM标注 | ⏳ |
 | R2e 通道扩展 | 企微智能机器人（长连接）/GUI 微信容器化（PoC 门）/抖音 web（同底座）/表情包收发/Canvas | ⏳ |
 | R2f 实时语音 | 独立全双工会话（VAD+流式ASR+句级TTS+打断），允许溢出 R3 | ⏳ |
@@ -130,7 +130,7 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2106 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 2232 passed）
 cd backend && pixi run coverage-gates       # 23 组 ≥80% enforce
 cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 6 用例（迁移链/并发唯一键/行锁/混合检索）
@@ -158,6 +158,16 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 6. docs：persona.md 核心记忆一节 / chat.md 链路与工具闸 / README 行 / 本台账。
 **验证**：后端 2106 passed / 23 组覆盖率 / mypy 148 文件零问题 / ruff / 门禁集（36 项漂移 + noqa 冻结 + 注释门 + 棘轮）/ 活 SeekDB 6 用例；前端 555 passed / coverage / lint / build。
 **剩余**：c5 终验 PR（分支收敛 + PR 描述）。
+
+### 已完成切片：R2b+ 甲套件 core（人格输出契约 + 合规守卫）
+**已完成**：
+1. `chat/prompts.py`：`PERSONA_CONTRACT_TEMPLATE`（角色契约五条）+ `COMPLIANCE_NUDGE_TEMPLATE`（重试提醒）+ 渲染函数与独立版本常量；PROMPTS_VERSION 1.7.0（1.6.0 → 1.7.0）；既有模板字节零变更。
+2. `chat/compliance_models.py` / `compliance_guard.py`：助手腔四类规则表（AI 自我声明 2.0 / 客服话术 1.5 / 道歉开场 1.0 / 短回复总结腔 1.0；阈值 2.0）+ 加权检测（确定性、命中片段截断留证）+ 重试采样参数构建（0.8 基线、2.0 夹取、克隆保留其余字段）+ `COMPLIANCE_` env 面（enabled / threshold / temperature_bump / max_retries）。
+3. `chat/service.py`：compose 链宪章之后、心情块之前恒注入角色契约（后续块序号顺移一位）；`reply` 在网关响应后、输出协议解析前检测助手腔并做一次强化重试（末尾角色提醒 system 块 + 提升温度、结果无条件采用、不循环；工具循环分支重试不带工具面与 tool 轮；`max_retries=0` 只记日志）；`stream_reply` 不重试（流式边界文档化）。
+4. 测试：`test_compliance_guard.py`（25 用例：四类信号矩阵 / 保守阈值 / 正常台词零误报 / 协议标签之后的开场判定 / 重试参数 / env 面）+ `test_chat_compliance.py`（11 用例：契约链位置 / 一次重试携带提醒与提升温度 / 两次违规只重试一次 / 停用与零重试 / 重试文本走协议解析 / 工具循环分支 / 流式不重试）+ prompts byte-lock 增补两条。
+5. docs：chat.md「人格输出契约与合规守卫」整节（契约五条 / 规则矩阵 / 重试语义 / 请求 JSON / 流式边界 / `COMPLIANCE_` env 表）+ backend README 行 + 本台账。
+**验证**：后端 2232 passed / 23 组覆盖率（harness/chat 95.9%）/ mypy 153 文件零问题 / ruff / 注释门 + noqa 冻结 + 沙盒漂移 36 / DTO fixture 零变更（78 组）；既有测试零改动（prompts 锁仅增补）。
+**剩余**：`COMPLIANCE_*` 四键纳入 `.env.example` / Setup Wizard 生成器（根脚本不在本切片允许清单）；sync-test 棘轮的 4 条同步用例在 `test_llm_logprobs.py`（属 logprobs 切片，非本切片新增）。
 
 ### 已完成切片：R2-defense（丙+丁——提示注入防线）
 **已完成**：

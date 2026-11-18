@@ -6,7 +6,9 @@
 
 | 模块 | 职责 | 关键导出 |
 |---|---|---|
-| `prompts.py` | **全部 LLM 提示词文本的唯一存放地**（Unit 文件）：模板 + 逐模板版本常量 + 纯渲染函数 | `CHARTER_TEMPLATE` / `CONSTITUTION_TEMPLATE` / `UNTRUSTED_WRAP_*_TEMPLATE` / `INJECTION_HINT_TEMPLATE` / `PERSONA_*_SECTION_TEMPLATE` / `WORLD_BOOK_ENTRY_TEMPLATE` / `POST_HISTORY_TEMPLATE` / `FIRST_GREETING_FALLBACK_TEMPLATE` / `render_*` |
+| `prompts.py` | **全部 LLM 提示词文本的唯一存放地**（Unit 文件）：模板 + 逐模板版本常量 + 纯渲染函数 | `CHARTER_TEMPLATE` / `CONSTITUTION_TEMPLATE` / `PERSONA_CONTRACT_TEMPLATE` / `COMPLIANCE_NUDGE_TEMPLATE` / `UNTRUSTED_WRAP_*_TEMPLATE` / `INJECTION_HINT_TEMPLATE` / `PERSONA_*_SECTION_TEMPLATE` / `WORLD_BOOK_ENTRY_TEMPLATE` / `POST_HISTORY_TEMPLATE` / `FIRST_GREETING_FALLBACK_TEMPLATE` / `render_*` |
+| `compliance_models.py` | 人格输出合规 Model Classes（Unit 文件）：助手腔种类 / 命中原因 / 检测结果 / 规则表 / `COMPLIANCE_` 配置 | `ComplianceKind` / `ComplianceSignalModel` / `COMPLIANCE_RULES` / `ComplianceGuardSettings` |
+| `compliance_guard.py` | 人格输出合规纯函数（Unit 文件）：助手腔加权检测 / 重试采样参数构建 | `detect_assistant_violation` / `build_retry_params` / `COMPLIANCE_RETRY_BASELINE_TEMPERATURE` |
 | `injection_models.py` | 注入防御 Model Classes（Unit 文件）：信号种类 / 命中原因 / 检测结果 / 规则表 / 包裹结果 / 反击风格 / `INJECTION_` 配置 | `InjectionKind` / `InjectionSignalModel` / `INJECTION_RULES` / `WrappedContentModel` / `CounterStyle` / `InjectionGuardSettings` |
 | `injection_guard.py` | 注入防御纯函数（Unit 文件）：不可信内容 nonce 定界包裹 / 规则表加权检测 / 提示块构建 | `wrap_untrusted_content` / `detect_injection` / `build_injection_hint` |
 | `injection_counter_texts.py` | 角色内反击台词表（Unit 文件——毒舌 / 温柔 / 傲娇；确定性选句） | `COUNTER_TEXTS` / `pick_counter_text` |
@@ -34,58 +36,61 @@
                                                        身份 / 规则 / 引用 /
                                                        标签 / 挑衅应对——见
                                                        [defense.md](defense.md)）
-    ⑤ 心情状态块（emotion_summary 非空时）              R2b 轻情绪——M 态
+    ⑤ render_persona_contract(card.name)               人格输出契约五条
+                                                       （见下方「人格输出
+                                                       契约与合规守卫」）
+    ⑥ 心情状态块（emotion_summary 非空时）              R2b 轻情绪——M 态
                                                        非中性摘要（见
                                                        [emotion.md](emotion.md)）
-    ⑥ 长期指令块（directives 非空时）                   R2b D7-14 USER.md
+    ⑦ 长期指令块（directives 非空时）                   R2b D7-14 USER.md
                                                        式常备指令（见
                                                        [persona.md](persona.md)
                                                        长期指令一节）
-    ⑦ 人物事实块（facts 非空时）                        R2c「关于对方」——
+    ⑧ 人物事实块（facts 非空时）                        R2c「关于对方」——
                                                        现行高置信事实（见
                                                        [persona.md](persona.md)
                                                        人物画像一节）
-    ⑧ 核心记忆块（core_memory 非空时）                 R2c「自我认知」——
+    ⑨ 核心记忆块（core_memory 非空时）                 R2c「自我认知」——
                                                        四块自编辑自我模型
                                                        的非空块（见
                                                        [persona.md](persona.md)
                                                        核心记忆一节）
-    ⑨ 相关技能块（skills 命中时）                       R2c「相关技能」——
+    ⑩ 相关技能块（skills 命中时）                       R2c「相关技能」——
                                                        仅命中本轮用户文本的
                                                        技能（见
                                                        [persona.md](persona.md)
                                                        程序性技能一节）
-    ⑩ render_output_protocol()                          R2b 输出格式协议
+    ⑪ render_output_protocol()                          R2b 输出格式协议
                                                        （心声 / 情绪标签指令）
-    ⑪ 世界书 after_char 条目块                          检索增强（行为补充）
+    ⑫ 世界书 after_char 条目块                          检索增强（行为补充）
 [历史回合]
-    ⑫ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合；当轮入站
+    ⑬ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合；当轮入站
        回合在注入防御启用时被 nonce 定界包裹——历史回合保持原文）
 [system 注入提示]
-    ⑬ render_injection_hint(...)                       仅检测命中且提示开关
+    ⑭ render_injection_hint(...)                       仅检测命中且提示开关
                                                        开启时（紧接包裹回合；
                                                        见 [defense.md](defense.md)）
 [system 末块]
-    ⑭ render_post_history_message(card)                历史后再注入（deep
+    ⑮ render_post_history_message(card)                历史后再注入（deep
                                                        anti-drift nudge——
                                                        卡片声明 post_history_instructions 时）
 ```
 
 各块以 `\n\n` 连接；⑭ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
 
-长期指令块（⑤）的渲染语义（`render_directives_block`）：每条指令一行
+长期指令块（⑦）的渲染语义（`render_directives_block`）：每条指令一行
 `- 正文`；最多 20 条且总字符 ≤ 2000（含列表符号）——超帽追加
 「（其余长期指令已省略）」说明行；无有效指令时整块跳过。块文本模板
 （`DIRECTIVES_BLOCK_TEMPLATE`）与截断说明行（`DIRECTIVES_TRUNCATION_NOTE`）
 同属 prompt Unit 文件 byte-lock 面（版本常量 `DIRECTIVES_BLOCK_TEMPLATE_VERSION`）。
 
-人物事实块（⑥）的渲染语义（`render_facts_block`）：每条事实一行
+人物事实块（⑧）的渲染语义（`render_facts_block`）：每条事实一行
 `- 【类别标签】正文`；注入行由 `FactsService.top_facts_for_compose` 提供并按
 置信度降序裁剪（12 条 / 1500 字符帽——含类别标签与行符号），无现行事实时整块
 跳过。块文本模板（`FACTS_BLOCK_TEMPLATE`）属 prompt Unit 文件 byte-lock 面
 （版本常量 `FACTS_BLOCK_TEMPLATE_VERSION`）。
 
-核心记忆块（⑦）的渲染语义（`render_core_memory_block`）：块记录由
+核心记忆块（⑨）的渲染语义（`render_core_memory_block`）：块记录由
 `CoreMemoryService.list_blocks` 提供（固定四块序），**仅非空块**进入注入；
 每块渲染为 `### 块名称` 标题行 + 正文，锁定块标题追加「（锁定）」标识，块间
 空行分隔，累计字符（含标题 / 换行 / 分隔）≤ 2400——预算不足时截断当前块正文
@@ -93,7 +98,7 @@
 （`CORE_MEMORY_BLOCK_TEMPLATE`）属 prompt Unit 文件 byte-lock 面（版本常量
 `CORE_MEMORY_BLOCK_TEMPLATE_VERSION`）。
 
-相关技能块（⑧）的渲染语义（`render_skills_block`）：**仅当命中本轮用户文本
+相关技能块（⑩）的渲染语义（`render_skills_block`）：**仅当命中本轮用户文本
 时**注入——命中由 `SkillsService.match_for_compose` 按启用技能的触发短语字面
 包含（NFKC + casefold）或描述关键词片段判定，条数帽 2 条在读取面施加；每条
 技能渲染为 `### 名称` 标题行 + markdown 正文，技能之间空行分隔，总字符
@@ -112,7 +117,9 @@ current_message_label="", injection_hint=None)` 仍是纯函数——M 态读取
 读取面协议见 `FactsReaderFace` / `CoreMemoryReaderFace` /
 `SkillsReaderFace`）。
 
-宪章块（④）恒注入且紧跟人格正典——五条规则先于一切记忆层与对话内容生效。
+宪章块（④）恒注入且紧跟人格正典——五条规则先于一切记忆层与对话内容生效；
+角色契约块（⑤）紧随宪章之后：宪章管身份与规则从哪来，契约管说出来的话像不像
+这个人（逐条见下方「人格输出契约与合规守卫」）。
 当轮入站包裹（`wrap_current_message=True` → 只包裹最后一条 user 回合）与注入
 提示块（`injection_hint` 非空且确实发生包裹时追加）由 `ChatService` 按
 `INJECTION_` 配置驱动；包裹格式、检测矩阵、来源标签与攻击面缺口见
@@ -194,6 +201,13 @@ nonce 定界帧（标签按 `sender_provenance`：主人消息 / 群友消息）
 不拦截回合；`INJECTION_ENABLED=false` 回到未包裹、未检测形态。完整格式、
 规则矩阵与缺口见 [defense.md](defense.md)。
 
+**人格输出合规守卫（助手腔检测 + 单次强化重试）**：`reply` 在网关响应之后、
+输出协议解析之前对原始回复跑 `detect_assistant_violation`，命中助手腔
+（AI 自我声明 / 道歉开场 / 短回复总结腔 / 客服话术）时按 `COMPLIANCE_` 配置
+做一次强化重试（末尾追加角色提醒块 + 温度提升），重试结果无条件采用；
+`stream_reply` 不重试。契约块、检测矩阵、重试语义与配置表见下节「人格输出
+契约与合规守卫」。
+
 **输出协议（R2b——`reply` 面）**：模型原始输出先经
 `output_protocol.parse_assistant_output` 解析——返回 / 落回合 / 进历史 /
 发通道的**只有可见正文**；心声与情绪增量只进回合 `meta`（`ff_chat_messages.meta`，
@@ -225,6 +239,110 @@ nonce 定界帧（标签按 `sender_provenance`：主人消息 / 群友消息）
 未注入 sink（CLI / 单元测试 / 未装配记忆服务的形态）行为与既有完全一致。
 
 **锁定决策（保持）**：会话创建时快照卡片（运行期管理面编辑不热更到在途会话；resume 按当前正典重取）。
+
+## 人格输出契约与合规守卫
+
+### 角色契约（compose 常驻块）
+
+`prompts.py` 的 `PERSONA_CONTRACT_TEMPLATE`（版本常量
+`PERSONA_CONTRACT_TEMPLATE_VERSION`；套件总版本 `PROMPTS_VERSION` 随之为
+1.7.0）在 compose 链第 ⑤ 步注入，紧跟宪章之后、先于一切记忆层与格式协议。
+五条约束：① 你是 `{persona}`，是角色不是助手——不用「作为 AI / 作为一个语言
+模型」的腔调；② 不道歉式开场（抱歉 / 对不起 / 不好意思），除非真的做错了事；
+③ 不自我审查式软化（「不过其实」「希望这对你有帮助」这类总结腔能省则省）；
+④ 场景变亲密或动情时保持人物语气直接续写——不升维、不突然端正、不总结陈词；
+⑤ 被纠正或调侃时用角色口吻接住，不辩论。
+
+契约块恒注入、与 `COMPLIANCE_ENABLED` 无关（它是提示面约束，不是运行时
+补救）。`render_persona_contract` 对空白人格名抛 `ValueError`——装配期缺陷
+不应产出「你是，是角色不是助手」这类断句文本。
+
+### 助手腔检测（`detect_assistant_violation`）
+
+`compliance_guard.detect_assistant_violation(text, threshold=2.0)` 按
+`COMPLIANCE_RULES` 逐条匹配并加权求和；每条规则对全文最多计一次权重，原因
+按规则表顺序输出（确定性），命中片段截断 40 字符留证。规则矩阵：
+
+| 种类 | 命中样例（正则要点） | 权重 | 触发条件 |
+|---|---|---|---|
+| `ai_disclaimer` | `作为…AI/语言模型/助手`、`我只是一个程序`、`我不是真正的人类`、`as an AI` | 2.0 | 单条即达阈值（说了「作为 AI」，人设已经降级成工具） |
+| `persona_break` | `我是来帮助你的`、`有什么可以帮到你`、`请问还有什么`、`如果你还有其他问题` | 1.5 | 单条不达；两条叠加、或与任一其他信号叠加触发 |
+| `apology_opening` | 正文（剥离开头 `<心声>` / `<情绪>` 标签后）以 `抱歉` / `对不起` / `不好意思` 开头 | 1.0 | 单条不达（角色也会真的道歉，句中道歉不算开场） |
+| `hedge_softening` | `不过(，)?我?其实`、`希望能帮到你`、`希望这对你有帮助`、`总的来说`、`需要说明的是`，且全文 ≤ 300 字 | 1.0 | 单条不达；短回复连用两句即叠加触发（长回复里的正常收束句不算） |
+
+阈值缺省 2.0（`COMPLIANCE_THRESHOLD` 可覆盖）。检测结果示例：
+
+```json
+{
+  "violated": true,
+  "score": 3.0,
+  "reasons": [
+    {"kind": "ai_disclaimer", "matched": "作为一个AI"},
+    {"kind": "hedge_softening", "matched": "希望能帮到你"}
+  ]
+}
+```
+
+### 强化重试（仅非流式 `reply`）
+
+命中后的处理顺序（`ChatService.reply`：网关响应 → 合规检测 → 输出协议解析 →
+回合落库）：
+
+1. 记一条 warning（`persona_id` + 命中种类 + 总分；**不含回复正文**）；
+2. `COMPLIANCE_MAX_RETRIES=1`（缺省）时重试一次：请求消息 = 原组装消息 + 末尾
+   `COMPLIANCE_NUDGE_TEMPLATE` 渲染的 system 提醒块（版本常量
+   `COMPLIANCE_NUDGE_TEMPLATE_VERSION`）；采样参数经 `build_retry_params`
+   构建——请求未携带参数时以 `COMPLIANCE_RETRY_BASELINE_TEMPERATURE=0.8`
+   为基线叠加 `COMPLIANCE_TEMPERATURE_BUMP`（缺省 0.2，合计 1.0），请求自带
+   温度时以其为基线，结果一律夹取 2.0 上限，`max_tokens` / `top_p` / `extra`
+   原样保留；
+3. 重试结果**无条件采用**：不再检测、不循环，重试后仍失守也照常进入协议
+   解析与回合落库（一次重试是成本上限——反复重写会把对话拖成拉锯）；
+4. 工具循环分支的重试请求只带组装消息与提醒块、不携带工具面与 tool 轮
+   （重写的是最终可见文本，不需要重跑工具）。
+
+重试请求片段（命中后的第二次网关调用）：
+
+```json
+{
+  "model": "glm-5.3",
+  "temperature": 1.0,
+  "messages": [
+    {"role": "system", "content": "【会话章程】…\n\n【宪章】…\n\n【角色契约】…\n\n【回复格式协议】…"},
+    {"role": "user", "content": "今天好累呀"},
+    {"role": "system", "content": "【角色提醒】\n你刚才那句不太像「大肥鱼」在说话，倒像在念一份说明。\n重来一次：你就是 大肥鱼 本人，别解释自己的身份，别客套总结，直接接着这段对话往下说。"}
+  ]
+}
+```
+
+### 流式边界（锁定）
+
+`stream_reply` **不重试**：增量块已经逐块交给消费方，无法回头重说一遍，检测
+面因此只覆盖非流式 `reply`；重试文本一旦产出才进行协议解析的既有次序也不变
+（心声 / 情绪照常只进 meta）。流式通道维持 content-only + 起始前缀标签剥离的
+既有契约（见「stream_reply 边界」）。
+
+### `COMPLIANCE_` 配置面
+
+| 键 | 缺省 | 说明 |
+|---|---|---|
+| `COMPLIANCE_ENABLED` | `true` | 守卫总开关；`false` 时检测与重试全关（角色契约块仍恒注入） |
+| `COMPLIANCE_THRESHOLD` | `2.0` | 触发重试的加权总分阈值 |
+| `COMPLIANCE_TEMPERATURE_BUMP` | `0.2` | 重试温度增量（0–1；叠加结果夹取 2.0 上限） |
+| `COMPLIANCE_MAX_RETRIES` | `1` | 命中后的重试次数（0 = 只记日志不重试；上限 1——重试结果无条件采用） |
+
+`.env` 示例：
+
+```
+COMPLIANCE_ENABLED=true
+COMPLIANCE_THRESHOLD=2.0
+COMPLIANCE_TEMPERATURE_BUMP=0.2
+COMPLIANCE_MAX_RETRIES=1
+```
+
+四个键由 `ComplianceGuardSettings`（chat 域本地 `BaseSettings`，
+`env_prefix=COMPLIANCE_`）读取；`.env.example` / Setup Wizard 的示例模板由根
+脚本统一生成。
 
 ## 输出协议（`<心声>` / `<情绪>`——R2b）
 
@@ -366,9 +484,10 @@ nonce 定界帧（标签按 `sender_provenance`：主人消息 / 群友消息）
 
 ## prompt 版本与 byte-lock
 
-prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本——注入面防护模板
-加入后为 1.6.0）+ 逐模板 `*_TEMPLATE_VERSION`（含
-`CONSTITUTION_TEMPLATE_VERSION` / `UNTRUSTED_WRAP_TEMPLATE_VERSION` /
+prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本——角色契约与
+合规提醒模板加入后为 1.7.0）+ 逐模板 `*_TEMPLATE_VERSION`（含
+`CONSTITUTION_TEMPLATE_VERSION` / `PERSONA_CONTRACT_TEMPLATE_VERSION` /
+`COMPLIANCE_NUDGE_TEMPLATE_VERSION` / `UNTRUSTED_WRAP_TEMPLATE_VERSION` /
 `INJECTION_HINT_TEMPLATE_VERSION` / `OUTPUT_PROTOCOL_TEMPLATE_VERSION` /
 `EMOTION_STATE_TEMPLATE_VERSION` / `CORE_MEMORY_BLOCK_TEMPLATE_VERSION` /
 `SKILLS_BLOCK_TEMPLATE_VERSION`）。模板文本变更 = 行为变更，须同步：① 上调版本常量；② 更新 `tests/unit/test_chat_prompts.py` 的 sha256 摘要锁（`_BYTE_LOCKS`）——测试红即「知情确认」关卡。
@@ -515,6 +634,8 @@ lifespan                                          上述函数对的 asynccontex
 - `tests/unit/test_migration_chat_message_variants.py`——迁移 0010 SQLite 升 / 降 / 复升 + 复合唯一键语义；
 - `tests/unit/test_injection_guard.py`——注入防御机制：包裹保真 / nonce 碰撞规避与重试上限 / 标签边界 / 检测规则逐种类可达 / 保守阈值边界 / 台词确定性；
 - `tests/unit/test_prompt_injection_red_team.py`——38 条红队模板检测矩阵 + 阳性模板组装面防线（宪章 / 包裹 / 提示 / 风格台词）+ 阴性零误报 + owner / peer 标签 / 开关 / 流式；
+- `tests/unit/test_compliance_guard.py`——人格输出合规机制：四类助手腔逐条可达 / AI 自我声明单条触发 / 道歉与话术单条不触发 / 短回复总结腔限定与长回复豁免 / 协议标签之后的开场判定 / 正常角色台词零误报 / 阈值覆盖 / 重试参数（基线、克隆保留字段、2.0 夹取）/ `COMPLIANCE_` env 面；
+- `tests/unit/test_chat_compliance.py`——守卫接入：契约块链位置（宪章之后、记忆层之前）/ 违规首次 + 合规重试（提醒块 + 提升温度 + 参数直通）/ 两次违规只重试一次 / 停用与零重试单调用 / 合规首次不重试 / 重试文本走输出协议 / 工具循环分支重试不带 tool 轮与工具面 / 流式不重试；
 - `tests/unit/test_chat_persistence.py`——持久化集成：落库 / 网关失败保留用户回合 / resume 全链路（历史原文 + 当轮包裹边界）/ 持久化关闭兼容纯内存形态 / CLI `/new` `/sessions` `/resume` 命令（真实启动栈 + tmp SQLite + 假网关）；
 - `tests/unit/test_chat_cli.py`——注入式 I/O 驱动全流程（真实启动栈 + tmp SQLite + 假网关，never real stdin）：命令面 / 无主人格指引（退出码 1）/ 业务异常不崩 REPL / main 入口；
 - `tests/unit/test_app_main.py`——create_app 路由注册 / startup-shutdown 函数对（真实组件 + LIFO 追踪）/ health 与 personas 经 ASGITransport 走真实 app / lifespan 全周期 / 外部引擎治理；

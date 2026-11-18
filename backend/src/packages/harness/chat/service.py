@@ -8,24 +8,27 @@
         ↓ ③ prompts.render_persona_system_prompt(card)     人格正典（覆写感知）
         ↓ ④ prompts.render_constitution()                 宪章（注入面防护五条
               ——身份 / 规则 / 引用 / 标签 / 挑衅应对）
-        ↓ ⑤ 非中性情绪摘要块（render_emotion_state_block——R2b 轻情绪引擎；
+        ↓ ⑤ prompts.render_persona_contract(card.name)     角色契约（人格输出
+              契约五条——不自我声明 AI / 不道歉式开场 / 不总结腔软化 /
+              亲密场景不升维 / 被纠正不辩论）
+        ↓ ⑥ 非中性情绪摘要块（render_emotion_state_block——R2b 轻情绪引擎；
               无状态 / 全中性跳过）
-        ↓ ⑥ 长期指令块（render_directives_block——R2b D7-14；现行指令
+        ↓ ⑦ 长期指令块（render_directives_block——R2b D7-14；现行指令
               注入，20 条 / 2000 字符帽截断；无指令跳过）
-        ↓ ⑦ 人物事实块（render_facts_block——R2c；【关于对方】现行高置信
+        ↓ ⑧ 人物事实块（render_facts_block——R2c；【关于对方】现行高置信
               事实注入，12 条 / 1500 字符帽由读取面裁剪；无事实跳过）
-        ↓ ⑧ 核心记忆块（render_core_memory_block——R2c；【自我认知】四块
+        ↓ ⑨ 核心记忆块（render_core_memory_block——R2c；【自我认知】四块
               自编辑自我模型的非空块注入，锁定块带锁定标识，总字符 2400
               帽由渲染面截断；全空跳过）
-        ↓ ⑨ 相关技能块（render_skills_block——R2c；【相关技能】仅当命中
+        ↓ ⑩ 相关技能块（render_skills_block——R2c；【相关技能】仅当命中
               本轮用户文本时注入，2 条 / 2000 字符帽；无命中跳过）
-        ↓ ⑩ prompts.render_output_protocol()               输出格式协议（心声 /
+        ↓ ⑪ prompts.render_output_protocol()               输出格式协议（心声 /
               情绪标签指令——R2b）
-        ↓ ⑪ 世界书 after_char 条目块                       检索增强（后段）
-        ↓ ⑫ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合；
+        ↓ ⑫ 世界书 after_char 条目块                       检索增强（后段）
+        ↓ ⑬ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合；
               当轮入站回合经 nonce 定界包裹——历史保持原文，见下节）
-        ↓ ⑬ 注入提示块（检测命中时）                        紧接当轮包裹消息之后
-        ↓ ⑭ prompts.render_post_history_message(card)      历史后再注入（末块）
+        ↓ ⑭ 注入提示块（检测命中时）                        紧接当轮包裹消息之后
+        ↓ ⑮ prompts.render_post_history_message(card)      历史后再注入（末块）
 
 注入面防护（结构隔离 + 检测提示——本域新增防线，攻击面矩阵见
 docs/backend/defense.md）：
@@ -49,6 +52,29 @@ docs/backend/defense.md）：
       风格 / 阈值 / 提示开关）；``enabled=False`` 时包裹与检测全关，回复
       链路回到原始形态。世界书 / 长期指令 / 人物事实 / 核心记忆 / 技能
       属**受信层**（主人或人格自身写入），不做包裹。
+
+人格输出合规守卫（助手腔检测 + 单次强化重试——``COMPLIANCE_`` env 面
+``ComplianceGuardSettings``）：
+
+    - **输出契约**：compose 链在宪章之后恒注入【角色契约】块
+      （``render_persona_contract``——不自我声明 AI / 不道歉式开场 /
+      不总结腔软化 / 亲密场景不升维 / 被纠正不辩论），属 system 提示的
+      常驻约束，不随开关变化；
+    - **检测面**：``reply`` 在网关响应之后、输出协议解析之前对原始回复跑
+      ``detect_assistant_violation``（助手腔种类：AI 自我声明 / 道歉开场 /
+      短回复里的总结腔 / 客服话术），越过阈值时记一条 warning（人格 +
+      命中种类，不含回复正文）；
+    - **重试语义（锁定）**：命中的非流式回复**只重试一次**——同一段对话
+      末尾追加角色提醒块（``render_compliance_nudge``）并把温度提升
+      ``temperature_bump``（请求未携带采样参数时以
+      ``COMPLIANCE_RETRY_BASELINE_TEMPERATURE`` 为基线，叠加结果夹取
+      2.0 上限；请求自带温度时以其为基线）。重试结果是**无条件接受**的：
+      不再检测、不循环，重试后仍失守也照常解析落回合；``max_retries=0``
+      等价于只记日志不重试；
+    - **工具循环分支**：重试请求只带组装消息 + 提醒块、不携带工具面——
+      工具步是循环内部状态，重写的是最终可见文本，不需要重新跑工具；
+    - **流式边界**：``stream_reply`` 恒不重试——逐块产出时已经交给了
+      消费方，无法回头重说一遍；检测面因此只覆盖非流式回复。
 
 世界书筛选语义（chara card v2 规格 + R2b 高级触发——算法链全文见
 ``world_book`` 模块文档，此处为消费面摘要）：
@@ -220,6 +246,11 @@ from packages.harness.chat.chat_models import (
     ChatTurnModel,
     MessageCompositionResult,
 )
+from packages.harness.chat.compliance_guard import (
+    build_retry_params,
+    detect_assistant_violation,
+)
+from packages.harness.chat.compliance_models import ComplianceGuardSettings
 from packages.harness.chat.injection_guard import (
     build_injection_hint,
     detect_injection,
@@ -238,6 +269,7 @@ from packages.harness.chat.prompts import (
     UNTRUSTED_LABEL_TOOL_RESULT,
     WORLD_BOOK_SECTION_SEPARATOR,
     render_charter,
+    render_compliance_nudge,
     render_constitution,
     render_core_memory_block,
     render_directives_block,
@@ -245,6 +277,7 @@ from packages.harness.chat.prompts import (
     render_facts_block,
     render_first_greeting,
     render_output_protocol,
+    render_persona_contract,
     render_persona_system_prompt,
     render_post_history_message,
     render_skills_block,
@@ -392,9 +425,9 @@ def compose_messages(
 
     消息序列结构::
 
-        [system]  章程 + 世界书 before 段 + 人格正典 + 宪章 + 心情状态块 +
-                  长期指令块 + 人物事实块 + 核心记忆块 + 相关技能块 +
-                  输出格式协议块 + 世界书 after 段
+        [system]  章程 + 世界书 before 段 + 人格正典 + 宪章 + 角色契约 +
+                  心情状态块 + 长期指令块 + 人物事实块 + 核心记忆块 +
+                  相关技能块 + 输出格式协议块 + 世界书 after 段
         [user/assistant ...]  全部历史回合（含刚追加的用户回合；当轮入站
                   回合在 ``wrap_current_message=True`` 时被定界包裹）
         [system]  注入提示块（仅检测命中且调用方传入 ``injection_hint`` 时；
@@ -403,7 +436,10 @@ def compose_messages(
                   位于**最后一条历史回合之后**——deep anti-drift 位置）
 
     宪章块（``render_constitution``）恒注入且紧跟人格正典——五条注入面
-    防护规则先于一切记忆层与对话内容生效。
+    防护规则先于一切记忆层与对话内容生效；角色契约块
+    （``render_persona_contract``）紧随宪章之后、先于一切记忆层注入——
+    宪章管身份与规则从哪来，契约管说出来的话像不像这个人（输出腔调
+    约束）。
 
     心情状态块仅在 ``emotion_summary`` 非空时注入（非中性情绪——由
     ChatService 经 emotion 域读取 M 态产出）；长期指令块仅在
@@ -476,6 +512,7 @@ def compose_messages(
         system_parts.append(before_block)
     system_parts.append(render_persona_system_prompt(state.card))
     system_parts.append(render_constitution())
+    system_parts.append(render_persona_contract(state.card.name))
     emotion_block = render_emotion_state_block(emotion_summary)
     if emotion_block:
         system_parts.append(emotion_block)
@@ -688,6 +725,7 @@ class ChatService:
         core_memory_reader: CoreMemoryReaderFace | None = None,
         skills_reader: SkillsReaderFace | None = None,
         injection_settings: InjectionGuardSettings | None = None,
+        compliance_settings: ComplianceGuardSettings | None = None,
         episode_sink: EpisodeSinkFace | None = None,
     ) -> None:
         """初始化服务。
@@ -728,6 +766,9 @@ class ChatService:
             injection_settings: 注入防御配置（None = 现场构造默认实例——
                 读 ``INJECTION_`` env；缺省启用结构隔离与检测提示，见
                 模块 docstring「注入面防护」）。
+            compliance_settings: 人格输出合规守卫配置（None = 现场构造
+                默认实例——读 ``COMPLIANCE_`` env；缺省启用一次强化重试，
+                见模块 docstring「人格输出合规守卫」）。
             episode_sink: chat 回合情景落库面（None = 零情景写入——CLI /
                 未装配记忆服务的形态行为与既有完全一致；注入后每回合
                 消息落库即写入 kind=chat 情景事件——fire-and-forget 语义
@@ -755,6 +796,10 @@ class ChatService:
         #: 注入防御配置（默认实例读 INJECTION_ env——见模块 docstring）。
         self._injection_settings = (
             injection_settings if injection_settings is not None else InjectionGuardSettings()
+        )
+        #: 合规守卫配置（默认实例读 COMPLIANCE_ env——见模块 docstring）。
+        self._compliance_settings = (
+            compliance_settings if compliance_settings is not None else ComplianceGuardSettings()
         )
         #: 情景落库面绑定（None = 零情景写入——记忆管道未接线形态）。
         self._episode_sink = episode_sink
@@ -949,6 +994,11 @@ class ChatService:
         「群友消息」），检测命中时在包裹回合之后追加注入提示块；工具循环
         回灌的 tool 轮正文同样定界包裹（「工具结果」）。
 
+        人格输出合规守卫（``COMPLIANCE_ENABLED`` 开启——见模块 docstring
+        「人格输出合规守卫」）：网关响应之后、协议解析之前检测助手腔，
+        命中时按配置做一次强化重试（提醒块 + 温度提升），重试结果无条件
+        采用；``stream_reply`` 不重试。
+
         失败语义：网关异常原样上抛（用户回合保留在历史——调用方决定
         重试或提示）。重试语义（文档化决策）：调用方对 ``reply`` 的任何
         重试都是**完整重发**——用户消息再次进入会话历史；持久化绑定且
@@ -1030,6 +1080,9 @@ class ChatService:
                 purpose=CHAT_PURPOSE,
             )
             raw_content = response.content
+        raw_content = await self._apply_compliance_retry(
+            result.messages, raw_content, state
+        )
         parsed = parse_assistant_output(raw_content)
         content = parsed.visible_text
         if not content:
@@ -1057,7 +1110,8 @@ class ChatService:
         标签剥离后 yield（空增量块跳过；未知 / 未闭合标签原样放行）；
         流自然结束后聚合已放行文本追加为 assistant 回合。本路径**不跑
         完整输出协议**：心声 / 情绪增量不落 meta、不推进 M 态（流式
-        通道是操作员可见面——边界文档化于模块 docstring）。消费方提前终止
+        通道是操作员可见面——边界文档化于模块 docstring），也不跑人格
+        输出合规重试（增量已逐块交给消费方，无法回头重说）。消费方提前终止
         （``GeneratorExit``）时**不追加助手回合**——半截回复不入历史
         （文档化决策；持久化面同语义——半截助手回合不落库）。重试语义
         同 ``reply``：调用方重试是完整重发——用户回合已落库时再落一行
@@ -1202,6 +1256,69 @@ class ChatService:
             return True, label, None
         hint = build_injection_hint(self._injection_settings.counter_style, user_text)
         return True, label, hint
+
+    async def _apply_compliance_retry(
+        self,
+        messages: Sequence[ChatMessageModel],
+        raw_content: str,
+        state: ChatSessionStateModel,
+    ) -> str:
+        """人格输出合规守卫：命中助手腔时做一次强化重试。
+
+        运行判定：``COMPLIANCE_ENABLED`` 关闭时原样返回；启用时对原始回复
+        跑 ``detect_assistant_violation``，未越过阈值原样返回。命中即记一条
+        warning（人格 + 命中种类，不含回复正文），并在
+        ``COMPLIANCE_MAX_RETRIES=1`` 时重试一次：同一段组装对话末尾追加
+        【角色提醒】system 块，温度按 ``COMPLIANCE_TEMPERATURE_BUMP`` 提升
+        （参数构建见 :func:`build_retry_params`）。重试结果**无条件返回**
+        ——不再检测、不循环；重试仍失守的回复照常进入协议解析与落回合。
+
+        工具循环分支的重试请求只带组装消息与提醒块、不携带工具面：工具步
+        是循环内部状态，本次重写的是最终可见文本，不需要重新执行工具。
+
+        Args:
+            messages: 组装结果消息序列（重试请求的基底——不含工具循环内部
+                的 assistant 调用轮与 tool 反馈轮）。
+            raw_content: 网关返回的原始回复文本（含可能的协议标签）。
+            state: 会话状态（卡片人格名进提醒块——与角色契约同名；人格
+                ID 进日志与请求参数）。
+
+        Returns:
+            最终采用的原始回复文本（未命中 / 守卫关闭 / 重试禁用时为入参
+            原样；命中且重试时为重试请求的回复文本）。
+        """
+        if not self._compliance_settings.enabled:
+            return raw_content
+        signal = detect_assistant_violation(
+            raw_content, threshold=self._compliance_settings.threshold
+        )
+        if not signal.violated:
+            return raw_content
+        logger.warning(
+            "人格输出失守（助手腔），触发强化重试: persona_id={}, score={:.2f}, kinds={}",
+            state.persona_id,
+            signal.score,
+            [reason.kind.value for reason in signal.reasons],
+        )
+        if self._compliance_settings.max_retries < 1:
+            return raw_content
+        retry_messages = [
+            *messages,
+            ChatMessageModel(
+                role=ChatMessageRole.SYSTEM,
+                content=render_compliance_nudge(state.card.name),
+            ),
+        ]
+        response: ChatResponseModel = await self._gateway.chat_by_role(
+            ModelRole.CHAT,
+            retry_messages,
+            build_retry_params(
+                None, temperature_bump=self._compliance_settings.temperature_bump
+            ),
+            persona_id=str(state.persona_id),
+            purpose=CHAT_PURPOSE,
+        )
+        return response.content
 
     async def _tool_loop(
         self,
