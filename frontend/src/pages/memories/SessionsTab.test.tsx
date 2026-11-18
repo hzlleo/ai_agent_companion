@@ -19,6 +19,32 @@ describe('SessionsTab', () => {
     expect(await screen.findByText('已加载全部')).toBeInTheDocument()
   })
 
+  it('群聊多人格会话显示应答人格徽标', async () => {
+    server.use(
+      http.get(`${BACKEND_ORIGIN}/memories/sessions`, () =>
+        HttpResponse.json(
+          okResult({
+            items: [
+              mockSessionSummary({
+                id: 7,
+                title: 'channel:telegram:group:10086:persona:3',
+                persona_id: '3',
+              }),
+            ],
+            total: -1,
+            page: 1,
+            page_size: 20,
+            next_cursor: null,
+            has_more: false,
+          }),
+        ),
+      ),
+    )
+    renderWithProviders(<SessionsTab personaId={undefined} />)
+    expect(await screen.findByTestId('session-row-7')).toBeInTheDocument()
+    expect(screen.getByText('群聊多人格 · 人格#3')).toBeInTheDocument()
+  })
+
   it('空列表 → 空态；失败 → 错误呈现', async () => {
     server.use(
       http.get(`${BACKEND_ORIGIN}/memories/sessions`, () =>

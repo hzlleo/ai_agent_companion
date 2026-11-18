@@ -20,7 +20,8 @@
 TELEGRAM / QQ / DUTY / DREAM_SCHEDULE / SCHEDULER / TOOLS_SANDBOX /
 VOICE_TTS / VOICE_ASR / ENV），与模板分节顺序一致。前缀存在包含关系时
 （``LLM_INTIMATE_`` ⊂ ``LLM_``）按定义顺序首次命中归属，模板键不会在
-两个步骤里重复出现。
+两个步骤里重复出现；``FLOW_`` / ``GROUP_PERSONA_`` 为独立前缀，各自
+对应心流门控与群聊多人格配置步骤。
 """
 
 from __future__ import annotations
@@ -67,6 +68,8 @@ _STEP_DEFINITIONS: list[tuple[str, list[str]]] = [
     ("语音识别配置", ["VOICE_ASR_"]),
     ("联网搜索配置", ["SEARCH_"]),
     ("拟人节律配置", ["RHYTHM_"]),
+    ("心流门控配置", ["FLOW_"]),
+    ("群聊多人格配置", ["GROUP_PERSONA_"]),
     ("意图快径配置", ["INTENT_"]),
     ("轻情绪引擎配置", ["EMOTION_"]),
     ("提示词注入防御配置", ["INJECTION_"]),

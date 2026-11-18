@@ -41,9 +41,23 @@ L 层不入状态表的理由：身份正典与可变状态的生命周期不同
 6. **无乐观锁版本列**：本工程 ORM 无版本计数约定（database/base.py 仅 BigIntIdMixin / TimestampMixin / PersonaMixin，usage 域表亦无）——遵循既有约定不引入 `version` 列；注册表写路径低频（管理面操作），冲突面由 name 唯一约束 + 主人格标记唯一键 + 单事务切换兜底。
 7. **运行期绑定 `bind_persona_context(persona_id)`**：注册表主键为 BigInt，而上下文轴 `persona_id_var` / PersonaMixin 均为字符串——绑定 helper 接受 `int | str` 并经 `str()` 归一（chat 会话等运行期入口消费，见 `core.context.bind_context`）。
 
-> **前向注（R2d）**：当前「按上下文寻址」的消费面已具备数据模型基础（可寻址集 + 会话级 persona 绑定——通道会话按 `persona_id` 保持在位、resumed 会话保留其记录人格）；R2d 将在此之上交付 per-context 绑定（心流 / 群聊 / 多会话显式选择人格，主人格仅作缺省解析目标）。
+> **上下文寻址现状**：可寻址集（`list_addressable`）已被群聊多人格应答消费——同一群会话内按轮转 / 冷却 / 重复抑制选择应答人格，每个应答人格持有自己的持久化会话（会话行人格主键即消息应答归属）。主人格仍是非群聊多人格场景的缺省解析目标；心流门控的 per-persona 节律覆写解析仍待接线（当前门控使用全局面）。
 
 ## 链路顺序
+### 群聊多人格选址（`GROUP_PERSONA_` env 面）
+
+群聊消息的应答者从 `list_addressable()`（enabled 人格、主键升序）中
+确定性选择：冷却外且上一轮未发言者优先（轮转），可用者都刚发过言时
+允许重复，全部冷却时选最近应答时刻最早者兜底；`max_responders` 限制
+单条消息的应答人数（1 = 轮流单人格，>1 = 多人格接续）。单聊不参与
+轮转；功能关闭 / 选择为空时回退主人格路径。
+
+每个应答人格的会话标题为 `channel:<channel>:<chat_id>:persona:<id>`，
+`ff_chat_sessions.persona_id` 即该会话全部消息的应答归属（`replied_by`）
+——助手回合归属经会话外键确定，无需消息级冗余列。选择算法与配置说明见
+[chat.md](chat.md#群聊多人格应答group-multi-persona-routing)，通道接线
+与失败隔离见 [channels.md](channels.md#群聊多人格group_persona_enabled选择--轮转--冷却--归属)。
+
 
 **创建 → 设主 → 会话绑定**：
 

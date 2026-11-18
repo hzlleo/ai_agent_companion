@@ -14,6 +14,10 @@
 | `injection_counter_texts.py` | 角色内反击台词表（Unit 文件——毒舌 / 温柔 / 傲娇；确定性选句） | `COUNTER_TEXTS` / `pick_counter_text` |
 | `output_protocol.py` | 输出协议解析（R2b——纯函数 Unit）：前导 ``<心声>`` / ``<情绪>`` 标签 → 可见正文 / 心声 / 情绪增量；流式起始前缀 best-effort 剥离器 | `parse_assistant_output` / `ParsedAssistantOutputModel` / `StreamTagStripper` / `strip_leading_protocol_prefix` |
 | `chat_models.py` | 会话回合 / 会话状态 / 组装结果 Model Classes（Unit 文件；含世界书回合状态——冷却追踪） | `ChatTurnModel` / `ChatSessionStateModel` / `MessageCompositionResult` |
+| `flow_models.py` | 心流门控 Model Classes（Unit 文件）：`FLOW_` 配置 / 裁决与理由枚举 / 节律快照 / 会话节拍状态 / 判定输入输出 / 合并结果 | `FlowGateSettings` / `FlowVerdict` / `FlowReason` / `FlowChatStateModel` / `FlowGateInputModel` / `FlowGateDecisionModel` / `MergedBurstModel` |
+| `flow_gate.py` | 心流门控纯函数（判定矩阵 / 入站记录 / 连发合并 / 静默窗口与状态迁移——时间全部注入） | `evaluate_flow_gate` / `record_inbound` / `merge_buffered_texts` / `remaining_quiet_ms` / `mark_pending` / `clear_pending` / `clear_backlog` / `rhythm_state_from_gate` |
+| `persona_rotation_models.py` | 群聊多人格 Model Classes（Unit 文件）：`GROUP_PERSONA_` 配置 / 选择理由枚举 / 应答候选 / 应答记忆 / 选择结论 | `GroupPersonaSettings` / `GroupSelectionReason` / `GroupResponderCandidateModel` / `GroupResponderStateModel` / `GroupPersonaSelectionModel` |
+| `persona_rotation.py` | 群聊多人格选择纯函数（轮转 / 冷却 / 重复抑制 / 全冷却兜底——确定性） | `select_group_responders` |
 | `world_book.py` | 世界书高级选择算法链（R2b——纯函数 Unit 文件；rng / 回合状态可注入）+ token 近似估算 | `select_world_book_entries` / `SelectedEntryModel` / `WorldBookTurnStateModel` / `WorldBookSelectionResult` / `RECURSION_HOP_CAP` / `estimate_text_tokens` |
 | `service.py` | 消息组装（消费选择结果）+ `ChatService` 会话循环（回合状态回存 / 可选工具循环与发送者来源分级工具闸） | `compose_messages` / `ChatService` |
 | `cli.py` | 控制台 REPL（启动 / 停机序列 + 命令面 + 流式直写） | `run_chat_cli` / `main` |
@@ -448,6 +452,133 @@ COMPLIANCE_MAX_RETRIES=1
 标签原样放行；未闭合标签在流结束时剥离开标签标记、其后文本原样交还）；
 **心声 / 情绪不落 meta、不推进 M 态**（流式通道是操作员可见面——诚实边界，
 不引入逐块语义解析复杂度）。落库正文 = 已放行（客户端实际可见）文本。
+
+## 心流门控（Heartflow gate）
+
+入站消息进入聊天生成前的判定层：把节律层现状、会话消息密度与间隔、
+未读积压、关系进展摘要折算为一条结构化裁决——**立即回复 / 延迟回复 /
+连发合并 / 不回复**。判定与模型分文件（`flow_models.py` 只承载数据，
+`flow_gate.py` 为纯函数），时间由调用方注入 `now_ms`（epoch 毫秒）。
+门控关闭（`FLOW_ENABLED=false`，缺省）时回复链路与引入前完全一致。
+
+### 判定矩阵（顺序锁定）
+
+| 序 | 输入信号 | 裁决 | 理由枚举 | 延迟 |
+|---|---|---|---|---|
+| ① | `FLOW_ENABLED=false` | `reply` | `disabled` | 0 |
+| ② | 入站 `synthetic=true`（机器事件） | `skip` | `synthetic_event` | 0 |
+| ③ | 节律门不允许（睡眠窗口） | `defer` | `sleep_window` | 节律门给出的距醒来毫秒 |
+| ④ | 连发窗口内条数 ≥ `FLOW_BURST_COUNT` | `merge` | `burst_merge` | 静默窗口剩余毫秒 |
+| ⑤ | 连续两条消息间隔 < `FLOW_MIN_REPLY_GAP_MS`，且关系非亲近 / 亲密 | `defer` | `density_pacing` | 补齐最小间隔毫秒 |
+| ⑥ | 未读积压 ≥ `FLOW_BACKLOG_DEFER_THRESHOLD`，且关系非亲近 / 亲密 | `defer` | `backlog_defer` | `step × 超出条数`，封顶 `FLOW_BACKLOG_DEFER_MAX_MS` |
+| ⑦ | 关系阶段为 `close` / `intimate`，且本应触发 ⑤ 或 ⑥ | `reply` | `relationship_priority` | 0 |
+| ⑧ | 节律允许但拟人延迟 > 0 | `defer` | `rhythm_delay` | 节律门延迟 |
+| ⑨ | 其余 | `reply` | `normal` | 0 |
+
+睡眠窗口优先于关系优先（人在睡，关系再近也不叫醒）；关系优先只跳过
+密度与积压节流，不跳过睡眠。
+
+### 会话节拍状态与缓冲
+
+`FlowChatStateModel` 按会话身份键保存在通道路由器内存中：最近入站时刻
+（最多 32 条）、未读积压条数、待回复缓冲（最多 32 条）、排程标记与计划
+执行时刻。判定前的入站记录经 `record_inbound` 追加；回复成功后
+`clear_backlog` 清零积压与缓冲（到达时刻历史保留供密度判定）。
+
+连发合并按 `FLOW_MERGE_MAX_MESSAGES` 保留**最近**条目（最新几句承载当前
+诉求），丢弃最老条目并记录条数；合并文本按入站顺序以换行连接。延迟 /
+合并批次一律经中央调度器的 `schedule_once` 一次性作业排程（禁止自建
+线程 / 定时器）；批次执行前若静默窗口未满或仍在睡眠窗口，作业按剩余
+时长重排，不在进程内等待。调度器不可用时延迟裁决降级立即回复
+（fail-safe，记 warning）。
+
+### 配置（`FLOW_` env 面）
+
+| 字段 | env 键 | 默认 | 说明 |
+|---|---|---|---|
+| `enabled` | `FLOW_ENABLED` | `false` | 门控开关（false = 直通形态） |
+| `burst_window_ms` | `FLOW_BURST_WINDOW_MS` | `4000` | 连发窗口毫秒 |
+| `burst_count` | `FLOW_BURST_COUNT` | `3` | 连发合并阈值（窗口内条数，2-20） |
+| `merge_quiet_ms` | `FLOW_MERGE_QUIET_MS` | `2500` | 合并静默毫秒（最后入站后的等待） |
+| `merge_max_messages` | `FLOW_MERGE_MAX_MESSAGES` | `5` | 单次合并承载上限（1-20） |
+| `min_reply_gap_ms` | `FLOW_MIN_REPLY_GAP_MS` | `1200` | 两条回复之间的最小间隔毫秒 |
+| `backlog_defer_threshold` | `FLOW_BACKLOG_DEFER_THRESHOLD` | `6` | 未读积压转延迟阈值 |
+| `backlog_defer_step_ms` | `FLOW_BACKLOG_DEFER_STEP_MS` | `8000` | 每条超出阈值的追加延迟 |
+| `backlog_defer_max_ms` | `FLOW_BACKLOG_DEFER_MAX_MS` | `90000` | 积压延迟上限 |
+| `pending_grace_ms` | `FLOW_PENDING_GRACE_MS` | `60000` | 排程任务丢失判定宽限 |
+
+### 裁决 JSON 示例
+
+```json
+{
+  "verdict": "merge",
+  "delay_ms": 2400,
+  "reason": "burst_merge"
+}
+```
+
+判定输入（路由器内部构造，不落库）：
+
+```json
+{
+  "now_ms": 1700000000200,
+  "is_synthetic": false,
+  "rhythm": {"allowed": true, "suggested_delay_ms": 0},
+  "relationship": {
+    "stage": "familiar",
+    "intimacy_level": 1,
+    "score": 4.5,
+    "event_count": 3,
+    "recent_events": [],
+    "boundaries": [],
+    "generated_at_ms": 1700000000200
+  },
+  "state": {
+    "recent_arrival_ms": [1700000000000, 1700000000100, 1700000000200],
+    "backlog_count": 3,
+    "buffered_texts": ["在吗", "看看这个", "喂"],
+    "pending": false,
+    "pending_due_ms": null
+  }
+}
+```
+
+## 群聊多人格应答（Group multi-persona routing）
+
+群聊消息在启用人格集合内按确定性规则选择应答者：轮转（上一轮发言者
+让位）、冷却（`GROUP_PERSONA_COOLDOWN_MS` 内不重复）、重复抑制（可用者
+都刚发过言时允许重复并标注 `repeat_fallback`）、全冷却兜底（选最近应答
+时刻最早者，保证群里有回应）。`GROUP_PERSONA_MAX_RESPONDERS` 控制单条
+消息的应答人数：1 = 轮流单人格应答，>1 = 多人格依次接续同一轮对话；
+同一轮内一人至多应答一次（去重互斥）。
+
+归属语义：每个应答人格拥有**自己的持久化会话**（标题
+`channel:<channel>:<chat_id>:persona:<persona_id>`），会话行
+`ff_chat_sessions.persona_id` 即该会话全部消息的应答归属
+（`replied_by`）——助手回合无需消息级冗余列，无迁移。单聊消息不参与
+轮转；功能关闭 / 选择为空 / 无启用人格时回退主人格单人格路径。
+
+配置（`GROUP_PERSONA_` env 面）：
+
+| 字段 | env 键 | 默认 | 说明 |
+|---|---|---|---|
+| `enabled` | `GROUP_PERSONA_ENABLED` | `false` | 群聊多人格开关 |
+| `max_responders` | `GROUP_PERSONA_MAX_RESPONDERS` | `1` | 单条群消息应答人数上限（1-4） |
+| `cooldown_ms` | `GROUP_PERSONA_COOLDOWN_MS` | `60000` | 同一人格两次应答的最小间隔 |
+
+选择结论 JSON 示例：
+
+```json
+{
+  "responder_persona_ids": [3, 5],
+  "reason": "rotation",
+  "cooling_persona_ids": [1]
+}
+```
+
+链路位置：通道路由器在门控裁决为 `reply`（或延迟批次到期）后读取
+启用人格集合并选择应答者，再逐人格经 `bind_persona_context` 进入
+`ChatService.reply`；逐人格失败隔离，全部失败才走通用兜底文案。
 
 ## 来源分级参数
 

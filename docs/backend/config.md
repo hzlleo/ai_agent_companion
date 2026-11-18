@@ -1,6 +1,6 @@
 # config — 配置域
 
-`backend/src/packages/harness/config/` 承载全工程配置：env 面 Settings（server / database / log / pools / llm 等十六分节）、config.yaml 结构化面（模型注册表 / 角色绑定 / 多模态回退链 / 搜索 provider 注册表）、extensions_config.json 工具清单、运行时加载器（含热重载地基）、配置节管理基座（原子持久化 / 热重建 / 回滚共享机械）、模型解析器、wire 构建器与交互式配置向导。
+`backend/src/packages/harness/config/` 承载全工程配置：env 面 Settings（server / database / log / pools / llm / rhythm / flow / group_persona 等分节）、config.yaml 结构化面（模型注册表 / 角色绑定 / 多模态回退链 / 搜索 provider 注册表）、extensions_config.json 工具清单、运行时加载器（含热重载地基）、配置节管理基座（原子持久化 / 热重建 / 回滚共享机械）、模型解析器、wire 构建器与交互式配置向导。
 
 ## 模块一览
 
@@ -55,6 +55,9 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 | VoiceSettings.tts（TtsSettings） | `VOICE_TTS_` | `ENABLED`(false) · `BASE_URL`(http://127.0.0.1:9880) · `MODEL_ENTRY`(cosyvoice3) · `REQUEST_TIMEOUT_SECONDS`(30.0) · `DEFAULT_SPEAKER`(中文女) · `DEFAULT_SPEED`(1.0) |
 | VoiceSettings.asr（AsrSettings） | `VOICE_ASR_` | `ENABLED`(false) · `BASE_URL`(http://127.0.0.1:8082) · `MODEL_ENTRY`(qwen3-asr-0.6b) · `REQUEST_TIMEOUT_SECONDS`(60.0) · `LANGUAGE`(null) · `MAX_UPLOAD_BYTES`(26214400) |
 | WebSearchSettings（`Settings.search`） | `SEARCH_` | `ENABLED`(false) · `TOOL_ENABLED`(false) · `DAILY_BUDGET_PER_PERSONA`(50) · `DAILY_BUDGET_GLOBAL`(200) · `COOLDOWN_SECONDS`(60) |
+| RhythmSettings（`Settings.rhythm`） | `RHYTHM_` | `ENABLED`(false) · `BEDTIME`(23:30) · `WAKE_TIME`(08:00) · `TIMEZONE_NOTE`(naive-local) · `REPLY_DELAY_MIN_MS`(1500) · `REPLY_DELAY_MAX_MS`(45000) · `TYPING_SPEED_MS_PER_CHAR`(45) · `TYPING_BASE_MS`(800) · `BURST_PROBABILITY`(0.12) |
+| FlowGateSettings（`Settings.flow`） | `FLOW_` | `ENABLED`(false) · `BURST_WINDOW_MS`(4000) · `BURST_COUNT`(3) · `MERGE_QUIET_MS`(2500) · `MERGE_MAX_MESSAGES`(5) · `MIN_REPLY_GAP_MS`(1200) · `BACKLOG_DEFER_THRESHOLD`(6) · `BACKLOG_DEFER_STEP_MS`(8000) · `BACKLOG_DEFER_MAX_MS`(90000) · `PENDING_GRACE_MS`(60000) |
+| GroupPersonaSettings（`Settings.group_persona`） | `GROUP_PERSONA_` | `ENABLED`(false) · `MAX_RESPONDERS`(1) · `COOLDOWN_MS`(60000) |
 | Settings | （无前缀） | `ENV`(local) |
 
 分节与 `.env.example` 逐分节对齐（生成器 `scripts/generate_examples_env.py` 的 `_ENV_SECTIONS` 登记表为序——键面以 `.env.example` 为真源，本表为语义说明；敏感字段在 example 中恒留空）。各分节语义详见所属域文档（channels / duty / tools-sandbox / voice）。

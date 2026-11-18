@@ -1,6 +1,6 @@
 # rhythm — 拟人节律层（persona rhythm）
 
-`backend/src/packages/harness/rhythm/`（纯函数核心 + 薄服务门面）+ `Settings.rhythm` 分节（RHYTHM_ env 面），构成「拟人节律层」：**作息窗口判定 + 拟人回复延迟采样 + 打字模拟**，为 R2d 心流层（回复调度）与 R2e GUI / 浏览器通道（状态展示）提供决策原料；R2a 交付核心数学 + 门面契约，回复链路暂不消费（行为零变化）。
+`backend/src/packages/harness/rhythm/`（纯函数核心 + 薄服务门面）+ `Settings.rhythm` 分节（RHYTHM_ env 面），构成「拟人节律层」：**作息窗口判定 + 拟人回复延迟采样 + 打字模拟**，为心流门控（回复调度决策，见 [chat.md](chat.md#心流门控heartflow-gate)）与 GUI / 浏览器通道（状态展示）提供决策原料。门控经通道装配注入 `RhythmService` 读取 `gate_reply` 结果；`FLOW_ENABLED=false` 时回复链路不消费门（行为零变化）。
 
 ## 模块一览
 
@@ -104,9 +104,9 @@ gate_reply(now_ms=None → 注入时钟)
 
 | 消费方 | 版本 | 形态 |
 |---|---|---|
-| R2d heartflow | 后继 | `gate_reply` / `should_reply_now` 回复调度决策（睡眠静默 + 延迟节拍）；per-persona `PersonaRhythmOverride` 解析 |
+| 心流门控 | 已接线 | `FLOW_ENABLED=true` 时 `ChannelRouter` 在聊天生成前读取 `gate_reply`：睡眠窗口 → `defer`（距醒来毫秒）；清醒拟人延迟 → `defer`（延迟批次）；门控关闭 / 节律停用 → 即时回复。per-persona `PersonaRhythmOverride` 解析仍由后续接线（当前门控使用全局面） |
 | R2e GUI / 浏览器通道 | 后继 | 门结果（allowed + reason）人设状态展示（在线 / 休息中） |
-| R2a 通道路径 | 本版 | **不消费门**——既有回复行为零变化（意图快径的短延迟属意图面，见 intent.md） |
+| 未启用门控的通道回复 | 本版 | **不消费门**——既有回复行为零变化（意图快径的短延迟属意图面，见 intent.md） |
 
 ## 测试
 

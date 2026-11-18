@@ -17,7 +17,9 @@ from generate_examples_helpers import (
 from pydantic_settings import BaseSettings
 
 from packages.harness.chat.compliance_models import ComplianceGuardSettings
+from packages.harness.chat.flow_models import FlowGateSettings
 from packages.harness.chat.injection_models import InjectionGuardSettings
+from packages.harness.chat.persona_rotation_models import GroupPersonaSettings
 from packages.harness.config.models import (
     AsrSettings,
     DatabaseConfig,
@@ -62,6 +64,8 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("VOICE.ASR — 语音识别配置（Qwen3-ASR 服务端点）", [AsrSettings]),
     ("SEARCH.WEB — 联网搜索运营配置（默认关闭；密钥经 SEARCH_BOCHA_API_KEY / SEARCH_ZHIPU_API_KEY 间接——条目表在 config.yaml search 节管理）", [WebSearchSettings]),
     ("RHYTHM — 拟人节律层配置（默认关闭；HH:MM 为 naive 本地时间——调度器同口径）", [RhythmSettings]),
+    ("FLOW — 心流门控配置（默认关闭；延迟 / 合并批次经中央调度器一次性作业排程）", [FlowGateSettings]),
+    ("GROUP_PERSONA — 群聊多人格应答配置（默认关闭；单人格应答保持既有语义）", [GroupPersonaSettings]),
     ("INTENT — 意图快径配置（默认开启——纯本地零成本罐头意图，绕过主 LLM）", [IntentSettings]),
     ("EMOTION — 轻情绪引擎配置（默认开启——协议解析宽容降级；驱动 M 层情绪状态）", [EmotionSettings]),
     ("INJECTION — 提示词注入防御配置（默认开启——保守阈值；反击风格可选）", [InjectionGuardSettings]),
