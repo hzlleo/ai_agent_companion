@@ -15,7 +15,7 @@
       单回合字符上限」两个结构性上限近似 token 预算（防无限膨胀的
       in-memory 历史拖爆上下文窗口）；持久化消息不受滑动窗口约束
       （全量记录——内存窗口只是上下文组装面）；世界书条目预算的
-      token 估算见 service 层 ``estimate_text_tokens``。
+      token 估算与选择算法链见 chat 域 ``world_book`` 模块。
 
 时间字段全部 epoch 毫秒（``core.time_utils.now_ms``）。
 """
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from packages.harness.chat.world_book import WorldBookTurnStateModel
 from packages.harness.core.time_utils import now_ms
 from packages.harness.llm.llm_models import ChatMessageModel, ChatMessageRole
 from packages.harness.persona.chara_card import CharaCardModel
@@ -68,6 +69,9 @@ class ChatSessionStateModel(BaseModel):
         turns: 会话回合列表（时间序——追加式）。
         max_history_turns: 历史回合数上限（滑动窗口：超出丢最老回合）。
         max_turn_chars: 单回合字符上限（超长输入截断保护）。
+        world_book_state: 世界书回合状态（冷却判定的组装计数 + 注入
+            追踪；会话作用域内存态——**无持久化**，重启即复位；由
+            ``ChatService`` 在每次组装后回存功能式推进结果）。
     """
 
     persona_id: int = Field(gt=0, description="绑定人格主键")
@@ -80,6 +84,10 @@ class ChatSessionStateModel(BaseModel):
     turns: list[ChatTurnModel] = Field(default_factory=list, description="会话回合列表")
     max_history_turns: int = Field(default=64, ge=2, description="历史回合数上限（滑动窗口）")
     max_turn_chars: int = Field(default=2000, ge=1, description="单回合字符上限（截断保护）")
+    world_book_state: WorldBookTurnStateModel = Field(
+        default_factory=WorldBookTurnStateModel,
+        description="世界书回合状态（冷却追踪——会话作用域内存态）",
+    )
 
     def append_turn(self, role: ChatMessageRole, content: str) -> ChatTurnModel:
         """追加回合（空内容拒绝 + 超长截断 + 滑动窗口裁剪）。
@@ -123,6 +131,11 @@ class MessageCompositionResult(BaseModel):
         post_history_message: 历史后再注入文本（卡片未声明时为 None）。
         included_book_entries: 实际注入的世界书条目数（constant + 触发）。
         estimated_system_tokens: system 提示的近似 token 估算值。
+        world_book_state: 推进后的世界书回合状态（组装调用 +1 与本次
+            注入记录——**组装是纯函数不回写会话态**，由 ChatService
+            消费后回存；直调测试忽略即丢弃，功能式语义）。
+        emotion_summary: 本次注入的心情摘要行（非中性情绪时由调用方
+            经 emotion 域产出并传入；None = 未注入——纯观测面）。
     """
 
     messages: list[ChatMessageModel] = Field(description="完整请求消息序列")
@@ -132,3 +145,10 @@ class MessageCompositionResult(BaseModel):
     )
     included_book_entries: int = Field(default=0, ge=0, description="实际注入的世界书条目数")
     estimated_system_tokens: int = Field(default=0, ge=0, description="system 提示近似 token 估算")
+    world_book_state: WorldBookTurnStateModel = Field(
+        default_factory=WorldBookTurnStateModel,
+        description="推进后的世界书回合状态（会话层回存面）",
+    )
+    emotion_summary: str | None = Field(
+        default=None, description="本次注入的心情摘要行（None = 未注入）"
+    )

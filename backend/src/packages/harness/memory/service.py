@@ -14,12 +14,19 @@ MemoryService（情景层 + 策展层）：
 
 ChatSessionService（工作层）：
 
-    - 会话生命周期：create / list（游标）/ get（含全量消息）/ delete
-      （消息单语句批量清理 + 会话行 ORM 删除——两语句同事务）；
+    - 会话生命周期：create / list（游标）/ get（含全量消息；可选嵌套变体）
+      / delete（消息单语句批量清理 + 会话行 ORM 删除——两语句同事务）；
     - 消息追加：append_message（seq = message_count + 1 递增——会话行
-      经 ``SELECT ... FOR UPDATE`` 行锁串行化计数，``(session_id, seq)``
-      唯一键 DB 级兜底 + 冲突重试一次；会话行 message_count /
-      last_active_at 同事务更新）。
+      经 ``SELECT ... FOR UPDATE`` 行锁串行化计数，复合唯一键
+      ``uq_ff_chat_messages_seq_variant`` 的变体身份语义见 ORM 模块文档
+      + 冲突重试一次；会话行 message_count / last_active_at 同事务更新）；
+    - 消息变体（swipes——``append_variant`` / ``list_variants``）：变体行
+      seq = 父回合 seq、``variant_of_id`` 指向父 assistant 回合、
+      ``variant_index`` 从父回合既有最大值续编；不推进 message_count /
+      last_active_at（正典链计数只度量真实对话回合——变体是探索面）；
+      仅 assistant 正典回合可作父回合（服务层强制，变体不再生成变体）；
+    - 选定提升（``replace_message``）：以选中变体正文 / 元数据替换正典
+      回合（父行幸存、变体行保留——select-variant 的唯一写点）。
 
 人格作用域契约：三张 PersonaMixin 表（episodes / curated / sessions）
 的读写经 database.base 的自动注入 / 自动过滤隔离——**调用方须先经
@@ -35,9 +42,10 @@ Session 契约：方法接收调用方注入的 :class:`AsyncSession`（app 层�
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 from loguru import logger
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,6 +55,8 @@ from packages.harness.core.time_utils import now_ms
 from packages.harness.llm.llm_models import ChatMessageRole
 from packages.harness.memory.dtos import (
     ChatMessageDTO,
+    ChatMessageMetaModel,
+    ChatMessageMiniDTO,
     ChatSessionDetailDTO,
     ChatSessionQueryDTO,
     ChatSessionSummaryDTO,
@@ -139,6 +149,34 @@ def _episode_record(row: MemoryEpisodeRow) -> EpisodeRecordDTO:
 #: 策展单 active 守卫标记值（与 CuratedStatus.ACTIVE 同字面——DB 唯一
 #: 键 uq_ff_curated_active 的非 NULL 侧标记；superseded 行为 NULL）。
 _CURATED_ACTIVE_MARKER: str = CuratedStatus.ACTIVE.value
+
+
+def _message_dto(
+    row: ChatMessageRow,
+    variants: Sequence[ChatMessageMiniDTO] | None = None,
+) -> ChatMessageDTO:
+    """会话消息行 → DTO（可选嵌套变体——详情读侧装配面）。
+
+    Args:
+        row: 消息 ORM 行（正典链行或变体行）。
+        variants: 嵌套变体摘要列表（正典 assistant 回合按序号升序；
+            None = 非嵌套查询——空列表）。
+
+    Returns:
+        消息 DTO（meta 原样按元数据模型归一）。
+    """
+    return ChatMessageDTO(
+        id=row.id,
+        session_id=row.session_id,
+        seq=row.seq,
+        role=ChatMessageRole(row.role),
+        content=row.content,
+        ts_ms=row.ts_ms,
+        meta=(
+            ChatMessageMetaModel.model_validate(row.meta) if row.meta is not None else None
+        ),
+        variants=list(variants) if variants is not None else [],
+    )
 
 
 class MemoryService:
@@ -799,13 +837,20 @@ class ChatSessionService:
         )
 
     async def get_session(
-        self, session: AsyncSession, session_id: int
+        self, session: AsyncSession, session_id: int, *, include_variants: bool = False
     ) -> ChatSessionDetailDTO:
-        """读取会话详情（摘要 + 全量消息 seq 升序）。
+        """读取会话详情（正典链摘要 + 全量消息 seq 升序；可选嵌套变体）。
+
+        消息列表**恒只含正典对话链行**（``variant_of_id IS NULL``）——
+        变体不进入 seq 链（与父回合同 seq），默认不返回；``include_variants``
+        为真时按父回合主键分组把变体摘要嵌套进对应正典 assistant 回合
+        （``variants`` 字段，序号升序）。
 
         Args:
             session: 注入的异步 Session。
             session_id: 会话主键。
+            include_variants: 是否嵌套变体列表（默认 False——既有读侧
+                零变更；前端会话详情打开时置真）。
 
         Returns:
             会话详情 DTO。
@@ -818,13 +863,50 @@ class ChatSessionService:
             (
                 await session.execute(
                     select(ChatMessageRow)
-                    .where(ChatMessageRow.session_id == session_id)
+                    .where(
+                        ChatMessageRow.session_id == session_id,
+                        ChatMessageRow.variant_of_id.is_(None),
+                    )
                     .order_by(ChatMessageRow.seq.asc())
                 )
             )
             .scalars()
             .all()
         )
+        variants_by_parent: dict[int, list[ChatMessageMiniDTO]] = {}
+        if include_variants and message_rows:
+            variant_rows = list(
+                (
+                    await session.execute(
+                        select(ChatMessageRow)
+                        .where(
+                            ChatMessageRow.session_id == session_id,
+                            ChatMessageRow.variant_of_id.is_not(None),
+                        )
+                        .order_by(
+                            ChatMessageRow.variant_of_id.asc(),
+                            ChatMessageRow.variant_index.asc(),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for variant_row in variant_rows:
+                if variant_row.variant_of_id is None:
+                    continue
+                variants_by_parent.setdefault(variant_row.variant_of_id, []).append(
+                    ChatMessageMiniDTO(
+                        id=variant_row.id,
+                        content=variant_row.content,
+                        ts_ms=variant_row.ts_ms,
+                        meta=(
+                            ChatMessageMetaModel.model_validate(variant_row.meta)
+                            if variant_row.meta is not None
+                            else None
+                        ),
+                    )
+                )
         return ChatSessionDetailDTO(
             id=row.id,
             persona_id=row.persona_id,
@@ -832,8 +914,270 @@ class ChatSessionService:
             message_count=row.message_count,
             created_at=row.created_at,
             last_active_at=row.last_active_at,
-            messages=[ChatMessageDTO.model_validate(message) for message in message_rows],
+            messages=[
+                _message_dto(message, variants_by_parent.get(message.id))
+                for message in message_rows
+            ],
         )
+
+    async def ensure_session(self, session: AsyncSession, session_id: int) -> None:
+        """校验会话存在且处于当前人格作用域（轻量归属检查——无消息读取）。
+
+        Args:
+            session: 注入的异步 Session。
+            session_id: 会话主键。
+
+        Raises:
+            BusinessException: 会话不存在或不在当前人格作用域（``NOT_FOUND``）。
+        """
+        await self._require_session(session, session_id)
+
+    async def require_message(
+        self, session: AsyncSession, session_id: int, message_id: int
+    ) -> ChatMessageRow:
+        """按主键取会话消息行（归属校验；正典链行与变体行均可）。
+
+        Args:
+            session: 注入的异步 Session。
+            session_id: 会话主键。
+            message_id: 消息主键。
+
+        Returns:
+            消息 ORM 行（调用方按 role / variant_of_id 判定语义）。
+
+        Raises:
+            BusinessException: 消息不存在或不属于该会话（``NOT_FOUND``）。
+        """
+        row = (
+            (
+                await session.execute(
+                    select(ChatMessageRow).where(
+                        ChatMessageRow.id == message_id,
+                        ChatMessageRow.session_id == session_id,
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if row is None:
+            raise BusinessException(
+                code=ErrorCode.NOT_FOUND,
+                message="会话消息不存在",
+                details={"session_id": session_id, "message_id": message_id},
+            )
+        return row
+
+    async def append_variant(
+        self,
+        session: AsyncSession,
+        session_id: int,
+        *,
+        parent_message_id: int,
+        variant_index: int,
+        content: str,
+        ts_ms: int | None = None,
+        meta: dict[str, Any] | None = None,
+    ) -> ChatMessageDTO:
+        """追加单条消息变体（父回合下的候选回复——不推进正典计数）。
+
+        变体行 seq = 父回合 seq、``variant_of_id`` = 父回合主键、
+        ``variant_index`` 由调用方给出（同父回合内唯一——复合唯一键兜底）；
+        会话行 ``message_count`` / ``last_active_at`` **不更新**（变体是
+        探索面，正典链计数只度量真实对话回合，文档化决策）。
+
+        Args:
+            session: 注入的异步 Session。
+            session_id: 会话主键。
+            parent_message_id: 父回合主键（须为 assistant 正典链行）。
+            variant_index: 父回合内序号（>=1——续编由调用方计算）。
+            content: 变体可见正文（非空）。
+            ts_ms: 变体生成时间（epoch 毫秒；None = 当前时间）。
+            meta: 变体元数据（心声 / 情绪增量 / variant_index；原样落 JSON）。
+
+        Returns:
+            落库后的变体消息 DTO（``variants`` 恒空）。
+
+        Raises:
+            BusinessException: 父回合不存在 / 非 assistant / 本身是变体
+                （``VALIDATION_ERROR``）；序号非法（``VALIDATION_ERROR``）；
+                并发撞复合唯一键（``INTERNAL_ERROR``——重试由调用方）。
+        """
+        parent = await self.require_message(session, session_id, parent_message_id)
+        if parent.role != ChatMessageRole.ASSISTANT.value:
+            raise BusinessException(
+                code=ErrorCode.VALIDATION_ERROR,
+                message="仅 assistant 回合可生成变体",
+                details={"message_id": parent_message_id, "role": parent.role},
+            )
+        if parent.variant_of_id is not None:
+            raise BusinessException(
+                code=ErrorCode.VALIDATION_ERROR,
+                message="变体不可再生成变体（父回合须为正典链行）",
+                details={"message_id": parent_message_id},
+            )
+        if variant_index < 1:
+            raise BusinessException(
+                code=ErrorCode.VALIDATION_ERROR,
+                message="变体序号必须从 1 起",
+                details={"variant_index": variant_index},
+            )
+        row = ChatMessageRow(
+            session_id=session_id,
+            seq=parent.seq,
+            role=ChatMessageRole.ASSISTANT.value,
+            content=content,
+            ts_ms=ts_ms if ts_ms is not None else now_ms(),
+            meta=meta,
+            variant_of_id=parent.id,
+            variant_index=variant_index,
+        )
+        session.add(row)
+        try:
+            await _commit(session)
+        except IntegrityError as exc:
+            await _rollback_quietly(session)
+            raise BusinessException(
+                code=ErrorCode.INTERNAL_ERROR,
+                message="变体并发生成冲突（同父回合同序号已被占用）",
+                details={"parent_message_id": parent_message_id, "variant_index": variant_index},
+            ) from exc
+        return _message_dto(row)
+
+    async def list_variants(
+        self, session: AsyncSession, session_id: int, parent_message_id: int
+    ) -> list[ChatMessageDTO]:
+        """读取父回合下的全部变体（序号升序——续编序号计算面）。
+
+        Args:
+            session: 注入的异步 Session。
+            session_id: 会话主键。
+            parent_message_id: 父回合主键（缺失即 ``NOT_FOUND``）。
+
+        Returns:
+            变体消息 DTO 列表（variant_index 升序）。
+        """
+        await self.require_message(session, session_id, parent_message_id)
+        rows = list(
+            (
+                await session.execute(
+                    select(ChatMessageRow)
+                    .where(
+                        ChatMessageRow.session_id == session_id,
+                        ChatMessageRow.variant_of_id == parent_message_id,
+                    )
+                    .order_by(ChatMessageRow.variant_index.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [_message_dto(row) for row in rows]
+
+    async def list_canonical_messages_before(
+        self, session: AsyncSession, session_id: int, *, before_seq: int
+    ) -> list[ChatMessageDTO]:
+        """读取正典对话链在指定 seq 之前的全部回合（时间序——重生成上下文面）。
+
+        **只回放正典链**（``variant_of_id IS NULL``）：变体是探索面，不
+        进入后续组装（swipes 语义——每回合针对原始对话脊柱重掷；文档化
+        限制，见 docs/backend/chat.md「消息变体」）。
+
+        Args:
+            session: 注入的异步 Session。
+            session_id: 会话主键。
+            before_seq: 上界（严格小于——待重生成父回合的 seq）。
+
+        Returns:
+            正典回合 DTO 列表（seq 升序；``variants`` 恒空）。
+        """
+        rows = list(
+            (
+                await session.execute(
+                    select(ChatMessageRow)
+                    .where(
+                        ChatMessageRow.session_id == session_id,
+                        ChatMessageRow.variant_of_id.is_(None),
+                        ChatMessageRow.seq < before_seq,
+                    )
+                    .order_by(ChatMessageRow.seq.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [_message_dto(row) for row in rows]
+
+    async def next_variant_index(
+        self, session: AsyncSession, session_id: int, parent_message_id: int
+    ) -> int:
+        """计算父回合下一变体序号（既有最大值 + 1；无变体为 1）。
+
+        变体不清洗（重生成追加而非替换——历史候选全部保留，文档化
+        决策）：序号续编避免撞复合唯一键。
+
+        Args:
+            session: 注入的异步 Session。
+            session_id: 会话主键。
+            parent_message_id: 父回合主键。
+
+        Returns:
+            下一可用变体序号（>=1）。
+
+        Raises:
+            BusinessException: 父回合不存在或不属于该会话（``NOT_FOUND``）。
+        """
+        await self.require_message(session, session_id, parent_message_id)
+        max_index = (
+            await session.execute(
+                select(func.max(ChatMessageRow.variant_index)).where(
+                    ChatMessageRow.session_id == session_id,
+                    ChatMessageRow.variant_of_id == parent_message_id,
+                )
+            )
+        ).scalar_one()
+        return (int(max_index) if max_index is not None else 0) + 1
+
+    async def replace_message(
+        self,
+        session: AsyncSession,
+        session_id: int,
+        message_id: int,
+        *,
+        content: str,
+        meta: dict[str, Any] | None,
+    ) -> ChatMessageDTO:
+        """以选定变体内容替换正典回合正文 / 元数据（select-variant 写点）。
+
+        父回合幸存且保持正典链身份（``variant_of_id`` 仍为 NULL）；变体行
+        原样保留（历史可回溯——不清洗，文档化决策）。仅 assistant 正典
+        链行可被替换（服务层强制）。
+
+        Args:
+            session: 注入的异步 Session。
+            session_id: 会话主键。
+            message_id: 正典回合主键。
+            content: 新正文（选中变体可见文本——非空）。
+            meta: 新元数据（选中变体协议元数据 + 选中注记）。
+
+        Returns:
+            更新后的正典消息 DTO。
+
+        Raises:
+            BusinessException: 消息不存在（``NOT_FOUND``）；非 assistant /
+                本身是变体（``VALIDATION_ERROR``）。
+        """
+        row = await self.require_message(session, session_id, message_id)
+        if row.role != ChatMessageRole.ASSISTANT.value or row.variant_of_id is not None:
+            raise BusinessException(
+                code=ErrorCode.VALIDATION_ERROR,
+                message="仅正典 assistant 回合可被变体替换",
+                details={"message_id": message_id, "role": row.role},
+            )
+        row.content = content
+        row.meta = meta
+        await _commit(session)
+        return _message_dto(row)
 
     async def delete_session(self, session: AsyncSession, session_id: int) -> None:
         """删除会话（消息 + 会话行同事务清理——两语句形态）。
@@ -866,15 +1210,18 @@ class ChatSessionService:
         role: ChatMessageRole,
         content: str,
         ts_ms: int | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> ChatMessageDTO:
         """追加会话消息（seq = message_count + 1 递增；会话行同事务更新）。
 
         并发不变式（双层防线）：会话行经 ``SELECT ... FOR UPDATE``
         锁定读取（MySQL 行锁串行化同会话并发追加——第二事务阻塞至
         首者提交后取到新计数；SQLite 方言无 FOR UPDATE，但其单写者
-        天然串行）；``(session_id, seq)`` 唯一键 ``uq_ff_chat_messages_seq``
-        为 DB 级兜底——冲突时回滚重读计数重算 seq 重试一次，再冲突
-        映射 ``INTERNAL_ERROR``。
+        天然串行）；正典链 seq 的唯一性由该行锁计数维持（迁移 0010 后
+        DB 级复合键 ``uq_ff_chat_messages_seq_variant`` 的守卫面让位于
+        变体身份——正典行两列 NULL 被唯一键忽略，见 ORM 模块文档）；并发
+        双写撞键时回滚重读计数重算 seq 重试一次，再冲突映射
+        ``INTERNAL_ERROR``。
 
         Args:
             session: 注入的异步 Session。
@@ -882,6 +1229,8 @@ class ChatSessionService:
             role: 消息角色。
             content: 消息文本（非空）。
             ts_ms: 消息时间（epoch 毫秒；None = 当前时间）。
+            meta: 回合元数据（可空——心声 / 情绪增量 / 情绪快照；缺省
+                None 保持既有调用方零变更）。
 
         Returns:
             落库后的消息 DTO。
@@ -892,7 +1241,7 @@ class ChatSessionService:
         """
         try:
             message = await self._append_message_once(
-                session, session_id, role=role, content=content, ts_ms=ts_ms
+                session, session_id, role=role, content=content, ts_ms=ts_ms, meta=meta
             )
         except IntegrityError:
             # 并发追加抢先落了同 seq 行——回滚重读计数重算（行锁下重读
@@ -901,7 +1250,7 @@ class ChatSessionService:
             logger.info("会话消息 seq 并发冲突，重读计数重算重试: session_id={}", session_id)
             try:
                 message = await self._append_message_once(
-                    session, session_id, role=role, content=content, ts_ms=ts_ms
+                    session, session_id, role=role, content=content, ts_ms=ts_ms, meta=meta
                 )
             except IntegrityError as exc:
                 await _rollback_quietly(session)
@@ -920,6 +1269,7 @@ class ChatSessionService:
         role: ChatMessageRole,
         content: str,
         ts_ms: int | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> ChatMessageRow:
         """单次消息追加尝试（行锁读取 + 计数推进——无重试）。
 
@@ -929,6 +1279,7 @@ class ChatSessionService:
             role: 消息角色。
             content: 消息文本（非空）。
             ts_ms: 消息时间（epoch 毫秒；None = 当前时间）。
+            meta: 回合元数据（可空——原样落 JSON 列）。
 
         Returns:
             落库后的消息 ORM 行。
@@ -936,8 +1287,8 @@ class ChatSessionService:
         Raises:
             BusinessException: 会话不存在或不在当前人格作用域
                 （``NOT_FOUND``）。
-            IntegrityError: 并发追加撞 ``uq_ff_chat_messages_seq``（由
-                上层重试收敛）。
+            IntegrityError: 并发追加撞复合唯一键 ``uq_ff_chat_messages_seq_variant``
+                （由上层重试收敛）。
         """
         row = await self._require_session(session, session_id, for_update=True)
         resolved_ts = ts_ms if ts_ms is not None else now_ms()
@@ -947,6 +1298,7 @@ class ChatSessionService:
             role=role.value,
             content=content,
             ts_ms=resolved_ts,
+            meta=meta,
         )
         session.add(message)
         row.message_count = message.seq

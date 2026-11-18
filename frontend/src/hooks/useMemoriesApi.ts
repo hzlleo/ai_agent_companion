@@ -24,12 +24,17 @@ import {
   listDreamRuns,
   listEpisodes,
   listSessions,
+  regenerateVariants,
   searchMemories,
+  selectVariant,
   triggerDream,
   upsertCurated,
 } from '@/api/memories'
 import { getCursorPageParam } from '@/api/pagination'
 import type {
+  ChatMessage,
+  ChatVariantRegenerateRequest,
+  ChatVariantSelectRequest,
   CuratedKind,
   CuratedRecord,
   CuratedStatus,
@@ -202,12 +207,55 @@ export function useSessionsList(personaId: number | undefined, limit?: number) {
   })
 }
 
-/** 会话详情（摘要 + 全量消息 seq 升序）。 */
-export function useSessionDetail(personaId: number | undefined, sessionId: number) {
+/** 会话详情（正典消息 seq 升序；includeVariants 时嵌套变体列表）。 */
+export function useSessionDetail(
+  personaId: number | undefined,
+  sessionId: number,
+  includeVariants = false,
+) {
   return useQuery({
-    queryKey: [...MEMORIES_QUERY_KEY, 'session', personaId, sessionId],
-    queryFn: () => getSession(personaId, sessionId),
+    queryKey: [...MEMORIES_QUERY_KEY, 'session', personaId, sessionId, includeVariants],
+    queryFn: () => getSession(personaId, sessionId, includeVariants),
     enabled: sessionId > 0,
+  })
+}
+
+/** 重生成消息变体（swipes——成功后失效 memories 族，详情重拉带变体）。 */
+export function useRegenerateVariants() {
+  const invalidate = useInvalidateMemories()
+  return useMutation({
+    mutationFn: ({
+      personaId,
+      sessionId,
+      messageId,
+      payload,
+    }: {
+      personaId: number | undefined
+      sessionId: number
+      messageId: number
+      payload: ChatVariantRegenerateRequest
+    }): Promise<ChatMessage[]> =>
+      regenerateVariants(personaId, sessionId, messageId, payload),
+    onSuccess: invalidate,
+  })
+}
+
+/** 选定变体提升正典回合（成功后父回合正文替换——失效详情缓存）。 */
+export function useSelectVariant() {
+  const invalidate = useInvalidateMemories()
+  return useMutation({
+    mutationFn: ({
+      personaId,
+      sessionId,
+      messageId,
+      payload,
+    }: {
+      personaId: number | undefined
+      sessionId: number
+      messageId: number
+      payload: ChatVariantSelectRequest
+    }): Promise<ChatMessage> => selectVariant(personaId, sessionId, messageId, payload),
+    onSuccess: invalidate,
   })
 }
 

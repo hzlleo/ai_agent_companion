@@ -143,3 +143,87 @@ async def test_book_fields_roundtrip() -> None:
         CharaBookModel(scan_depth=0)
     with pytest.raises(ValidationError):
         CharaBookModel(token_budget=0)
+
+
+# ---------------------------------------------------------------------------
+# R2b 高级触发字段（加性缺省 = 既有行为；界校验 + 规格一致性）
+# ---------------------------------------------------------------------------
+
+
+async def test_entry_advanced_field_defaults_preserve_legacy_shape() -> None:
+    """高级字段缺省：depth=4 / recursive=False / include_group=None /
+    trigger_probability=1.0 / cooldown_turns=0（缺省即既有行为）。"""
+    entry = CharaBookEntryModel(keys=["k"], content="正文")
+    assert entry.depth == 4
+    assert entry.recursive is False
+    assert entry.include_group is None
+    assert entry.trigger_probability == 1.0
+    assert entry.cooldown_turns == 0
+
+
+async def test_entry_advanced_field_bounds() -> None:
+    """高级字段界校验：depth 0-20 / cooldown 0-50 / probability 0.0-1.0。"""
+    with pytest.raises(ValidationError):
+        CharaBookEntryModel(keys=["k"], depth=-1)
+    with pytest.raises(ValidationError):
+        CharaBookEntryModel(keys=["k"], depth=21)
+    with pytest.raises(ValidationError):
+        CharaBookEntryModel(keys=["k"], cooldown_turns=-1)
+    with pytest.raises(ValidationError):
+        CharaBookEntryModel(keys=["k"], cooldown_turns=51)
+    with pytest.raises(ValidationError):
+        CharaBookEntryModel(keys=["k"], trigger_probability=-0.01)
+    with pytest.raises(ValidationError):
+        CharaBookEntryModel(keys=["k"], trigger_probability=1.01)
+    assert CharaBookEntryModel(keys=["k"], depth=0).depth == 0
+    assert CharaBookEntryModel(keys=["k"], depth=20).depth == 20
+    assert CharaBookEntryModel(keys=["k"], cooldown_turns=50).cooldown_turns == 50
+    assert CharaBookEntryModel(keys=["k"], trigger_probability=0.0).trigger_probability == 0.0
+
+
+async def test_entry_include_group_normalization_and_bound() -> None:
+    """互斥分组：空白串归一 None；非空保留；超 64 字符拒绝。"""
+    assert CharaBookEntryModel(keys=["k"], include_group="").include_group is None
+    assert CharaBookEntryModel(keys=["k"], include_group="   ").include_group is None
+    assert CharaBookEntryModel(keys=["k"], include_group="greet").include_group == "greet"
+    with pytest.raises(ValidationError):
+        CharaBookEntryModel(keys=["k"], include_group="分" * 65)
+
+
+async def test_entry_recursive_requires_book_level_switch() -> None:
+    """规格一致性：条目 recursive=True 须书级 recursive_scanning=True。"""
+    with pytest.raises(ValidationError, match="recursive_scanning"):
+        CharaBookModel(
+            recursive_scanning=False,
+            entries=[CharaBookEntryModel(keys=["k"], content="A", recursive=True)],
+        )
+    book = CharaBookModel(
+        recursive_scanning=True,
+        entries=[CharaBookEntryModel(keys=["k"], content="A", recursive=True)],
+    )
+    assert book.entries[0].recursive is True
+
+
+async def test_entry_advanced_fields_roundtrip() -> None:
+    """高级字段 JSON 往返（落库形态 ↔ 读取形态——加性字段无损）。"""
+    book = CharaBookModel(
+        recursive_scanning=True,
+        entries=[
+            CharaBookEntryModel(
+                keys=["问候"],
+                content="问候条目",
+                depth=2,
+                recursive=True,
+                include_group="greet",
+                trigger_probability=0.5,
+                cooldown_turns=3,
+            ),
+        ],
+    )
+    roundtrip = CharaBookModel.model_validate(book.model_dump())
+    assert roundtrip == book
+    assert roundtrip.entries[0].depth == 2
+    assert roundtrip.entries[0].recursive is True
+    assert roundtrip.entries[0].include_group == "greet"
+    assert roundtrip.entries[0].trigger_probability == 0.5
+    assert roundtrip.entries[0].cooldown_turns == 3

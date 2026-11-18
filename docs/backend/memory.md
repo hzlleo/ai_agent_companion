@@ -68,10 +68,41 @@
 | `version` | Integer | 链内版本号（首版 1，supersede 递增） |
 | `active_marker` | String(16)，可空 | 单 active 守卫标记（active 行 `'active'` / superseded 行 NULL）——唯一键 `uq_ff_curated_active (persona_id, kind, topic, active_marker)` 的非 NULL 侧（两方言唯一键均忽略 NULL，多代 superseded 行共存；迁移 0007） |
 
+长期指令（R2b D7-14）不新建表：以 `kind=user_note` + `topic='directive:<slug>'` 行承载
+（supersede / 历史链 / 唯一键全部复用本表；服务层只做命名空间收窄——详见
+[persona.md](persona.md#长期指令r2b-d7-14usermd-式常备指令)）。
+
 ### ff_chat_sessions / ff_chat_messages（工作层）
 
 `ff_chat_sessions`：`persona_id`（PersonaMixin）/ `title` / `message_count`（下一消息 seq）/ `last_active_at`（索引）。
-`ff_chat_messages`：`session_id`（FK ff_chat_sessions.id，级联删除，索引）/ `seq`（会话内从 1 递增；唯一键 `uq_ff_chat_messages_seq (session_id, seq)`——DB 级兜底，迁移 0007）/ `role`（user/assistant/system）/ `content` / `ts_ms`。
+`ff_chat_messages`：`session_id`（FK ff_chat_sessions.id，级联删除，索引）/ `seq`（会话内从 1 递增；迁移 0010 后唯一键为复合键 `uq_ff_chat_messages_seq_variant (session_id, seq, variant_of_id, variant_index)`——变体身份 DB 级兜底；正典行两列 NULL，正典 seq 唯一性由服务层会话行锁计数维持，迁移沿革 0007 → 0010）/ `role`（user/assistant/system）/ `content` / `ts_ms` / `meta`（JSON 可空——回合内部观测元数据：`thought` 心声 / `emotion_deltas` 情绪增量 / `emotion_snapshot` 情绪快照 / 变体行 `variant_index` / 选中注记 `selected_variant_id`，**永不进入可见正文**；迁移 0009，见 [emotion.md](emotion.md)）/ `variant_of_id`（自引用 FK ff_chat_messages.id，ON DELETE CASCADE，索引；NULL = 正典链行；迁移 0010）/ `variant_index`（父回合内变体序号 1..N；NULL = 正典链行）。
+
+消息变体（swipes——单回合多候选，[chat.md](chat.md#消息变体swipesr2b-d7-5)）：变体行
+`seq = 父回合 seq`、`variant_of_id` 指向父 assistant 回合、`variant_index` 续编（既有
+候选不清洗）；不推进会话 `message_count` / `last_active_at`；仅 assistant 正典回合可
+作父回合（服务层强制）；降级 0009 丢弃变体行后重建旧 `(session_id, seq)` 唯一键。
+
+`append_message(..., meta=None)` 为可选追加参数（既有调用方零变更）；会话详情
+DTO `messages[].meta`（`ChatMessageMetaModel`）为读侧形态——无元数据回合为
+`null`。`GET /api/v1/memories/sessions/{id}` 响应示例（assistant 回合）：
+
+```json
+{
+  "id": 2,
+  "session_id": 1,
+  "seq": 2,
+  "role": "assistant",
+  "content": "你回来啦，快坐下。",
+  "ts_ms": 1760000000500,
+  "meta": {
+    "thought": "他终于来了，等了好久。",
+    "emotion_deltas": {"joy": 0.4, "affection": 0.2},
+    "emotion_snapshot": {"joy": 0.9, "affection": 0.7, "calm": 0.5}
+  }
+}
+```
+
+（`meta` 为可空字段；流式路径不落 meta——边界见 [chat.md](chat.md)。）
 
 ## provenance 规则（全记忆层统一 taxonomy）
 
@@ -98,10 +129,18 @@ query_curated(query) / get_curated(id)    查询 / 读取（kind / topic / statu
 get_curated_history(id)                   历史链（锚点行同 (kind, topic) 全链，版本升序）
 delete_curated(id)                        管理面删除（active 行删除后该 topic 重新起链，version 从 1 计数）
 
-create_session(title) / list_sessions / get_session / delete_session / append_message
+create_session(title) / list_sessions / get_session(include_variants=False) / delete_session / append_message
                                           （append_message：会话行 SELECT ... FOR UPDATE 行锁 +
-                                          (session_id, seq) 唯一键兜底 + 冲突重试一次；delete_session：
+                                          正典 seq 计数唯一性 + 冲突重试一次；delete_session：
                                           消息单语句批量 DELETE + 会话行 ORM 删除）
+
+append_variant(parent_message_id, variant_index, content, meta)/
+list_variants(parent_message_id) / next_variant_index(parent_message_id) /
+list_canonical_messages_before(before_seq) / replace_message(...) /
+require_message(id) / ensure_session(id)
+                                          （变更体（父回合语义校验 + 复合唯一键兜底）/ 读变体 /
+                                          续编序号 / 正典脊柱读取（变体不参与）/ 选定提升写点 /
+                                          消息读取 / 会话归属轻量校验）
 ```
 
 ### supersede 链（单一真相）
@@ -183,8 +222,12 @@ POST   /api/v1/memories/curated/upsert              upsert（supersede 语义）
 GET    /api/v1/memories/curated/{id}/history        历史链（版本升序）
 DELETE /api/v1/memories/curated/{id}                删除
 GET    /api/v1/memories/sessions                    会话游标分页
-GET    /api/v1/memories/sessions/{id}               详情（含全量消息 seq 升序）
-DELETE /api/v1/memories/sessions/{id}               删除（消息同事务清理）
+GET    /api/v1/memories/sessions/{id}               详情（正典消息 seq 升序；include_variants 可嵌套变体）
+DELETE /api/v1/memories/sessions/{id}               删除（消息同事务清理；变体随会话删除）
+POST   /api/v1/memories/sessions/{id}/messages/{mid}/variants
+                                                    重生成消息变体（swipes；count 1-8 默认 4）
+POST   /api/v1/memories/sessions/{id}/messages/{mid}/select-variant
+                                                    选定变体提升正典回合（唯一 M 态推进写点）
 POST   /api/v1/memories/search                      记忆检索（dense / keyword / hybrid——见「检索层」）
 POST   /api/v1/memories/dream/trigger               手工触发夜间梦境整理（见「夜间梦境」）
 GET    /api/v1/memories/dream/runs                  梦境运行日志游标分页
@@ -216,6 +259,9 @@ chat 回合（reply / stream_reply）
 - `tests/unit/test_memory_service.py`——服务面全语义（追加 / 去重双通道 / 分页过滤 / 批量部分成功 / 日记取回 / **人格隔离** / supersede 链与 active_marker 两态 / 单 active 唯一键 DB 约束 + 并发冲突重试 / untrusted 拒绝 / 会话 seq 递增 + seq 唯一键 DB 约束 + 冲突重试 / 批量删除 ids 唯一性 / 载荷判别与指纹）；
 - `tests/unit/test_chat_persistence.py`——ChatService 持久化集成（落库 / 恢复全链路 / 未绑定持久化时的纯内存兼容）+ CLI `/new` `/sessions` `/resume` 命令；
 - `tests/unit/test_memories_api.py`——ASGITransport 全端点 + 处理器直调契约面；
+- 消息变体（swipes）三件：`test_chat_swipe.py`（服务全语义 / 脊柱-only 上下文 / 选定提升）、
+  `test_chat_swipe_api.py`（变体端点 + include_variants 读侧）、
+  `test_migration_chat_message_variants.py`（迁移 0010 SQLite round-trip + 唯一键语义）；
 - 检索层五件：`test_memory_retrieval_sql.py`（构建器精确字符串断言 + hybrid 执行面形态异常含多列 fail loud）/ `test_memory_seekdb_store.py`（假 aiomysql 池）/ `test_memory_sqlite_store.py`（共享引擎回退往返）/ `test_memory_indexer.py`（索引管道 + 服务联动）/ `test_memory_search_api.py`（POST /search 全模式）+ `test_pools_seekdb.py`（池生命周期）；
 - 梦境三件：`test_dreaming_prompts.py`（byte-lock + 渲染契约）/ `test_dreaming.py`（纯函数数学 + 门矩阵 + fail-closed 全链 + 孤儿 running 收敛 / 已晋升回溯窗 / 事件上限截断 / 合并中断决策补齐）/ `test_dream_api.py`（trigger + runs 端点）；
 - SeekDB 真引擎强制套件：`src/tests/integration_seekdb/`（迁移链 round-trip / 并发不变式 / 混合检索往返——缺 env 即 fail，不跳过；见 docs/test-strategy/README.md「SeekDB 真引擎强制套件」）；

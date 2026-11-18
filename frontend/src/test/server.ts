@@ -13,10 +13,16 @@ import { http, HttpResponse } from 'msw'
 import { API_BASE_URL, API_PREFIX } from '@/api/client'
 import type { ResultDTO } from '@/types/common'
 import type {
+  DirectiveRecord,
   PersonaRecord,
   PersonaState,
+  TraitComponent,
+  TraitLibrary,
+  TraitPreset,
 } from '@/types/persona'
 import type {
+  ChatMessage,
+  ChatMessageVariant,
   ChatSessionDetail,
   ChatSessionSummary,
   CuratedRecord,
@@ -26,9 +32,15 @@ import type {
 } from '@/types/memory'
 import type { UsageAggregate, UsageRecord, UsageSummary } from '@/types/usage'
 import type { ModelEntryMasked, RegistryState, RoleBinding } from '@/types/model-registry'
+import type { ReminderRecord } from '@/types/reminders'
 
 /** 后端 URL 前缀（handlers 统一经此拼接，与 api client 同源）。 */
 export const BACKEND_ORIGIN = `${API_BASE_URL}${API_PREFIX}`
+
+/** msw formData 部件 → 文件项判定（duck-typing——msw 重建的 File 与测试域全局 File 非同构造器，instanceof 不可靠）。 */
+export function isFileEntry(entry: FormDataEntryValue | null): entry is File {
+  return typeof entry === 'object' && entry !== null && 'name' in entry && 'text' in entry
+}
 
 /** 构造成功 ResultDTO。 */
 export function okResult<T>(data: T, message = '成功'): ResultDTO<T> {
@@ -78,6 +90,100 @@ export function mockState(overrides: Partial<PersonaState> = {}): PersonaState {
     created_at: 1731000000000,
     updated_at: 1731000000000,
     ...overrides,
+  }
+}
+
+/** 测试用特质组件（wire 形态）。 */
+export function mockTraitComponent(overrides: Partial<TraitComponent> = {}): TraitComponent {
+  return {
+    id: 'warm-hearted',
+    name_zh: '温情底色',
+    description_zh: '待人有一种天然的暖意，会默默惦记对方的冷暖',
+    category: 'temperament',
+    tone_directives: ['语气里带着藏不住的关切'],
+    sample_speech: '今天降温了，出门记得把外套穿上。',
+    conflicts: [],
+    ...overrides,
+  }
+}
+
+/** 测试用特质预设（wire 形态；傲娇组合）。 */
+export function mockTraitPreset(overrides: Partial<TraitPreset> = {}): TraitPreset {
+  return {
+    id: 'tsundere',
+    name_zh: '傲娇',
+    tagline_zh: '嘴上全是拒绝，行动全是真心',
+    description_zh: '口是心非的别扭鬼，好话反着说、关心藏着给',
+    components: ['duplicitous-mouth', 'soft-heart-hard-mouth'],
+    base_card_overrides: {
+      name_suffix: null,
+      personality: null,
+      mes_example: null,
+      system_prompt_fragment: null,
+    },
+    suggested_voice: null,
+    suggested_book: [],
+    ...overrides,
+  }
+}
+
+/** 测试用特质库（画廊载荷：2 预设 + 组件注册表）。 */
+export function mockTraitLibrary(): TraitLibrary {
+  return {
+    presets: [
+      mockTraitPreset(),
+      mockTraitPreset({
+        id: 'genki-girl',
+        name_zh: '元气少女',
+        tagline_zh: '人形小太阳，电量永远 100%',
+        description_zh: '元气满格的活泼少女，一句话能把阴天聊出太阳',
+        components: ['energetic-sunny', 'pun-enthusiast'],
+        base_card_overrides: {
+          name_suffix: '-酱',
+          personality: null,
+          mes_example: null,
+          system_prompt_fragment: null,
+        },
+      }),
+    ],
+    components: [
+      mockTraitComponent(),
+      mockTraitComponent({
+        id: 'duplicitous-mouth',
+        name_zh: '口是心非',
+        description_zh: '想要偏说不要，喜欢偏说讨厌',
+        category: 'speech',
+        tone_directives: ['想法与说出口的话刻意相反'],
+        sample_speech: '谁想和你多待一会儿啊，我只是刚好顺路。',
+      }),
+      mockTraitComponent({
+        id: 'soft-heart-hard-mouth',
+        name_zh: '嘴硬心软',
+        description_zh: '嘴上不饶人，落在行动里却诚实得很',
+        category: 'temperament',
+        tone_directives: [],
+        sample_speech: null,
+        conflicts: [],
+      }),
+      mockTraitComponent({
+        id: 'energetic-sunny',
+        name_zh: '元气满满',
+        description_zh: '情绪高昂有干劲，是身边的晴天',
+        category: 'temperament',
+        tone_directives: ['语气轻快上扬'],
+        sample_speech: '走走走！出去兜一圈！',
+        conflicts: [],
+      }),
+      mockTraitComponent({
+        id: 'pun-enthusiast',
+        name_zh: '谐音梗爱好者',
+        description_zh: '谐音梗十级学者，逮着机会就要抖一个',
+        category: 'humor',
+        tone_directives: [],
+        sample_speech: null,
+        conflicts: [],
+      }),
+    ],
   }
 }
 
@@ -146,6 +252,140 @@ export const personaHandlers = [  // 游标分页列表：首页 2 条 + next_cu
   http.get(`${BACKEND_ORIGIN}/personas/primary`, () =>
     HttpResponse.json(okResult(mockPersona({ id: 1, is_primary: true }))),
   ),
+  // 官方特质预设库（画廊载荷）。
+  http.get(`${BACKEND_ORIGIN}/personas/presets`, () =>
+    HttpResponse.json(okResult(mockTraitLibrary())),
+  ),
+  // 单发导入：JSON 面（官方预设生成 / 用户卡片）——同名「傲娇」与
+  // desired_name=companion-1 触发冲突形态，其余成功导入。
+  http.post(`${BACKEND_ORIGIN}/personas/import`, async ({ request }) => {
+    const contentType = request.headers.get('content-type') ?? ''
+    let presetId: string | null = null
+    let cardName = ''
+    let desiredName: string | null = null
+    let strategy = 'skip'
+    if (contentType.includes('multipart/form-data')) {
+      const form = await request.formData()
+      presetId = null
+      const file = form.get('file')
+      if (isFileEntry(file)) {
+        try {
+          cardName = (JSON.parse(await file.text()) as { name?: string }).name ?? ''
+        } catch {
+          return HttpResponse.json(
+            errorResult('导入卡片文件解析失败（须为 chara card v2 JSON 文档）', 'VALIDATION_ERROR'),
+            { status: 422 },
+          )
+        }
+      }
+      const strategyField = form.get('conflict_strategy')
+      if (typeof strategyField === 'string' && strategyField !== '') {
+        strategy = strategyField
+      }
+      const desiredField = form.get('desired_name')
+      if (typeof desiredField === 'string' && desiredField !== '') {
+        desiredName = desiredField
+      }
+    } else {
+      const body = (await request.json()) as {
+        preset_id?: string | null
+        card?: { name?: string } | null
+        conflict_strategy?: string
+        desired_name?: string | null
+      }
+      presetId = body.preset_id ?? null
+      cardName = body.card?.name ?? ''
+      desiredName = body.desired_name ?? null
+      strategy = body.conflict_strategy ?? 'skip'
+    }
+    if (presetId !== null && presetId !== 'tsundere' && presetId !== 'genki-girl') {
+      return HttpResponse.json(errorResult('官方预设不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    const targetName = desiredName ?? (presetId !== null ? '傲娇' : cardName)
+    if (strategy === 'skip' && targetName === 'companion-1') {
+      return HttpResponse.json(
+        okResult(
+          {
+            imported: false,
+            persona_id: 1,
+            reason: 'name_conflict',
+            warnings: [],
+          },
+          '注册名已存在，按跳过策略未导入',
+        ),
+      )
+    }
+    if (strategy === 'rename' && targetName === 'companion-1') {
+      return HttpResponse.json(
+        okResult(
+          { imported: true, persona_id: 11, reason: null, warnings: [] },
+          '人格已导入',
+        ),
+      )
+    }
+    return HttpResponse.json(
+      okResult(
+        { imported: true, persona_id: presetId !== null ? 11 : 12, reason: null, warnings: [] },
+        '人格已导入',
+      ),
+    )
+  }),
+  // 批量导入（multipart 多文件，部分成功形态：非法 JSON 失败 + companion-1 冲突跳过）。
+  http.post(`${BACKEND_ORIGIN}/personas/import/batch`, async ({ request }) => {
+    const form = await request.formData()
+    const files = form.getAll('files').filter(isFileEntry)
+    const results = await Promise.all(
+      files.map(async (file) => {
+        try {
+          const cardName = (JSON.parse(await file.text()) as { name?: string }).name ?? ''
+          if (cardName === 'companion-1') {
+            return {
+              filename: file.name,
+              success: true,
+              imported: false,
+              persona_id: 1,
+              reason: 'name_conflict',
+              code: null,
+              message: '注册名已存在，按跳过策略未导入',
+            }
+          }
+          return {
+            filename: file.name,
+            success: true,
+            imported: true,
+            persona_id: 20,
+            reason: null,
+            code: null,
+            message: '已导入',
+          }
+        } catch {
+          return {
+            filename: file.name,
+            success: false,
+            imported: false,
+            persona_id: null,
+            reason: null,
+            code: 'VALIDATION_ERROR',
+            message: '卡片文件解析失败（须为 chara card v2 JSON）: invalid',
+          }
+        }
+      }),
+    )
+    const succeeded = results.filter((item) => item.success).length
+    const importedCount = results.filter((item) => item.imported).length
+    return HttpResponse.json(
+      okResult(
+        {
+          total: results.length,
+          succeeded,
+          failed: results.length - succeeded,
+          imported_count: importedCount,
+          items: results,
+        },
+        `批量导入完成（成功 ${succeeded} / 失败 ${results.length - succeeded} / 新导入 ${importedCount}）`,
+      ),
+    )
+  }),
   // 读取。
   http.get(`${BACKEND_ORIGIN}/personas/:personaId`, ({ params }) => {
     const id = Number(params.personaId)
@@ -285,6 +525,22 @@ export function mockSessionSummary(overrides: Partial<ChatSessionSummary> = {}):
   }
 }
 
+/** 测试用消息变体（wire 形态；父回合候选回复）。 */
+export function mockVariant(overrides: Partial<ChatMessageVariant> = {}): ChatMessageVariant {
+  return {
+    id: 21,
+    content: '变体回复一',
+    ts_ms: 1731000000600,
+    meta: {
+      thought: '换个更温柔的说法。',
+      emotion_deltas: { affection: 0.3 },
+      emotion_snapshot: null,
+      variant_index: 1,
+    },
+    ...overrides,
+  }
+}
+
 /** 测试用会话详情（wire 形态；3 条消息 seq 升序）。 */
 export function mockSessionDetail(
   overrides: Partial<ChatSessionDetail> = {},
@@ -298,11 +554,49 @@ export function mockSessionDetail(
     created_at: 1731000000000,
     last_active_at: 1731000001000,
     messages: [
-      { id: 1, session_id: sessionId, seq: 1, role: 'user', content: '今天好累', ts_ms: 1731000000000 },
-      { id: 2, session_id: sessionId, seq: 2, role: 'assistant', content: '辛苦了，想聊聊吗？', ts_ms: 1731000000500 },
-      { id: 3, session_id: sessionId, seq: 3, role: 'user', content: '就是工作上的事', ts_ms: 1731000001000 },
+      { id: 1, session_id: sessionId, seq: 1, role: 'user', content: '今天好累', ts_ms: 1731000000000, variants: [] },
+      {
+        id: 2,
+        session_id: sessionId,
+        seq: 2,
+        role: 'assistant',
+        content: '辛苦了，想聊聊吗？',
+        ts_ms: 1731000000500,
+        meta: {
+          thought: '他听起来真的很累，先别急着给建议。',
+          emotion_deltas: { affection: 0.2 },
+          emotion_snapshot: { affection: 0.7, shyness: 0.55 },
+        },
+        variants: [],
+      },
+      { id: 3, session_id: sessionId, seq: 3, role: 'user', content: '就是工作上的事', ts_ms: 1731000001000, variants: [] },
     ],
     ...overrides,
+  }
+}
+
+/** 会话详情读侧 handler 用的 assistant 回合（含两条候选变体）。 */
+function mockAssistantMessageWithVariants(sessionId: number): ChatMessage {
+  const detail = mockSessionDetail({ id: sessionId })
+  const assistant = detail.messages.find((message) => message.role === 'assistant')
+  if (assistant === undefined) {
+    throw new Error('mockSessionDetail 缺少 assistant 回合（测试数据损坏）')
+  }
+  return {
+    ...assistant,
+    variants: [
+      mockVariant(),
+      mockVariant({
+        id: 22,
+        content: '变体回复二',
+        meta: {
+          thought: '换一种更温柔的说法。',
+          emotion_deltas: { affection: 0.3 },
+          emotion_snapshot: null,
+          variant_index: 2,
+        },
+      }),
+    ],
   }
 }
 
@@ -642,13 +936,55 @@ export const memoryHandlers = [
       }),
     )
   }),
-  http.get(`${BACKEND_ORIGIN}/memories/sessions/:sessionId`, ({ params }) => {
+  http.get(`${BACKEND_ORIGIN}/memories/sessions/:sessionId`, ({ request, params }) => {
     const id = Number(params.sessionId)
     if (id === 404) {
       return HttpResponse.json(errorResult('会话不存在或不在此人格作用域', 'NOT_FOUND'), { status: 404 })
     }
-    return HttpResponse.json(okResult(mockSessionDetail({ id })))
+    const includeVariants =
+      new URL(request.url).searchParams.get('include_variants') === 'true'
+    const detail = mockSessionDetail({ id })
+    if (includeVariants) {
+      detail.messages = detail.messages.map((message) =>
+        message.role === 'assistant' ? mockAssistantMessageWithVariants(id) : message,
+      )
+    }
+    return HttpResponse.json(okResult(detail))
   }),
+  // 变体重生成：按 count 返回候选（id 100 起）。
+  http.post(
+    `${BACKEND_ORIGIN}/memories/sessions/:sessionId/messages/:messageId/variants`,
+    async ({ request }) => {
+      const body = (await request.json()) as { count: number }
+      const variants = Array.from({ length: body.count }, (_, index) =>
+        mockVariant({ id: 100 + index, content: `新候选${index + 1}` }),
+      )
+      return HttpResponse.json(okResult(variants, `已生成 ${variants.length} 条变体`))
+    },
+  ),
+  // 变体选定：回显父回合（内容替换为选中候选）。
+  http.post(
+    `${BACKEND_ORIGIN}/memories/sessions/:sessionId/messages/:messageId/select-variant`,
+    async ({ request, params }) => {
+      const body = (await request.json()) as { variant_id: number }
+      const sessionId = Number(params.sessionId)
+      const assistant = mockAssistantMessageWithVariants(sessionId)
+      const variant =
+        [mockVariant(), mockVariant({ id: 22, content: '变体回复二' }), mockVariant({ id: 100, content: '新候选1' })]
+          .find((item) => item.id === body.variant_id) ?? mockVariant()
+      return HttpResponse.json(
+        okResult(
+          {
+            ...assistant,
+            content: variant.content,
+            meta: { ...variant.meta, selected_variant_id: variant.id },
+            variants: assistant.variants,
+          },
+          '已选中该变体',
+        ),
+      )
+    },
+  ),
   http.delete(`${BACKEND_ORIGIN}/memories/sessions/:sessionId`, ({ params }) => {
     const id = Number(params.sessionId)
     if (id === 404) {
@@ -886,5 +1222,198 @@ export const modelHandlers = [
   }),
 ]
 
+// ---------------------------------------------------------------------------
+// reminders 域（持久化提醒——P10=B）
+// ---------------------------------------------------------------------------
+
+/** 测试用提醒记录（wire 形态）。 */
+export function mockReminder(overrides: Partial<ReminderRecord> = {}): ReminderRecord {
+  return {
+    id: 1,
+    persona_id: '1',
+    title: '起来喝水',
+    due_at_ms: 1731000600000,
+    status: 'pending',
+    delivery_attempts: 0,
+    last_error: null,
+    delivered_at_ms: null,
+    source: 'manual',
+    meta: null,
+    created_at: 1731000000000,
+    updated_at: 1731000000000,
+    ...overrides,
+  }
+}
+
+/** reminders 域默认 handlers（成功形态 + 状态守卫 / 部分成功面）。 */
+export const reminderHandlers = [
+  // 列表：3 行（status 过滤 + 游标两页）。
+  http.get(`${BACKEND_ORIGIN}/reminders`, ({ request }) => {
+    const url = new URL(request.url)
+    const cursor = url.searchParams.get('cursor')
+    const status = url.searchParams.get('status')
+    const all = [
+      mockReminder({ id: 3, title: '交水电费', due_at_ms: 1731001200000 }),
+      mockReminder({
+        id: 2,
+        title: '早点睡',
+        due_at_ms: 1731000900000,
+        status: 'delivered',
+        delivered_at_ms: 1731000900000,
+      }),
+      mockReminder({ id: 1, title: '已取消的提醒', status: 'cancelled' }),
+    ]
+    const filtered = all.filter((row) => status === null || row.status === status)
+    if (cursor === null) {
+      return HttpResponse.json(
+        okResult({
+          items: filtered.slice(0, 2),
+          total: -1,
+          page: 1,
+          page_size: 20,
+          next_cursor: 'reminders-page-2',
+          has_more: true,
+        }),
+      )
+    }
+    return HttpResponse.json(
+      okResult({
+        items: filtered.slice(2),
+        total: -1,
+        page: 1,
+        page_size: 20,
+        next_cursor: null,
+        has_more: false,
+      }),
+    )
+  }),
+  // 创建：回显 pending 记录。
+  http.post(`${BACKEND_ORIGIN}/reminders`, async ({ request }) => {
+    const body = (await request.json()) as { title: string; due_at_ms: number }
+    return HttpResponse.json(
+      okResult(
+        mockReminder({ id: 9, title: body.title, due_at_ms: body.due_at_ms }),
+        '提醒已创建',
+      ),
+    )
+  }),
+  // 批量取消（部分成功形态：id=1 记 NOT_FOUND 失败——人格作用域外语义）。
+  http.post(`${BACKEND_ORIGIN}/reminders/batch-cancel`, async ({ request }) => {
+    const body = (await request.json()) as { ids: number[] }
+    const items = body.ids.map((id) =>
+      id === 1
+        ? { id, success: false, code: 'NOT_FOUND', message: '提醒不存在（或不属于当前人格）' }
+        : { id, success: true, code: null, message: '已取消' },
+    )
+    const succeeded = items.filter((item) => item.success).length
+    return HttpResponse.json(
+      okResult(
+        { total: items.length, succeeded, failed: items.length - succeeded, items },
+        '批量取消已完成',
+      ),
+    )
+  }),
+  // 读取：id=404 → 404。
+  http.get(`${BACKEND_ORIGIN}/reminders/:reminderId`, ({ params }) => {
+    const id = Number(params.reminderId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('提醒不存在（或不属于当前人格）', 'NOT_FOUND'), {
+        status: 404,
+      })
+    }
+    return HttpResponse.json(okResult(mockReminder({ id })))
+  }),
+  // 取消：id=2（已投递）→ 422 状态守卫；其余 → cancelled。
+  http.post(`${BACKEND_ORIGIN}/reminders/:reminderId/cancel`, ({ params }) => {
+    const id = Number(params.reminderId)
+    if (id === 2) {
+      return HttpResponse.json(
+        errorResult('仅待投递提醒可以取消', 'VALIDATION_ERROR', { id, status: 'delivered' }),
+        { status: 422 },
+      )
+    }
+    if (id === 404) {
+      return HttpResponse.json(errorResult('提醒不存在（或不属于当前人格）', 'NOT_FOUND'), {
+        status: 404,
+      })
+    }
+    return HttpResponse.json(okResult(mockReminder({ id, status: 'cancelled' }), '提醒已取消'))
+  }),
+]
+
+// ---------------------------------------------------------------------------
+// directives 域（长期指令——USER.md 式常备指令）
+// ---------------------------------------------------------------------------
+
+/** 测试用长期指令记录（wire 形态）。 */
+export function mockDirective(overrides: Partial<DirectiveRecord> = {}): DirectiveRecord {
+  return {
+    id: 1,
+    topic: 'directive:7f1a2b3c4d5e',
+    content: '以后都用简体中文',
+    version: 1,
+    created_at: 1731000000000,
+    updated_at: 1731000000000,
+    ...overrides,
+  }
+}
+
+/** directives 域默认 handlers（成功形态 + 404 面）。 */
+export const directiveHandlers = [
+  // 列表：两条现行指令（新写入在前）。
+  http.get(`${BACKEND_ORIGIN}/directives`, () => {
+    return HttpResponse.json(
+      okResult([
+        mockDirective({ id: 2, topic: 'directive:aa11bb22cc33', content: '不要超过十二点睡' }),
+        mockDirective(),
+      ]),
+    )
+  }),
+  // 创建：回显新记录。
+  http.post(`${BACKEND_ORIGIN}/directives`, async ({ request }) => {
+    const body = (await request.json()) as { content: string; topic?: string }
+    return HttpResponse.json(
+      okResult(
+        mockDirective({
+          id: 9,
+          content: body.content,
+          topic: body.topic ?? 'directive:9f8e7d6c5b4a',
+        }),
+        '长期指令已保存',
+      ),
+    )
+  }),
+  // 更新：id=404 → 404；其余 → version+1。
+  http.put(`${BACKEND_ORIGIN}/directives/:directiveId`, async ({ request, params }) => {
+    const id = Number(params.directiveId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('长期指令不存在（非本域策展行）', 'NOT_FOUND'), {
+        status: 404,
+      })
+    }
+    const body = (await request.json()) as { content: string }
+    return HttpResponse.json(
+      okResult(mockDirective({ id: id + 100, content: body.content, version: 2 }), '长期指令已更新'),
+    )
+  }),
+  // 删除：id=404 → 404；其余成功。
+  http.delete(`${BACKEND_ORIGIN}/directives/:directiveId`, ({ params }) => {
+    const id = Number(params.directiveId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('长期指令不存在（非本域策展行）', 'NOT_FOUND'), {
+        status: 404,
+      })
+    }
+    return HttpResponse.json(okResult(null, '长期指令已删除'))
+  }),
+]
+
 /** 共享 msw 服务器（setup.ts 管理生命周期）。 */
-export const server = setupServer(...personaHandlers, ...memoryHandlers, ...usageHandlers, ...modelHandlers)
+export const server = setupServer(
+  ...personaHandlers,
+  ...memoryHandlers,
+  ...usageHandlers,
+  ...modelHandlers,
+  ...reminderHandlers,
+  ...directiveHandlers,
+)

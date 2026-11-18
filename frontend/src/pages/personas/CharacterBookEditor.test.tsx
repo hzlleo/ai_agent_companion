@@ -151,4 +151,53 @@ describe('CharacterBookEditor', () => {
     await user.selectOptions(screen.getByLabelText(/插入位置/), 'after_char')
     expect(screen.getByLabelText(/插入位置/)).toHaveValue('after_char')
   })
+
+  it('R2b 高级字段编辑：插入深度 + 互斥分组 + 触发概率 + 冷却回合数', async () => {
+    const user = userEvent.setup()
+    render(<StatefulEditor initial={createEmptyBook()} />)
+    await user.clear(screen.getByLabelText(/插入深度/))
+    await user.type(screen.getByLabelText(/插入深度/), '2')
+    await user.type(screen.getByLabelText(/互斥分组/), '问候变体')
+    await user.clear(screen.getByLabelText(/触发概率/))
+    await user.type(screen.getByLabelText(/触发概率/), '0.5')
+    await user.clear(screen.getByLabelText(/冷却回合数/))
+    await user.type(screen.getByLabelText(/冷却回合数/), '3')
+    expect(screen.getByLabelText(/插入深度/)).toHaveValue('2')
+    expect(screen.getByLabelText(/互斥分组/)).toHaveValue('问候变体')
+    expect(screen.getByLabelText(/触发概率/)).toHaveValue('0.5')
+    expect(screen.getByLabelText(/冷却回合数/)).toHaveValue('3')
+  })
+
+  it('R2b：正文递归触发开关（条目级——与书级递归扫描开关联动校验）', async () => {
+    const user = userEvent.setup()
+    render(<StatefulEditor initial={createEmptyBook()} />)
+    const entryRecursive = screen.getByRole('checkbox', { name: '正文递归触发' })
+    expect(entryRecursive).not.toBeChecked()
+    await user.click(entryRecursive)
+    expect(entryRecursive).toBeChecked()
+    await user.click(screen.getByRole('checkbox', { name: /递归扫描/ }))
+    expect(screen.getByRole('checkbox', { name: /递归扫描/ })).toBeChecked()
+  })
+
+  it('R2b：高级字段校验错误内联呈现（深度 / 概率 / 冷却 / 分组 / 递归总开关）', () => {
+    render(
+      <StatefulEditor
+        initial={createEmptyBook()}
+        errors={{
+          'card.character_book.entries.0.depth': '插入深度须在 0-20 之间',
+          'card.character_book.entries.0.trigger_probability': '触发概率须在 0-1 之间',
+          'card.character_book.entries.0.cooldown_turns': '冷却回合数须在 0-50 之间',
+          'card.character_book.entries.0.include_group': '互斥分组名长度不得超过 64 个字符',
+          'card.character_book.entries.0.recursive': '条目正文递归须先开启书级「递归扫描」总开关',
+        }}
+      />,
+    )
+    expect(screen.getByText('插入深度须在 0-20 之间')).toBeInTheDocument()
+    expect(screen.getByText('触发概率须在 0-1 之间')).toBeInTheDocument()
+    expect(screen.getByText('冷却回合数须在 0-50 之间')).toBeInTheDocument()
+    expect(screen.getByText('互斥分组名长度不得超过 64 个字符')).toBeInTheDocument()
+    expect(
+      screen.getByText('条目正文递归须先开启书级「递归扫描」总开关'),
+    ).toBeInTheDocument()
+  })
 })

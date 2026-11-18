@@ -29,7 +29,13 @@ from collections.abc import Awaitable, Callable
 from loguru import logger
 
 from packages.harness.core.time_utils import now_ms as default_now_ms
-from packages.harness.intent.intent_models import IntentMatchModel, PersonaNaming
+from packages.harness.intent.intent_models import (
+    DirectiveSinkFace,
+    IntentKind,
+    IntentMatchModel,
+    PersonaNaming,
+)
+from packages.harness.intent.intent_texts import DIRECTIVE_CONFIRMED_TEXT
 from packages.harness.intent.matcher import match_intent
 from packages.harness.rhythm.rhythm_models import EffectiveRhythm
 
@@ -67,6 +73,7 @@ class IntentShortcutService:
         sleep: SleepFace = asyncio.sleep,
         effective: EffectiveRhythm | None = None,
         clock: Callable[[], int] = default_now_ms,
+        directive_sink: DirectiveSinkFace | None = None,
     ) -> None:
         """初始化服务（无后台任务——纯委托面）。
 
@@ -79,11 +86,15 @@ class IntentShortcutService:
                 提供时深夜带 = 人格睡眠窗口——rhythm 值面与门控开关
                 ``RHYTHM_ENABLED`` 正交，作息描述恒可用于文案选带）。
             clock: 时钟（epoch 毫秒；``now_ms`` 参数缺省时取值面）。
+            directive_sink: 长期指令落库面（None = 无副作用形态——
+                DIRECTIVE 命中只回附和文案，不落库；装配方注入通道
+                专属闭包，见模块 docstring）。
         """
         self._rng = rng if rng is not None else random.Random()
         self._sleep = sleep
         self._effective = effective
         self._clock = clock
+        self._directive_sink = directive_sink
 
     async def try_shortcut(
         self, text: str, persona: PersonaNaming, now_ms: int | None = None
@@ -106,12 +117,47 @@ class IntentShortcutService:
         try:
             now = now_ms if now_ms is not None else self._clock()
             persona_display = persona.display_name or persona.persona_name
-            return match_intent(text, persona_display, now, self._effective)
+            match = match_intent(text, persona_display, now, self._effective)
+            return await self._apply_directive_side_effect(match)
         except Exception:
             # 快径失败永不阻断正常回复链路（隔离边界：本服务是回复链路
             # 的可选加速面——内部任何异常归一未命中，错误细节进日志）。
             logger.opt(exception=True).warning("意图快径内部异常（归一未命中，文本照常流入 LLM）")
             return IntentMatchModel()
+
+    async def _apply_directive_side_effect(self, match: IntentMatchModel) -> IntentMatchModel:
+        """DIRECTIVE 命中副作用（落库成功 → 替换为「已记住」确认文案）。
+
+        语义（锁定）：sink 未接线 / 落库失败 / 正文缺失时原样返回附和
+        文案（不承诺「记住」——下一轮 compose 读不到指令时不自相矛盾）；
+        副作用异常在此吞没（快径链路恒不抛，错误进日志）。
+
+        Args:
+            match: 匹配结果（matcher 产出）。
+
+        Returns:
+            处理后的匹配结果（DIRECTIVE + 落库成功时 response_text 为
+            确认文案）。
+        """
+        if (
+            not match.handled
+            or match.kind is not IntentKind.DIRECTIVE
+            or not match.directive_text
+        ):
+            return match
+        if self._directive_sink is None:
+            return match
+        try:
+            saved = await self._directive_sink(match.directive_text)
+        except Exception:  # 副作用异常不阻断回复链路（退化为附和文案）
+            logger.opt(exception=True).warning("长期指令落库异常（退化为附和文案）")
+            return match
+        if not saved:
+            logger.warning("长期指令未落库（退化为附和文案）: text={}", match.directive_text)
+            return match
+        return match.model_copy(
+            update={"response_text": DIRECTIVE_CONFIRMED_TEXT.format(directive=match.directive_text)}
+        )
 
     async def realism_delay(self) -> None:
         """快径拟真延迟（800-1500ms 随机采样 + 休眠面等待）。

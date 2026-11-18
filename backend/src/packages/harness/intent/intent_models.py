@@ -4,9 +4,13 @@
 经本地模式表直接命中罐头回复，**完全绕过主 LLM 调用**——省钱、零延迟
 抖动、离线可用；未命中（``handled=False``）时文本照常流入 LLM。
 
-锁定决策（四类封顶）：TIME_QUERY / GREETING / IDENTITY / HELP——
-高频、零风险、答案确定；STOP_STEER 等对话控制类**有意不收**（控制流
-语义需要上下文感知，罐头回复会破坏对话状态机——后续心流层统一承载）。
+锁定决策（四类封顶 + R2b 第五类）：TIME_QUERY / GREETING / IDENTITY /
+HELP——高频、零风险、答案确定；``DIRECTIVE``（R2b D7-14 追加：常备
+指令捕获——「记住：X」「以后都 X」「别再 X」前缀句）是**带副作用的
+快径**：命中的正文经装配方注入的 ``DirectiveSinkFace`` 落库为长期指令，
+回复文案在落库成功后才给「已记住」确认（副作用失败退化普通附和）。
+STOP_STEER 等对话控制类**有意不收**（控制流语义需要上下文感知，罐头
+回复会破坏对话状态机——后续心流层统一承载）。
 
 依赖方向：pydantic / 标准库 + rhythm 域模型（EffectiveRhythm——问候
 时段带消费；被 config 域聚合 ``Settings.intent``，严禁反向 import
@@ -26,6 +30,7 @@ __all__ = [
     "IntentMatchModel",
     "IntentSettings",
     "PersonaNaming",
+    "DirectiveSinkFace",
 ]
 
 
@@ -40,6 +45,7 @@ class IntentKind(StrEnum):
     GREETING = "greeting"
     IDENTITY = "identity"
     HELP = "help"
+    DIRECTIVE = "directive"
 
 
 class IntentMatchModel(BaseModel):
@@ -53,9 +59,12 @@ class IntentMatchModel(BaseModel):
         confidence: 匹配置信度（0-1——精确整句命中高 / 模糊包含命中低；
             观测面，不参与路由决策）。
         response_text: 罐头回复文本（模板渲染后——persona_name / 时间
-            已注入；未命中为空串）。
+            已注入；未命中为空串；DIRECTIVE 命中时先为普通附和文案，
+            落库成功后由服务层替换为「已记住」确认）。
         handled: 是否命中快径（True = 调用方直接采用 response_text、
             跳过 LLM；False = 照常走 LLM）。
+        directive_text: DIRECTIVE 命中的指令正文（前缀剥离 / 边界归一后；
+            非 DIRECTIVE 命中为 None——服务层副作用的落库载荷）。
     """
 
     kind: IntentKind | None = Field(default=None, description="命中的意图类型（未命中为 None）")
@@ -64,6 +73,9 @@ class IntentMatchModel(BaseModel):
     )
     response_text: str = Field(default="", description="罐头回复文本（未命中为空串）")
     handled: bool = Field(default=False, description="是否命中快径（True = 跳过 LLM）")
+    directive_text: str | None = Field(
+        default=None, description="DIRECTIVE 命中的指令正文（其余命中为 None）"
+    )
 
 
 class IntentSettings(BaseSettings):
@@ -88,6 +100,28 @@ class IntentSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+
+class DirectiveSinkFace(Protocol):
+    """长期指令落库面协议（intent 服务副作用的装配注入契约）。
+
+    结构化消费：app 装配注入的闭包（``session_scope`` + ``DirectivesService``
+    ——人格上下文由通道入站路径已绑定）实现本协议；测试注入 fake 同形态。
+    实现方**恒不抛异常**（失败归一 False——快径回复不受副作用影响，见
+    ``intent.service`` 的失败退化语义）。
+    """
+
+    async def __call__(self, text: str) -> bool:
+        """把指令正文落库为长期指令。
+
+        Args:
+            text: 指令正文（matcher 前缀剥离后的内容）。
+
+        Returns:
+            True = 已落库（服务层据此给「已记住」确认）；False = 落库失败
+            （退化为普通附和文案）。
+        """
+        ...
 
 
 class PersonaNaming(Protocol):

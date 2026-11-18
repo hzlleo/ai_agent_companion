@@ -7,9 +7,10 @@ import { CuratedTab } from './CuratedTab'
 import { SessionsTab } from './SessionsTab'
 import { SearchTab } from './SearchTab'
 import { DreamTab } from './DreamTab'
+import { RemindersTab } from './RemindersTab'
 
 /** 记忆模块子页签（本工程约定：页签态经本地 state 承载，不入 URL）。 */
-type MemoryTab = 'episodes' | 'curated' | 'sessions' | 'search' | 'dream'
+type MemoryTab = 'episodes' | 'curated' | 'sessions' | 'search' | 'dream' | 'reminders'
 
 /** 页签定义（顺序即展示顺序）。 */
 const TABS: { key: MemoryTab; label: string }[] = [
@@ -18,12 +19,13 @@ const TABS: { key: MemoryTab; label: string }[] = [
   { key: 'sessions', label: '会话' },
   { key: 'search', label: '检索' },
   { key: 'dream', label: '梦境' },
+  { key: 'reminders', label: '提醒' },
 ]
 
 /**
- * 记忆管理页：三层记忆 + 检索 + 梦境的操作面。
+ * 记忆管理页：三层记忆 + 检索 + 梦境 + 提醒的操作面。
  *
- * 结构决策（文档化）：五个子视图共享同一目标人格作用域（PersonaPicker
+ * 结构决策（文档化）：六个子视图共享同一目标人格作用域（PersonaPicker
  * 顶层一次选择），故采用**页签（本地 state）而非子路由**——与人格
  * 模块「单页 + 对话框」的粒度一致，避免每页签重复解析人格参数；
  * 深链需求出现时再迁移为子路由（路由壳已预留 /memories 单路由）。
@@ -69,6 +71,7 @@ export default function MemoriesPage() {
       {activeTab === 'sessions' && <SessionsTab personaId={personaId} />}
       {activeTab === 'search' && <SearchTab personaId={personaId} />}
       {activeTab === 'dream' && <DreamTab personaId={personaId} />}
+      {activeTab === 'reminders' && <RemindersTab personaId={personaId} />}
     </div>
   )
 }

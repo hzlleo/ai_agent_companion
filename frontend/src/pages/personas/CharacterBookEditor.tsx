@@ -24,7 +24,9 @@ export interface CharacterBookEditorProps {
  *
  * 条目字段面（与后端 chara card v2 契约一致）：keys / secondary_keys /
  * content / insertion_order / constant / case_sensitive / selective /
- * position。keywords 以逗号分隔编辑；selective 未开启时副触发键
+ * position + R2b 高级触发五字段（depth 深度槽 / recursive 正文递归 /
+ * include_group 互斥分组 / trigger_probability 概率门 / cooldown_turns
+ * 冷却回合）。keywords 以逗号分隔编辑；selective 未开启时副触发键
  * 置灰（规格一致性：非选择性条目不得携带副键）；开启时副触发键
  * 必填（空副键永不触发——提交期校验，输入不阻断）。
  */
@@ -208,6 +210,89 @@ export function CharacterBookEditor({ book, onChange, errors }: CharacterBookEdi
                   </Select>
                 </div>
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label htmlFor={`entry-depth-${index}`} className="text-sm font-medium">
+                    插入深度（0-20）
+                  </label>
+                  <Input
+                    id={`entry-depth-${index}`}
+                    value={entry.depth}
+                    onChange={(e) => updateEntry(index, { depth: e.target.value })}
+                    placeholder="默认 4"
+                    inputMode="numeric"
+                  />
+                  <p className="text-xs text-[var(--color-text-secondary)]">
+                    段内深度槽：0 = 最贴近对话末尾（段尾槽），值越大越靠段首；同深度按插入顺序
+                  </p>
+                  {errors[`${prefix}.depth`] !== undefined && (
+                    <p className="text-xs text-[var(--color-destructive)]" role="alert">
+                      {errors[`${prefix}.depth`]}
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <label htmlFor={`entry-include-group-${index}`} className="text-sm font-medium">
+                    互斥分组（可选）
+                  </label>
+                  <Input
+                    id={`entry-include-group-${index}`}
+                    value={entry.include_group}
+                    onChange={(e) => updateEntry(index, { include_group: e.target.value })}
+                    placeholder="如：问候变体"
+                  />
+                  <p className="text-xs text-[var(--color-text-secondary)]">
+                    同分组命中的条目一次回复只注入优先级最高的一条
+                  </p>
+                  {errors[`${prefix}.include_group`] !== undefined && (
+                    <p className="text-xs text-[var(--color-destructive)]" role="alert">
+                      {errors[`${prefix}.include_group`]}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label htmlFor={`entry-probability-${index}`} className="text-sm font-medium">
+                    触发概率（0-1）
+                  </label>
+                  <Input
+                    id={`entry-probability-${index}`}
+                    value={entry.trigger_probability}
+                    onChange={(e) => updateEntry(index, { trigger_probability: e.target.value })}
+                    placeholder="默认 1（恒注入）"
+                    inputMode="decimal"
+                  />
+                  <p className="text-xs text-[var(--color-text-secondary)]">
+                    命中后按概率注入；1 = 恒注入，0 = 永不注入
+                  </p>
+                  {errors[`${prefix}.trigger_probability`] !== undefined && (
+                    <p className="text-xs text-[var(--color-destructive)]" role="alert">
+                      {errors[`${prefix}.trigger_probability`]}
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <label htmlFor={`entry-cooldown-${index}`} className="text-sm font-medium">
+                    冷却回合数（0-50）
+                  </label>
+                  <Input
+                    id={`entry-cooldown-${index}`}
+                    value={entry.cooldown_turns}
+                    onChange={(e) => updateEntry(index, { cooldown_turns: e.target.value })}
+                    placeholder="默认 0（不冷却）"
+                    inputMode="numeric"
+                  />
+                  <p className="text-xs text-[var(--color-text-secondary)]">
+                    注入后 N 个回复内不再注入；会话内生效，重启即复位
+                  </p>
+                  {errors[`${prefix}.cooldown_turns`] !== undefined && (
+                    <p className="text-xs text-[var(--color-destructive)]" role="alert">
+                      {errors[`${prefix}.cooldown_turns`]}
+                    </p>
+                  )}
+                </div>
+              </div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap gap-1">
                   <Checkbox
@@ -232,7 +317,17 @@ export function CharacterBookEditor({ book, onChange, errors }: CharacterBookEdi
                     }}
                     label="选择性触发"
                   />
+                  <Checkbox
+                    checked={entry.recursive}
+                    onChange={(e) => updateEntry(index, { recursive: e.target.checked })}
+                    label="正文递归触发"
+                  />
                 </div>
+                {errors[`${prefix}.recursive`] !== undefined && (
+                  <p className="text-xs text-[var(--color-destructive)]" role="alert">
+                    {errors[`${prefix}.recursive`]}
+                  </p>
+                )}
                 <Button
                   type="button"
                   variant="ghost"

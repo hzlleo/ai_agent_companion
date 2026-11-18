@@ -665,25 +665,48 @@ async def test_session_missing_raises_not_found(db_session: AsyncSession) -> Non
 # ---------------------------------------------------------------------------
 
 
-async def test_session_message_seq_db_constraint(db_session: AsyncSession) -> None:
-    """DB 级 seq 唯一键：同 (session_id, seq) 双行 → IntegrityError。"""
+async def test_session_message_variant_db_constraint(db_session: AsyncSession) -> None:
+    """DB 级复合唯一键：同父回合同序号变体 → IntegrityError（迁移 0010 语义）。
+
+    正典行 ``variant_of_id`` / ``variant_index`` 均为 NULL——两方言唯一键
+    忽略 NULL，正典 seq 唯一性由会话行锁计数维持（既有 append 路径）；
+    DB 级兜底面为变体身份（同 (session, seq, 父回合, 序号) 至多一行）。
+    """
     async with bind_persona_context(PERSONA_A):
-        summary = await session_service.create_session(db_session, title="seq 约束")
+        summary = await session_service.create_session(db_session, title="变体约束")
+        parent = ChatMessageRow(
+            session_id=summary.id, seq=1, role="assistant", content="父回合", ts_ms=1
+        )
+        db_session.add(parent)
+        await db_session.commit()
+        await db_session.refresh(parent)
         db_session.add(
             ChatMessageRow(
-                session_id=summary.id, seq=1, role="user", content="第一条", ts_ms=1
+                session_id=summary.id,
+                seq=1,
+                role="assistant",
+                content="候选一",
+                ts_ms=2,
+                variant_of_id=parent.id,
+                variant_index=1,
             )
         )
         await db_session.commit()
         db_session.add(
             ChatMessageRow(
-                session_id=summary.id, seq=1, role="user", content="重复 seq", ts_ms=2
+                session_id=summary.id,
+                seq=1,
+                role="assistant",
+                content="候选一重复",
+                ts_ms=3,
+                variant_of_id=parent.id,
+                variant_index=1,
             )
         )
         with pytest.raises(IntegrityError):
             await db_session.commit()
         await db_session.rollback()
-    assert await _count(db_session, ChatMessageRow) == 1  # 第二条未落库
+    assert await _count(db_session, ChatMessageRow) == 2  # 父回合 + 首条变体
 
 
 async def test_append_message_seq_conflict_retry_recomputes(
@@ -701,6 +724,7 @@ async def test_append_message_seq_conflict_retry_recomputes(
         role: ChatMessageRole,
         content: str,
         ts_ms: int | None = None,
+        meta: dict[str, object] | None = None,
     ) -> object:
         """首次尝试：模拟并发赢家抢先追加一条消息（计数同步推进）后抛唯一键冲突。"""
         if not calls:
@@ -714,7 +738,7 @@ async def test_append_message_seq_conflict_retry_recomputes(
                 Exception("Duplicate entry for key 'uq_ff_chat_messages_seq'"),
             )
         return await original_once(
-            inner_self, session, session_id, role=role, content=content, ts_ms=ts_ms
+            inner_self, session, session_id, role=role, content=content, ts_ms=ts_ms, meta=meta
         )
 
     monkeypatch.setattr(ChatSessionService, "_append_message_once", conflicting_then_real)

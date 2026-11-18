@@ -4,6 +4,10 @@
 
     - 创建 / 更新 / 复制 / 删除（注册名唯一校验；复制可选深拷贝 M/S
       状态；删除有主人格守卫）；
+    - **导入**（``import_persona`` / ``import_personas_batch``）：预设
+      生成卡片或用户卡片文档 → 内容哈希幂等（同卡恒跳过——与策略
+      无关）→ 名称冲突按策略（skip / rename / overwrite）落库；批量
+      为部分成功形态（逐文件独立事务）；
     - **事务性主人格切换**：``set_primary`` 在单事务内「全表清主人格
       标记 → 目标取标记」——设 B 为主人格必然解除 A（至多一个主人格
       的不变式由 DB 唯一键 ``uq_ff_personas_primary`` 强制 + 并发冲突
@@ -37,7 +41,7 @@
     - ``disable`` 是纯生命周期操作（status 切 disabled；主人格守卫
       拒绝——见上）；已停用人格重复停用为幂等 no-op；
     - 复制产物恒 ``disabled + 非主人格``（启用与设为主人格均为显式
-      后续动作）。
+      后续动作）；导入产物同样恒 ``disabled + 非主人格``。
 
 Session 契约：方法接收调用方注入的 :class:`AsyncSession`（app 层经
 ``get_async_db`` 依赖注入；测试直连共享引擎 Session）——服务层内部
@@ -48,8 +52,10 @@ database.session.get_async_db 的分工约定）。
 from __future__ import annotations
 
 import copy
+import json
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from hashlib import sha256
 from typing import Any
 
 from loguru import logger
@@ -68,16 +74,26 @@ from packages.harness.persona.dtos import (
     PersonaCardDTO,
     PersonaCopyDTO,
     PersonaCreateDTO,
+    PersonaImportBatchFileDTO,
+    PersonaImportBatchItemDTO,
+    PersonaImportBatchResultDTO,
+    PersonaImportResultModel,
     PersonaQueryDTO,
     PersonaRecordDTO,
     PersonaStateDTO,
     PersonaStateUpsertDTO,
     PersonaUpdateDTO,
 )
-from packages.harness.persona.models import PersonaStateLayer, PersonaStatus
+from packages.harness.persona.models import (
+    PersonaImportConflictStrategy,
+    PersonaImportReason,
+    PersonaStateLayer,
+    PersonaStatus,
+)
 from packages.harness.persona.orm import PERSONA_PRIMARY_MARKER, PersonaRow, PersonaStateRow
+from packages.harness.voice.voice_models import VoiceProfileModel
 
-__all__ = ["PersonaService", "bind_persona_context"]
+__all__ = ["PersonaService", "bind_persona_context", "canonical_card_hash"]
 
 
 @asynccontextmanager
@@ -114,6 +130,25 @@ async def _rollback_quietly(session: AsyncSession) -> None:
         await session.rollback()
     except Exception:  # best-effort: 回滚失败由会话关闭兜底
         logger.opt(exception=True).debug("批量路径会话回滚失败（close 兜底）")
+
+
+def canonical_card_hash(card: CharaCardModel) -> str:
+    """卡片内容哈希（导入幂等判据——sha256 of canonical JSON）。
+
+    规范形态：``model_dump()``（模型字段序 + 缺省补齐——同一文档恒同
+    形态）→ ``sort_keys`` 键序稳定化 → 紧凑分隔符 + 中文原样序列化 →
+    sha256 hexdigest。同一卡片文档（含字段序差异的等价 JSON）恒同哈希。
+
+    Args:
+        card: 待哈希的卡片模型。
+
+    Returns:
+        64 字符 hex 摘要。
+    """
+    canonical = json.dumps(
+        card.model_dump(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class PersonaService:
@@ -510,6 +545,264 @@ class PersonaService:
             total=len(items),
             succeeded=succeeded,
             failed=len(items) - succeeded,
+            items=items,
+        )
+
+    # ------------------------------------------------------------------
+    # 导入面（预设生成卡片 / 用户卡片文档——内容哈希幂等 + 冲突策略）
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _free_suffixed_name(taken_names: set[str], base: str) -> str:
+        """自动后缀寻名（``base-2`` 起递增——首个空闲名）。
+
+        Args:
+            taken_names: 已占用注册名集合。
+            base: 后缀基名（期望名 / 卡片名）。
+
+        Returns:
+            首个空闲的 ``base-N`` 名。
+
+        Raises:
+            BusinessException: ``-2`` 至 ``-100`` 全部被占用（极端注册表
+                形态——``INTERNAL_ERROR``，调用方换名重试）。
+        """
+        for suffix in range(2, 101):
+            candidate = f"{base}-{suffix}"
+            if candidate not in taken_names:
+                return candidate
+        raise BusinessException(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="自动改名后缀已耗尽（名字-2 至 名字-100 均被占用），请显式指定注册名",
+            details={"base": base},
+        )
+
+    async def import_persona(
+        self,
+        session: AsyncSession,
+        card: CharaCardModel,
+        *,
+        strategy: PersonaImportConflictStrategy = PersonaImportConflictStrategy.SKIP,
+        desired_name: str | None = None,
+        warnings: Sequence[str] = (),
+        voice_profile: VoiceProfileModel | None = None,
+    ) -> PersonaImportResultModel:
+        """导入人格（内容哈希幂等 + 名称冲突策略——导入操作面）。
+
+        判定序（锁定语义）：
+
+            1. **内容同卡幂等**：导入卡片与既有人格卡片哈希一致 →
+               ``{imported: false, reason: identical_content, persona_id:
+               既有行}``——**与冲突策略无关**（同卡重导恒幂等）；
+            2. 目标注册名（``desired_name`` 或卡片名）空闲 → 创建新行
+               （恒 disabled + 非主人格；展示名回落卡片名；预设导入
+               可携带 ``voice_profile`` 落库）；
+            3. 名称冲突 → 策略生效：``skip``（缺省）返回
+               ``name_conflict`` 未导入；``rename`` 自动后缀
+               ``名字-2`` 起寻名落库；``overwrite`` 整体替换占用行卡片
+               （**保留** M/S 状态 / status / 主人格标记 / 语音绑定）。
+
+        Args:
+            session: 注入的异步 Session。
+            card: 导入卡片（预设生成产物或用户自有卡片文档）。
+            strategy: 名称冲突策略（缺省 skip）。
+            desired_name: 期望注册名（None = 卡片名；预设导入时卡片名
+                已含期望名 + 预设后缀——调用方传 None 防双拼）。
+            warnings: 透传警告文案（预设生成冲突软警告等——并入结果）。
+            voice_profile: 预设建议语音绑定（None = 不绑定；仅创建
+                路径落库，覆盖路径保留既有绑定）。
+
+        Returns:
+            导入结果（imported / persona_id / reason / warnings）。
+
+        Raises:
+            BusinessException: 期望名为空白（``VALIDATION_ERROR``）；
+                并发写入撞名（``CONFLICT``）；自动后缀耗尽
+                （``INTERNAL_ERROR``）。
+        """
+        target_name = (
+            desired_name if desired_name is not None else card.name
+        ).strip()
+        if not target_name:
+            raise BusinessException(
+                code=ErrorCode.VALIDATION_ERROR,
+                message="导入期望名不能为空白",
+                details={"desired_name": desired_name},
+            )
+        card_hash = canonical_card_hash(card)
+        rows = list((await session.execute(select(PersonaRow))).scalars().all())
+        for row in rows:
+            existing_hash = canonical_card_hash(CharaCardModel.model_validate(row.chara_card))
+            if existing_hash == card_hash:
+                # 内容同卡幂等：与策略无关——同卡重导恒跳过。
+                return PersonaImportResultModel(
+                    imported=False,
+                    persona_id=row.id,
+                    reason=PersonaImportReason.IDENTICAL_CONTENT,
+                    warnings=list(warnings),
+                )
+        holder = next((row for row in rows if row.name == target_name), None)
+        if holder is None:
+            new_row = PersonaRow(
+                name=target_name,
+                display_name=card.name,
+                status=PersonaStatus.DISABLED.value,
+                is_primary_marker=None,
+                chara_card=card.model_dump(),
+                voice_profile=voice_profile.model_dump() if voice_profile is not None else None,
+            )
+            session.add(new_row)
+            try:
+                await self._commit(session)
+            except IntegrityError as exc:
+                raise BusinessException(
+                    code=ErrorCode.CONFLICT,
+                    message="人格导入并发写入冲突（注册名被抢占）",
+                    details={"name": target_name},
+                ) from exc
+            logger.info("人格已导入: id={}, name={}", new_row.id, new_row.name)
+            return PersonaImportResultModel(
+                imported=True,
+                persona_id=new_row.id,
+                warnings=list(warnings),
+            )
+        if strategy == PersonaImportConflictStrategy.SKIP:
+            return PersonaImportResultModel(
+                imported=False,
+                persona_id=holder.id,
+                reason=PersonaImportReason.NAME_CONFLICT,
+                warnings=list(warnings),
+            )
+        if strategy == PersonaImportConflictStrategy.RENAME:
+            # 期望名被占用：自动后缀寻名（desired_name 已在判定序 2 用尽
+            # 空闲形态——到达此处必然被占用，直接后缀）。
+            final_name = self._free_suffixed_name(
+                {row.name for row in rows}, target_name
+            )
+            new_row = PersonaRow(
+                name=final_name,
+                display_name=card.name,
+                status=PersonaStatus.DISABLED.value,
+                is_primary_marker=None,
+                chara_card=card.model_dump(),
+                voice_profile=voice_profile.model_dump() if voice_profile is not None else None,
+            )
+            session.add(new_row)
+            try:
+                await self._commit(session)
+            except IntegrityError as exc:
+                raise BusinessException(
+                    code=ErrorCode.CONFLICT,
+                    message="人格导入并发写入冲突（注册名被抢占）",
+                    details={"name": final_name},
+                ) from exc
+            logger.info("人格已导入（自动改名）: id={}, name={}", new_row.id, new_row.name)
+            return PersonaImportResultModel(
+                imported=True,
+                persona_id=new_row.id,
+                warnings=list(warnings),
+            )
+        # overwrite：整体替换占用行卡片——保留 M/S 状态 / status /
+        # 主人格标记 / 语音绑定（仅卡片文档替换）。
+        holder.chara_card = card.model_dump()
+        await self._commit(session)
+        logger.info("人格卡片已覆盖导入: id={}, name={}", holder.id, holder.name)
+        return PersonaImportResultModel(
+            imported=True,
+            persona_id=holder.id,
+            warnings=list(warnings),
+        )
+
+    async def import_personas_batch(
+        self,
+        session: AsyncSession,
+        files: Sequence[PersonaImportBatchFileDTO],
+        *,
+        strategy: PersonaImportConflictStrategy = PersonaImportConflictStrategy.SKIP,
+    ) -> PersonaImportBatchResultDTO:
+        """批量导入（部分成功形态——逐文件独立事务，单文件失败不阻塞其余）。
+
+        单文件失败捕获面为**全部异常**：``BusinessException`` 沿用其
+        错误码与消息；其余未知异常归一为 ``INTERNAL_ERROR`` 失败项 +
+        告警日志。解析失败（``card=None``）直接记 ``VALIDATION_ERROR``
+        失败项。幂等 / 冲突跳过是**合法结果**（success=True、
+        imported=False——reason 呈现原因）。
+
+        Args:
+            session: 注入的异步 Session。
+            files: 逐文件装配面（文件名 + 卡片或解析错误）。
+            strategy: 名称冲突策略（整批统一；缺省 skip）。
+
+        Returns:
+            批量导入结果（total / succeeded / failed / imported_count /
+            逐文件结果——与提交顺序一致）。
+        """
+        items: list[PersonaImportBatchItemDTO] = []
+        for file_entry in files:
+            if file_entry.card is None or file_entry.error_message is not None:
+                items.append(
+                    PersonaImportBatchItemDTO(
+                        filename=file_entry.filename,
+                        success=False,
+                        imported=False,
+                        code=ErrorCode.VALIDATION_ERROR,
+                        message=file_entry.error_message or "卡片文件解析失败",
+                    )
+                )
+                continue
+            try:
+                result = await self.import_persona(
+                    session, file_entry.card, strategy=strategy
+                )
+                if result.imported:
+                    message = "已导入"
+                elif result.reason == PersonaImportReason.IDENTICAL_CONTENT:
+                    message = "内容同卡已存在，幂等跳过"
+                else:
+                    message = "注册名已存在，按跳过策略未导入"
+                items.append(
+                    PersonaImportBatchItemDTO(
+                        filename=file_entry.filename,
+                        success=True,
+                        imported=result.imported,
+                        persona_id=result.persona_id,
+                        reason=result.reason,
+                        message=message,
+                    )
+                )
+            except BusinessException as exc:
+                await _rollback_quietly(session)
+                items.append(
+                    PersonaImportBatchItemDTO(
+                        filename=file_entry.filename,
+                        success=False,
+                        imported=False,
+                        code=exc.code,
+                        message=exc.message,
+                    )
+                )
+            except Exception:
+                await _rollback_quietly(session)
+                logger.opt(exception=True).warning(
+                    "批量导入单文件出现未知异常（归一为 INTERNAL_ERROR 失败项）: filename={}",
+                    file_entry.filename,
+                )
+                items.append(
+                    PersonaImportBatchItemDTO(
+                        filename=file_entry.filename,
+                        success=False,
+                        imported=False,
+                        code=ErrorCode.INTERNAL_ERROR,
+                        message="导入人格时发生内部错误",
+                    )
+                )
+        succeeded = sum(1 for item in items if item.success)
+        imported_count = sum(1 for item in items if item.imported)
+        return PersonaImportBatchResultDTO(
+            total=len(items),
+            succeeded=succeeded,
+            failed=len(items) - succeeded,
+            imported_count=imported_count,
             items=items,
         )
 

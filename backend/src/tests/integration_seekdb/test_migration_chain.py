@@ -1,9 +1,12 @@
-"""迁移链真引擎 round-trip（SeekDB MySQL 方言——0001→0008 全链升 / 降级）。
+"""迁移链真引擎 round-trip（SeekDB MySQL 方言——0001→0011 全链升 / 降级）。
 
 验证面（SQLite 方言永不暴露、只有真引擎能锁定的迁移序语义）：
 
-    - 升级 head 后 ``SHOW TABLES`` 收敛到 9 表集（``alembic_version`` +
-      8 张 ``ff_*`` 域表）且版本戳为 head（0008）；
+    - 升级 head 后 ``SHOW TABLES`` 收敛到 10 表集（``alembic_version`` +
+      9 张 ``ff_*`` 域表）且版本戳为 head（0011）；0009 的
+      ``ff_chat_messages.meta`` 列、0010 的变体列
+      （``variant_of_id`` / ``variant_index``）与 0011 的
+      ``ff_reminders`` 列在真引擎上存在；
     - **降级 base**：MySQL 系引擎（含 SeekDB）要求外键列必须保有索引
       ——降级须先删外键约束再删其索引，否则报错误 5320（「索引被外键
       占用」）；SQLite 方言无此约束，该序错误在单测面永不暴露。本
@@ -30,20 +33,45 @@ async def test_migration_chain_round_trip(
     seekdb_scratch: SeekDbTestTarget,
     run_alembic: Callable[..., Awaitable[None]],
 ) -> None:
-    """升级 head（9 表集 + 版本戳）→ 降级 base（5320 方言面）→ 复升 head。
+    """升级 head（10 表集 + 版本戳）→ 降级 base（5320 方言面）→ 复升 head。
 
     Args:
         seekdb_scratch: scratch 库目标（空库起步——模块 fixture 已重建）。
         run_alembic: 进程内 alembic 命令运行器（conftest 提供——
             ``asyncio.to_thread`` 桥接的异步 callable）。
     """
-    # 1. 升级 head：0001→0008 全链（env.py 异步引擎在线迁移）。
+    # 1. 升级 head：0001→0011 全链（env.py 异步引擎在线迁移）。
     await run_alembic("head")
     tables_upgraded = await support.fetch_table_names(seekdb_scratch)
     assert tables_upgraded == support.EXPECTED_HEAD_TABLES
     assert await support.fetch_alembic_version(seekdb_scratch) == support.HEAD_REVISION
+    assert await support.fetch_column_names(seekdb_scratch, "ff_chat_messages") >= {
+        "id",
+        "session_id",
+        "seq",
+        "role",
+        "content",
+        "ts_ms",
+        "meta",
+        "variant_of_id",
+        "variant_index",
+    }
+    assert await support.fetch_column_names(seekdb_scratch, "ff_reminders") >= {
+        "id",
+        "persona_id",
+        "title",
+        "due_at_ms",
+        "status",
+        "delivery_attempts",
+        "last_error",
+        "delivered_at_ms",
+        "source",
+        "meta",
+        "created_at",
+        "updated_at",
+    }
 
-    # 2. 降级 base：0008→0001 逆向链——错误 5320 的暴露面（FK 列须保有
+    # 2. 降级 base：0011→0001 逆向链——错误 5320 的暴露面（FK 列须保有
     #    索引：先删约束再删索引；SQLite 永不复现，真引擎强制验证）。
     await run_alembic("base", downgrade=True)
     tables_downgraded = await support.fetch_table_names(seekdb_scratch)
@@ -55,3 +83,8 @@ async def test_migration_chain_round_trip(
     tables_reupgraded = await support.fetch_table_names(seekdb_scratch)
     assert tables_reupgraded == support.EXPECTED_HEAD_TABLES
     assert await support.fetch_alembic_version(seekdb_scratch) == support.HEAD_REVISION
+
+    # 4. 提醒扫描语句的方言面：SeekDB（MySQL 系）必须支持 FOR UPDATE SKIP
+    #    LOCKED（并发扫描实例抢占不重叠的到期行——job 扫描语句的锁定
+    #    子句；SQLite 方言忽略该子句，故该能力只能在真引擎锁定）。
+    await support.assert_reminder_scan_lock(seekdb_scratch)

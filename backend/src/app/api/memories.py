@@ -10,8 +10,13 @@
     - GET    /api/v1/memories/curated/{id}/history        —— 历史链读取
     - DELETE /api/v1/memories/curated/{id}                —— 删除
     - GET    /api/v1/memories/sessions                    —— 会话游标分页
-    - GET    /api/v1/memories/sessions/{id}               —— 会话详情（含全量消息）
+    - GET    /api/v1/memories/sessions/{id}               —— 会话详情（正典消息；
+                                                                    include_variants 可嵌套变体）
     - DELETE /api/v1/memories/sessions/{id}               —— 删除（消息同事务清理）
+    - POST   /api/v1/memories/sessions/{id}/messages/{mid}/variants
+                                                          —— 重生成消息变体（swipes）
+    - POST   /api/v1/memories/sessions/{id}/messages/{mid}/select-variant
+                                                          —— 选定变体提升正典回合
     - POST   /api/v1/memories/search                      —— 记忆检索（dense /
                                                                    keyword / hybrid 三模式）
     - POST   /api/v1/memories/dream/trigger               —— 手工触发夜间梦境整理（同步
@@ -40,6 +45,7 @@ from typing import cast
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from packages.harness.chat.swipe import SwipeService
 from packages.harness.config.models import Settings
 from packages.harness.config.models import settings as global_settings
 from packages.harness.core.dtos import PageResponse, ResultDTO
@@ -54,9 +60,12 @@ from packages.harness.memory.dreaming_models import (
     DreamTriggerRequestDTO,
 )
 from packages.harness.memory.dtos import (
+    ChatMessageDTO,
     ChatSessionDetailDTO,
     ChatSessionQueryDTO,
     ChatSessionSummaryDTO,
+    ChatVariantRegenerateRequestDTO,
+    ChatVariantSelectRequestDTO,
     CuratedQueryDTO,
     CuratedRecordDTO,
     CuratedUpsertDTO,
@@ -475,24 +484,137 @@ async def get_session(
     session_id: int,
     persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
+    include_variants: bool = Query(
+        False, description="是否嵌套返回 assistant 回合的变体列表（默认否）"
+    ),
 ) -> ResultDTO[ChatSessionDetailDTO]:
-    """读取会话详情（摘要 + 全量消息 seq 升序）。
+    """读取会话详情（正典消息 seq 升序；可选嵌套变体）。
 
     Args:
         session_id: 会话主键。
         persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
+        include_variants: 是否把变体摘要嵌套进对应正典 assistant 回合
+            （默认 False——既有读侧形态零变更）。
 
     Returns:
-        会话详情 DTO。
+        会话详情 DTO（messages 恒为正典对话链；include_variants 时
+        各回合 ``variants`` 按序号升序）。
 
     Raises:
         BusinessException: 会话不存在或不在目标人格作用域（``NOT_FOUND``）。
     """
     record = await _resolve_target_persona(db, persona_id)
     async with bind_persona_context(record.id):
-        detail = await chat_session_service.get_session(db, session_id)
+        detail = await chat_session_service.get_session(
+            db, session_id, include_variants=include_variants
+        )
     return ResultDTO.ok(data=detail)
+
+
+@router.post(
+    "/sessions/{session_id}/messages/{message_id}/variants",
+    response_model=ResultDTO[list[ChatMessageDTO]],
+)
+async def regenerate_message_variants(
+    session_id: int,
+    message_id: int,
+    req: ChatVariantRegenerateRequestDTO,
+    request: Request,
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
+    db: AsyncSession = Depends(get_async_db),
+) -> ResultDTO[list[ChatMessageDTO]]:
+    """为指定 assistant 回合重生成 N 条候选变体（swipes 写入面）。
+
+    链路：解析目标人格（人格作用域绑定）→ 会话归属校验（他人格 / 缺失
+    404）→ ``SwipeService.regenerate_variants``（正典脊柱组装 + 网关 N 次
+    采样 + 逐条落库）。变体不推进共享 M 态（探索面——选定后才推进），
+    也不推进会话 message_count（正典链计数只度量真实回合）。
+
+    Args:
+        session_id: 会话主键。
+        message_id: 父回合主键（须为 assistant 正典链行）。
+        req: 重生成请求体（count 1-8，默认 4）。
+        request: 当前请求（app.state.gateway 解析——lifespan 装配优先）。
+        persona_id: 目标人格主键（None = 当前主人格）。
+        db: 注入的异步 Session。
+
+    Returns:
+        新建变体消息 DTO 列表（variant_index 升序续编）。
+
+    Raises:
+        BusinessException: 会话 / 父回合缺失（``NOT_FOUND``）；父回合非
+            assistant / 为变体（``VALIDATION_ERROR``）；模型空回复
+            （``LLM_CALL_FAILED``）；网关异常透传。
+    """
+    record = await _resolve_target_persona(db, persona_id)
+    gateway = _resolve_request_gateway(request)
+    service = SwipeService(
+        gateway=gateway,
+        session_service=chat_session_service,
+    )
+    async with bind_persona_context(record.id):
+        await chat_session_service.ensure_session(db, session_id)
+        variants = await service.regenerate_variants(
+            db,
+            session_id=session_id,
+            parent_message_id=message_id,
+            persona=record,
+            count=req.count,
+        )
+    return ResultDTO.ok(data=variants, message=f"已生成 {len(variants)} 条变体")
+
+
+@router.post(
+    "/sessions/{session_id}/messages/{message_id}/select-variant",
+    response_model=ResultDTO[ChatMessageDTO],
+)
+async def select_message_variant(
+    session_id: int,
+    message_id: int,
+    req: ChatVariantSelectRequestDTO,
+    request: Request,
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
+    db: AsyncSession = Depends(get_async_db),
+) -> ResultDTO[ChatMessageDTO]:
+    """选定变体并提升为正典回合内容（唯一 M 态推进写点）。
+
+    链路：解析目标人格（人格作用域绑定）→ 会话归属校验 → 变体归属校验
+    （须属同一父回合）→ 父回合正文 / 元数据就地替换 + 该变体情绪增量
+    推进 M 态 + ``selected_variant_id`` 注记；变体行保留（历史可回溯）。
+
+    Args:
+        session_id: 会话主键。
+        message_id: 父回合主键（须为 assistant 正典链行）。
+        req: 选定请求体（variant_id）。
+        request: 当前请求（app.state.gateway 装配面同检索端点；本端点
+            只消费其已解析状态，不发起网关调用）。
+        persona_id: 目标人格主键（None = 当前主人格）。
+        db: 注入的异步 Session。
+
+    Returns:
+        更新后的正典消息 DTO（选中变体正文 / 元数据）。
+
+    Raises:
+        BusinessException: 会话 / 父回合 / 变体缺失或变体不属该回合
+            （``NOT_FOUND``）；父回合非 assistant / 为变体
+            （``VALIDATION_ERROR``）。
+    """
+    record = await _resolve_target_persona(db, persona_id)
+    service = SwipeService(
+        gateway=_resolve_request_gateway(request),
+        session_service=chat_session_service,
+    )
+    async with bind_persona_context(record.id):
+        await chat_session_service.ensure_session(db, session_id)
+        updated = await service.select_variant(
+            db,
+            session_id=session_id,
+            parent_message_id=message_id,
+            variant_id=req.variant_id,
+            persona=record,
+        )
+    return ResultDTO.ok(data=updated, message="已选中该变体")
 
 
 @router.delete("/sessions/{session_id}", response_model=ResultDTO[None])

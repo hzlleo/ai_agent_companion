@@ -3,10 +3,10 @@
 装配契约：
 
     - :func:`create_app` —— FastAPI 工厂（共享异常处理器 + personas /
-      memories / usage / voice / look_at / models / search / channels-qq /
-      health 共九路由 + 管理面 owner-token 鉴权（七管理路由统一挂接，
-      health / qq webhook 豁免——豁免契约见 :func:`_include_routers`）+
-      CORS + lifespan）；
+      memories / usage / voice / look_at / models / search / reminders /
+      directives / channels-qq / health 共十一路由 + 管理面 owner-token
+      鉴权（九管理路由统一挂接，health / qq webhook 豁免——豁免契约见
+      :func:`_include_routers`）+ CORS + lifespan）；
     - :func:`startup_app_state` / :func:`shutdown_app_state` —— **可独立
       驱动的纯异步函数对**（不藏在 lifespan 闭包内——测试无需 ASGI
       lifespan runner 即可直调，本工程不引入 asgi-lifespan 依赖）；
@@ -95,12 +95,14 @@ from loguru import logger
 import packages.harness.persona.orm as persona_orm
 import packages.harness.usage.orm as usage_orm
 from app.api.channels_qq import router as qq_channels_router
+from app.api.directives import router as directives_router
 from app.api.health import APP_VERSION
 from app.api.health import router as health_router
 from app.api.look_at import router as look_at_router
 from app.api.memories import router as memories_router
 from app.api.models import router as models_router
 from app.api.personas import router as personas_router
+from app.api.reminders import router as reminders_router
 from app.api.search import router as search_router
 from app.api.usage import router as usage_router
 from app.api.voice import router as voice_router
@@ -134,8 +136,15 @@ from packages.harness.memory.dreaming import DreamService
 from packages.harness.memory.retrieval import MemorySearchService, build_memory_store
 from packages.harness.memory.service import ChatSessionService, MemoryService
 from packages.harness.multimodal.look_at import LookAtService, register_look_at_tool
+from packages.harness.persona.directives import DirectivesService
+from packages.harness.persona.directives_models import DirectiveCreateDTO
 from packages.harness.persona.service import PersonaService
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
+from packages.harness.reminders.job import (
+    REMINDER_SCAN_INTERVAL_SECONDS,
+    build_reminder_scan_job,
+)
+from packages.harness.reminders.service import ReminderService
 from packages.harness.rhythm.core import resolve_effective
 from packages.harness.rhythm.service import RhythmService
 from packages.harness.scheduler import Scheduler, build_dream_trigger_job
@@ -483,9 +492,29 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
         enabled=settings.rhythm.enabled,
         rng=rhythm_rng,
     )
+    directives_service = DirectivesService()
+
+    async def _capture_directive(text: str) -> bool:
+        """对话捕获长期指令（DIRECTIVE 快径副作用面——恒不抛异常）。
+
+        人格上下文由通道入站路径绑定（``ChannelRouter.handle_inbound`` 的
+        ``bind_persona_context``）——本闭包在同一任务内开短事务落库；
+        失败归一 False（快径退化为附和文案，回复链路不受影响）。
+        """
+        try:
+            async with session_scope() as db_session:
+                await directives_service.create(db_session, DirectiveCreateDTO(content=text))
+        except Exception:  # 副作用失败不阻断回复链路（退化为附和文案）
+            logger.opt(exception=True).warning("对话捕获长期指令失败（退化为附和文案）")
+            return False
+        logger.info("对话捕获长期指令已落库: text={}", text)
+        return True
+
     intent_shortcut: IntentShortcutService | None = None
     if settings.intent.enabled:
-        intent_shortcut = IntentShortcutService(rng=rhythm_rng, effective=effective_rhythm)
+        intent_shortcut = IntentShortcutService(
+            rng=rhythm_rng, effective=effective_rhythm, directive_sink=_capture_directive
+        )
         logger.info("意图快径已装配（通道路径 ChatService 前钩；INTENT_ENABLED=true）")
     else:
         logger.info("意图快径未启用（INTENT_ENABLED=false）——通道回复全量走 LLM")
@@ -505,6 +534,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
                 tools=tool_specs,
                 tool_executor=tool_registry,
                 intent_shortcut=intent_shortcut,
+                directive_service=directives_service,
             )
         browser_specs = getattr(app.state, "browser_tool_specs", None)
         browser_registry = getattr(app.state, "browser_tool_registry", None)
@@ -515,11 +545,13 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
                 tools=browser_specs,
                 tool_executor=browser_registry,
                 intent_shortcut=intent_shortcut,
+                directive_service=directives_service,
             )
         return ChatService(
             gateway=gateway,
             session_service=ChatSessionService(),
             intent_shortcut=intent_shortcut,
+            directive_service=directives_service,
         )
 
     router = ChannelRouter(
@@ -645,7 +677,7 @@ def _log_channel_task_termination(task: asyncio.Task[None]) -> None:
 
 
 async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
-    """装配中央调度器（duty / dream 任一启用时注册作业并启动后台任务）。
+    """装配中央调度器（duty / dream / 提醒投递面任一可用时注册作业并启动后台任务）。
 
     装配链（顺序锁定）：工具注册表（内置工具——get_current_time 恒注册；
     search_memory 经记忆检索服务注入，存储与 dream 作业共用
@@ -668,10 +700,20 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
     app.state.scheduler_task = None
     app.state.duty_service = None
     app.state.duty_registry = None
+    app.state.reminder_service = None
     duty_enabled = settings.duty.enabled
     dream_enabled = settings.dream_schedule.enabled
-    if not duty_enabled and not dream_enabled:
-        logger.info("中央调度器未启用（DUTY_ENABLED / DREAM_SCHEDULE_ENABLED 均关闭）——跳过装配")
+    telegram = settings.channels.telegram
+    reminder_delivery_ready = (
+        telegram.enabled
+        and telegram.owner_chat_id is not None
+        and app.state.channels_router is not None
+    )
+    if not duty_enabled and not dream_enabled and not reminder_delivery_ready:
+        logger.info(
+            "中央调度器未启用（DUTY_ENABLED / DREAM_SCHEDULE_ENABLED 关闭且提醒投递面"
+            "不可用）——跳过装配"
+        )
         return
     store = app.state.memory_store
     scheduler = Scheduler(tick_seconds=settings.scheduler.tick_seconds)
@@ -736,6 +778,19 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
             store=store,
         )
         scheduler.register_daily("dream", dream_job, daily_at=settings.dream_schedule.daily_at)
+    if reminder_delivery_ready:
+        reminder_service = ReminderService()
+        reminder_job = build_reminder_scan_job(
+            reminder_service=reminder_service,
+            persona_service=PersonaService(),
+            channel_router=app.state.channels_router,
+            owner_chat_id=telegram.owner_chat_id,
+            session_factory=session_scope,
+        )
+        scheduler.register_interval(
+            "reminders", reminder_job, every_seconds=REMINDER_SCAN_INTERVAL_SECONDS
+        )
+        app.state.reminder_service = reminder_service
     task = asyncio.create_task(scheduler.run(), name="central-scheduler")
     background_task_manager.register(task)
     task.add_done_callback(_log_scheduler_task_termination)
@@ -843,6 +898,7 @@ async def _shutdown_scheduler(app: FastAPI) -> None:
     app.state.scheduler = None
     app.state.scheduler_task = None
     app.state.duty_service = None
+    app.state.reminder_service = None
     app.state.duty_registry = None
     if task is None or task.done():
         if task is not None and not task.cancelled():
@@ -945,7 +1001,8 @@ def _include_routers(app: FastAPI) -> None:
     挂载契约（R2 审计放行条件——新端点不得扩张无鉴权面）：
 
         - **受保护路由集**：personas / memories / usage / voice /
-          look_at / models / search 七个管理路由统一挂 ``require_admin_token``
+          look_at / models / search / reminders / directives 九个管理路由
+          统一挂 ``require_admin_token``
           依赖——经单一 ``APIRouter(dependencies=[...])`` 包装路由**一次
           注册**（依赖定义在 ``app/middleware/admin_auth``；token 经
           ``ServerConfig.admin_token_env`` env 间接，空 = 鉴权关闭）；
@@ -971,6 +1028,8 @@ def _include_routers(app: FastAPI) -> None:
     admin_api.include_router(look_at_router)
     admin_api.include_router(models_router)
     admin_api.include_router(search_router)
+    admin_api.include_router(reminders_router)
+    admin_api.include_router(directives_router)
     app.include_router(admin_api)
     # 豁免面（见本函数 docstring 豁免契约——不挂 require_admin_token）。
     app.include_router(qq_channels_router)

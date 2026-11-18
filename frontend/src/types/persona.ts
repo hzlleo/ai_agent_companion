@@ -60,6 +60,16 @@ export interface CharaBookEntry {
   selective: boolean
   /** 插入位置。 */
   position: CharaBookPosition
+  /** 深度槽位（0-20，默认 4；段内值越大越靠段首，0 为段尾槽——最贴近对话末尾；同槽按 insertion_order）。 */
+  depth: number
+  /** 条目正文是否参与递归扫描面（默认 false；须书级 recursive_scanning=true）。 */
+  recursive: boolean
+  /** 互斥分组名（null = 不分组；同组命中条目一次组装只注入最高优先级者）。 */
+  include_group: string | null
+  /** 触发概率（0.0-1.0，默认 1.0 恒注入；非 constant 条目的概率门）。 */
+  trigger_probability: number
+  /** 注入后冷却回合数（0-50，默认 0 不冷却；会话作用域——重启即复位）。 */
+  cooldown_turns: number
 }
 
 /** 世界书（检索增强条目集）。 */
@@ -258,4 +268,175 @@ export interface PersonaListParams {
   cursor?: string
   /** 页大小（1-200，默认 20）。 */
   limit?: number
+}
+
+// ---------------------------------------------------------------------------
+// 特质组件库（R2b-2——官方预设画廊 / 生成面）
+// ---------------------------------------------------------------------------
+
+/** 特质组件分类（六类：温性 / 言语风格 / 习惯癖性 / 价值取向 / 社交风格 / 幽默感）。 */
+export type TraitComponentCategory =
+  | 'temperament'
+  | 'speech'
+  | 'quirks'
+  | 'values'
+  | 'sociality'
+  | 'humor'
+
+/** 特质组件（最小可复用人格碎片——预设的组合原子）。 */
+export interface TraitComponent {
+  /** 组件 id（kebab-case，库内唯一）。 */
+  id: string
+  /** 组件中文名（画廊芯片展示）。 */
+  name_zh: string
+  /** 特质描述碎片（落入卡片 personality 的短句）。 */
+  description_zh: string
+  /** 分类（六类值域）。 */
+  category: TraitComponentCategory
+  /** 语气指令行（拼入 system 提示碎片）。 */
+  tone_directives: string[]
+  /** 示例台词（null = 无）。 */
+  sample_speech: string | null
+  /** 冲突组件 id 列表（同组组合软警告——不拒绝）。 */
+  conflicts: string[]
+}
+
+/** 预设级卡片覆写片段（全部可选——生成时的部分合并面）。 */
+export interface TraitPresetCardOverrides {
+  /** 名字后缀建议（拼在基础名之后；null = 不加）。 */
+  name_suffix: string | null
+  /** 预设级性格补充文本。 */
+  personality: string | null
+  /** 预设级对话示例补充。 */
+  mes_example: string | null
+  /** 预设级 system 提示补充行。 */
+  system_prompt_fragment: string | null
+}
+
+/** 特质预设（组件 id 组合集 + 可选生成覆写——官方库的发行单元）。 */
+export interface TraitPreset {
+  /** 预设 id（kebab-case，库内唯一）。 */
+  id: string
+  /** 预设中文名（画廊标题；缺省基础名来源）。 */
+  name_zh: string
+  /** 一句话标语（画廊副标题）。 */
+  tagline_zh: string
+  /** 预设描述（生成卡片 personality 的首段碎片）。 */
+  description_zh: string
+  /** 组件 id 组合集（1-16 个——声明序即组合序）。 */
+  components: string[]
+  /** 卡片覆写片段（全部可选）。 */
+  base_card_overrides: TraitPresetCardOverrides
+  /** 建议语音绑定（null = 无建议；导入时随人格落库）。 */
+  suggested_voice: VoiceProfile | null
+  /** 建议世界书条目（生成时并入卡片世界书）。 */
+  suggested_book: CharaBookEntry[]
+}
+
+/** 特质库读取面（画廊载荷——预设 + 组件注册表，前端按 id 映射解析芯片）。 */
+export interface TraitLibrary {
+  /** 官方预设列表（数据文件声明序）。 */
+  presets: TraitPreset[]
+  /** 全量官方组件列表。 */
+  components: TraitComponent[]
+}
+
+// ---------------------------------------------------------------------------
+// 导入面（R2b-2——内容哈希幂等 + 名称冲突策略）
+// ---------------------------------------------------------------------------
+
+/** 导入冲突策略（仅名称冲突时生效——内容同卡恒幂等）。 */
+export type PersonaImportConflictStrategy = 'skip' | 'rename' | 'overwrite'
+
+/** 导入未落库原因（imported=false 时的机器可读原因）。 */
+export type PersonaImportReason = 'identical_content' | 'name_conflict'
+
+/** 导入请求（JSON 面：官方预设 id 或用户卡片文档 + 冲突策略）。 */
+export interface PersonaImportRequest {
+  /** 官方预设 id（与 card 恰一提供）。 */
+  preset_id: string | null
+  /** 用户自有卡片文档（与 preset_id 恰一提供）。 */
+  card: CharaCard | null
+  /** 名称冲突策略（默认 skip）。 */
+  conflict_strategy: PersonaImportConflictStrategy
+  /** 期望注册名（null = 卡片名 / 预设名；1-128 字符）。 */
+  desired_name: string | null
+}
+
+/** 导入结果（单发面——含幂等 / 冲突未导入形态）。 */
+export interface PersonaImportResult {
+  /** 是否实际落库（false = 幂等跳过或名称冲突未导入）。 */
+  imported: boolean
+  /** 关联人格主键（新行 / 覆盖行 / 既有行；null = 未关联）。 */
+  persona_id: number | null
+  /** 未导入原因（null = 已导入）。 */
+  reason: PersonaImportReason | null
+  /** 生成警告文案列表（预设导入的组件冲突软警告等）。 */
+  warnings: string[]
+}
+
+/** 批量导入结果单条目（部分成功形态——逐文件）。 */
+export interface PersonaImportBatchItem {
+  /** 文件名（与提交顺序一致）。 */
+  filename: string
+  /** 请求是否处理成功（冲突跳过与幂等属合法结果——仍为 true）。 */
+  success: boolean
+  /** 是否实际导入。 */
+  imported: boolean
+  /** 关联人格主键（null = 未关联）。 */
+  persona_id: number | null
+  /** 未导入原因（null = 已导入或处理失败）。 */
+  reason: PersonaImportReason | null
+  /** 失败错误码（成功为 null）。 */
+  code: string | null
+  /** 提示信息。 */
+  message: string
+}
+
+/** 批量导入结果（部分成功形态——逐文件独立事务）。 */
+export interface PersonaImportBatchResult {
+  /** 提交文件总数。 */
+  total: number
+  /** 处理成功数（含幂等 / 冲突跳过的合法结果）。 */
+  succeeded: number
+  /** 处理失败数（解析失败 / 内部错误）。 */
+  failed: number
+  /** 实际新导入数。 */
+  imported_count: number
+  /** 逐文件结果（与提交顺序一致）。 */
+  items: PersonaImportBatchItem[]
+}
+
+// ---------------------------------------------------------------------------
+// 长期指令（directives——USER.md 式常备指令；策展记忆 user_note 收窄面）
+// ---------------------------------------------------------------------------
+
+/** 长期指令记录（策展记忆行收窄投影——管理面 / 面板读取面）。 */
+export interface DirectiveRecord {
+  /** 策展记忆主键（删除 / 更新锚点）。 */
+  id: number
+  /** 主题键（directive: 前缀——同 topic 覆盖为 supersede）。 */
+  topic: string
+  /** 指令正文。 */
+  content: string
+  /** 链内版本号（supersede 递增——面板展示 vN）。 */
+  version: number
+  /** 落库时间（epoch 毫秒）。 */
+  created_at: number
+  /** 行更新时间（epoch 毫秒）。 */
+  updated_at: number
+}
+
+/** 长期指令创建请求（同 topic 覆盖为 supersede——「编辑」语义）。 */
+export interface DirectiveCreateRequest {
+  /** 指令正文（1-500 字符）。 */
+  content: string
+  /** 主题键（undefined = 按正文派生 directive:<指纹>；显式同 topic 覆盖）。 */
+  topic?: string
+}
+
+/** 长期指令更新请求（按既有 topic 重写——supersede 链 +1）。 */
+export interface DirectiveUpdateRequest {
+  /** 指令正文（1-500 字符）。 */
+  content: string
 }

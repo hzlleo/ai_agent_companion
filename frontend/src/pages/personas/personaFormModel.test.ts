@@ -50,6 +50,11 @@ function sampleRecord(): PersonaRecord {
             case_sensitive: true,
             selective: false,
             position: 'after_char',
+            depth: 4,
+            recursive: false,
+            include_group: null,
+            trigger_probability: 1.0,
+            cooldown_turns: 0,
           },
         ],
       },
@@ -198,6 +203,76 @@ describe('validatePersonaForm', () => {
     expect(errors['card.character_book.entries.0.secondary_keys']).toBeUndefined()
   })
 
+  it('R2b：depth 界外（<0 / >20 / 非整数）报错', () => {
+    const form = createEmptyForm()
+    form.name = 'x'
+    form.card.name = 'y'
+    form.card.character_book = createEmptyBook()
+    form.card.character_book.entries[0]!.depth = '-1'
+    expect(validatePersonaForm(form)['card.character_book.entries.0.depth']).toBeDefined()
+    form.card.character_book.entries[0]!.depth = '21'
+    expect(validatePersonaForm(form)['card.character_book.entries.0.depth']).toBeDefined()
+    form.card.character_book.entries[0]!.depth = '1.5'
+    expect(validatePersonaForm(form)['card.character_book.entries.0.depth']).toBeDefined()
+    form.card.character_book.entries[0]!.depth = '0'
+    expect(validatePersonaForm(form)['card.character_book.entries.0.depth']).toBeUndefined()
+  })
+
+  it('R2b：cooldown_turns 界外（<0 / >50 / 非整数）报错', () => {
+    const form = createEmptyForm()
+    form.name = 'x'
+    form.card.name = 'y'
+    form.card.character_book = createEmptyBook()
+    form.card.character_book.entries[0]!.cooldown_turns = '-1'
+    expect(validatePersonaForm(form)['card.character_book.entries.0.cooldown_turns']).toBeDefined()
+    form.card.character_book.entries[0]!.cooldown_turns = '51'
+    expect(validatePersonaForm(form)['card.character_book.entries.0.cooldown_turns']).toBeDefined()
+    form.card.character_book.entries[0]!.cooldown_turns = '2.5'
+    expect(validatePersonaForm(form)['card.character_book.entries.0.cooldown_turns']).toBeDefined()
+    form.card.character_book.entries[0]!.cooldown_turns = '50'
+    expect(validatePersonaForm(form)['card.character_book.entries.0.cooldown_turns']).toBeUndefined()
+  })
+
+  it('R2b：trigger_probability 界外 / 非数值报错；0 / 0.5 / 1 合法', () => {
+    const form = createEmptyForm()
+    form.name = 'x'
+    form.card.name = 'y'
+    form.card.character_book = createEmptyBook()
+    form.card.character_book.entries[0]!.trigger_probability = '-0.1'
+    expect(validatePersonaForm(form)['card.character_book.entries.0.trigger_probability']).toBeDefined()
+    form.card.character_book.entries[0]!.trigger_probability = '1.1'
+    expect(validatePersonaForm(form)['card.character_book.entries.0.trigger_probability']).toBeDefined()
+    form.card.character_book.entries[0]!.trigger_probability = 'abc'
+    expect(validatePersonaForm(form)['card.character_book.entries.0.trigger_probability']).toBeDefined()
+    for (const valid of ['0', '0.5', '1']) {
+      form.card.character_book.entries[0]!.trigger_probability = valid
+      expect(validatePersonaForm(form)['card.character_book.entries.0.trigger_probability']).toBeUndefined()
+    }
+  })
+
+  it('R2b：include_group 超长报错；空 = 不分组合法', () => {
+    const form = createEmptyForm()
+    form.name = 'x'
+    form.card.name = 'y'
+    form.card.character_book = createEmptyBook()
+    form.card.character_book.entries[0]!.include_group = '分'.repeat(65)
+    expect(validatePersonaForm(form)['card.character_book.entries.0.include_group']).toBeDefined()
+    form.card.character_book.entries[0]!.include_group = '问候变体'
+    expect(validatePersonaForm(form)['card.character_book.entries.0.include_group']).toBeUndefined()
+  })
+
+  it('R2b：recursive 未开书级总开关报错；开启后合法（镜像后端规格校验）', () => {
+    const form = createEmptyForm()
+    form.name = 'x'
+    form.card.name = 'y'
+    form.card.character_book = createEmptyBook()
+    form.card.character_book.recursive_scanning = false
+    form.card.character_book.entries[0]!.recursive = true
+    expect(validatePersonaForm(form)['card.character_book.entries.0.recursive']).toBeDefined()
+    form.card.character_book.recursive_scanning = true
+    expect(validatePersonaForm(form)['card.character_book.entries.0.recursive']).toBeUndefined()
+  })
+
   it('语音绑定：仅填指令 / 语速而缺发音人 → 报错', () => {
     const form = createEmptyForm()
     form.name = 'x'
@@ -269,7 +344,70 @@ describe('表单态 → wire', () => {
       case_sensitive: false,
       selective: true,
       position: 'after_char',
+      depth: 4,
+      recursive: false,
+      include_group: null,
+      trigger_probability: 1,
+      cooldown_turns: 0,
     })
+  })
+
+  it('cardFormToWire：R2b 高级字段收敛（trim 分组 / 数值收敛）', () => {
+    const card = createEmptyCard()
+    card.name = '小夜'
+    card.character_book = createEmptyBook()
+    card.character_book.recursive_scanning = true
+    const entry = card.character_book.entries[0]!
+    entry.depth = '2'
+    entry.recursive = true
+    entry.include_group = '  问候变体  '
+    entry.trigger_probability = '0.5'
+    entry.cooldown_turns = '3'
+    const wire = cardFormToWire(card)
+    expect(wire.character_book?.entries[0]).toMatchObject({
+      depth: 2,
+      recursive: true,
+      include_group: '问候变体',
+      trigger_probability: 0.5,
+      cooldown_turns: 3,
+    })
+  })
+
+  it('cardFormToWire：R2b 非法输入兜底缺省（校验先行，此处兜底形态）', () => {
+    const card = createEmptyCard()
+    card.name = '小夜'
+    card.character_book = createEmptyBook()
+    const entry = card.character_book.entries[0]!
+    entry.depth = 'abc'
+    entry.trigger_probability = ''
+    entry.cooldown_turns = 'xyz'
+    const wire = cardFormToWire(card)
+    expect(wire.character_book?.entries[0]).toMatchObject({
+      depth: 4,
+      trigger_probability: 1.0,
+      cooldown_turns: 0,
+    })
+  })
+
+  it('recordToFormState：R2b 高级 wire 字段落地表单态', () => {
+    const record = sampleRecord()
+    const book = record.card.character_book!
+    book.entries[0] = {
+      ...book.entries[0]!,
+      depth: 9,
+      recursive: true,
+      include_group: '问候变体',
+      trigger_probability: 0.3,
+      cooldown_turns: 7,
+    }
+    const form = recordToFormState(record)
+    const entry = form.card.character_book?.entries[0]
+    expect(entry).toBeDefined()
+    expect(entry?.depth).toBe('9')
+    expect(entry?.recursive).toBe(true)
+    expect(entry?.include_group).toBe('问候变体')
+    expect(entry?.trigger_probability).toBe('0.3')
+    expect(entry?.cooldown_turns).toBe('7')
   })
 
   it('cardFormToWire：无世界书 → null', () => {
@@ -341,6 +479,11 @@ describe('工厂', () => {
       case_sensitive: false,
       selective: false,
       position: 'after_char',
+      depth: '4',
+      recursive: false,
+      include_group: '',
+      trigger_probability: '1',
+      cooldown_turns: '0',
     })
   })
 

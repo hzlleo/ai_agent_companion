@@ -41,6 +41,18 @@ _BYTE_LOCKS: dict[str, str] = {
     "FIRST_GREETING_FALLBACK_TEMPLATE": (
         "cb91bfe944c2f86d882d08f102f45ee7508f36a51fc0c69d705d9e55d34e66eb"
     ),
+    "OUTPUT_PROTOCOL_TEMPLATE": (
+        "8dae9484ea2654e64e0c8a7da425e3f45c3b2052bc6e52c64fbf5f35b434a23c"
+    ),
+    "EMOTION_STATE_TEMPLATE": (
+        "f9e8caca401318e6e23eb040a1c0bbfde82241b3eedb848eb3f761530a967be2"
+    ),
+    "DIRECTIVES_BLOCK_TEMPLATE": (
+        "7926b4a3aa8e5194e5870b3ad32b10be852e38e03f01cab2bbf22a3362673b41"
+    ),
+    "DIRECTIVES_TRUNCATION_NOTE": (
+        "de29e1478243f5691850d4a803dfd4c8babd7ffa9283aee79ba43db2745b1404"
+    ),
 }
 
 #: 版本常量清单（存在性 + 非空字符串形态）。
@@ -51,6 +63,9 @@ _VERSION_CONSTANTS = (
     "WORLD_BOOK_ENTRY_TEMPLATE_VERSION",
     "POST_HISTORY_TEMPLATE_VERSION",
     "FIRST_GREETING_FALLBACK_VERSION",
+    "OUTPUT_PROTOCOL_TEMPLATE_VERSION",
+    "EMOTION_STATE_TEMPLATE_VERSION",
+    "DIRECTIVES_BLOCK_TEMPLATE_VERSION",
 )
 
 
@@ -86,6 +101,27 @@ def _card(**overrides: str) -> CharaCardModel:
     }
     fields.update(overrides)
     return CharaCardModel.model_validate(fields)
+
+
+async def test_render_output_protocol_mentions_both_tags() -> None:
+    """输出协议块：心声 / 情绪标签指令与维度枚举齐备（解析器契约对齐）。"""
+    text = prompts.render_output_protocol()
+    assert "<心声>" in text and "</心声>" in text
+    assert "<情绪>" in text and "</情绪>" in text
+    assert "joy 愉悦" in text and "annoyance 微恼" in text
+
+
+async def test_render_emotion_state_block_empty_summary_skips() -> None:
+    """心情块：空摘要（None / 空白）返回空串——组装链跳过空块。"""
+    assert prompts.render_emotion_state_block(None) == ""
+    assert prompts.render_emotion_state_block("   ") == ""
+
+
+async def test_render_emotion_state_block_wraps_summary() -> None:
+    """心情块：摘要行被包裹进【心情状态】块（strip 后渲染）。"""
+    text = prompts.render_emotion_state_block("  当前情绪：愉悦↑  ")
+    assert text.startswith("【心情状态】")
+    assert "当前情绪：愉悦↑" in text
 
 
 async def test_render_persona_system_prompt_full_card() -> None:

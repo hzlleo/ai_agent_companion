@@ -31,13 +31,18 @@ describe('PersonaCardJsonPreview', () => {
           case_sensitive: false,
           selective: false,
           position: 'before_char',
+          depth: '4',
+          recursive: false,
+          include_group: '',
+          trigger_probability: '1',
+          cooldown_turns: '0',
         },
       ],
     }
     render(<PersonaCardJsonPreview card={card} />)
     const parsed = JSON.parse(screen.getByTestId('card-json-preview').textContent) as {
       name: string
-      character_book: { scan_depth: number | null; token_budget: number | null; entries: Array<{ keys: string[]; secondary_keys: string[]; content: string; insertion_order: number; constant: boolean; case_sensitive: boolean; selective: boolean; position: string }> } | null
+      character_book: { scan_depth: number | null; token_budget: number | null; entries: Array<{ keys: string[]; secondary_keys: string[]; content: string; insertion_order: number; constant: boolean; case_sensitive: boolean; selective: boolean; position: string; depth: number; recursive: boolean; include_group: string | null; trigger_probability: number; cooldown_turns: number }> } | null
     }
     expect(parsed.name).toBe('小夜')
     expect(parsed.character_book?.scan_depth).toBe(5)
@@ -51,6 +56,11 @@ describe('PersonaCardJsonPreview', () => {
       case_sensitive: false,
       selective: false,
       position: 'before_char',
+      depth: 4,
+      recursive: false,
+      include_group: null,
+      trigger_probability: 1,
+      cooldown_turns: 0,
     })
   })
 })

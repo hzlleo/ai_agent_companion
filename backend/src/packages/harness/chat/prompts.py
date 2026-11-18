@@ -21,13 +21,21 @@
     - :data:`POST_HISTORY_TEMPLATE`            —— 历史后再注入（deep
       anti-drift nudge——拼在全部对话历史**之后**的强约束）；
     - :data:`FIRST_GREETING_FALLBACK_TEMPLATE` —— 开场白兜底（卡片
-      ``first_mes`` 为空时的首条人格消息）。
+      ``first_mes`` 为空时的首条人格消息）；
+    - :data:`OUTPUT_PROTOCOL_TEMPLATE`        —— 输出格式协议（心声 /
+      情绪标签指令——接在人格正典之后的格式块，R2b）；
+    - :data:`EMOTION_STATE_TEMPLATE`          —— 心情状态块（非中性
+      情绪摘要注入——R2b 轻情绪引擎 compose 面）；
+    - :data:`DIRECTIVES_BLOCK_TEMPLATE`       —— 长期指令块（USER.md 式
+      常备指令注入——R2b D7-14；截断说明见 :data:`DIRECTIVES_TRUNCATION_NOTE`）。
 
 渲染函数（纯函数——只做文本装配，不做条目选择 / 关键词匹配等逻辑；
 世界书筛选逻辑在 service 层）：chara card 字段 → 上述模板的最终文本。
 """
 
 from __future__ import annotations
+
+from collections.abc import Sequence
 
 from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
@@ -41,6 +49,11 @@ __all__ = [
     "WORLD_BOOK_ENTRY_TEMPLATE_VERSION",
     "POST_HISTORY_TEMPLATE_VERSION",
     "FIRST_GREETING_FALLBACK_VERSION",
+    "OUTPUT_PROTOCOL_TEMPLATE_VERSION",
+    "EMOTION_STATE_TEMPLATE_VERSION",
+    "DIRECTIVES_BLOCK_TEMPLATE_VERSION",
+    "DIRECTIVES_MAX_ENTRIES",
+    "DIRECTIVES_MAX_CHARS",
     "CHARTER_TEMPLATE",
     "PERSONA_NAME_HEADER_TEMPLATE",
     "PERSONA_DESCRIPTION_SECTION_TEMPLATE",
@@ -50,15 +63,22 @@ __all__ = [
     "WORLD_BOOK_SECTION_SEPARATOR",
     "POST_HISTORY_TEMPLATE",
     "FIRST_GREETING_FALLBACK_TEMPLATE",
+    "OUTPUT_PROTOCOL_TEMPLATE",
+    "EMOTION_STATE_TEMPLATE",
+    "DIRECTIVES_BLOCK_TEMPLATE",
+    "DIRECTIVES_TRUNCATION_NOTE",
+    "render_directives_block",
     "render_charter",
     "render_persona_system_prompt",
     "render_world_book_block",
     "render_post_history_message",
     "render_first_greeting",
+    "render_output_protocol",
+    "render_emotion_state_block",
 ]
 
 #: prompt 套件总版本（任一模板变更时同步上调）。
-PROMPTS_VERSION: str = "1.0.0"
+PROMPTS_VERSION: str = "1.2.0"
 
 # ---------------------------------------------------------------------------
 # 版本常量——逐模板独立版本（byte-lock 测试按模板分别锁定摘要）
@@ -74,6 +94,19 @@ WORLD_BOOK_ENTRY_TEMPLATE_VERSION: str = "1.0.0"
 POST_HISTORY_TEMPLATE_VERSION: str = "1.0.0"
 #: 开场白兜底模板版本。
 FIRST_GREETING_FALLBACK_VERSION: str = "1.0.0"
+#: 输出格式协议模板版本（心声 / 情绪标签指令）。
+OUTPUT_PROTOCOL_TEMPLATE_VERSION: str = "1.0.0"
+#: 心情状态块模板版本（非中性情绪摘要注入）。
+EMOTION_STATE_TEMPLATE_VERSION: str = "1.0.0"
+#: 长期指令块模板版本（USER.md 式常备指令注入）。
+DIRECTIVES_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
+
+#: 长期指令注入上限——条数（超出部分不进系统提示；截断说明行提示存在
+#: 其余指令）。
+DIRECTIVES_MAX_ENTRIES: int = 20
+
+#: 长期指令注入上限——总字符（含列表符号；超出即截断并追加说明行）。
+DIRECTIVES_MAX_CHARS: int = 2000
 
 # ---------------------------------------------------------------------------
 # 模板文本（byte-lock——修改须同步版本常量与测试摘要）
@@ -122,6 +155,28 @@ POST_HISTORY_TEMPLATE: str = (
 FIRST_GREETING_FALLBACK_TEMPLATE: str = (
     "（{name}抬起头看向你，微微一笑）嗯，你回来啦。今天想聊点什么？"
 )
+
+#: 输出格式协议（无占位符——接在人格正典之后的格式指令块；标签由
+#: ``chat/output_protocol.parse_assistant_output`` 解析，永不进入可见
+#: 正文 / 通道 / TTS）。
+OUTPUT_PROTOCOL_TEMPLATE: str = (
+    "【回复格式协议】\n"
+    "若你有内心想法，在回复最前面输出 <心声>一两句不会直接说出口的内心活动</心声>；"
+    "若当前情绪相对上一条回复有变化，紧跟输出 <情绪>维度:+增量,...</情绪>（增量取值 -1~1）；"
+    "随后输出正文。心声与情绪标签永远不会展示给对方。\n"
+    "可用情绪维度：joy 愉悦、affection 亲昵、shyness 羞怯、excitement 兴奋、"
+    "calm 平静、sadness 低落、anxiety 不安、annoyance 微恼。"
+)
+
+#: 心情状态块（占位符 ``{summary}``——非中性情绪摘要行；全中性不注入）。
+EMOTION_STATE_TEMPLATE: str = "【心情状态】\n{summary}"
+
+#: 长期指令块（占位符 ``{directives}``——每条一行「- 正文」；无指令不注入）。
+DIRECTIVES_BLOCK_TEMPLATE: str = "【长期指令】\n{directives}"
+
+#: 长期指令截断说明行（条目 / 字符帽触发时追加——告知模型存在未列出的
+#: 其余常备指令，避免把截断误解为指令全集）。
+DIRECTIVES_TRUNCATION_NOTE: str = "（其余长期指令已省略）"
 
 # ---------------------------------------------------------------------------
 # 渲染函数（纯文本装配——无状态 / 无 I/O / 无条目选择逻辑）
@@ -176,6 +231,71 @@ def render_world_book_block(entries: list[CharaBookEntryModel]) -> str:
         return ""
     blocks = [WORLD_BOOK_ENTRY_TEMPLATE.format(content=entry.content) for entry in entries]
     return WORLD_BOOK_SECTION_SEPARATOR.join(blocks)
+
+
+def render_output_protocol() -> str:
+    """渲染输出格式协议块（无占位符——原样返回模板）。
+
+    Returns:
+        输出格式协议文本（接在人格正典之后；标签解析见
+        ``chat/output_protocol``）。
+    """
+    return OUTPUT_PROTOCOL_TEMPLATE
+
+
+def render_emotion_state_block(summary: str | None) -> str:
+    """渲染心情状态块（非中性情绪摘要 → 注入块文本）。
+
+    Args:
+        summary: 情绪摘要行（``summarize_emotion`` 产出；None / 空白 =
+            全中性——返回空串，组装链跳过空块）。
+
+    Returns:
+        心情状态块文本；空摘要返回空串。
+    """
+    if summary is None or not summary.strip():
+        return ""
+    return EMOTION_STATE_TEMPLATE.format(summary=summary.strip())
+
+
+def render_directives_block(directives: Sequence[str]) -> str:
+    """渲染长期指令块（USER.md 式常备指令——条数 / 字符双帽截断）。
+
+    渲染语义（锁定）：每条指令一行 ``- 正文``；最多
+    :data:`DIRECTIVES_MAX_ENTRIES` 条且总字符不超过
+    :data:`DIRECTIVES_MAX_CHARS`（含列表符号与换行）；帽触发时追加
+    :data:`DIRECTIVES_TRUNCATION_NOTE` 说明行。空列表 / 全空白条目返回
+    空串（组装链跳过空块）。
+
+    Args:
+        directives: 现行指令正文列表（服务层按写入倒序提供——调用方
+            保证顺序；本函数只做装配与截断）。
+
+    Returns:
+        长期指令块文本；无有效指令返回空串。
+    """
+    lines: list[str] = []
+    truncated = False
+    used_chars = 0
+    for content in directives:
+        stripped = content.strip()
+        if not stripped:
+            continue
+        if len(lines) >= DIRECTIVES_MAX_ENTRIES:
+            truncated = True
+            break
+        line = f"- {stripped}"
+        added = len(line) + (1 if lines else 0)
+        if used_chars + added > DIRECTIVES_MAX_CHARS:
+            truncated = True
+            break
+        lines.append(line)
+        used_chars += added
+    if not lines:
+        return ""
+    if truncated:
+        lines.append(DIRECTIVES_TRUNCATION_NOTE)
+    return DIRECTIVES_BLOCK_TEMPLATE.format(directives="\n".join(lines))
 
 
 def render_post_history_message(card: CharaCardModel) -> str:

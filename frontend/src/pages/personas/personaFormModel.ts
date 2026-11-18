@@ -44,6 +44,16 @@ export interface BookEntryFormState {
   selective: boolean
   /** 插入位置。 */
   position: 'before_char' | 'after_char'
+  /** 深度槽位（字符串态，收敛期转数字；0-20）。 */
+  depth: string
+  /** 条目正文是否参与递归扫描面。 */
+  recursive: boolean
+  /** 互斥分组名（空 = 不分组）。 */
+  include_group: string
+  /** 触发概率（字符串态，收敛期转数字；0-1）。 */
+  trigger_probability: string
+  /** 冷却回合数（字符串态，收敛期转数字；0-50）。 */
+  cooldown_turns: string
 }
 
 /** 世界书字段态。 */
@@ -126,6 +136,11 @@ export function createEmptyEntry(): BookEntryFormState {
     case_sensitive: false,
     selective: false,
     position: 'after_char',
+    depth: '4',
+    recursive: false,
+    include_group: '',
+    trigger_probability: '1',
+    cooldown_turns: '0',
   }
 }
 
@@ -273,6 +288,11 @@ export function bookToFormState(book: CharaBook): CharacterBookFormState {
       case_sensitive: entry.case_sensitive,
       selective: entry.selective,
       position: entry.position,
+      depth: String(entry.depth),
+      recursive: entry.recursive,
+      include_group: entry.include_group ?? '',
+      trigger_probability: String(entry.trigger_probability),
+      cooldown_turns: String(entry.cooldown_turns),
     })),
   }
 }
@@ -305,6 +325,30 @@ function validateInsertionOrder(value: string): string | null {
   return null
 }
 
+/** 校验有界整数字段（min-max 整数）；返回错误文案或 null。 */
+function validateBoundedInt(value: string, fieldLabel: string, min: number, max: number): string | null {
+  const parsed = Number(value)
+  if (value.trim() === '' || !Number.isInteger(parsed)) {
+    return `${fieldLabel}须为整数`
+  }
+  if (parsed < min || parsed > max) {
+    return `${fieldLabel}须在 ${min}-${max} 之间`
+  }
+  return null
+}
+
+/** 校验触发概率（0-1 数值）；返回错误文案或 null。 */
+function validateProbability(value: string): string | null {
+  const parsed = Number(value)
+  if (value.trim() === '' || !Number.isFinite(parsed)) {
+    return '触发概率须为 0-1 之间的数值'
+  }
+  if (parsed < 0 || parsed > 1) {
+    return '触发概率须在 0-1 之间'
+  }
+  return null
+}
+
 /**
  * 表单整体校验（与后端契约对齐）：
  * - 注册名 / 卡片称呼名：必填，1-128 字符；
@@ -313,6 +357,9 @@ function validateInsertionOrder(value: string): string | null {
  * - 条目 insertion_order：0-9999 整数；
  * - 条目 selective=false 时不得携带副触发键，selective=true 时必须
  *   携带至少一个非空副触发键（后端规格一致性校验的对称双分支）；
+ * - 条目 depth：0-20 整数；cooldown_turns：0-50 整数；
+ *   trigger_probability：0-1 数值；include_group ≤64 字符（空 = 不分组）；
+ *   recursive=true 须书级 recursive_scanning 总开关放行（后端对称校验）；
  * - 语音绑定：speaker 1-128 字符（填写指令 / 语速时必填）；
  *   instruct_text ≤2000 字符；speed 0.5-2.0（后端 VoiceProfileModel
  *   值域）。
@@ -354,6 +401,24 @@ export function validatePersonaForm(form: PersonaFormState): PersonaFormErrors {
       if (entry.selective && parseKeys(entry.secondary_keys).length === 0) {
         errors[`${prefix}.secondary_keys`] = '开启选择性触发的条目必须填写至少一个副触发关键词'
       }
+      const depthError = validateBoundedInt(entry.depth, '插入深度', 0, 20)
+      if (depthError !== null) {
+        errors[`${prefix}.depth`] = depthError
+      }
+      const cooldownError = validateBoundedInt(entry.cooldown_turns, '冷却回合数', 0, 50)
+      if (cooldownError !== null) {
+        errors[`${prefix}.cooldown_turns`] = cooldownError
+      }
+      const probabilityError = validateProbability(entry.trigger_probability)
+      if (probabilityError !== null) {
+        errors[`${prefix}.trigger_probability`] = probabilityError
+      }
+      if (entry.include_group.trim().length > 64) {
+        errors[`${prefix}.include_group`] = '互斥分组名长度不得超过 64 个字符'
+      }
+      if (entry.recursive && !book.recursive_scanning) {
+        errors[`${prefix}.recursive`] = '条目正文递归须先开启书级「递归扫描」总开关'
+      }
     })
   }
 
@@ -381,8 +446,18 @@ export function validatePersonaForm(form: PersonaFormState): PersonaFormErrors {
 // 表单态 → wire
 // ---------------------------------------------------------------------------
 
+/** 有界整数字符串 → 数字（空串/非法回落 default——提交期校验先行，此处为兜底形态）。 */
+function boundedInt(value: string, defaultValue: number): number {
+  const parsed = Number(value)
+  if (value.trim() !== '' && Number.isInteger(parsed)) {
+    return parsed
+  }
+  return defaultValue
+}
+
 /** 表单态条目 → wire 条目。 */
 function entryFormToWire(entry: BookEntryFormState): CharaBookEntry {
+  const probabilityParsed = Number(entry.trigger_probability)
   return {
     keys: parseKeys(entry.keys),
     secondary_keys: parseKeys(entry.secondary_keys),
@@ -392,6 +467,14 @@ function entryFormToWire(entry: BookEntryFormState): CharaBookEntry {
     case_sensitive: entry.case_sensitive,
     selective: entry.selective,
     position: entry.position,
+    depth: boundedInt(entry.depth, 4),
+    recursive: entry.recursive,
+    include_group: entry.include_group.trim() === '' ? null : entry.include_group.trim(),
+    trigger_probability:
+      entry.trigger_probability.trim() !== '' && Number.isFinite(probabilityParsed)
+        ? probabilityParsed
+        : 1.0,
+    cooldown_turns: boundedInt(entry.cooldown_turns, 0),
   }
 }
 

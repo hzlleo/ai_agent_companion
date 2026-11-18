@@ -158,8 +158,13 @@ async def test_curated_active_marker_composite_unique(
         conn.close()
 
 
-async def test_chat_message_seq_unique(migrated_scratch: SeekDbTestTarget) -> None:
-    """ff_chat_messages 会话内序号守卫：撞序被 uq_ff_chat_messages_seq 拒绝。
+async def test_chat_message_variant_unique(migrated_scratch: SeekDbTestTarget) -> None:
+    """ff_chat_messages 变体身份守卫：同 (会话, seq, 父回合, 序号) 被唯一键拒绝。
+
+    迁移 0010 后复合唯一键 ``uq_ff_chat_messages_seq_variant`` 的守卫面
+    是**变体身份**：正典行两列 NULL（唯一键忽略 NULL——正典 seq 唯一性
+    由服务层会话行锁计数维持），变体行共享父回合 seq 但 (父回合, 序号)
+    不同——同父同序号重复插入即 1062。
 
     Args:
         migrated_scratch: 已升级 head 的 scratch 库目标。
@@ -167,12 +172,12 @@ async def test_chat_message_seq_unique(migrated_scratch: SeekDbTestTarget) -> No
     conn = await support.connect_scratch(migrated_scratch)
     try:
         async with conn.cursor() as cur:
-            # 会话头 + 首条消息（列形来自迁移 0004）。
+            # 会话头 + 正典父回合（列形来自迁移 0004 + 0010）。
             await cur.execute(
                 "INSERT INTO ff_chat_sessions"
                 " (persona_id, title, message_count, last_active_at, created_at, updated_at)"
                 " VALUES (%s, %s, %s, %s, %s, %s)",
-                ("900001", "seq-guard-session", 2, 1, 1, 1),
+                ("900001", "variant-guard-session", 2, 1, 1, 1),
             )
             await cur.execute("SELECT LAST_INSERT_ID()")
             session_row = await cur.fetchone()
@@ -184,16 +189,35 @@ async def test_chat_message_seq_unique(migrated_scratch: SeekDbTestTarget) -> No
                 " (session_id, seq, role, content, ts_ms, created_at, updated_at)"
                 " VALUES (%s, %s, %s, %s, %s, %s, %s)"
             )
-            await cur.execute(message_insert, (session_id, 1, "user", "m1", 1, 1, 1))
+            await cur.execute(message_insert, (session_id, 2, "assistant", "父回合", 1, 1, 1))
+            await cur.execute("SELECT LAST_INSERT_ID()")
+            parent_row = await cur.fetchone()
+            assert parent_row is not None
+            parent_id = int(parent_row[0])
 
-            # 同 (session_id, seq)：并发 append 的 DB 级兜底拒绝。
+            variant_insert = (
+                "INSERT INTO ff_chat_messages"
+                " (session_id, seq, role, content, ts_ms, created_at, updated_at,"
+                " variant_of_id, variant_index)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            )
+            await cur.execute(
+                variant_insert, (session_id, 2, "assistant", "候选一", 1, 1, 1, parent_id, 1)
+            )
+            # 同 (session, seq, 父回合, 序号)：变体身份唯一键拒绝。
             with pytest.raises(aiomysql.IntegrityError) as exc_info:
-                await cur.execute(message_insert, (session_id, 1, "user", "m2", 1, 1, 1))
+                await cur.execute(
+                    variant_insert,
+                    (session_id, 2, "assistant", "候选一重复", 1, 1, 1, parent_id, 1),
+                )
             assert exc_info.value.args[0] == 1062
-            assert "uq_ff_chat_messages_seq" in str(exc_info.value)
+            assert "uq_ff_chat_messages_seq_variant" in str(exc_info.value)
 
-            # 异序共存的正控（seq=2 合法插入）。
-            await cur.execute(message_insert, (session_id, 2, "user", "m3", 1, 1, 1))
+            # 正控：同父不同序号 / 同 seq 的正典行（两列 NULL）合法共存。
+            await cur.execute(
+                variant_insert, (session_id, 2, "assistant", "候选二", 1, 1, 1, parent_id, 2)
+            )
+            await cur.execute(message_insert, (session_id, 2, "assistant", "正典重复", 1, 1, 1))
     finally:
         conn.close()
 

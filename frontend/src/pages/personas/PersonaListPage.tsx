@@ -34,6 +34,7 @@ import type {
 } from '@/types/persona'
 import { CopyPersonaDialog } from './CopyPersonaDialog'
 import { BatchDeleteResultDialog } from '@/components/BatchDeleteResultDialog'
+import { PersonaImportButton } from './PersonaImportButton'
 
 /** 状态过滤态（空串 = 全部）。 */
 type StatusFilter = '' | PersonaStatus
@@ -239,13 +240,22 @@ export default function PersonaListPage() {
     <div className="p-8">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-[var(--color-text)]">人格管理</h1>
-        <Link
-          to="/personas/new"
-          className="inline-flex h-10 items-center gap-1 rounded-md bg-[var(--color-primary)] px-4 text-sm font-medium text-white transition-colors hover:bg-[var(--color-primary-hover)]"
-        >
-          <Plus className="h-4 w-4" aria-hidden="true" />
-          新建人格
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/personas/presets"
+            className="inline-flex h-10 items-center gap-1 rounded-md border border-[var(--color-border)] px-4 text-sm font-medium text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-hover)]"
+          >
+            预设画廊
+          </Link>
+          <PersonaImportButton />
+          <Link
+            to="/personas/new"
+            className="inline-flex h-10 items-center gap-1 rounded-md bg-[var(--color-primary)] px-4 text-sm font-medium text-white transition-colors hover:bg-[var(--color-primary-hover)]"
+          >
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            新建人格
+          </Link>
+        </div>
       </div>
 
       {/* 工具栏：状态过滤 + 批量删除 */}

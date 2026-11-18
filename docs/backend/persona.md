@@ -6,13 +6,16 @@
 
 | 模块 | 职责 | 关键导出 |
 |---|---|---|
-| `models.py` | 值域枚举（可用性状态 / L-M-S 状态层） | `PersonaStatus` / `PersonaStateLayer` |
+| `models.py` | 值域枚举（可用性状态 / L-M-S 状态层 / 导入冲突策略与原因） | `PersonaStatus` / `PersonaStateLayer` / `PersonaImportConflictStrategy` / `PersonaImportReason` |
 | `chara_card.py` | chara card v2 规格模型（卡片 + 世界书，Unit 文件） | `CharaCardModel` / `CharaBookModel` / `CharaBookEntryModel` / `CharaBookPosition` |
+| `trait_library.py` | 特质组件库（组件 / 预设模型 + 确定性卡片生成 + 官方库装载，Unit 文件） | `TraitComponentModel` / `TraitPresetModel` / `generate_card_from_preset` / `load_official_presets` / `load_official_components` |
+| `presets/` | 官方库数据面（仓库数据非代码：`components.yaml` 33 组件 + `presets.yaml` 8 预设） | — |
 | `orm.py` | 注册表 ORM（`ff_personas` + `ff_persona_states`） | `PersonaRow` / `PersonaStateRow` |
-| `dtos.py` | 创建 / 更新 / 复制 / 记录 / 卡片 / 状态 / 查询 / 批量 DTO（Unit 文件） | `PersonaCreateDTO` / `PersonaUpdateDTO` / `PersonaCopyDTO` / `PersonaRecordDTO` / `PersonaCardDTO` / `PersonaStateUpsertDTO` / `PersonaStateDTO` / `PersonaQueryDTO` / `PersonaBatchDelete*` |
-| `service.py` | 注册 CRUD / 事务性主人格切换 / 可寻址集 / 状态层读写 / 批量删除 + `bind_persona_context` 运行期绑定 | `PersonaService` / `bind_persona_context` |
+| `dtos.py` | 创建 / 更新 / 复制 / 记录 / 卡片 / 状态 / 查询 / 批量 / 导入 / 特质库 DTO（Unit 文件） | `PersonaCreateDTO` / `PersonaUpdateDTO` / `PersonaCopyDTO` / `PersonaRecordDTO` / `PersonaCardDTO` / `PersonaStateUpsertDTO` / `PersonaStateDTO` / `PersonaQueryDTO` / `PersonaBatchDelete*` / `PersonaImportRequestDTO` / `PersonaImportResultModel` / `PersonaImportBatch*` / `TraitLibraryDTO` |
+| `service.py` | 注册 CRUD / 事务性主人格切换 / 可寻址集 / 状态层读写 / 批量删除 / 导入（幂等 + 冲突策略）+ `bind_persona_context` 运行期绑定 | `PersonaService` / `bind_persona_context` / `canonical_card_hash` |
+| `directives.py` / `directives_models.py` | 长期指令（USER.md 式常备指令）服务与 DTO——策展记忆 `user_note` + `directive:` 前缀命名空间的收窄面（R2b D7-14） | `DirectivesService` / `DirectiveCreateDTO` / `DirectiveUpdateDTO` / `DirectiveRecordDTO` / `DIRECTIVE_TOPIC_PREFIX` |
 
-依赖方向：persona → core（dtos 分页 / errors / context）+ database（Base Mixins / get_async_db）；app 层（api/personas + middleware/error_handler）→ persona + core + database。**两张表均非 PersonaMixin**（见下）。
+依赖方向：persona → core（dtos 分页 / errors / context）+ database（Base Mixins / get_async_db）+ voice（预设建议语音 `VoiceProfileModel`）；app 层（api/personas + middleware/error_handler）→ persona + core + database。**两张表均非 PersonaMixin**（见下）。
 
 ## L / M / S 三层心理状态模型
 
@@ -89,7 +92,7 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | `id` | BIGINT | PK 自增（SQLite 渲染 INTEGER） | 主键 |
 | `persona_id` | BIGINT | 非空；FK `ff_personas.id`（ON DELETE CASCADE）；索引 | 所属人格 |
 | `layer` | VARCHAR(8) | 非空；`(persona_id, layer)` 唯一 | 状态层（M=中期；S=短期） |
-| `state` | JSON | 非空 | 状态 JSON 文档（整体替换式更新） |
+| `state` | JSON | 非空 | 状态 JSON 文档（整体替换式更新；M 层可含 `emotion` 子文档——R2b 轻情绪引擎，见 [emotion.md](emotion.md)） |
 | `created_at` / `updated_at` | BIGINT | 非空 | epoch 毫秒（TimestampMixin） |
 
 迁移链：`backend/alembic/versions/000000000003_add_personas.py`（Revision 000000000003，Revises 000000000002——两表 + 索引 + 唯一约束）→ `000000000006_add_persona_voice_profile.py`（Revision 000000000006，Revises 000000000005——`ff_personas` 增 `voice_profile` JSON 可空列，纯增列、既有行落 NULL）→ `000000000008_persona_primary_marker.py`（Revision 000000000008，Revises 000000000007——多激活可寻址模型重构：增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active=1` 行回填 `'primary'`（旧单激活不变式保证至多一行），删 `is_active` 列；降级逆向重建；升级 / 降级 / 再升级均经 SQLite 冒烟验证）。
@@ -114,7 +117,7 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | `post_history_instructions` | str | 缺省 `""` | 历史后指令 |
 | `character_book` | CharaBookModel \| None | 缺省 `null` | 世界书（检索增强条目集） |
 
-**世界书（CharaBookModel）**：`name` / `description`（str）、`scan_depth`（int ≥ 1，最近 N 条消息内检索）、`token_budget`（int ≥ 1，超预算按 insertion_order 截断）、`recursive_scanning`（bool）、`entries`（条目列表）。
+**世界书（CharaBookModel）**：`name` / `description`（str）、`scan_depth`（int ≥ 1，最近 N 条消息内检索——**书级**扫描窗口，条目级不设窗口）、`token_budget`（int ≥ 1，超预算按渲染序截断）、`recursive_scanning`（bool——递归扫描**总开关**：条目级 `recursive=True` 须本开关放行，错配构造期拒绝）、`entries`（条目列表）。
 
 **世界书条目（CharaBookEntryModel）**：
 
@@ -124,10 +127,44 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | `secondary_keys` | list[str] | 缺省 `[]`；**仅 `selective=True` 可携带且须有非空键**（选择性条目空副键永不触发——构造期拒绝） | 副触发关键词（选择性触发收敛） |
 | `content` | str | 缺省 `""` | 条目正文 |
 | `insertion_order` | int | **界 0-9999**，缺省 100 | 插入顺序（值越大越靠后） |
-| `constant` | bool | 缺省 False | 恒插入（免触发） |
+| `constant` | bool | 缺省 False | 恒插入（免触发；无视分组 / 概率 / 冷却门，不占 token 预算） |
 | `case_sensitive` | bool | 缺省 False | 关键词匹配区分大小写 |
 | `selective` | bool | 缺省 False | 选择性触发（主键 + 副键双命中） |
-| `position` | CharaBookPosition | 缺省 `after_char` | 插入位置 |
+| `position` | CharaBookPosition | 缺省 `after_char` | 插入位置（决定渲染段位） |
+| `depth` | int | **界 0-20**，缺省 4 | 深度槽位：段内值越大越靠段首（远离对话末尾），0 为段尾槽（最贴近末条消息一侧）；同槽按 `insertion_order` |
+| `recursive` | bool | 缺省 False；**须书级 `recursive_scanning=True`**（错配构造期拒绝） | 条目正文参与递归扫描面（其内容可再触发其他条目） |
+| `include_group` | str \| None | 缺省 None；空白归一 None；≤64 字符 | 互斥分组名（同组非 constant 命中条目一次组装只注入优先级最高者） |
+| `trigger_probability` | float | **界 0.0-1.0**，缺省 1.0 | 触发概率门（命中后按概率注入；1.0 恒过门且零随机数消耗） |
+| `cooldown_turns` | int | **界 0-50**，缺省 0 | 注入后冷却回合数（回合 = 组装调用；会话作用域内存追踪） |
+
+### 世界书高级触发语义（R2b）
+
+选择算法链（chat 域 `world_book.select_world_book_entries` 纯函数——顺序锁定，逐候选按链序过门）：
+
+```
+① constant 恒注入      constant 条目直接进候选集（免触发；无视分组 /
+                        概率 / 冷却门；不占 token 预算）
+② 关键词匹配            最近 scan_depth 条回合文本拼接扫描面：keys 任一
+                        命中；selective 再要求 secondary_keys 任一命中；
+                        大小写按条目声明
+③ 递归扩展（2 跳上限）   书级 recursive_scanning 总开关 × 条目级 recursive
+                        收窄：已入选条目正文追加进扫描面再触发新条目；
+                        跳 1 → 跳 2 → 停（跳 2 入选者正文不再入面）；
+                        visited 集合保证环不可能（条目至多入选一次）
+④ 互斥分组剪枝          非 constant 候选同 include_group 只留优先级最高
+                        者（insertion_order 升序、同值按条目索引升序
+                        ——确定性）；constant 无视分组（不参与不排斥）
+⑤ 概率门（rng）          非 constant 候选 trigger_probability < 1.0 时
+                        消耗一次 rng.random() < p 判定；消耗序 = 渲染序
+⑥ 冷却门（回合状态）     上次注入第 F 回合、当前第 C 回合时
+                        1 <= C - F <= cooldown_turns 即拒（第 N+1 回合解禁）
+⑦ token 预算装箱        渲染序累计 estimate_text_tokens；首条超预算即
+                        截止（其后非 constant 候选不再评估）
+```
+
+渲染序（精确裁定）：条目恒渲染在 `position` 决定的段内（`before_char` 段在人格正典前 / `after_char` 段在后——段位语义不变，prompt 模板字节零改动）；段内按 **`(depth 降序, insertion_order 升序, 条目索引升序)`**。`depth` 语义是「距对话末尾的近因深度」（0 = 最贴近末条消息）：世界书条目渲染于角色定义段，故 depth 落位为段内深度槽——0 为段尾槽（紧邻其后渲染的对话历史一侧），值越大越靠段首。**兼容保证**：既有卡片全部条目缺省 `depth=4`（同槽）→ 段内退化为纯 `insertion_order` 升序 = 既有行为逐字节一致。
+
+冷却的会话作用域（诚实文档化）：`cooldown_turns` 的回合计数与注入追踪存于 `ChatSessionStateModel.world_book_state`（组装调用计数 + `{条目索引: 注入回合号}`），**纯内存态、无持久化 schema**——进程重启即复位（冷却全部解除）；条目索引在会话内稳定（卡片快照会话期不可变）。
 
 **卡片 JSON 示例**：
 
@@ -146,7 +183,7 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
     "description": "大肥鱼的世界观设定",
     "scan_depth": 4,
     "token_budget": 800,
-    "recursive_scanning": false,
+    "recursive_scanning": true,
     "entries": [
       {
         "keys": ["鱼缸", "书房"],
@@ -156,7 +193,12 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
         "constant": false,
         "case_sensitive": false,
         "selective": false,
-        "position": "after_char"
+        "position": "after_char",
+        "depth": 4,
+        "recursive": false,
+        "include_group": null,
+        "trigger_probability": 1.0,
+        "cooldown_turns": 0
       },
       {
         "keys": ["晚饭"],
@@ -166,7 +208,27 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
         "constant": false,
         "case_sensitive": true,
         "selective": true,
-        "position": "before_char"
+        "position": "before_char",
+        "depth": 4,
+        "recursive": false,
+        "include_group": null,
+        "trigger_probability": 1.0,
+        "cooldown_turns": 0
+      },
+      {
+        "keys": ["晚安", "睡觉"],
+        "secondary_keys": [],
+        "content": "睡前语态：大肥鱼会压低声音说晚安。",
+        "insertion_order": 30,
+        "constant": false,
+        "case_sensitive": false,
+        "selective": false,
+        "position": "after_char",
+        "depth": 0,
+        "recursive": false,
+        "include_group": "night-greeting",
+        "trigger_probability": 0.8,
+        "cooldown_turns": 2
       }
     ]
   }
@@ -180,10 +242,17 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
   "state": {
     "mood": "期待",
     "relationship": 80,
-    "last_summary": "主人这周工作很忙，聊了三次加班"
+    "last_summary": "主人这周工作很忙，聊了三次加班",
+    "emotion": {
+      "values": {"joy": 0.62, "affection": 0.58},
+      "updated_at_ms": 1760000000000
+    }
   }
 }
 ```
+
+（`emotion` 子文档由轻情绪引擎经同一 upsert 面合并写入——其他 M 层键原样
+保留；结构 / 衰减 / 摘要规则见 [emotion.md](emotion.md)。）
 
 ```json
 {
@@ -194,6 +263,44 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
   }
 }
 ```
+
+## 特质组件库与导入（R2b-2）
+
+### 特质组件库（P1——纯特质组合集发行）
+
+官方预设库以**纯特质组合集**形态发行：零角色名 / 零背景故事 / 零既有形象引用（版权洁净由「只发行可组合特质」保证）；用户经导入端点私有导入自己的完整 chara card v2 卡片文件。两层结构：
+
+- **组件**（`TraitComponentModel`，`presets/components.yaml`，33 个）：最小可复用人格碎片——`description_zh`（落入卡片 `personality` 的短句）+ 六类分类（温性 / 言语风格 / 习惯癖性 / 价值取向 / 社交风格 / 幽默感）+ `tone_directives`（进入 system 提示的短指令行）+ `sample_speech`（示例台词——拼入 `mes_example`）+ `conflicts`（不宜共存的组件 id——组合时软警告不拒绝）。
+- **预设**（`TraitPresetModel`，`presets/presets.yaml`，8 个原型：大家闺秀 / 小家碧玉 / 绿茶 / 傲娇 / 温柔治愈 / 高冷御姐 / 元气少女 / 毒舌损友）：组件 id 组合集（声明序即组合序）+ 可选覆写片段（`name_suffix` 名字后缀 / `personality` / `mes_example` / `system_prompt_fragment`）+ `suggested_voice`（导入时随人格落库）+ `suggested_book`（生成时并入卡片世界书）。
+
+**生成面是纯函数**（`generate_card_from_preset`——确定性组合，逐字段锁定）：
+
+- `name` = 基础名 + `name_suffix`（存在时；基础名 = 期望名或预设中文名）；
+- `personality` = 预设描述 → 预设级补充 → 组件碎片，`；` 拼接；
+- `system_prompt` = 组件语气指令行（声明序）→ 预设级补充行，换行拼接；
+- `mes_example` = 预设级示例 → 组件示例台词（各成 `<START>\n{name}: 台词` 块）；
+- `character_book` = 建议条目非空时建书（名 = `{预设id}-book`），否则 None；
+- 组合集命中冲突声明 → `GenerationWarningModel` 列表**返回不抛错**（调用方并入导入结果 `warnings` 呈现）。
+
+**装载面**（`load_official_components` / `load_official_presets`）：路径相对资源加载（`presets/` 数据文件）+ 模型校验 + 模块级缓存——**模块导入期零副作用**，首次调用（端点）即校验，非法数据文件 fail loud（`ValueError` → 端点映射 500）。官方库不变式（装载期校验拒绝违约数据）：预设引用组件恒存在、id 唯一、组合集内无重复、**官方预设自身零冲突**（命中冲突声明 = 发行数据作者错误）、冲突引用指向已知组件。显式传入数据目录（测试合成数据）绕过缓存。
+
+### 导入端点（P2——内容哈希幂等 + 名称冲突三策略）
+
+`POST /api/v1/personas/import` 双载荷形态（JSON 或 multipart——stdlib `email` 解析器解析，与 voice.asr 同模式零新增依赖；请求体上限为模块级常量 2MB，不引入新 settings 键）：
+
+- `{preset_id}`——服务端按官方预设 + 组件库确定性生成卡片（期望名缺省 = 预设中文名；生成软警告并入结果 `warnings`；预设建议语音随创建落库；未知预设 404）；
+- `{card}`（JSON）或 `file`（multipart 卡片 JSON 文件）——用户自有卡片文档直载；
+- `conflict_strategy`（skip 缺省 / rename / overwrite）+ `desired_name` 对两种载荷通用。
+
+**冲突判定序（锁定语义，`PersonaService.import_persona`）**：
+
+1. **内容同卡幂等**：导入卡片与既有人格卡片的内容哈希（`canonical_card_hash`——`model_dump` + `sort_keys` 紧凑序列化的 sha256；等价 JSON 恒同哈希）一致 → `{imported: false, reason: identical_content, persona_id: 既有行}`——**与冲突策略无关**（同卡重导恒幂等）；
+2. 目标注册名（`desired_name` 或卡片名）空闲 → 创建新行（恒 disabled + 非主人格；展示名回落卡片名）；
+3. 名称冲突 → 策略生效：`skip`（缺省）返回 `name_conflict` 未导入；`rename` 自动后缀 `名字-2` 起寻名落库（期望名已被占用时）；`overwrite` 整体替换占用行卡片——**保留** M/S 状态 / status / 主人格标记 / 语音绑定（仅卡片文档替换）。
+
+`POST /api/v1/personas/import/batch`（multipart `files` 多文件）：逐文件独立事务部分成功——解析失败记 `VALIDATION_ERROR` 失败项；**幂等跳过与名称冲突（skip 策略）是合法结果**（`success=true, imported=false`，`reason` 呈现原因）；计数面 `{total, succeeded, failed, imported_count}`。
+
+前端消费面（`frontend/src/pages/personas/`）：预设画廊（`/personas/presets`——卡片网格 + 组件芯片 + 生成流）与列表页导入按钮（`PersonaImportButton`——单文件冲突三选一重问（跳过 / 改名 / 覆盖）+ 批量结果对话框）；共享三选一对话框 `PersonaImportConflictDialog`。multipart 请求体由前端**手工 RFC 2046 序列化**（卡片文档恒 UTF-8 文本——确定性 wire 形态，规避 axios JSON 实例头对 FormData 的改写与拦截器链对跨实现 File 对象的文件名丢失）。
 
 ## PersonaService API
 
@@ -206,6 +313,8 @@ record = await service.update(session, persona_id, dto)           # 部分更新
 record = await service.copy(session, persona_id, dto)             # 复制（可选深拷贝 M/S；恒 disabled + 非主人格；语音绑定随行复制）
 await service.delete(session, persona_id)                         # 删除（主人格守卫：CONFLICT——先另设主人格）
 result = await service.batch_delete(session, ids)                 # 批量删除（部分成功形态）
+result = await service.import_persona(session, card, strategy=..., desired_name=..., warnings=..., voice_profile=...)  # 导入（内容哈希幂等 + 冲突策略；预设建议语音仅创建路径落库）
+result = await service.import_personas_batch(session, files, strategy=...)  # 批量导入（部分成功：解析失败失败项 / 幂等与冲突跳过为合法成功项）
 record = await service.set_primary(session, persona_id)           # 设为主人格（事务性切换；DB 唯一键 + 冲突重试）
 record = await service.disable(session, persona_id)               # 停用（生命周期；主人格守卫拒绝；幂等）
 primary = await service.get_primary_persona(session)              # 当前主人格（无主人格 NOT_FOUND fail loud）
@@ -224,6 +333,63 @@ async with bind_persona_context(persona.id):                      # 运行期任
 
 卡片补丁合并语义（`PersonaUpdateDTO.card`）：仅出现字段覆写既有卡片（`exclude_unset` 合并后整体重校验——合并结果违约 `VALIDATION_ERROR` fail loud）；`character_book` 提供时整体替换（不做条目级合并），显式 `null` 清除世界书。
 
+
+## 长期指令（R2b D7-14——USER.md 式常备指令）
+
+长期指令是主人对人格的**持久行为约定**（如「以后都用简体中文」「别再熬夜了」）——
+与一次性记忆的区别是它在每轮对话组装的系统提示里恒常注入（chat compose 链的
+【长期指令】块，见 [chat.md](chat.md) 组装链）。
+
+**存储决策（锁定）**：**不新建表**——复用策展记忆域 `ff_curated_memory` 的
+`kind=user_note` + `topic='directive:<slug>'` 行；supersede 语义（同 topic 单
+active + 历史链 + 唯一键强制）与删除语义直接继承策展层，本域只做命名空间收窄与
+边界校验（不复制存储实现）。
+
+| 项 | 取值 | 说明 |
+|---|---|---|
+| `kind` | `user_note` | 固定（策展类型值域既有成员） |
+| `topic` | `directive:<slug>` | 前缀强制（`DIRECTIVE_TOPIC_PREFIX`）；缺省 slug = 正文 sha256 前 12 hex（同文重复创建收敛同链——天然去重）；显式 topic 用于编辑（同 topic 覆盖 supersede，`version` 递增） |
+| `content` | 1-500 字符 | 首尾空白裁剪；超长 / 空白拒绝（`VALIDATION_ERROR`） |
+| `provenance` | `owner` | 固定（长期指令恒源自主人——对话捕获与面板创建同轴） |
+| 注入帽 | 20 条 / 2000 字符 | chat compose 渲染帽（超帽追加截断说明行） |
+
+`DirectivesService` API（人格作用域——调用方先 `bind_persona_context`）：
+
+```python
+service = DirectivesService()                                     # 无状态；Session 逐调用注入
+record = await service.create(session, DirectiveCreateDTO(content=..., topic=None))   # 创建 / 同 topic 覆盖
+record = await service.update(session, directive_id, DirectiveUpdateDTO(content=...)) # 按既有 topic 重写
+records = await service.list_active(session, limit=200)           # 现行指令（id 降序）
+texts = await service.list_active_texts(session, limit=20)        # compose 注入面（正文列表）
+await service.delete(session, directive_id)                       # 删除（策展行删除）
+```
+
+同域非指令行（普通 `user_note` 备忘）在列表 / 更新 / 删除面均不可见（topic 前缀
+收窄——非本域行 `NOT_FOUND`）。他人格指令同样 `NOT_FOUND`（PersonaMixin 作用域）。
+
+### 管理 API 面（app/api/directives.py）
+
+前缀 `/api/v1/directives`；全部响应经 `ResultDTO` 封装，DB Session 经
+`get_async_db` 注入（事务边界归服务层）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/directives` | 现行指令列表（`persona_id` 可选——缺省主人格；他人格不可见） |
+| POST | `/api/v1/directives` | 创建（body `{content, topic?}`；同 topic 覆盖为 supersede） |
+| PUT | `/api/v1/directives/{id}` | 按既有 topic 重写（body `{content}`；supersede 链 +1） |
+| DELETE | `/api/v1/directives/{id}` | 删除（策展行删除；不可恢复） |
+
+### 对话捕获（意图快径 DIRECTIVE——R2b）
+
+通道对话里以「记住 / 记得 / 以后都 / 以后 / 别再 / 不要」开头的消息经意图快径
+`DIRECTIVE` 类型捕获（见 [chat.md](chat.md) 意图快径一节）：正文经装配注入的
+`DirectiveSinkFace` 落库为长期指令（`provenance=owner`），**落库成功才**回复
+「已记住：正文」；落库失败 / 未接线时退化为普通附和（不承诺记住——避免下一轮
+compose 读不到指令时自相矛盾）。副作用恒不阻断回复链路。
+
+前端消费面（`frontend/src/pages/personas/DirectivesPanel.tsx`）：人格编辑页
+「常备指令」卡片——列表 / 新建 / 编辑（supersede）/ 删除（确认）。
+
 ## 管理 API 面（app/api/personas.py）
 
 前缀 `/api/v1/personas`；全部响应经 `ResultDTO` 封装，分页经 `PageResponse`，DB Session 经 `get_async_db` 注入（事务边界归服务层）：
@@ -240,6 +406,9 @@ async with bind_persona_context(persona.id):                      # 运行期任
 | POST | `/api/v1/personas/{id}/set-primary` | 设为主人格（事务性切换；停用人格 409） |
 | POST | `/api/v1/personas/{id}/disable` | 停用（生命周期；主人格守卫 409） |
 | GET | `/api/v1/personas/primary` | 当前主人格（无主人格 404——清晰中文错误） |
+| GET | `/api/v1/personas/presets` | 官方特质库读取（`{presets, components}` 画廊载荷；装载失败 500） |
+| POST | `/api/v1/personas/import` | 导入（JSON：`{preset_id}` 官方预设生成 / `{card}` 用户卡片 + `conflict_strategy` + `desired_name`；multipart：`file` + 同名表单字段） |
+| POST | `/api/v1/personas/import/batch` | 批量导入（multipart `files` 多文件 + `conflict_strategy`；部分成功形态） |
 | GET | `/api/v1/personas/{id}/card` | 卡片读取 |
 | PUT | `/api/v1/personas/{id}/card` | 卡片整体替换（body 为完整卡片） |
 | GET | `/api/v1/personas/{id}/states` | 已写状态层列表 |
@@ -249,7 +418,7 @@ async with bind_persona_context(persona.id):                      # 运行期任
 
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；
-- 全部 `async def test_`；引擎经共享会话级 SQLite fixture（StaticPool 单连接 + 每测试自动清表）；HTTP 面零真实网络（ASGITransport 本地装配 app）；
+- 测试位置：`src/tests/unit/test_directives_service.py`（长期指令：topic 派生 / 同文收敛 / 显式 topic 覆盖 / 边界 / 命名空间收窄 / 注入帽 / 链更新 / 删除 / 人格隔离）/ `test_directives_api.py`（长期指令 HTTP 面：CRUD + 隔离 404）/ `src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元：v2 基础校验 + R2b 高级字段界校验 / include_group 归一 / recursive 总开关规格一致性 / 加性字段 JSON 往返）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_trait_library.py`（R2b-2 特质库：组件 / 预设模型规格（kebab / 分类值域 / 空组合拒绝）+ 纯函数生成（后缀拼接 / 分号拼接序 / 指令行拼接 / `<START>` 台词块 / 建议世界书并入 / 冲突软警告双向去重 / 未知组件 fail loud）+ 官方库装载（真实随包 YAML——8 预设名单序 / 全引用合法 / 发行零冲突 / 缓存命中）+ 显式目录违约形态 fail loud（缺失 / 结构 / 重复 id / 未知引用 / 发行冲突预设 / 空库））/ `test_persona_import_service.py`（R2b-2 导入服务：判定序（内容同卡三策略恒幂等）+ 名称冲突三策略矩阵（skip / rename 自动后缀链 / overwrite 保状态保标记保语音）+ 期望名 / 载荷恰一 + 批量部分成功（合法跳过成功项 / 解析失败失败项 / 计数面））/ `test_persona_import_api.py`（R2b-2 导入 HTTP 面：预设库读取 + JSON / multipart 双面矩阵（预设生成 / 期望名 + 后缀 / 同卡幂等 / 冲突三策略 / 未知预设 404 / 载荷恰一 422 / 策略非法 422 / 空体 400 / 非法 JSON 400/422）+ 批量部分成功（rename 策略表单字段）+ 处理器直调契约面）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；世界书选择算法链的运行语义测试在 chat 域 `test_chat_world_book.py`（见 chat.md）；
+- 全部 `async def test_`；引擎经共享会话级 SQLite fixture（StaticPool 单连接 + 每测试自动清表）；HTTP 面零真实网络（ASGITransport 本地装配 app）；预设库装载测试用真实随包 YAML（仓库数据即 hermetic）；
 - 覆盖率（scoped 实测）：harness/persona **100%**、app/api **100%**、app/middleware **100%**；
 - 运行：`cd backend && pixi run tests-unit`。
