@@ -40,6 +40,9 @@ from packages.harness.persona.service import PersonaService, bind_persona_contex
 memory_service = MemoryService()
 persona_service = PersonaService()
 
+#: 事实 / 技能阶段的空提案响应（阶段序：gate → facts → skills → merge；铺底用）。
+FACTS_EMPTY = "[]"
+
 
 class StubDreamGateway:
     """桩网关（chat_by_role 排队响应——dream 角色面，零真实网络）。
@@ -169,7 +172,7 @@ async def test_dream_trigger_happy_path(
             ),
         )
     dream_app.state.gateway = StubDreamGateway(
-        [_merge_response([episode.id]), "今天主人吃到了虾干，很开心。"]
+        [FACTS_EMPTY, "[]", _merge_response([episode.id]), "今天主人吃到了虾干，很开心。"]
     )
 
     response = await client.post("/api/v1/memories/dream/trigger", json={})
@@ -269,12 +272,14 @@ async def test_dream_runs_list_and_detail(
                 importance=6,
             ),
         )
-    dream_app.state.gateway = StubDreamGateway([_merge_response([episode.id]), "第一天的日记。"])
+    dream_app.state.gateway = StubDreamGateway(
+        [FACTS_EMPTY, "[]", _merge_response([episode.id]), "第一天的日记。"]
+    )
     first = (await client.post("/api/v1/memories/dream/trigger", json={})).json()["data"]
     assert first["status"] == "success"
     # 第二次触发：chat 事件已在首次成功运行晋升 → 门控跳过；但首日的
     # 日记事件（kind=dream，新写入）作为普通候选进入合并（空提案）
-    dream_app.state.gateway = StubDreamGateway(["[]", "第二天的日记。"])
+    dream_app.state.gateway = StubDreamGateway([FACTS_EMPTY, "[]", "[]", "第二天的日记。"])
     second = (await client.post("/api/v1/memories/dream/trigger", json={})).json()["data"]
     assert second["status"] == "success"
     assert second["stats"]["promoted"] == 0
@@ -329,7 +334,7 @@ async def test_dream_trigger_handler_direct_contract(
 ) -> None:
     """处理器直调：ResultDTO 包装契约（触发即返回运行记录）。"""
     await _append_episode(db_session, primary_persona_id, "直调契约事件")
-    dream_app.state.gateway = StubDreamGateway(["[]", "今天的日记。"])
+    dream_app.state.gateway = StubDreamGateway([FACTS_EMPTY, "[]", "[]", "今天的日记。"])
     request = Request(scope={"type": "http", "app": dream_app})
 
     from packages.harness.memory.dreaming_models import DreamTriggerRequestDTO

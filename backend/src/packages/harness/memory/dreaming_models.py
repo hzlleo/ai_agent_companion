@@ -18,6 +18,12 @@
       决策构成「已晋升事件集」——后续运行的跳过依据）；
     - :class:`DreamProposedItemModel` —— LLM 合并提案条目（梦境模型
       严格 JSON 数组输出的元素契约——校验失败即丢弃计数）；
+    - :class:`DreamFactProposedItemModel` —— LLM 人物事实提案条目（事实
+      提取阶段严格 JSON 数组输出的元素契约——类别 / 正文 1-200 /
+      置信度 / 证据事件编号；校验失败即丢弃计数）；
+    - :class:`DreamSkillProposedItemModel` —— LLM 技能提案条目（技能挖矿
+      阶段严格 JSON 数组输出的元素契约——名称 / 描述 / 触发短语 /
+      markdown 正文 1-4000 / 置信度 / 证据事件编号；校验失败即丢弃计数）；
     - :class:`DreamRunRecordDTO`     —— 运行记录读取面（ORM 行归一）；
     - :class:`DreamRunQueryDTO`      —— 运行日志游标分页查询面；
     - :class:`DreamTriggerRequestDTO` —— 手工触发请求体（persona_id 可选
@@ -36,6 +42,14 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from packages.harness.memory.models import CuratedKind
+from packages.harness.persona.facts_models import PersonaFactCategory
+from packages.harness.persona.skills_models import (
+    SKILL_DESCRIPTION_MAX_LENGTH,
+    SKILL_MINED_CONTENT_MAX_LENGTH,
+    SKILL_NAME_MAX_LENGTH,
+    SKILL_TRIGGERS_MAX,
+    SkillTriggerModel,
+)
 
 __all__ = [
     "DreamRunStatus",
@@ -44,6 +58,8 @@ __all__ = [
     "DreamRunStatsModel",
     "DreamDecisionModel",
     "DreamProposedItemModel",
+    "DreamFactProposedItemModel",
+    "DreamSkillProposedItemModel",
     "DreamRunRecordDTO",
     "DreamRunQueryDTO",
     "DreamTriggerRequestDTO",
@@ -75,12 +91,16 @@ class DreamDecisionAction(StrEnum):
     - ``merged``：事件内容并入**既有 active 主题**（upsert 推进
       supersede 链，version > 1——事件并入既有记忆）；
     - ``skipped``：未参与晋升（低于分数线 / 既往已晋升 / 超出候选
-      上限 / 提案未收录或被丢弃）。
+      上限 / 提案未收录或被丢弃 / 目标主题已冻结）；
+    - ``archived``：**策展记忆**归档（生命周期阶段产物——决策主体是
+      ``curated_id`` 指向的策展行，不是情景事件；``episode_id`` 为 0，
+      理由 = ``strength_below_threshold``）。
     """
 
     PROMOTED = "promoted"
     SKIPPED = "skipped"
     MERGED = "merged"
+    ARCHIVED = "archived"
 
 
 class DreamJobConfig(BaseModel):
@@ -153,8 +173,29 @@ class DreamRunStatsModel(BaseModel):
           主题链）；
         - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数
           （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；
+        - ``skipped_peer``：窗口内被硬排除的 peer 事件数（群聊同侪 /
+          其他智能体的发言——不晋升策展层、不作事实证据）；
         - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用
-          未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）。
+          未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；
+        - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物
+          ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的
+          记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions
+          的 ``frozen`` 理由）；
+        - ``facts_created``：事实提取阶段新建的人物事实行数（新身份
+          事实 / 更正链首版的梦境侧产物）；
+        - ``facts_merged``：事实提取阶段收敛到既有现行事实的行数（同
+          归一化身份 → 置信度取最大值 + 证据合并的元数据刷新，不推进
+          版本）；
+        - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号
+          越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条
+          丢弃计数，不整体失败）；
+        - ``skills_created``：技能挖矿阶段新建的技能行数（新 slug 的
+          mined 产物）；
+        - ``skills_merged``：技能挖矿阶段收敛到既有技能的行数（同 slug
+          → 置信度取最大值 + 触发短语并集的元数据刷新，不推进版本）；
+        - ``skills_dropped``：技能提案丢弃计数（字段校验失败 / 证据编号
+          越出候选集 / 置信度低于提取下限 / 超出单次 5 条上限——逐条
+          丢弃计数，不整体失败）。
 
     Attributes:
         candidates: 可信候选事件数。
@@ -162,7 +203,15 @@ class DreamRunStatsModel(BaseModel):
         promoted: 晋升事件数（新起链）。
         superseded: 并入事件数（推进既有链）。
         skipped_untrusted: untrusted 硬排除计数。
+        skipped_peer: peer 硬排除计数（群聊同侪 / 其他智能体的发言）。
         failed: 提案丢弃计数。
+        archived: 策展记忆归档行数（生命周期阶段）。
+        facts_created: 人物事实新建行数（事实提取阶段）。
+        facts_merged: 人物事实元数据刷新行数（事实提取阶段）。
+        facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。
+        skills_created: 技能新建行数（技能挖矿阶段）。
+        skills_merged: 技能元数据刷新行数（技能挖矿阶段）。
+        skills_dropped: 技能提案丢弃计数（技能挖矿阶段）。
     """
 
     candidates: int = Field(default=0, ge=0, description="可信候选事件数")
@@ -170,7 +219,15 @@ class DreamRunStatsModel(BaseModel):
     promoted: int = Field(default=0, ge=0, description="晋升事件数（新起链）")
     superseded: int = Field(default=0, ge=0, description="并入事件数（推进既有链）")
     skipped_untrusted: int = Field(default=0, ge=0, description="untrusted 硬排除计数")
+    skipped_peer: int = Field(default=0, ge=0, description="peer 硬排除计数（群聊同侪 / 其他智能体）")
     failed: int = Field(default=0, ge=0, description="提案丢弃计数")
+    archived: int = Field(default=0, ge=0, description="策展记忆归档行数（生命周期阶段）")
+    facts_created: int = Field(default=0, ge=0, description="人物事实新建行数（事实提取阶段）")
+    facts_merged: int = Field(default=0, ge=0, description="人物事实元数据刷新行数（事实提取阶段）")
+    facts_dropped: int = Field(default=0, ge=0, description="人物事实提案丢弃计数（事实提取阶段）")
+    skills_created: int = Field(default=0, ge=0, description="技能新建行数（技能挖矿阶段）")
+    skills_merged: int = Field(default=0, ge=0, description="技能元数据刷新行数（技能挖矿阶段）")
+    skills_dropped: int = Field(default=0, ge=0, description="技能提案丢弃计数（技能挖矿阶段）")
 
 
 class DreamDecisionModel(BaseModel):
@@ -182,18 +239,24 @@ class DreamDecisionModel(BaseModel):
     后续运行的「已晋升」跳过依据。
 
     Attributes:
-        episode_id: 情景事件主键（决策主体）。
+        episode_id: 情景事件主键（决策主体；策展归档决策为 0——无关联
+            情景事件，主体见 ``curated_id``）。
         topic: 关联策展主题键（纯跳过决策为空串）。
         kind: 关联策展类型（纯跳过决策为 None）。
-        action: 决策动作（promoted / skipped / merged）。
-        reason: 人读决策理由（跳过原因 / 晋升去向说明）。
+        action: 决策动作（promoted / skipped / merged / archived）。
+        reason: 人读决策理由（跳过原因 / 晋升去向说明 / 归档原因）。
+        curated_id: 关联策展记忆主键（仅 archived 决策填写——归档
+            决策的主体是策展行；其余决策为 None）。
     """
 
-    episode_id: int = Field(description="情景事件主键")
+    episode_id: int = Field(default=0, ge=0, description="情景事件主键（策展归档决策为 0）")
     topic: str = Field(default="", description="关联策展主题键（纯跳过为空串）")
     kind: CuratedKind | None = Field(default=None, description="关联策展类型（纯跳过为 None）")
     action: DreamDecisionAction = Field(description="决策动作")
     reason: str = Field(default="", description="决策理由")
+    curated_id: int | None = Field(
+        default=None, description="关联策展记忆主键（仅 archived 决策填写）"
+    )
 
 
 class DreamProposedItemModel(BaseModel):
@@ -217,6 +280,78 @@ class DreamProposedItemModel(BaseModel):
     content: str = Field(min_length=1, description="蒸馏后的记忆正文")
     importance: int = Field(ge=1, le=10, description="重要度（1-10）")
     merged_from: list[int] = Field(min_length=1, description="来源候选事件主键列表（至少一条）")
+
+
+class DreamFactProposedItemModel(BaseModel):
+    """LLM 人物事实提案条目（事实提取阶段输出的严格 JSON 数组元素契约）。
+
+    校验语义（dreaming 编排逐条校验，失败丢弃并计入 ``facts_dropped``）：
+    category 封闭值域 / content 1-200 字符 / confidence 0-1 由本 Model
+    Class 边界强制；``evidence_episode_ids ⊆ 候选事件 id 集`` 与置信度
+    下限（``FACT_MIN_CONFIDENCE``）由编排校验（需要候选上下文与阈值）。
+
+    Attributes:
+        category: 事实类别（preference / biography / relationship /
+            context）。
+        content: 事实陈述（1-200 字符——短事实陈述是提取面的锁定上限）。
+        confidence: 置信度（0-1）。
+        evidence_episode_ids: 来源候选事件主键列表（至少一条——事实必须
+            有事件背书）。
+    """
+
+    category: PersonaFactCategory = Field(description="事实类别")
+    content: str = Field(min_length=1, max_length=200, description="事实陈述（1-200 字符）")
+    confidence: float = Field(ge=0, le=1, description="置信度（0-1）")
+    evidence_episode_ids: list[int] = Field(
+        min_length=1, description="来源候选事件主键列表（至少一条）"
+    )
+
+
+class DreamSkillProposedItemModel(BaseModel):
+    """LLM 技能提案条目（技能挖矿阶段输出的严格 JSON 数组元素契约）。
+
+    校验语义（dreaming 编排逐条校验，失败丢弃并计入 ``skills_dropped``）：
+    name / description / triggers 条数与单条长度 / content 长度 /
+    confidence 0-1 由本 Model Class 边界强制；``evidence_episode_ids ⊆
+    候选事件 id 集`` 与置信度下限（``SKILL_MIN_CONFIDENCE``）由编排校验
+    （需要候选上下文与阈值）。
+
+    证据编号只作提案有效性校验（技能表不存证据链——技能是操作指令，
+    不是可溯源断言；事件回链的价值已在事实 / 策展层保留）。
+
+    Attributes:
+        name: 技能名（1-120 字符——服务层由此派生 slug）。
+        description: 何时使用的触发描述（1-500 字符）。
+        triggers: 触发短语（1-8 条、每条 1-40 字符——主人可能说出的
+            字面短语）。
+        content: markdown 步骤正文（1-4000 字符——挖矿面比手工面更窄）。
+        confidence: 置信度（0-1）。
+        evidence_episode_ids: 来源候选事件主键列表（至少一条——提案必须
+            有事件背书）。
+    """
+
+    name: str = Field(
+        min_length=1, max_length=SKILL_NAME_MAX_LENGTH, description="技能名（1-120 字符）"
+    )
+    description: str = Field(
+        min_length=1,
+        max_length=SKILL_DESCRIPTION_MAX_LENGTH,
+        description="何时使用的触发描述（1-500 字符）",
+    )
+    triggers: list[SkillTriggerModel] = Field(
+        min_length=1,
+        max_length=SKILL_TRIGGERS_MAX,
+        description="触发短语（1-8 条、每条 1-40 字符）",
+    )
+    content: str = Field(
+        min_length=1,
+        max_length=SKILL_MINED_CONTENT_MAX_LENGTH,
+        description="markdown 步骤正文（1-4000 字符）",
+    )
+    confidence: float = Field(ge=0, le=1, description="置信度（0-1）")
+    evidence_episode_ids: list[int] = Field(
+        min_length=1, description="来源候选事件主键列表（至少一条）"
+    )
 
 
 class DreamRunRecordDTO(BaseModel):

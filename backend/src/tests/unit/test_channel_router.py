@@ -43,7 +43,10 @@ _PERSONA_ID = 7
 
 
 def _inbound(
-    chat_id: str = "10086", text: str = "你好", message_id: str = "42"
+    chat_id: str = "10086",
+    text: str = "你好",
+    message_id: str = "42",
+    is_group_chat: bool = False,
 ) -> InboundMessageModel:
     """构造入站消息（测试直供形态）。
 
@@ -51,6 +54,7 @@ def _inbound(
         chat_id: 会话 ID。
         text: 消息文本。
         message_id: 消息 ID。
+        is_group_chat: 群聊标记（provenance 分级回归用）。
 
     Returns:
         :class:`InboundMessageModel` 实例。
@@ -61,6 +65,7 @@ def _inbound(
         message_id=message_id,
         sender_id="7",
         text=text,
+        is_group_chat=is_group_chat,
     )
 
 
@@ -95,14 +100,17 @@ class FakeChatService:
             card=CharaCardModel(name="小鱼"),
         )
 
-    async def reply(self, state: ChatSessionStateModel, user_text: str) -> str:
-        """fake 回复（记录人格上下文 + 复用态断言原料）。"""
+    async def reply(
+        self, state: ChatSessionStateModel, user_text: str, *, sender_provenance=None
+    ) -> str:
+        """fake 回复（记录人格上下文 + 复用态断言原料 + 来源分级）。"""
         self.reply_calls.append(
             {
                 "state": state,
                 "text": user_text,
                 "persona_ctx": persona_id_var.get(),
                 "session_id": state.session_id,
+                "sender_provenance": sender_provenance,
             }
         )
         if self.reply_error is not None:
@@ -401,7 +409,9 @@ class GatedFakeChatService:
             card=CharaCardModel(name="小鱼"),
         )
 
-    async def reply(self, state: ChatSessionStateModel, user_text: str) -> str:
+    async def reply(
+        self, state: ChatSessionStateModel, user_text: str, *, sender_provenance=None
+    ) -> str:
         """fake 慢回复：登记进入事件 → 等待释放门 → 登记退出事件。"""
         self.events.append(f"enter:{user_text}")
         self.entered_event(user_text).set()
@@ -512,3 +522,27 @@ class TestV2PassThrough:
         assert adapter.sent[0].text == "echo:看看这张"
         assert adapter.sent[0].attachments == []
         assert result.attachment_results == []
+
+
+class TestSenderProvenance:
+    """入站来源分级：私聊 owner / 群聊 peer（提示词攻击防御的落档面）。"""
+
+    async def test_private_chat_reply_carries_owner_provenance(self) -> None:
+        """私聊消息 → ChatService.reply 收到 owner 来源分级。"""
+        from packages.harness.memory.models import MemoryProvenance
+
+        chat = FakeChatService()
+        router = _router(chat)
+        router.register_adapter(ChannelType.TELEGRAM, FakeAdapter())
+        await router.handle_inbound(_inbound(text="早呀"))
+        assert chat.reply_calls[0]["sender_provenance"] == MemoryProvenance.OWNER
+
+    async def test_group_chat_reply_carries_peer_provenance(self) -> None:
+        """群聊消息 → ChatService.reply 收到 peer 来源分级（同侪发言不晋升）。"""
+        from packages.harness.memory.models import MemoryProvenance
+
+        chat = FakeChatService()
+        router = _router(chat)
+        router.register_adapter(ChannelType.TELEGRAM, FakeAdapter())
+        await router.handle_inbound(_inbound(chat_id="group:42", text="你好", is_group_chat=True))
+        assert chat.reply_calls[0]["sender_provenance"] == MemoryProvenance.PEER

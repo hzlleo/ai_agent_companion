@@ -97,6 +97,22 @@ from packages.harness.persona.directives_models import (
     DirectiveRecordDTO,
     DirectiveUpdateDTO,
 )
+from packages.harness.persona.core_memory_models import (
+    CoreMemoryBlockDTO,
+    CoreMemoryRevDTO,
+    OwnerEditModel,
+)
+from packages.harness.persona.facts_models import (
+    FactCorrectDTO,
+    FactCreateDTO,
+    FactEvidenceRefModel,
+    FactRecordDTO,
+)
+from packages.harness.persona.skills_models import (
+    SkillCreateModel,
+    SkillRecordDTO,
+    SkillUpdateModel,
+)
 from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
     CharaBookModel,
@@ -236,6 +252,21 @@ def build_manifest() -> list[SchemaExportEntry]:
         SchemaExportEntry("DirectiveCreateDTO", DirectiveCreateDTO, "DirectiveCreateRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("DirectiveUpdateDTO", DirectiveUpdateDTO, "DirectiveUpdateRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("DirectiveRecordDTO", DirectiveRecordDTO, "DirectiveRecord", _FRONTEND_PERSONA),
+        # persona 域——人物事实（R2c；结构化事实 / 证据链 / 更正循环）。
+        SchemaExportEntry("FactEvidenceRefModel", FactEvidenceRefModel, "FactEvidenceRef", _FRONTEND_PERSONA),
+        SchemaExportEntry("FactCreateDTO", FactCreateDTO, "FactCreateRequest", _FRONTEND_PERSONA),
+        SchemaExportEntry("FactCorrectDTO", FactCorrectDTO, "FactCorrectRequest", _FRONTEND_PERSONA),
+        SchemaExportEntry("FactRecordDTO", FactRecordDTO, "FactRecord", _FRONTEND_PERSONA),
+        # persona 域——程序性技能（R2c；触发短语 / 原地版本 / 启用状态）。
+        SchemaExportEntry("SkillCreateModel", SkillCreateModel, "SkillCreateRequest", _FRONTEND_PERSONA),
+        SchemaExportEntry("SkillUpdateModel", SkillUpdateModel, "SkillUpdateRequest", _FRONTEND_PERSONA),
+        SchemaExportEntry("SkillRecordDTO", SkillRecordDTO, "SkillRecord", _FRONTEND_PERSONA),
+        # persona 域——核心记忆（R2c；四块自编辑自我模型 / 修订链 / 主人编辑）。
+        SchemaExportEntry("CoreMemoryBlockDTO", CoreMemoryBlockDTO, "CoreMemoryBlock", _FRONTEND_PERSONA),
+        SchemaExportEntry("CoreMemoryRevDTO", CoreMemoryRevDTO, "CoreMemoryRevision", _FRONTEND_PERSONA),
+        SchemaExportEntry(
+            "OwnerEditModel", OwnerEditModel, "CoreMemoryOwnerUpdateRequest", _FRONTEND_PERSONA
+        ),
         # memory 域——情景事件。
         SchemaExportEntry("EpisodeCreateDTO", EpisodeCreateDTO, "EpisodeCreateRequest", _FRONTEND_MEMORY),
         SchemaExportEntry("EpisodeRecordDTO", EpisodeRecordDTO, "EpisodeRecord", _FRONTEND_MEMORY),

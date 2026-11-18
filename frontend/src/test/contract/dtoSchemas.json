@@ -144,6 +144,56 @@
         "schema_key": "DirectiveRecordDTO"
       },
       {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "FactEvidenceRef",
+        "schema_key": "FactEvidenceRefModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "FactCreateRequest",
+        "schema_key": "FactCreateDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "FactCorrectRequest",
+        "schema_key": "FactCorrectDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "FactRecord",
+        "schema_key": "FactRecordDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "SkillCreateRequest",
+        "schema_key": "SkillCreateModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "SkillUpdateRequest",
+        "schema_key": "SkillUpdateModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "SkillRecord",
+        "schema_key": "SkillRecordDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "CoreMemoryBlock",
+        "schema_key": "CoreMemoryBlockDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "CoreMemoryRevision",
+        "schema_key": "CoreMemoryRevDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "CoreMemoryOwnerUpdateRequest",
+        "schema_key": "OwnerEditModel"
+      },
+      {
         "frontend_file": "frontend/src/types/memory.ts",
         "frontend_type": "EpisodeCreateRequest",
         "schema_key": "EpisodeCreateDTO"
@@ -1829,6 +1879,194 @@
       "title": "ChatVariantSelectRequestDTO",
       "type": "object"
     },
+    "CoreMemoryBlockDTO": {
+      "$defs": {
+        "CoreBlockKey": {
+          "description": "核心记忆块键值域（ff_core_memory_blocks.block_key）。\n\n- ``self_identity``：自我认知（人格对自己身份 / 性格 / 处境的稳定理解）；\n- ``owner_profile``：关于对方（对主人的稳定认知——称呼 / 习惯 / 边界）；\n- ``relationship_story``：我们的故事（共同经历与关系里程碑）；\n- ``open_notes``：备忘（尚未归入前三块的长期事项）。",
+          "enum": [
+            "self_identity",
+            "owner_profile",
+            "relationship_story",
+            "open_notes"
+          ],
+          "title": "CoreBlockKey",
+          "type": "string"
+        },
+        "CoreMemoryActor": {
+          "description": "核心记忆的写入者值域（块的 ``updated_by`` 与修订的 ``provenance``）。\n\n- ``owner``：主人（管理面编辑——含锁定开关）；\n- ``agent``：人格自身（对话内 ``edit_core_memory`` 工具调用）。\n\n修订来源 ``source`` 与之强制配对（admin ↔ owner、chat ↔ agent），\n由服务层在写入前校验。",
+          "enum": [
+            "owner",
+            "agent"
+          ],
+          "title": "CoreMemoryActor",
+          "type": "string"
+        }
+      },
+      "description": "核心记忆块读取 DTO（ORM 行归一——管理面 / 面板 / compose 读取面）。\n\nAttributes:\n    id: 块主键（修订列表的归属锚点）。\n    block: 块键（封闭四元组）。\n    content: 块正文（0-2000 字符；空块不进入 compose 注入）。\n    locked: 是否锁定（True = 仅主人可改写）。\n    version: 编辑版本号（首版 1，任何内容 / 锁定状态变更递增）。\n    updated_by: 最近一次写入者（owner / agent）。\n    last_edited_session_id: 最近一次对话内编辑的会话主键（管理面编辑\n        为 None）。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒）。",
+      "properties": {
+        "block": {
+          "$ref": "#/$defs/CoreBlockKey",
+          "description": "块键（封闭四元组）"
+        },
+        "content": {
+          "description": "块正文（0-2000 字符；空块不注入）",
+          "title": "Content",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "落库时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "id": {
+          "description": "块主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "last_edited_session_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "最近一次对话内编辑的会话主键（管理面为 None）",
+          "title": "Last Edited Session Id"
+        },
+        "locked": {
+          "description": "是否锁定（True = 仅主人可改写）",
+          "title": "Locked",
+          "type": "boolean"
+        },
+        "updated_at": {
+          "description": "行更新时间（epoch 毫秒）",
+          "title": "Updated At",
+          "type": "integer"
+        },
+        "updated_by": {
+          "$ref": "#/$defs/CoreMemoryActor",
+          "description": "最近一次写入者（owner/agent）"
+        },
+        "version": {
+          "description": "编辑版本号（首版 1）",
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "block",
+        "content",
+        "locked",
+        "version",
+        "updated_by",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "CoreMemoryBlockDTO",
+      "type": "object"
+    },
+    "CoreMemoryRevDTO": {
+      "$defs": {
+        "CoreBlockKey": {
+          "description": "核心记忆块键值域（ff_core_memory_blocks.block_key）。\n\n- ``self_identity``：自我认知（人格对自己身份 / 性格 / 处境的稳定理解）；\n- ``owner_profile``：关于对方（对主人的稳定认知——称呼 / 习惯 / 边界）；\n- ``relationship_story``：我们的故事（共同经历与关系里程碑）；\n- ``open_notes``：备忘（尚未归入前三块的长期事项）。",
+          "enum": [
+            "self_identity",
+            "owner_profile",
+            "relationship_story",
+            "open_notes"
+          ],
+          "title": "CoreBlockKey",
+          "type": "string"
+        },
+        "CoreMemoryActor": {
+          "description": "核心记忆的写入者值域（块的 ``updated_by`` 与修订的 ``provenance``）。\n\n- ``owner``：主人（管理面编辑——含锁定开关）；\n- ``agent``：人格自身（对话内 ``edit_core_memory`` 工具调用）。\n\n修订来源 ``source`` 与之强制配对（admin ↔ owner、chat ↔ agent），\n由服务层在写入前校验。",
+          "enum": [
+            "owner",
+            "agent"
+          ],
+          "title": "CoreMemoryActor",
+          "type": "string"
+        },
+        "CoreMemorySource": {
+          "description": "核心记忆修订的来源值域（ff_core_memory_revisions.source）。\n\n- ``admin``：管理面 API（主人编辑）；\n- ``chat``：对话内工具调用（人格自编辑）。",
+          "enum": [
+            "admin",
+            "chat"
+          ],
+          "title": "CoreMemorySource",
+          "type": "string"
+        }
+      },
+      "description": "核心记忆修订记录 DTO（append-only 历史——面板抽屉读取面）。\n\nAttributes:\n    id: 修订主键（倒序游标——越大越新）。\n    block: 修订所属块键。\n    version: 修订产生时的块版本号（与块行当时版本一致）。\n    content: 修订后的块全文（逐字留存——历史不可变）。\n    provenance: 写入者（owner / agent）。\n    source: 写入来源（admin / chat）。\n    session_id: 对话内编辑的会话主键（管理面修订为 None）。\n    ts_ms: 修订时刻（epoch 毫秒——倒序排序的第二键）。\n    created_at: 落库时间（epoch 毫秒）。",
+      "properties": {
+        "block": {
+          "$ref": "#/$defs/CoreBlockKey",
+          "description": "修订所属块键"
+        },
+        "content": {
+          "description": "修订后的块全文",
+          "title": "Content",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "落库时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "id": {
+          "description": "修订主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "provenance": {
+          "$ref": "#/$defs/CoreMemoryActor",
+          "description": "写入者（owner/agent）"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "对话内编辑的会话主键（管理面为 None）",
+          "title": "Session Id"
+        },
+        "source": {
+          "$ref": "#/$defs/CoreMemorySource",
+          "description": "写入来源（admin/chat）"
+        },
+        "ts_ms": {
+          "description": "修订时刻（epoch 毫秒）",
+          "title": "Ts Ms",
+          "type": "integer"
+        },
+        "version": {
+          "description": "修订产生时的块版本号",
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "block",
+        "version",
+        "content",
+        "provenance",
+        "source",
+        "ts_ms",
+        "created_at"
+      ],
+      "title": "CoreMemoryRevDTO",
+      "type": "object"
+    },
     "CuratedQueryDTO": {
       "$defs": {
         "CuratedKind": {
@@ -1841,17 +2079,27 @@
           "title": "CuratedKind",
           "type": "string"
         },
+        "CuratedSort": {
+          "description": "策展记忆列表排序值域（GET /api/v1/memories/curated 的 sort 参数）。\n\n- ``updated_desc``：按行更新时间降序（缺省——管理面最近操作优先；\n  与既有 id 降序形态对齐）；\n- ``strength_desc``：按**读时计算**的有效强度降序（生命周期排序面\n  ——强度由行值 + 注入时钟 + LifecycleConfig 现场计算，故该排序在\n  服务层内存完成并受单页扫描上限约束，见 memory.service 查询面）。",
+          "enum": [
+            "updated_desc",
+            "strength_desc"
+          ],
+          "title": "CuratedSort",
+          "type": "string"
+        },
         "CuratedStatus": {
-          "description": "策展记忆状态值域（ff_curated_memory.status）。\n\n- ``active``：现行版本（同 (persona, kind, topic) 至多一条）；\n- ``superseded``：已被新版本取代（superseded_by_id 指向取代者）。",
+          "description": "策展记忆状态值域（ff_curated_memory.status）。\n\n- ``active``：现行版本（同 (persona, kind, topic) 至多一条）；\n- ``superseded``：已被新版本取代（superseded_by_id 指向取代者）；\n- ``archived``：已归档（生命周期终态——梦境巩固按有效强度批量置入，\n  归档行不参与默认列表、免于再次归档；``active_marker`` 置 NULL 使\n  同主题可重新起链，见 memory.lifecycle 与 memory.dreaming）。",
           "enum": [
             "active",
-            "superseded"
+            "superseded",
+            "archived"
           ],
           "title": "CuratedStatus",
           "type": "string"
         }
       },
-      "description": "策展记忆查询 DTO（kind / topic / status 过滤 + 游标分页——id 降序）。\n\nAttributes:\n    kind: 策展类型过滤（None = 全部）。\n    topic: 主题键精确过滤（None = 全部）。\n    status: 状态过滤（None = 全部；active = 现行版本面）。\n    cursor: 上一页返回的不透明游标（None = 首页）。\n    limit: 页大小（1-200，默认 20）。",
+      "description": "策展记忆查询 DTO（过滤 + 排序 + 游标分页）。\n\n``strength_desc`` 的排序语义与已知限制（自包含说明）：该排序只对\n**最新 2000 行**做 id 降序预取（服务层扫描上限），再在应用层按读时\n有效强度重排；有效强度由创建时刻 + 访问计数 + 注入时钟现场计算并\n随时间衰减，因此偏移游标翻页期间排序键本就会漂移——翻页结果不保证\n快照一致，跨页可能重复 / 遗漏。这是读时计算的已知限制（非缺陷）；\n需要稳定全量排序时使用 ``updated_desc`` 或缩小过滤面。\n\nAttributes:\n    kind: 策展类型过滤（None = 全部）。\n    topic: 主题键精确过滤（None = 全部）。\n    status: 状态过滤（None = 全部；active = 现行版本面）。\n    sort: 排序（``updated_desc`` 缺省——行更新时间降序；\n        ``strength_desc`` 按读时计算的有效强度降序，受上述扫描上限\n        与排序键漂移限制）。\n    include_archived: 是否包含归档行（默认 False——归档行不进入\n        管理面默认列表；显式 ``status`` 过滤时该开关让位于状态过滤）。\n    cursor: 上一页返回的不透明游标（None = 首页）。\n    limit: 页大小（1-200，默认 20）。",
       "properties": {
         "cursor": {
           "anyOf": [
@@ -1865,6 +2113,12 @@
           "default": null,
           "description": "分页游标（首页为 None）",
           "title": "Cursor"
+        },
+        "include_archived": {
+          "default": false,
+          "description": "是否包含归档行（显式 status 过滤时让位）",
+          "title": "Include Archived",
+          "type": "boolean"
         },
         "kind": {
           "anyOf": [
@@ -1885,6 +2139,11 @@
           "minimum": 1,
           "title": "Limit",
           "type": "integer"
+        },
+        "sort": {
+          "$ref": "#/$defs/CuratedSort",
+          "default": "updated_desc",
+          "description": "排序（updated_desc / strength_desc）"
         },
         "status": {
           "anyOf": [
@@ -1928,27 +2187,36 @@
           "type": "string"
         },
         "CuratedStatus": {
-          "description": "策展记忆状态值域（ff_curated_memory.status）。\n\n- ``active``：现行版本（同 (persona, kind, topic) 至多一条）；\n- ``superseded``：已被新版本取代（superseded_by_id 指向取代者）。",
+          "description": "策展记忆状态值域（ff_curated_memory.status）。\n\n- ``active``：现行版本（同 (persona, kind, topic) 至多一条）；\n- ``superseded``：已被新版本取代（superseded_by_id 指向取代者）；\n- ``archived``：已归档（生命周期终态——梦境巩固按有效强度批量置入，\n  归档行不参与默认列表、免于再次归档；``active_marker`` 置 NULL 使\n  同主题可重新起链，见 memory.lifecycle 与 memory.dreaming）。",
           "enum": [
             "active",
-            "superseded"
+            "superseded",
+            "archived"
           ],
           "title": "CuratedStatus",
           "type": "string"
         },
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
           "type": "string"
         }
       },
-      "description": "策展记忆读取 DTO（ORM 行归一）。\n\nAttributes:\n    id: 记忆主键。\n    persona_id: 所属人格 ID。\n    kind: 策展类型。\n    topic: 主题键。\n    content: 记忆正文。\n    importance: 重要度（1-10）。\n    provenance: 来源可信度（owner/agent）。\n    status: 状态（active/superseded）。\n    superseded_by_id: 取代者行主键（active 行为 None）。\n    version: 链内版本号（首版 1）。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒）。",
+      "description": "策展记忆读取 DTO（ORM 行归一 + 生命周期读时投影）。\n\nAttributes:\n    id: 记忆主键。\n    persona_id: 所属人格 ID。\n    kind: 策展类型。\n    topic: 主题键。\n    content: 记忆正文。\n    importance: 重要度（1-10）。\n    provenance: 来源可信度（owner/agent）。\n    status: 状态（active/superseded/archived）。\n    superseded_by_id: 取代者行主键（active 行为 None）。\n    version: 链内版本号（首版 1）。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒）。\n    pinned: 是否置顶（免于时间衰减与归档）。\n    frozen: 是否冻结（不参与梦境合并 / 不被归档）。\n    access_count: 检索命中累计次数（写读强化轴）。\n    last_accessed_ms: 最近检索命中时刻（epoch 毫秒；None = 未命中）。\n    effective_strength: 有效强度（**读时计算**——由服务层以注入时钟 +\n        LifecycleConfig 现场求得，非落库列；归档行仍返回该值仅供\n        观测，前端对归档行展示占位符）。",
       "properties": {
+        "access_count": {
+          "default": 0,
+          "description": "检索命中累计次数",
+          "minimum": 0,
+          "title": "Access Count",
+          "type": "integer"
+        },
         "content": {
           "description": "记忆正文",
           "title": "Content",
@@ -1958,6 +2226,19 @@
           "description": "落库时间（epoch 毫秒）",
           "title": "Created At",
           "type": "integer"
+        },
+        "effective_strength": {
+          "default": 0.0,
+          "description": "有效强度（读时计算，非落库列）",
+          "minimum": 0,
+          "title": "Effective Strength",
+          "type": "number"
+        },
+        "frozen": {
+          "default": false,
+          "description": "是否冻结（不参与合并 / 不被归档）",
+          "title": "Frozen",
+          "type": "boolean"
         },
         "id": {
           "description": "记忆主键",
@@ -1973,10 +2254,29 @@
           "$ref": "#/$defs/CuratedKind",
           "description": "策展类型"
         },
+        "last_accessed_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "最近检索命中时刻（epoch 毫秒；None = 未命中）",
+          "title": "Last Accessed Ms"
+        },
         "persona_id": {
           "description": "所属人格 ID",
           "title": "Persona Id",
           "type": "string"
+        },
+        "pinned": {
+          "default": false,
+          "description": "是否置顶（免于衰减与归档）",
+          "title": "Pinned",
+          "type": "boolean"
         },
         "provenance": {
           "$ref": "#/$defs/MemoryProvenance",
@@ -1984,7 +2284,7 @@
         },
         "status": {
           "$ref": "#/$defs/CuratedStatus",
-          "description": "状态（active/superseded）"
+          "description": "状态（active/superseded/archived）"
         },
         "superseded_by_id": {
           "anyOf": [
@@ -2044,10 +2344,11 @@
           "type": "string"
         },
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -2202,24 +2503,40 @@
           "type": "string"
         },
         "DreamDecisionAction": {
-          "description": "逐事件决策动作值域（DreamDecisionModel.action）。\n\n- ``promoted``：事件内容经 LLM 蒸馏进入**新起链**的策展主题\n  （upsert 落 version=1——事件被晋升为记忆）；\n- ``merged``：事件内容并入**既有 active 主题**（upsert 推进\n  supersede 链，version > 1——事件并入既有记忆）；\n- ``skipped``：未参与晋升（低于分数线 / 既往已晋升 / 超出候选\n  上限 / 提案未收录或被丢弃）。",
+          "description": "逐事件决策动作值域（DreamDecisionModel.action）。\n\n- ``promoted``：事件内容经 LLM 蒸馏进入**新起链**的策展主题\n  （upsert 落 version=1——事件被晋升为记忆）；\n- ``merged``：事件内容并入**既有 active 主题**（upsert 推进\n  supersede 链，version > 1——事件并入既有记忆）；\n- ``skipped``：未参与晋升（低于分数线 / 既往已晋升 / 超出候选\n  上限 / 提案未收录或被丢弃 / 目标主题已冻结）；\n- ``archived``：**策展记忆**归档（生命周期阶段产物——决策主体是\n  ``curated_id`` 指向的策展行，不是情景事件；``episode_id`` 为 0，\n  理由 = ``strength_below_threshold``）。",
           "enum": [
             "promoted",
             "skipped",
-            "merged"
+            "merged",
+            "archived"
           ],
           "title": "DreamDecisionAction",
           "type": "string"
         }
       },
-      "description": "逐事件决策记录（ff_dream_runs.decisions JSON 的元素形态）。\n\n决策覆盖口径：**全部可信候选事件**（窗口内非 untrusted 事件——\n无论过门与否每人一条；untrusted 事件不可见、不产生决策）。\n既往成功运行中 action ∈ {promoted, merged} 的 episode_id 集合构成\n后续运行的「已晋升」跳过依据。\n\nAttributes:\n    episode_id: 情景事件主键（决策主体）。\n    topic: 关联策展主题键（纯跳过决策为空串）。\n    kind: 关联策展类型（纯跳过决策为 None）。\n    action: 决策动作（promoted / skipped / merged）。\n    reason: 人读决策理由（跳过原因 / 晋升去向说明）。",
+      "description": "逐事件决策记录（ff_dream_runs.decisions JSON 的元素形态）。\n\n决策覆盖口径：**全部可信候选事件**（窗口内非 untrusted 事件——\n无论过门与否每人一条；untrusted 事件不可见、不产生决策）。\n既往成功运行中 action ∈ {promoted, merged} 的 episode_id 集合构成\n后续运行的「已晋升」跳过依据。\n\nAttributes:\n    episode_id: 情景事件主键（决策主体；策展归档决策为 0——无关联\n        情景事件，主体见 ``curated_id``）。\n    topic: 关联策展主题键（纯跳过决策为空串）。\n    kind: 关联策展类型（纯跳过决策为 None）。\n    action: 决策动作（promoted / skipped / merged / archived）。\n    reason: 人读决策理由（跳过原因 / 晋升去向说明 / 归档原因）。\n    curated_id: 关联策展记忆主键（仅 archived 决策填写——归档\n        决策的主体是策展行；其余决策为 None）。",
       "properties": {
         "action": {
           "$ref": "#/$defs/DreamDecisionAction",
           "description": "决策动作"
         },
+        "curated_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "关联策展记忆主键（仅 archived 决策填写）",
+          "title": "Curated Id"
+        },
         "episode_id": {
-          "description": "情景事件主键",
+          "default": 0,
+          "description": "情景事件主键（策展归档决策为 0）",
+          "minimum": 0,
           "title": "Episode Id",
           "type": "integer"
         },
@@ -2249,7 +2566,6 @@
         }
       },
       "required": [
-        "episode_id",
         "action"
       ],
       "title": "DreamDecisionModel",
@@ -2357,24 +2673,40 @@
           "type": "string"
         },
         "DreamDecisionAction": {
-          "description": "逐事件决策动作值域（DreamDecisionModel.action）。\n\n- ``promoted``：事件内容经 LLM 蒸馏进入**新起链**的策展主题\n  （upsert 落 version=1——事件被晋升为记忆）；\n- ``merged``：事件内容并入**既有 active 主题**（upsert 推进\n  supersede 链，version > 1——事件并入既有记忆）；\n- ``skipped``：未参与晋升（低于分数线 / 既往已晋升 / 超出候选\n  上限 / 提案未收录或被丢弃）。",
+          "description": "逐事件决策动作值域（DreamDecisionModel.action）。\n\n- ``promoted``：事件内容经 LLM 蒸馏进入**新起链**的策展主题\n  （upsert 落 version=1——事件被晋升为记忆）；\n- ``merged``：事件内容并入**既有 active 主题**（upsert 推进\n  supersede 链，version > 1——事件并入既有记忆）；\n- ``skipped``：未参与晋升（低于分数线 / 既往已晋升 / 超出候选\n  上限 / 提案未收录或被丢弃 / 目标主题已冻结）；\n- ``archived``：**策展记忆**归档（生命周期阶段产物——决策主体是\n  ``curated_id`` 指向的策展行，不是情景事件；``episode_id`` 为 0，\n  理由 = ``strength_below_threshold``）。",
           "enum": [
             "promoted",
             "skipped",
-            "merged"
+            "merged",
+            "archived"
           ],
           "title": "DreamDecisionAction",
           "type": "string"
         },
         "DreamDecisionModel": {
-          "description": "逐事件决策记录（ff_dream_runs.decisions JSON 的元素形态）。\n\n决策覆盖口径：**全部可信候选事件**（窗口内非 untrusted 事件——\n无论过门与否每人一条；untrusted 事件不可见、不产生决策）。\n既往成功运行中 action ∈ {promoted, merged} 的 episode_id 集合构成\n后续运行的「已晋升」跳过依据。\n\nAttributes:\n    episode_id: 情景事件主键（决策主体）。\n    topic: 关联策展主题键（纯跳过决策为空串）。\n    kind: 关联策展类型（纯跳过决策为 None）。\n    action: 决策动作（promoted / skipped / merged）。\n    reason: 人读决策理由（跳过原因 / 晋升去向说明）。",
+          "description": "逐事件决策记录（ff_dream_runs.decisions JSON 的元素形态）。\n\n决策覆盖口径：**全部可信候选事件**（窗口内非 untrusted 事件——\n无论过门与否每人一条；untrusted 事件不可见、不产生决策）。\n既往成功运行中 action ∈ {promoted, merged} 的 episode_id 集合构成\n后续运行的「已晋升」跳过依据。\n\nAttributes:\n    episode_id: 情景事件主键（决策主体；策展归档决策为 0——无关联\n        情景事件，主体见 ``curated_id``）。\n    topic: 关联策展主题键（纯跳过决策为空串）。\n    kind: 关联策展类型（纯跳过决策为 None）。\n    action: 决策动作（promoted / skipped / merged / archived）。\n    reason: 人读决策理由（跳过原因 / 晋升去向说明 / 归档原因）。\n    curated_id: 关联策展记忆主键（仅 archived 决策填写——归档\n        决策的主体是策展行；其余决策为 None）。",
           "properties": {
             "action": {
               "$ref": "#/$defs/DreamDecisionAction",
               "description": "决策动作"
             },
+            "curated_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "关联策展记忆主键（仅 archived 决策填写）",
+              "title": "Curated Id"
+            },
             "episode_id": {
-              "description": "情景事件主键",
+              "default": 0,
+              "description": "情景事件主键（策展归档决策为 0）",
+              "minimum": 0,
               "title": "Episode Id",
               "type": "integer"
             },
@@ -2404,20 +2736,47 @@
             }
           },
           "required": [
-            "episode_id",
             "action"
           ],
           "title": "DreamDecisionModel",
           "type": "object"
         },
         "DreamRunStatsModel": {
-          "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    failed: 提案丢弃计数。",
+          "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``skipped_peer``：窗口内被硬排除的 peer 事件数（群聊同侪 /\n      其他智能体的发言——不晋升策展层、不作事实证据）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）；\n    - ``facts_created``：事实提取阶段新建的人物事实行数（新身份\n      事实 / 更正链首版的梦境侧产物）；\n    - ``facts_merged``：事实提取阶段收敛到既有现行事实的行数（同\n      归一化身份 → 置信度取最大值 + 证据合并的元数据刷新，不推进\n      版本）；\n    - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条\n      丢弃计数，不整体失败）；\n    - ``skills_created``：技能挖矿阶段新建的技能行数（新 slug 的\n      mined 产物）；\n    - ``skills_merged``：技能挖矿阶段收敛到既有技能的行数（同 slug\n      → 置信度取最大值 + 触发短语并集的元数据刷新，不推进版本）；\n    - ``skills_dropped``：技能提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 5 条上限——逐条\n      丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    skipped_peer: peer 硬排除计数（群聊同侪 / 其他智能体的发言）。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。\n    facts_created: 人物事实新建行数（事实提取阶段）。\n    facts_merged: 人物事实元数据刷新行数（事实提取阶段）。\n    facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。\n    skills_created: 技能新建行数（技能挖矿阶段）。\n    skills_merged: 技能元数据刷新行数（技能挖矿阶段）。\n    skills_dropped: 技能提案丢弃计数（技能挖矿阶段）。",
           "properties": {
+            "archived": {
+              "default": 0,
+              "description": "策展记忆归档行数（生命周期阶段）",
+              "minimum": 0,
+              "title": "Archived",
+              "type": "integer"
+            },
             "candidates": {
               "default": 0,
               "description": "可信候选事件数",
               "minimum": 0,
               "title": "Candidates",
+              "type": "integer"
+            },
+            "facts_created": {
+              "default": 0,
+              "description": "人物事实新建行数（事实提取阶段）",
+              "minimum": 0,
+              "title": "Facts Created",
+              "type": "integer"
+            },
+            "facts_dropped": {
+              "default": 0,
+              "description": "人物事实提案丢弃计数（事实提取阶段）",
+              "minimum": 0,
+              "title": "Facts Dropped",
+              "type": "integer"
+            },
+            "facts_merged": {
+              "default": 0,
+              "description": "人物事实元数据刷新行数（事实提取阶段）",
+              "minimum": 0,
+              "title": "Facts Merged",
               "type": "integer"
             },
             "failed": {
@@ -2439,6 +2798,34 @@
               "description": "晋升事件数（新起链）",
               "minimum": 0,
               "title": "Promoted",
+              "type": "integer"
+            },
+            "skills_created": {
+              "default": 0,
+              "description": "技能新建行数（技能挖矿阶段）",
+              "minimum": 0,
+              "title": "Skills Created",
+              "type": "integer"
+            },
+            "skills_dropped": {
+              "default": 0,
+              "description": "技能提案丢弃计数（技能挖矿阶段）",
+              "minimum": 0,
+              "title": "Skills Dropped",
+              "type": "integer"
+            },
+            "skills_merged": {
+              "default": 0,
+              "description": "技能元数据刷新行数（技能挖矿阶段）",
+              "minimum": 0,
+              "title": "Skills Merged",
+              "type": "integer"
+            },
+            "skipped_peer": {
+              "default": 0,
+              "description": "peer 硬排除计数（群聊同侪 / 其他智能体）",
+              "minimum": 0,
+              "title": "Skipped Peer",
               "type": "integer"
             },
             "skipped_untrusted": {
@@ -2566,13 +2953,41 @@
       "type": "object"
     },
     "DreamRunStatsModel": {
-      "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    failed: 提案丢弃计数。",
+      "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``skipped_peer``：窗口内被硬排除的 peer 事件数（群聊同侪 /\n      其他智能体的发言——不晋升策展层、不作事实证据）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）；\n    - ``facts_created``：事实提取阶段新建的人物事实行数（新身份\n      事实 / 更正链首版的梦境侧产物）；\n    - ``facts_merged``：事实提取阶段收敛到既有现行事实的行数（同\n      归一化身份 → 置信度取最大值 + 证据合并的元数据刷新，不推进\n      版本）；\n    - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条\n      丢弃计数，不整体失败）；\n    - ``skills_created``：技能挖矿阶段新建的技能行数（新 slug 的\n      mined 产物）；\n    - ``skills_merged``：技能挖矿阶段收敛到既有技能的行数（同 slug\n      → 置信度取最大值 + 触发短语并集的元数据刷新，不推进版本）；\n    - ``skills_dropped``：技能提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 5 条上限——逐条\n      丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    skipped_peer: peer 硬排除计数（群聊同侪 / 其他智能体的发言）。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。\n    facts_created: 人物事实新建行数（事实提取阶段）。\n    facts_merged: 人物事实元数据刷新行数（事实提取阶段）。\n    facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。\n    skills_created: 技能新建行数（技能挖矿阶段）。\n    skills_merged: 技能元数据刷新行数（技能挖矿阶段）。\n    skills_dropped: 技能提案丢弃计数（技能挖矿阶段）。",
       "properties": {
+        "archived": {
+          "default": 0,
+          "description": "策展记忆归档行数（生命周期阶段）",
+          "minimum": 0,
+          "title": "Archived",
+          "type": "integer"
+        },
         "candidates": {
           "default": 0,
           "description": "可信候选事件数",
           "minimum": 0,
           "title": "Candidates",
+          "type": "integer"
+        },
+        "facts_created": {
+          "default": 0,
+          "description": "人物事实新建行数（事实提取阶段）",
+          "minimum": 0,
+          "title": "Facts Created",
+          "type": "integer"
+        },
+        "facts_dropped": {
+          "default": 0,
+          "description": "人物事实提案丢弃计数（事实提取阶段）",
+          "minimum": 0,
+          "title": "Facts Dropped",
+          "type": "integer"
+        },
+        "facts_merged": {
+          "default": 0,
+          "description": "人物事实元数据刷新行数（事实提取阶段）",
+          "minimum": 0,
+          "title": "Facts Merged",
           "type": "integer"
         },
         "failed": {
@@ -2594,6 +3009,34 @@
           "description": "晋升事件数（新起链）",
           "minimum": 0,
           "title": "Promoted",
+          "type": "integer"
+        },
+        "skills_created": {
+          "default": 0,
+          "description": "技能新建行数（技能挖矿阶段）",
+          "minimum": 0,
+          "title": "Skills Created",
+          "type": "integer"
+        },
+        "skills_dropped": {
+          "default": 0,
+          "description": "技能提案丢弃计数（技能挖矿阶段）",
+          "minimum": 0,
+          "title": "Skills Dropped",
+          "type": "integer"
+        },
+        "skills_merged": {
+          "default": 0,
+          "description": "技能元数据刷新行数（技能挖矿阶段）",
+          "minimum": 0,
+          "title": "Skills Merged",
+          "type": "integer"
+        },
+        "skipped_peer": {
+          "default": 0,
+          "description": "peer 硬排除计数（群聊同侪 / 其他智能体）",
+          "minimum": 0,
+          "title": "Skipped Peer",
           "type": "integer"
         },
         "skipped_untrusted": {
@@ -2846,10 +3289,11 @@
           "type": "object"
         },
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -2982,10 +3426,11 @@
           "type": "string"
         },
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -3162,10 +3607,11 @@
           "type": "object"
         },
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -3282,13 +3728,380 @@
       "title": "EpisodeRecordDTO",
       "type": "object"
     },
-    "MemorySearchRequestDTO": {
+    "FactCorrectDTO": {
+      "description": "事实更正入参（主人纠正面——旧版本进入 supersede 历史链）。\n\nAttributes:\n    content: 更正后的事实陈述（1-1000 字符）。\n    confidence: 更正后的置信度（None = 保留原行置信度）。",
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "更正后置信度（None = 保留）",
+          "title": "Confidence"
+        },
+        "content": {
+          "description": "更正后的事实陈述（1-1000 字符）",
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "title": "FactCorrectDTO",
+      "type": "object"
+    },
+    "FactCreateDTO": {
       "$defs": {
+        "FactEvidenceRefModel": {
+          "description": "事实证据引用（ff_persona_facts.evidence 数组元素 / 管理面读取面）。\n\nAttributes:\n    episode_id: 情景事件主键（None = 手工事实无事件背书——主人直接\n        告知的事实）；写路径校验事件存在且属于当前人格，失败按\n        「丢弃该证据」处理（不阻断事实写入）。\n    quote: 逐字摘录（≤200 字符——梦境提取面由系统从被引用事件正文\n        逐字截取，手工面由主人填写；成为 compose 证据展开的展示面）。\n    ts_ms: 证据事件时间（epoch 毫秒；手工事实为录入时刻）。\n    provenance: 证据来源可信度（owner / agent——untrusted 永不出现在\n        本表）。",
+          "properties": {
+            "episode_id": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "情景事件主键（None = 手工事实）",
+              "title": "Episode Id"
+            },
+            "provenance": {
+              "$ref": "#/$defs/MemoryProvenance",
+              "description": "证据来源可信度（owner/agent）"
+            },
+            "quote": {
+              "description": "逐字摘录（≤200 字符）",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Quote",
+              "type": "string"
+            },
+            "ts_ms": {
+              "description": "证据事件时间（epoch 毫秒）",
+              "minimum": 0,
+              "title": "Ts Ms",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "quote",
+            "ts_ms",
+            "provenance"
+          ],
+          "title": "FactEvidenceRefModel",
+          "type": "object"
+        },
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
+            "untrusted"
+          ],
+          "title": "MemoryProvenance",
+          "type": "string"
+        },
+        "PersonaFactCategory": {
+          "description": "事实类别值域（ff_persona_facts.category）。\n\n- ``preference``：偏好（口味 / 作息 / 说话习惯 / 喜恶）；\n- ``biography``：背景（职业 / 经历 / 家庭与社会关系事实）；\n- ``relationship``：关系（对方的称呼 / 相处模式 / 边界约定）；\n- ``context``：近况（近期目标 / 状态变化 / 当下处境）。",
+          "enum": [
+            "preference",
+            "biography",
+            "relationship",
+            "context"
+          ],
+          "title": "PersonaFactCategory",
+          "type": "string"
+        }
+      },
+      "description": "事实创建入参（管理面手工录入面）。\n\nAttributes:\n    category: 事实类别（封闭值域）。\n    content: 事实陈述（1-1000 字符——服务层做去空白归一后落库）。\n    confidence: 置信度（0-1；手工录入缺省 0.8——主人直接告知属高可信）。\n    evidence: 证据引用列表（可空——手工事实可无事件背书）。",
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/PersonaFactCategory",
+          "description": "事实类别"
+        },
+        "confidence": {
+          "default": 0.8,
+          "description": "置信度（0-1）",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "content": {
+          "description": "事实陈述（1-1000 字符）",
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "证据引用列表（可空）",
+          "items": {
+            "$ref": "#/$defs/FactEvidenceRefModel"
+          },
+          "title": "Evidence",
+          "type": "array"
+        }
+      },
+      "required": [
+        "category",
+        "content"
+      ],
+      "title": "FactCreateDTO",
+      "type": "object"
+    },
+    "FactEvidenceRefModel": {
+      "$defs": {
+        "MemoryProvenance": {
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "enum": [
+            "owner",
+            "agent",
+            "peer",
+            "untrusted"
+          ],
+          "title": "MemoryProvenance",
+          "type": "string"
+        }
+      },
+      "description": "事实证据引用（ff_persona_facts.evidence 数组元素 / 管理面读取面）。\n\nAttributes:\n    episode_id: 情景事件主键（None = 手工事实无事件背书——主人直接\n        告知的事实）；写路径校验事件存在且属于当前人格，失败按\n        「丢弃该证据」处理（不阻断事实写入）。\n    quote: 逐字摘录（≤200 字符——梦境提取面由系统从被引用事件正文\n        逐字截取，手工面由主人填写；成为 compose 证据展开的展示面）。\n    ts_ms: 证据事件时间（epoch 毫秒；手工事实为录入时刻）。\n    provenance: 证据来源可信度（owner / agent——untrusted 永不出现在\n        本表）。",
+      "properties": {
+        "episode_id": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "情景事件主键（None = 手工事实）",
+          "title": "Episode Id"
+        },
+        "provenance": {
+          "$ref": "#/$defs/MemoryProvenance",
+          "description": "证据来源可信度（owner/agent）"
+        },
+        "quote": {
+          "description": "逐字摘录（≤200 字符）",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Quote",
+          "type": "string"
+        },
+        "ts_ms": {
+          "description": "证据事件时间（epoch 毫秒）",
+          "minimum": 0,
+          "title": "Ts Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "quote",
+        "ts_ms",
+        "provenance"
+      ],
+      "title": "FactEvidenceRefModel",
+      "type": "object"
+    },
+    "FactRecordDTO": {
+      "$defs": {
+        "FactEvidenceRefModel": {
+          "description": "事实证据引用（ff_persona_facts.evidence 数组元素 / 管理面读取面）。\n\nAttributes:\n    episode_id: 情景事件主键（None = 手工事实无事件背书——主人直接\n        告知的事实）；写路径校验事件存在且属于当前人格，失败按\n        「丢弃该证据」处理（不阻断事实写入）。\n    quote: 逐字摘录（≤200 字符——梦境提取面由系统从被引用事件正文\n        逐字截取，手工面由主人填写；成为 compose 证据展开的展示面）。\n    ts_ms: 证据事件时间（epoch 毫秒；手工事实为录入时刻）。\n    provenance: 证据来源可信度（owner / agent——untrusted 永不出现在\n        本表）。",
+          "properties": {
+            "episode_id": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "情景事件主键（None = 手工事实）",
+              "title": "Episode Id"
+            },
+            "provenance": {
+              "$ref": "#/$defs/MemoryProvenance",
+              "description": "证据来源可信度（owner/agent）"
+            },
+            "quote": {
+              "description": "逐字摘录（≤200 字符）",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Quote",
+              "type": "string"
+            },
+            "ts_ms": {
+              "description": "证据事件时间（epoch 毫秒）",
+              "minimum": 0,
+              "title": "Ts Ms",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "quote",
+            "ts_ms",
+            "provenance"
+          ],
+          "title": "FactEvidenceRefModel",
+          "type": "object"
+        },
+        "MemoryProvenance": {
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "enum": [
+            "owner",
+            "agent",
+            "peer",
+            "untrusted"
+          ],
+          "title": "MemoryProvenance",
+          "type": "string"
+        },
+        "PersonaFactCategory": {
+          "description": "事实类别值域（ff_persona_facts.category）。\n\n- ``preference``：偏好（口味 / 作息 / 说话习惯 / 喜恶）；\n- ``biography``：背景（职业 / 经历 / 家庭与社会关系事实）；\n- ``relationship``：关系（对方的称呼 / 相处模式 / 边界约定）；\n- ``context``：近况（近期目标 / 状态变化 / 当下处境）。",
+          "enum": [
+            "preference",
+            "biography",
+            "relationship",
+            "context"
+          ],
+          "title": "PersonaFactCategory",
+          "type": "string"
+        },
+        "PersonaFactSource": {
+          "description": "事实来源值域（ff_persona_facts.source）。\n\n- ``dream``：夜间梦境提取（provenance 恒 ``agent``）；\n- ``manual``：管理面手工录入（provenance 恒 ``owner``）；\n- ``correction``：主人更正（provenance 恒 ``owner``——更正链保留既有\n  证据并追加更正说明）。",
+          "enum": [
+            "dream",
+            "manual",
+            "correction"
+          ],
+          "title": "PersonaFactSource",
+          "type": "string"
+        },
+        "PersonaFactStatus": {
+          "description": "事实状态值域（ff_persona_facts.status）。\n\n- ``active``：现行事实（唯一 active 由守卫标记 + 唯一键强制）；\n- ``superseded``：被更正版本取代（历史链可回溯——``superseded_by_id``\n  指向取代者）；\n- ``rejected``：被主人驳回（不再参与 compose 注入；守卫标记同步清空，\n  同身份事实可重新起链）。",
+          "enum": [
+            "active",
+            "superseded",
+            "rejected"
+          ],
+          "title": "PersonaFactStatus",
+          "type": "string"
+        }
+      },
+      "description": "事实记录读取 DTO（ORM 行归一——管理面 / 面板读取面）。\n\nAttributes:\n    id: 事实主键（更正 / 驳回 / 删除锚点）。\n    category: 事实类别。\n    content: 事实陈述。\n    confidence: 置信度（0-1）。\n    status: 事实状态（active / superseded / rejected）。\n    provenance: 来源可信度（owner / agent）。\n    source: 事实来源（dream / manual / correction）。\n    evidence: 证据引用列表（逐字摘录 + 事件回链）。\n    superseded_by_id: 取代者主键（被更正版本的链链接；active 为 None）。\n    version: 更正链版本号（首版 1，更正递增）。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒）。",
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/PersonaFactCategory",
+          "description": "事实类别"
+        },
+        "confidence": {
+          "description": "置信度（0-1）",
+          "title": "Confidence",
+          "type": "number"
+        },
+        "content": {
+          "description": "事实陈述",
+          "title": "Content",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "落库时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "evidence": {
+          "description": "证据引用列表",
+          "items": {
+            "$ref": "#/$defs/FactEvidenceRefModel"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "id": {
+          "description": "事实主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "provenance": {
+          "$ref": "#/$defs/MemoryProvenance",
+          "description": "来源可信度（owner/agent）"
+        },
+        "source": {
+          "$ref": "#/$defs/PersonaFactSource",
+          "description": "事实来源（dream/manual/correction）"
+        },
+        "status": {
+          "$ref": "#/$defs/PersonaFactStatus",
+          "description": "事实状态"
+        },
+        "superseded_by_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "取代者主键（active 为 None）",
+          "title": "Superseded By Id"
+        },
+        "updated_at": {
+          "description": "行更新时间（epoch 毫秒）",
+          "title": "Updated At",
+          "type": "integer"
+        },
+        "version": {
+          "description": "更正链版本号（首版 1）",
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "category",
+        "content",
+        "confidence",
+        "status",
+        "provenance",
+        "source",
+        "version",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "FactRecordDTO",
+      "type": "object"
+    },
+    "MemorySearchRequestDTO": {
+      "$defs": {
+        "MemoryProvenance": {
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "enum": [
+            "owner",
+            "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -3408,10 +4221,11 @@
     "MemorySearchResultDTO": {
       "$defs": {
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -3755,6 +4569,36 @@
         }
       },
       "title": "ModelEntryUpdateDTO",
+      "type": "object"
+    },
+    "OwnerEditModel": {
+      "additionalProperties": false,
+      "description": "主人编辑入参（管理面——可清空正文 / 可切换锁定）。\n\nAttributes:\n    content: 新块正文（0-2000 字符——空串表示清空该块）。\n    locked: 锁定开关（None = 保持不变；True = 仅主人可改写；False =\n        解锁，人格可再次自编辑）。",
+      "properties": {
+        "content": {
+          "description": "新块正文（0-2000 字符；空串 = 清空）",
+          "maxLength": 2000,
+          "title": "Content",
+          "type": "string"
+        },
+        "locked": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "锁定开关（None = 保持不变）",
+          "title": "Locked"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "title": "OwnerEditModel",
       "type": "object"
     },
     "PageResponse": {
@@ -6639,6 +7483,267 @@
         "bound"
       ],
       "title": "RoleBindingDTO",
+      "type": "object"
+    },
+    "SkillCreateModel": {
+      "description": "技能创建入参（管理面手工录入面）。\n\nAttributes:\n    name: 技能名（1-120 字符——slug 由服务层按名称归一化派生）。\n    description: 何时使用的触发描述（1-500 字符）。\n    triggers: 触发短语（1-8 条、每条 1-40 字符——主人可能说出的\n        字面短语）。\n    content: markdown 步骤正文（1-8000 字符）。\n    confidence: 置信度（0-1；缺省 0.6——手工录入属较高可信）。",
+      "properties": {
+        "confidence": {
+          "default": 0.6,
+          "description": "置信度（0-1）",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "content": {
+          "description": "markdown 步骤正文（1-8000 字符）",
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "description": {
+          "description": "何时使用的触发描述（1-500 字符）",
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "name": {
+          "description": "技能名（1-120 字符）",
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "triggers": {
+          "description": "触发短语（1-8 条、每条 1-40 字符）",
+          "items": {
+            "maxLength": 40,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Triggers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "triggers",
+        "content"
+      ],
+      "title": "SkillCreateModel",
+      "type": "object"
+    },
+    "SkillRecordDTO": {
+      "$defs": {
+        "SkillSource": {
+          "description": "技能来源值域（ff_persona_skills.source）。\n\n- ``manual``：管理面手工录入（不缺省进入梦境提案）；\n- ``mined``：夜间梦境从历史事件中挖矿产出（与手工行同等可编辑）。",
+          "enum": [
+            "manual",
+            "mined"
+          ],
+          "title": "SkillSource",
+          "type": "string"
+        },
+        "SkillStatus": {
+          "description": "技能状态值域（ff_persona_skills.status）。\n\n- ``active``：启用（参与 compose 匹配与注入）；\n- ``disabled``：停用（不参与匹配，面板仍可查看 / 编辑 / 重新启用）。",
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "title": "SkillStatus",
+          "type": "string"
+        }
+      },
+      "description": "技能记录读取 DTO（ORM 行归一——管理面 / 面板 / compose 读取面）。\n\nAttributes:\n    id: 技能主键（编辑 / 停用 / 删除锚点）。\n    name: 技能名。\n    slug: 归一化 kebab 标识（同人格唯一）。\n    description: 何时使用的触发描述。\n    triggers: 触发短语列表。\n    content: markdown 步骤正文。\n    status: 状态（active / disabled）。\n    source: 来源（manual / mined）。\n    confidence: 置信度（0-1）。\n    use_count: compose 命中次数（写读强化轴）。\n    last_used_ms: 最近一次命中时间（epoch 毫秒；未命中为 None）。\n    version: 原地编辑版本号（首版 1）。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒）。",
+      "properties": {
+        "confidence": {
+          "description": "置信度（0-1）",
+          "title": "Confidence",
+          "type": "number"
+        },
+        "content": {
+          "description": "markdown 步骤正文",
+          "title": "Content",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "落库时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "description": {
+          "description": "何时使用的触发描述",
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "description": "技能主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "last_used_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "最近一次命中时间（epoch 毫秒）",
+          "title": "Last Used Ms"
+        },
+        "name": {
+          "description": "技能名",
+          "title": "Name",
+          "type": "string"
+        },
+        "slug": {
+          "description": "归一化 kebab 标识（同人格唯一）",
+          "title": "Slug",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SkillSource",
+          "description": "来源（manual/mined）"
+        },
+        "status": {
+          "$ref": "#/$defs/SkillStatus",
+          "description": "状态（active/disabled）"
+        },
+        "triggers": {
+          "description": "触发短语列表",
+          "items": {
+            "type": "string"
+          },
+          "title": "Triggers",
+          "type": "array"
+        },
+        "updated_at": {
+          "description": "行更新时间（epoch 毫秒）",
+          "title": "Updated At",
+          "type": "integer"
+        },
+        "use_count": {
+          "description": "compose 命中次数",
+          "title": "Use Count",
+          "type": "integer"
+        },
+        "version": {
+          "description": "原地编辑版本号（首版 1）",
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "slug",
+        "description",
+        "content",
+        "status",
+        "source",
+        "confidence",
+        "use_count",
+        "version",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "SkillRecordDTO",
+      "type": "object"
+    },
+    "SkillUpdateModel": {
+      "description": "技能编辑入参（原地更新——字段全部可选，版本递增）。\n\n编辑不产生历史行（技能是操作指令而非信念断言，理由见 ``skills_orm``\n模块文档）；``name`` 变更会重新派生 slug 并按唯一键校验冲突。\n\nAttributes:\n    name: 新技能名（None = 保留）。\n    description: 新触发描述（None = 保留）。\n    triggers: 新触发短语集（None = 保留；提供时整集替换）。\n    content: 新步骤正文（None = 保留）。\n    confidence: 新置信度（None = 保留）。",
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新置信度（None = 保留）",
+          "title": "Confidence"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "maxLength": 8000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新步骤正文（None = 保留）",
+          "title": "Content"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新触发描述（None = 保留）",
+          "title": "Description"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新技能名（None = 保留）",
+          "title": "Name"
+        },
+        "triggers": {
+          "anyOf": [
+            {
+              "items": {
+                "maxLength": 40,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新触发短语集（None = 保留；提供时整集替换）",
+          "title": "Triggers"
+        }
+      },
+      "title": "SkillUpdateModel",
       "type": "object"
     },
     "TraitComponentModel": {

@@ -13,9 +13,13 @@ import { http, HttpResponse } from 'msw'
 import { API_BASE_URL, API_PREFIX } from '@/api/client'
 import type { ResultDTO } from '@/types/common'
 import type {
+  CoreMemoryBlock,
+  CoreMemoryRevision,
   DirectiveRecord,
+  FactRecord,
   PersonaRecord,
   PersonaState,
+  SkillRecord,
   TraitComponent,
   TraitLibrary,
   TraitPreset,
@@ -508,6 +512,11 @@ export function mockCurated(overrides: Partial<CuratedRecord> = {}): CuratedReco
     version: 2,
     created_at: 1731000000000,
     updated_at: 1731000000000,
+    pinned: false,
+    frozen: false,
+    access_count: 0,
+    last_accessed_ms: null,
+    effective_strength: 5.2,
     ...overrides,
   }
 }
@@ -622,7 +631,22 @@ export function mockDreamRun(overrides: Partial<DreamRunRecord> = {}): DreamRunR
     status: 'success',
     started_ms: 1731000000000,
     finished_ms: 1731000009000,
-    stats: { candidates: 3, gated: 2, promoted: 1, superseded: 1, skipped_untrusted: 1, failed: 0 },
+    stats: {
+      candidates: 3,
+      gated: 2,
+      promoted: 1,
+      superseded: 1,
+      skipped_untrusted: 1,
+      skipped_peer: 0,
+      failed: 0,
+      archived: 0,
+      facts_created: 1,
+      facts_merged: 1,
+      facts_dropped: 0,
+      skills_created: 1,
+      skills_merged: 1,
+      skills_dropped: 0,
+    },
     decisions: [
       { episode_id: 1, topic: 'favorite-food', kind: 'memory', action: 'promoted', reason: '分数达标，晋升为新主题' },
       { episode_id: 2, topic: 'sleep-pattern', kind: 'relationship', action: 'merged', reason: '并入既有 active 主题' },
@@ -839,6 +863,7 @@ export const memoryHandlers = [
     const kind = url.searchParams.get('kind')
     const topic = url.searchParams.get('topic')
     const status = url.searchParams.get('status')
+    const includeArchived = url.searchParams.get('include_archived') === 'true'
     const all = [
       mockCurated({ id: 3, topic: 'sleep-pattern', kind: 'relationship', status: 'active', version: 1 }),
       mockCurated({ id: 2, topic: 'sleep-pattern', kind: 'relationship', status: 'superseded', superseded_by_id: 3, version: 1 }),
@@ -847,7 +872,8 @@ export const memoryHandlers = [
     const filtered = all.filter((row) => {
       if (kind !== null && row.kind !== kind) return false
       if (topic !== null && row.topic !== topic) return false
-      if (status !== null && row.status !== status) return false
+      if (status !== null) return row.status === status
+      if (!includeArchived) return row.status !== 'archived'
       return true
     })
     if (cursor === null) {
@@ -898,6 +924,19 @@ export const memoryHandlers = [
         mockCurated({ id: 3, topic: 'sleep-pattern', kind: 'relationship', status: 'active', version: 2 }),
       ]),
     )
+  }),
+  // 生命周期端点：置顶 / 冻结态切换（幂等——返回目标态）
+  http.post(`${BACKEND_ORIGIN}/memories/curated/:memoryId/:action`, ({ params }) => {
+    const id = Number(params.memoryId)
+    const action = String(params.action)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('记忆不存在或不在此人格作用域', 'NOT_FOUND'), { status: 404 })
+    }
+    if (action === 'pin') return HttpResponse.json(okResult(mockCurated({ id, pinned: true }), '策展记忆已置顶'))
+    if (action === 'unpin') return HttpResponse.json(okResult(mockCurated({ id, pinned: false }), '策展记忆已取消置顶'))
+    if (action === 'freeze') return HttpResponse.json(okResult(mockCurated({ id, frozen: true }), '策展记忆已冻结'))
+    if (action === 'unfreeze') return HttpResponse.json(okResult(mockCurated({ id, frozen: false }), '策展记忆已解冻'))
+    return HttpResponse.json(okResult(mockCurated({ id })))
   }),
   http.delete(`${BACKEND_ORIGIN}/memories/curated/:memoryId`, ({ params }) => {
     const id = Number(params.memoryId)
@@ -1408,6 +1447,366 @@ export const directiveHandlers = [
   }),
 ]
 
+// ---------------------------------------------------------------------------
+// facts 域（人物事实——结构化事实 / 证据链 / 更正循环）
+// ---------------------------------------------------------------------------
+
+/** 测试用人物事实记录（wire 形态——含证据链）。 */
+export function mockFact(overrides: Partial<FactRecord> = {}): FactRecord {
+  return {
+    id: 1,
+    category: 'preference',
+    content: '主人喜欢无糖乌龙茶',
+    confidence: 0.9,
+    status: 'active',
+    provenance: 'agent',
+    source: 'dream',
+    evidence: [
+      {
+        episode_id: 12,
+        quote: '用户：我喜欢喝无糖乌龙茶',
+        ts_ms: 1731000000000,
+        provenance: 'owner',
+      },
+    ],
+    superseded_by_id: null,
+    version: 1,
+    created_at: 1731000000000,
+    updated_at: 1731000000000,
+    ...overrides,
+  }
+}
+
+/** facts 域默认 handlers（成功形态 + 404 面）。 */
+export const factHandlers = [
+  // 列表：分页包裹的两条现行事实（不同类别）。
+  http.get(`${BACKEND_ORIGIN}/facts`, () => {
+    return HttpResponse.json(
+      okResult({
+        items: [
+          mockFact(),
+          mockFact({
+            id: 2,
+            category: 'biography',
+            content: '主人在杭州工作',
+            confidence: 0.7,
+            source: 'manual',
+            provenance: 'owner',
+            evidence: [],
+          }),
+        ],
+        total: -1,
+        page: 1,
+        page_size: 200,
+        next_cursor: null,
+        has_more: false,
+      }),
+    )
+  }),
+  // 创建：回显新记录（owner 手工来源）。
+  http.post(`${BACKEND_ORIGIN}/facts`, async ({ request }) => {
+    const body = (await request.json()) as {
+      category: FactRecord['category']
+      content: string
+      confidence?: number
+    }
+    return HttpResponse.json(
+      okResult(
+        mockFact({
+          id: 9,
+          category: body.category,
+          content: body.content,
+          confidence: body.confidence ?? 0.8,
+          source: 'manual',
+          provenance: 'owner',
+          evidence: [],
+        }),
+        '人物事实已保存',
+      ),
+    )
+  }),
+  // 更正：id=404 → 404；其余 → version+1 + correction 来源。
+  http.put(`${BACKEND_ORIGIN}/facts/:factId`, async ({ request, params }) => {
+    const id = Number(params.factId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('人物事实不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    const body = (await request.json()) as { content: string; confidence?: number }
+    return HttpResponse.json(
+      okResult(
+        mockFact({
+          id: id + 100,
+          content: body.content,
+          confidence: body.confidence ?? 0.9,
+          source: 'correction',
+          version: 2,
+        }),
+        '人物事实已更正',
+      ),
+    )
+  }),
+  // 驳回：id=404 → 404；其余 → rejected。
+  http.post(`${BACKEND_ORIGIN}/facts/:factId/reject`, ({ params }) => {
+    const id = Number(params.factId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('人物事实不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    return HttpResponse.json(okResult(mockFact({ id, status: 'rejected' }), '人物事实已驳回'))
+  }),
+  // 删除：id=404 → 404；其余成功。
+  http.delete(`${BACKEND_ORIGIN}/facts/:factId`, ({ params }) => {
+    const id = Number(params.factId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('人物事实不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    return HttpResponse.json(okResult(null, '人物事实已删除'))
+  }),
+]
+
+// ---------------------------------------------------------------------------
+// skills 域（程序性技能——触发短语 / 原地版本 / 启用状态）
+// ---------------------------------------------------------------------------
+
+/** 测试用技能记录（wire 形态——启用 + 梦境挖矿来源）。 */
+export function mockSkill(overrides: Partial<SkillRecord> = {}): SkillRecord {
+  return {
+    id: 1,
+    name: '周报流程',
+    slug: '周报流程',
+    description: '主人说「写周报」时使用：先列三件事再写进展',
+    triggers: ['写周报', '本周总结'],
+    content: '1. 先列三件事\n2. 再写进展',
+    status: 'active',
+    source: 'mined',
+    confidence: 0.8,
+    use_count: 3,
+    last_used_ms: 1731000000000,
+    version: 1,
+    created_at: 1731000000000,
+    updated_at: 1731000000000,
+    ...overrides,
+  }
+}
+
+/** skills 域默认 handlers（成功形态 + 404 面）。 */
+export const skillHandlers = [
+  // 列表：一条启用（mined）+ 一条停用（manual）。
+  http.get(`${BACKEND_ORIGIN}/skills`, () => {
+    return HttpResponse.json(
+      okResult({
+        items: [
+          mockSkill(),
+          mockSkill({
+            id: 2,
+            name: '日报流程',
+            slug: '日报流程',
+            description: '主人说「写日报」时使用',
+            triggers: ['写日报'],
+            content: '1. 写今日完成\n2. 写明日计划',
+            status: 'disabled',
+            source: 'manual',
+            confidence: 0.6,
+            use_count: 0,
+            last_used_ms: null,
+          }),
+        ],
+        total: -1,
+        page: 1,
+        page_size: 200,
+        next_cursor: null,
+        has_more: false,
+      }),
+    )
+  }),
+  // 创建：回显新记录（manual 来源）。
+  http.post(`${BACKEND_ORIGIN}/skills`, async ({ request }) => {
+    const body = (await request.json()) as {
+      name: string
+      description: string
+      triggers: string[]
+      content: string
+      confidence?: number
+    }
+    return HttpResponse.json(
+      okResult(
+        mockSkill({
+          id: 9,
+          name: body.name,
+          slug: body.name.toLowerCase().replaceAll(' ', '-'),
+          description: body.description,
+          triggers: body.triggers,
+          content: body.content,
+          confidence: body.confidence ?? 0.6,
+          source: 'manual',
+          use_count: 0,
+          last_used_ms: null,
+        }),
+        '技能已创建',
+      ),
+    )
+  }),
+  // 编辑：id=404 → 404；其余 → version+1。
+  http.put(`${BACKEND_ORIGIN}/skills/:skillId`, async ({ request, params }) => {
+    const id = Number(params.skillId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('技能不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    const body = (await request.json()) as Record<string, unknown>
+    return HttpResponse.json(
+      okResult(
+        mockSkill({
+          id,
+          ...(typeof body.name === 'string' ? { name: body.name } : {}),
+          ...(typeof body.description === 'string' ? { description: body.description } : {}),
+          ...(Array.isArray(body.triggers) ? { triggers: body.triggers as string[] } : {}),
+          ...(typeof body.content === 'string' ? { content: body.content } : {}),
+          ...(typeof body.confidence === 'number' ? { confidence: body.confidence } : {}),
+          version: 2,
+        }),
+        '技能已保存',
+      ),
+    )
+  }),
+  // 启用：id=404 → 404；其余 → active。
+  http.post(`${BACKEND_ORIGIN}/skills/:skillId/enable`, ({ params }) => {
+    const id = Number(params.skillId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('技能不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    return HttpResponse.json(okResult(mockSkill({ id, status: 'active' }), '技能已启用'))
+  }),
+  // 停用：id=404 → 404；其余 → disabled。
+  http.post(`${BACKEND_ORIGIN}/skills/:skillId/disable`, ({ params }) => {
+    const id = Number(params.skillId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('技能不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    return HttpResponse.json(okResult(mockSkill({ id, status: 'disabled' }), '技能已停用'))
+  }),
+  // 删除：id=404 → 404；其余成功。
+  http.delete(`${BACKEND_ORIGIN}/skills/:skillId`, ({ params }) => {
+    const id = Number(params.skillId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('技能不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    return HttpResponse.json(okResult(null, '技能已删除'))
+  }),
+]
+
+// ---------------------------------------------------------------------------
+// core-memory 域（自编辑核心记忆——四块自我模型 / 锁定 / 修订历史）
+// ---------------------------------------------------------------------------
+
+/** 测试用核心记忆块记录（wire 形态——默认「自我认知」块）。 */
+export function mockCoreMemoryBlock(overrides: Partial<CoreMemoryBlock> = {}): CoreMemoryBlock {
+  return {
+    id: 1,
+    block: 'self_identity',
+    content: '我是一条会写字的鱼',
+    locked: false,
+    version: 2,
+    updated_by: 'agent',
+    last_edited_session_id: 5,
+    created_at: 1731000000000,
+    updated_at: 1731000000000,
+    ...overrides,
+  }
+}
+
+/** 测试用核心记忆修订记录（wire 形态）。 */
+export function mockCoreMemoryRevision(
+  overrides: Partial<CoreMemoryRevision> = {},
+): CoreMemoryRevision {
+  return {
+    id: 11,
+    block: 'self_identity',
+    version: 3,
+    content: '我更正了自我认知',
+    provenance: 'owner',
+    source: 'admin',
+    session_id: null,
+    ts_ms: 1731000000000,
+    created_at: 1731000000000,
+    ...overrides,
+  }
+}
+
+/** 四块默认夹具（固定块序——与后端懒建顺序一致）。 */
+function defaultCoreMemoryBlocks(): CoreMemoryBlock[] {
+  return [
+    mockCoreMemoryBlock(),
+    mockCoreMemoryBlock({
+      id: 2,
+      block: 'owner_profile',
+      content: '主人喜欢无糖乌龙茶',
+      locked: true,
+      version: 3,
+      updated_by: 'owner',
+      last_edited_session_id: null,
+    }),
+    mockCoreMemoryBlock({
+      id: 3,
+      block: 'relationship_story',
+      content: '我们一起看过海。',
+      version: 2,
+      updated_by: 'owner',
+      last_edited_session_id: null,
+    }),
+    mockCoreMemoryBlock({
+      id: 4,
+      block: 'open_notes',
+      content: '',
+      version: 1,
+      updated_by: 'owner',
+      last_edited_session_id: null,
+    }),
+  ]
+}
+
+/** core-memory 域默认 handlers（成功形态 + 非法块键 400 面）。 */
+export const coreMemoryHandlers = [
+  http.get(`${BACKEND_ORIGIN}/core-memory/blocks`, () => {
+    return HttpResponse.json(okResult(defaultCoreMemoryBlocks()))
+  }),
+  http.put(`${BACKEND_ORIGIN}/core-memory/blocks/:block`, async ({ request, params }) => {
+    const block = String(params.block)
+    if (!['self_identity', 'owner_profile', 'relationship_story', 'open_notes'].includes(block)) {
+      return HttpResponse.json(errorResult('非法核心记忆块键', 'VALIDATION_ERROR'), { status: 400 })
+    }
+    const body = (await request.json()) as { content: string; locked?: boolean }
+    return HttpResponse.json(
+      okResult(
+        mockCoreMemoryBlock({
+          block: block as CoreMemoryBlock['block'],
+          content: body.content,
+          locked: body.locked ?? false,
+          version: 4,
+          updated_by: 'owner',
+          last_edited_session_id: null,
+        }),
+        '核心记忆已保存',
+      ),
+    )
+  }),
+  http.get(`${BACKEND_ORIGIN}/core-memory/blocks/:block/revisions`, ({ params }) => {
+    const block = String(params.block)
+    return HttpResponse.json(
+      okResult([
+        mockCoreMemoryRevision({ id: 12, block: block as CoreMemoryBlock['block'] }),
+        mockCoreMemoryRevision({
+          id: 11,
+          block: block as CoreMemoryBlock['block'],
+          version: 2,
+          content: '我是一条会写字的鱼',
+          provenance: 'agent',
+          source: 'chat',
+          session_id: 5,
+        }),
+      ]),
+    )
+  }),
+]
+
 /** 共享 msw 服务器（setup.ts 管理生命周期）。 */
 export const server = setupServer(
   ...personaHandlers,
@@ -1416,4 +1815,7 @@ export const server = setupServer(
   ...modelHandlers,
   ...reminderHandlers,
   ...directiveHandlers,
+  ...factHandlers,
+  ...skillHandlers,
+  ...coreMemoryHandlers,
 )

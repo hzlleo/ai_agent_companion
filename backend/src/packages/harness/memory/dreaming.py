@@ -18,13 +18,38 @@
           失败 / 未注入降级 boost=0）
         ↓ ⑤ 规则门 select_dream_candidates（零模型调用——纯函数）：
           untrusted 硬排除 → 既往已晋升跳过 → 分数门 → 分数降序截断
-        ↓ ⑥ LLM 合并（ModelRole.DREAM，purpose="dream"——人格中立 prompt）：
+        ↓ ⑥ LLM 人物事实提取（ModelRole.DREAM，purpose="dream"——人格中立
+          prompt）：严格 JSON 数组提案 → 解析（剥代码围栏 + 逐条 Model Class
+          校验）→ 证据编号 ⊆ 候选 / 置信度下限 / 单次上限复核 → 归一化
+          身份收敛（同身份现行事实只做置信度最大值 + 证据合并的元数据刷新
+          ——统计 facts_merged；新身份落 active 行——统计 facts_created；
+          丢弃条目录入 facts_dropped）
+        ↓ ⑦ LLM 技能挖矿（ModelRole.DREAM，purpose="dream"——人格中立
+          prompt）：严格 JSON 数组提案 → 解析（剥代码围栏 + 逐条 Model Class
+          校验）→ 证据编号 ⊆ 候选 / 置信度下限 / 单次 5 条上限复核 →
+          upsert_mined（同 slug 既有技能只做置信度最大值 + 触发短语并集的
+          元数据刷新——统计 skills_merged；新 slug 落 active 行——统计
+          skills_created；丢弃条目录入 skills_dropped）
+        ↓ ⑧ LLM 合并（ModelRole.DREAM，purpose="dream"——人格中立 prompt）：
           严格 JSON 数组提案 → 解析（剥代码围栏 + 逐条 Model Class 校验）
-        ↓ ⑦ 逐条提案复核（merged_from ⊆ 候选 id——未知引用丢弃计数）→
+        ↓ ⑨ 逐条提案复核（merged_from ⊆ 候选 id——未知引用丢弃计数）→
           upsert_curated（provenance=agent——supersede 语义自动推进链）
-        ↓ ⑧ 日记（dream 角色）：当日可信事件 → 第一人称日记 →
+        ↓ ⑩ 日记（dream 角色）：当日可信事件 → 第一人称日记 →
           append_episode（kind=dream / source="dream:diary" / provenance=agent）
-        ↓ ⑨ DreamRunRow 终态落库（status/error/stats/decisions）→ 返回记录 DTO
+        ↓ ⑪ 生命周期归档（**纯规则**，零模型调用）：既有 active 策展行按
+          memory.lifecycle.should_archive 判定 → archive_curated（执行点
+          复核 status=active，快照后已被取代的行跳过；status=archived +
+          索引移除）→ stats.archived / decisions(action=archived) 只按
+          实际归档集合生成
+        ↓ ⑫ DreamRunRow 终态落库（status/error/stats/decisions）→ 返回记录 DTO
+
+冻结 / 置顶语义（生命周期保护面——文档化决策）：
+
+    - **冻结主题不进入合并 prompt 主题列表**（``render_merge_prompt`` 的
+      既有主题数据面过滤——模板字节零变化）且**提案目标为冻结主题时
+      整条丢弃**（merged_from 逐事件落 skipped 决策，理由含 ``frozen``）；
+    - **置顶 / 冻结行不归档**（``should_archive`` 硬门）；置顶行同时免于
+      时间衰减（有效强度不衰减）。
 
 fail-closed 语义（锁定决策，逐条）：
 
@@ -36,13 +61,29 @@ fail-closed 语义（锁定决策，逐条）：
       failed，**零 upsert**（解析先于全部晋升——结构性失败不存在部分
       晋升态）；逐条提案校验失败（字段越界 / merged_from 未知引用）→
       该条丢弃计数（stats.failed），其余提案正常晋升；
+    - **事实提取阶段 fail-closed（与合并阶段同轴）**：事实提取的输出
+      结构失败（非 JSON / 非数组 / 空输出 / 调用异常）→ 运行标记
+      failed，**零合并 / 零日记**（前序阶段已提交的产物保留——事实阶
+      段的既有事实写入同样已提交）；逐条事实提案失败（类别越界 / 正文
+      越界 / 证据编号越出候选 / 置信度低于下限 / 超单次上限）→ 逐条丢弃
+      计数（stats.facts_dropped），其余提案正常落库；
+    - **技能挖矿阶段 fail-closed（与事实 / 合并同轴）**：技能提取的输出
+      结构失败（非 JSON / 非数组 / 空输出 / 调用异常）→ 运行标记 failed，
+      **零合并 / 零日记**（事实阶段与技能阶段已提交的写入保留）；逐条
+      技能提案失败（名称 / 描述 / 触发短语 / 正文越界、证据编号越出候选、
+      置信度低于下限、超单次 5 条上限）→ 逐条丢弃计数
+      （stats.skills_dropped），其余提案正常落库；
+    - **事实提取后置于规则门、前置于技能挖矿与合并**（锁定阶段序）：
+      事实、技能与合并消费**同一批过门候选**——事实是「对方是谁」、
+      技能是「事情怎么做」、合并是「发生了什么」的三层蒸馏，彼此互不
+      阻断（单层丢弃只影响该层产物，不改变其他层的提案面）；
     - **日记后置于晋升**（文档化排序决策）：晋升全部提交后才生成日记
       ——日记失败标记运行 failed 但**保留已提交的晋升并在 decisions
       中如实记录**（晋升是本任务的主产物、日记是叙事附产物；倒序会让
       日记失败回滚掉已有效的记忆巩固，代价更高）；
-    - **合并中断决策补齐**：合并 / 晋升阶段异常中断时，过门但未决策
-      的候选事件补 skipped 决策（reason=合并中断）——失败运行的决策
-      面对全部可信候选同样全覆盖；
+    - **合并中断决策补齐**：事实提取 / 技能挖矿 / 合并 / 晋升阶段异常
+      中断时，过门但未决策的候选事件补 skipped 决策（reason 标注中断
+      阶段）——失败运行的决策面对全部可信候选同样全覆盖；
     - **孤儿 running 行收敛**：run_dream 入口把本人格
       ``started_ms < now - stale_running_threshold_ms`` 且无终态的
       running 行批量置 failed（error=进程崩溃遗留）——进程崩溃是
@@ -84,21 +125,29 @@ from packages.harness.llm.llm_models import ChatMessageModel, ChatMessageRole
 from packages.harness.memory.dreaming_models import (
     DreamDecisionAction,
     DreamDecisionModel,
+    DreamFactProposedItemModel,
     DreamJobConfig,
     DreamProposedItemModel,
     DreamRunQueryDTO,
     DreamRunRecordDTO,
     DreamRunStatsModel,
     DreamRunStatus,
+    DreamSkillProposedItemModel,
 )
 from packages.harness.memory.dreaming_orm import DreamRunRow
-from packages.harness.memory.dreaming_prompts import render_diary_prompt, render_merge_prompt
+from packages.harness.memory.dreaming_prompts import (
+    render_diary_prompt,
+    render_facts_prompt,
+    render_merge_prompt,
+    render_skills_prompt,
+)
 from packages.harness.memory.dtos import (
     CuratedRecordDTO,
     CuratedUpsertDTO,
     EpisodeCreateDTO,
     EpisodeRecordDTO,
 )
+from packages.harness.memory.lifecycle import LifecycleConfig, should_archive
 from packages.harness.memory.models import (
     CuratedStatus,
     EpisodeKind,
@@ -113,17 +162,36 @@ from packages.harness.memory.retrieval_models import (
 )
 from packages.harness.memory.service import MemoryService
 from packages.harness.memory.store import MemoryStore
+from packages.harness.persona.facts import FactsService
+from packages.harness.persona.facts_models import (
+    FACT_MIN_CONFIDENCE,
+    FactCreateDTO,
+    FactEvidenceRefModel,
+    PersonaFactSource,
+)
+from packages.harness.persona.skills import SkillsService
+from packages.harness.persona.skills_models import (
+    SKILL_MIN_CONFIDENCE,
+    SKILL_PROPOSAL_CAP,
+    SkillCreateModel,
+)
 
 __all__ = [
     "MS_PER_DAY",
     "MS_PER_HOUR",
     "DREAM_PURPOSE",
     "DIARY_SOURCE",
+    "FACTS_PROPOSAL_CAP",
     "recency_decay",
     "dream_score",
     "select_dream_candidates",
     "parse_merge_proposals",
+    "parse_facts_proposals",
+    "parse_skills_proposals",
+    "select_archive_candidates",
     "DreamService",
+    "ARCHIVE_REASON_STRENGTH",
+    "SKIP_REASON_FROZEN",
 ]
 
 #: 一天的毫秒数（epoch 毫秒轴的换算基准）。
@@ -137,6 +205,18 @@ DIARY_SOURCE: str = "dream:diary"
 #: 孤儿 running 行收敛的落库失败原因（run_dream 入口批量置 failed 时写入
 #: DreamRunRow.error——进程崩溃遗留的终态补齐）。
 _STALE_RUNNING_ERROR: str = "进程崩溃遗留，由调度收敛"
+#: 归档决策理由（生命周期阶段的 decisions.reason——强度低于归档阈值）。
+ARCHIVE_REASON_STRENGTH: str = "strength_below_threshold"
+#: 冻结目标导致的提案丢弃理由（decisions.reason 片段——文档化 deltas）。
+SKIP_REASON_FROZEN: str = "目标主题已冻结（frozen），提案丢弃"
+#: 人物事实单次提取的条数上限（提案超出部分丢弃并计入 facts_dropped）。
+FACTS_PROPOSAL_CAP: int = 10
+#: 事实提取阶段中断的决策补齐理由（过门未决策候选的 skipped 理由）。
+_FACTS_INTERRUPT_REASON: str = "事实提取中断，本次未完成该事件的决策"
+#: 技能挖矿阶段中断的决策补齐理由（与事实 / 合并阶段措辞区分——可审计）。
+_SKILLS_INTERRUPT_REASON: str = "技能提取中断，本次未完成该事件的决策"
+#: 合并阶段中断的决策补齐理由（与事实阶段的措辞区分——可审计）。
+_MERGE_INTERRUPT_REASON: str = "合并中断，本次未完成该事件的决策"
 
 
 class _DreamPhaseError(Exception):
@@ -288,6 +368,9 @@ def select_dream_candidates(
         if record.provenance == MemoryProvenance.UNTRUSTED:
             stats.skipped_untrusted += 1
             continue
+        if record.provenance == MemoryProvenance.PEER:
+            stats.skipped_peer += 1
+            continue
         trusted.append(record)
     stats.candidates = len(trusted)
     pending: list[tuple[float, EpisodeRecordDTO]] = []
@@ -394,6 +477,169 @@ def parse_merge_proposals(raw: str) -> tuple[list[DreamProposedItemModel], int]:
     return valid, dropped
 
 
+def parse_facts_proposals(raw: str) -> tuple[list[DreamFactProposedItemModel], int]:
+    """解析 LLM 人物事实输出（robust parse——围栏剥离 + 逐条 Model Class 校验）。
+
+    结构性失败（整体 fail-closed——上抛由运行标记 failed，零合并 / 零
+    日记）与 :func:`parse_merge_proposals` 同轴：
+
+        - 输出不是合法 JSON（``json.JSONDecodeError``）；
+        - 顶层不是 JSON 数组。
+
+    逐条失败（丢弃计数，不整体失败）：元素无法通过
+    :class:`DreamFactProposedItemModel` 校验（类别越界 / 正文越界 /
+    置信度越界 / 证据编号列表为空）。
+
+    Args:
+        raw: 模型原始输出文本（可含代码围栏）。
+
+    Returns:
+        ``(valid_items, dropped_count)`` 二元组。
+
+    Raises:
+        BusinessException: 结构性解析失败（``VALIDATION_ERROR``——运行
+            标记 failed 的原因面）。
+    """
+    text = _strip_code_fences(raw)
+    try:
+        payload: Any = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise BusinessException(
+            code=ErrorCode.VALIDATION_ERROR,
+            message="梦境事实提取输出不是合法 JSON",
+            details={"reason": str(exc)},
+        ) from exc
+    if not isinstance(payload, list):
+        raise BusinessException(
+            code=ErrorCode.VALIDATION_ERROR,
+            message="梦境事实提取输出必须是 JSON 数组",
+            details={"got": type(payload).__name__},
+        )
+    valid: list[DreamFactProposedItemModel] = []
+    dropped = 0
+    for element in payload:
+        try:
+            valid.append(DreamFactProposedItemModel.model_validate(element))
+        except ValidationError:
+            dropped += 1
+            logger.warning("梦境事实提案条目校验失败，已丢弃: {}", str(element)[:200])
+    return valid, dropped
+
+
+def parse_skills_proposals(raw: str) -> tuple[list[DreamSkillProposedItemModel], int]:
+    """解析 LLM 技能提案输出（robust parse——围栏剥离 + 逐条 Model Class 校验）。
+
+    结构性失败（整体 fail-closed——上抛由运行标记 failed，零合并 / 零
+    日记）与 :func:`parse_facts_proposals` 同轴：
+
+        - 输出不是合法 JSON（``json.JSONDecodeError``）；
+        - 顶层不是 JSON 数组。
+
+    逐条失败（丢弃计数，不整体失败）：元素无法通过
+    :class:`DreamSkillProposedItemModel` 校验（名称 / 描述 / 触发短语 /
+    正文越界、置信度越界、证据编号列表为空）。
+
+    Args:
+        raw: 模型原始输出文本（可含代码围栏）。
+
+    Returns:
+        ``(valid_items, dropped_count)`` 二元组。
+
+    Raises:
+        BusinessException: 结构性解析失败（``VALIDATION_ERROR``——运行
+            标记 failed 的原因面）。
+    """
+    text = _strip_code_fences(raw)
+    try:
+        payload: Any = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise BusinessException(
+            code=ErrorCode.VALIDATION_ERROR,
+            message="梦境技能提取输出不是合法 JSON",
+            details={"reason": str(exc)},
+        ) from exc
+    if not isinstance(payload, list):
+        raise BusinessException(
+            code=ErrorCode.VALIDATION_ERROR,
+            message="梦境技能提取输出必须是 JSON 数组",
+            details={"got": type(payload).__name__},
+        )
+    valid: list[DreamSkillProposedItemModel] = []
+    dropped = 0
+    for element in payload:
+        try:
+            valid.append(DreamSkillProposedItemModel.model_validate(element))
+        except ValidationError:
+            dropped += 1
+            logger.warning("梦境技能提案条目校验失败，已丢弃: {}", str(element)[:200])
+    return valid, dropped
+
+
+def _backfill_undecided(
+    selected: Sequence[EpisodeRecordDTO],
+    decided_ids: set[int],
+    decisions: list[DreamDecisionModel],
+    *,
+    reason: str,
+) -> None:
+    """为过门但未决策的候选补 skipped 决策（失败路径的决策面全覆盖）。
+
+    Args:
+        selected: 过门候选（分数降序）。
+        decided_ids: 已决策事件 id 集（就地更新——防重复决策）。
+        decisions: 决策列表（就地追加）。
+        reason: 补齐理由（标注中断阶段——可审计）。
+    """
+    for candidate in selected:
+        if candidate.id in decided_ids:
+            continue
+        decisions.append(
+            DreamDecisionModel(
+                episode_id=candidate.id,
+                action=DreamDecisionAction.SKIPPED,
+                reason=reason,
+            )
+        )
+        decided_ids.add(candidate.id)
+
+
+def select_archive_candidates(
+    topics: Sequence[CuratedRecordDTO],
+    *,
+    now_ms: int,
+    cfg: LifecycleConfig,
+) -> list[CuratedRecordDTO]:
+    """生命周期归档候选（纯函数——零 I/O、零模型调用）。
+
+    判定委托 :func:`packages.harness.memory.lifecycle.should_archive`
+    （非置顶 / 非冻结 / 现行 active / 年龄超阈值 / 强度低于阈值）；
+    候选按 id 升序返回（确定性——归档语句与决策列表的稳定排列）。
+
+    Args:
+        topics: 既有 active 策展记忆（孤儿 running 收敛后的取回面）。
+        now_ms: 参考当前时间（epoch 毫秒——注入式，测试可控）。
+        cfg: 生命周期参数（衰减 / 强化 / 归档阈值 / 最小年龄）。
+
+    Returns:
+        应归档的策展记忆记录列表（id 升序；空列表 = 本次无归档）。
+    """
+    candidates = [
+        topic
+        for topic in topics
+        if should_archive(
+            importance=topic.importance,
+            anchor_ms=topic.created_at,
+            access_count=topic.access_count,
+            pinned=topic.pinned,
+            frozen=topic.frozen,
+            status=topic.status,
+            now_ms=now_ms,
+            config=cfg,
+        )
+    ]
+    return sorted(candidates, key=lambda topic: topic.id)
+
+
 # =========================================================================== []
 # 编排面——DreamService（取数 / LLM 调用 / 落库；无状态，Session 注入）
 # =========================================================================== []
@@ -406,18 +652,42 @@ class DreamService:
     ``persona.bind_persona_context`` 绑定人格上下文**（PersonaMixin 自动
     注入 / 自动过滤；缺上下文在运行行落库前即 fail loud）。
 
-    构造注入：``memory_service`` 可替换（默认新实例——无状态共享安全）；
-    网关 / 存储 / 时钟 / 参数逐次调用注入（run_dream 关键字参数）。
+    构造注入：``memory_service`` / ``facts_service`` 可替换（默认新实例
+    ——无状态共享安全）；网关 / 存储 / 时钟 / 参数逐次调用注入
+    （run_dream 关键字参数）。
     """
 
-    def __init__(self, *, memory_service: MemoryService | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        memory_service: MemoryService | None = None,
+        lifecycle_config: LifecycleConfig | None = None,
+        facts_service: FactsService | None = None,
+        skills_service: SkillsService | None = None,
+    ) -> None:
         """初始化服务。
 
         Args:
             memory_service: 记忆域服务（None = 新实例——日记追加 / 策展
-                晋升 / 窗口取回的复用面）。
+                晋升 / 窗口取回 / 归档的复用面；注入索引绑定形态时归档
+                同步移除检索索引）。
+            lifecycle_config: 生命周期参数（None = LifecycleConfig 默认
+                值——归档阶段的强度判定旋钮）。
+            facts_service: 人物事实服务（None = 以本服务的记忆服务构造
+                默认实例——事实提取阶段的写入面与证据校验面）。
+            skills_service: 技能服务（None = 新实例——技能挖矿阶段的
+                写入面：同 slug 元数据合并 / 新 slug 落库）。
         """
         self._memory = memory_service if memory_service is not None else MemoryService()
+        self._lifecycle_config = (
+            lifecycle_config if lifecycle_config is not None else LifecycleConfig()
+        )
+        self._facts = (
+            facts_service
+            if facts_service is not None
+            else FactsService(memory_service=self._memory)
+        )
+        self._skills = skills_service if skills_service is not None else SkillsService()
 
     # ------------------------------------------------------------------
     # 夜间梦境主链路
@@ -595,7 +865,14 @@ class DreamService:
         stats: DreamRunStatsModel,
         decisions: list[DreamDecisionModel],
     ) -> None:
-        """执行取数 → 门控 → 合并 → 晋升 → 日记各阶段（异常上抛归 run_dream）。
+        """执行取数 → 门控 → 事实提取 → 技能挖矿 → 合并 → 晋升 → 日记 → 生命周期归档各阶段。
+
+        阶段顺序锁定（gate → facts → skills → merge → diary → archive →
+        finalize）：事实提取、技能挖矿与合并消费同一批过门候选且依次
+        前置（事实是画像素描、技能是操作指令蒸馏、合并是事件蒸馏——
+        前序层的丢弃不改变后序层的提案面）；日记之后执行归档（归档是
+        **整理产物**，失败归 run_dream 终态记录；归档前序阶段异常时本次
+        跳过归档——下个周期重试）。
 
         Args:
             session: 注入的异步 Session。
@@ -624,14 +901,21 @@ class DreamService:
                 cfg.max_episodes,
             )
             episodes = episodes[: cfg.max_episodes]
-        trusted = [record for record in episodes if record.provenance != MemoryProvenance.UNTRUSTED]
-        already_promoted = await self._previous_promoted_ids(
-            session, run_now=run_now, cfg=cfg
-        )
+        trusted = [
+            record
+            for record in episodes
+            if record.provenance
+            not in (MemoryProvenance.UNTRUSTED, MemoryProvenance.PEER)
+        ]
+        already_promoted = await self._previous_promoted_ids(session, run_now=run_now, cfg=cfg)
         active_topics = await self._active_topics(session)
+        prompt_topics = [topic for topic in active_topics if not topic.frozen]
+        frozen_keys = frozenset(
+            (topic.kind.value, topic.topic) for topic in active_topics if topic.frozen
+        )
         topic_hits = (
-            await self._collect_topic_hits(store, persona_scope, active_topics, cfg)
-            if store is not None and trusted and active_topics
+            await self._collect_topic_hits(store, persona_scope, prompt_topics, cfg)
+            if store is not None and trusted and prompt_topics
             else frozenset()
         )
         selected, gate_stats, gate_decisions = select_dream_candidates(
@@ -643,17 +927,37 @@ class DreamService:
         )
         stats.candidates = gate_stats.candidates
         stats.skipped_untrusted = gate_stats.skipped_untrusted
+        stats.skipped_peer = gate_stats.skipped_peer
         stats.gated = gate_stats.gated
         decisions.extend(gate_decisions)
         decided_ids = {decision.episode_id for decision in decisions}
 
         if selected:
+            await self._extract_facts(
+                session,
+                gateway=gateway,
+                persona_scope=persona_scope,
+                selected=selected,
+                stats=stats,
+                decisions=decisions,
+                decided_ids=decided_ids,
+            )
+            await self._extract_skills(
+                session,
+                gateway=gateway,
+                persona_scope=persona_scope,
+                selected=selected,
+                stats=stats,
+                decisions=decisions,
+                decided_ids=decided_ids,
+            )
             stats.failed += await self._merge_and_promote(
                 session,
                 gateway=gateway,
                 persona_scope=persona_scope,
                 selected=selected,
-                active_topics=active_topics,
+                active_topics=prompt_topics,
+                frozen_keys=frozen_keys,
                 stats=stats,
                 decisions=decisions,
                 decided_ids=decided_ids,
@@ -669,6 +973,319 @@ class DreamService:
                 cfg=cfg,
                 row_id=row.id,
             )
+        await self._archive_pass(
+            session, run_now=run_now, active_topics=active_topics, stats=stats, decisions=decisions
+        )
+
+    async def _extract_facts(
+        self,
+        session: AsyncSession,
+        *,
+        gateway: LlmGateway,
+        persona_scope: str,
+        selected: list[EpisodeRecordDTO],
+        stats: DreamRunStatsModel,
+        decisions: list[DreamDecisionModel],
+        decided_ids: set[int],
+    ) -> None:
+        """LLM 人物事实提取 + 逐条复核 + 落库（异常时补齐决策后上抛）。
+
+        异常中断决策补齐（与合并阶段同一语义）：提取阶段任何异常上抛前，
+        过门但未决策的候选补 skipped 决策（reason 标注事实提取中断）——
+        失败运行的决策面对全部可信候选同样全覆盖。
+
+        Args:
+            session: 注入的异步 Session。
+            gateway: LLM 网关（dream 角色）。
+            persona_scope: 人格作用域 ID。
+            selected: 过门候选（分数降序——与合并阶段同一批）。
+            stats: 运行统计（facts_created / facts_merged / facts_dropped
+                就地累加）。
+            decisions: 决策列表（中断补齐时就地追加）。
+            decided_ids: 已决策事件 id 集（就地更新——防重复决策）。
+
+        Raises:
+            _DreamPhaseError: 模型返回空内容（fail-closed——零合并 / 零日记）。
+            BusinessException: 解析结构失败 / LLM 调用异常 / 落库失败（归
+                run_dream 终态记录）。
+        """
+        try:
+            await self._extract_facts_inner(
+                session,
+                gateway=gateway,
+                persona_scope=persona_scope,
+                selected=selected,
+                stats=stats,
+            )
+        except Exception:
+            _backfill_undecided(selected, decided_ids, decisions, reason=_FACTS_INTERRUPT_REASON)
+            raise
+
+    async def _extract_facts_inner(
+        self,
+        session: AsyncSession,
+        *,
+        gateway: LlmGateway,
+        persona_scope: str,
+        selected: list[EpisodeRecordDTO],
+        stats: DreamRunStatsModel,
+    ) -> None:
+        """事实提取主体（异常上抛由 ``_extract_facts`` 补决策）。
+
+        复核矩阵（逐条应用，文档化）：字段校验失败（解析级）→ 计数
+        ``facts_dropped``；证据编号越出候选集 → 丢弃计数；置信度低于
+        ``FACT_MIN_CONFIDENCE`` → 丢弃计数；超出单次
+        ``FACTS_PROPOSAL_CAP`` 条 → 丢弃计数。通过复核的提案经
+        ``FactsService.upsert_fact`` 落库（provenance=agent /
+        source=dream）：同归一化身份现行事实走元数据刷新（计数
+        ``facts_merged``）、新身份落现行行（计数 ``facts_created``）。
+        证据摘录由系统从被引用候选事件正文**逐字**截取（≤200 字符）——
+        模型不产出摘录文本，引用编号即背书。
+
+        Args:
+            session: 注入的异步 Session。
+            gateway: LLM 网关（dream 角色）。
+            persona_scope: 人格作用域 ID（用量归属）。
+            selected: 过门候选（分数降序）。
+            stats: 运行统计（三计数就地累加）。
+
+        Raises:
+            _DreamPhaseError: 模型返回空内容。
+            BusinessException: 解析结构失败 / LLM 调用异常 / 落库失败。
+        """
+        prompt = render_facts_prompt(selected)
+        response = await gateway.chat_by_role(
+            ModelRole.DREAM,
+            [ChatMessageModel(role=ChatMessageRole.SYSTEM, content=prompt)],
+            persona_id=persona_scope,
+            purpose=DREAM_PURPOSE,
+        )
+        raw = response.content.strip()
+        if not raw:
+            raise _DreamPhaseError("梦境事实提取模型返回空内容")
+        valid_items, dropped_count = parse_facts_proposals(raw)
+        stats.facts_dropped += dropped_count
+        episodes_by_id = {record.id: record for record in selected}
+        accepted: list[tuple[DreamFactProposedItemModel, list[FactEvidenceRefModel]]] = []
+        for item in valid_items:
+            if len(accepted) >= FACTS_PROPOSAL_CAP:
+                stats.facts_dropped += 1
+                logger.info("人物事实提案超出单次上限，已丢弃: content={}", item.content[:80])
+                continue
+            unknown_ids = [
+                episode_id
+                for episode_id in item.evidence_episode_ids
+                if episode_id not in episodes_by_id
+            ]
+            if unknown_ids:
+                stats.facts_dropped += 1
+                logger.warning(
+                    "人物事实提案引用未知事件，已丢弃: content={}, unknown={}",
+                    item.content[:80],
+                    unknown_ids,
+                )
+                continue
+            if item.confidence < FACT_MIN_CONFIDENCE:
+                stats.facts_dropped += 1
+                logger.info(
+                    "人物事实提案置信度低于下限，已丢弃: content={}, confidence={:.2f}",
+                    item.content[:80],
+                    item.confidence,
+                )
+                continue
+            references = [
+                self._fact_evidence(episodes_by_id[episode_id])
+                for episode_id in dict.fromkeys(item.evidence_episode_ids)
+            ]
+            accepted.append((item, [ref for ref in references if ref is not None]))
+        for item, evidence in accepted:
+            result = await self._facts.upsert_fact(
+                session,
+                FactCreateDTO(
+                    category=item.category,
+                    content=item.content,
+                    confidence=item.confidence,
+                    evidence=evidence,
+                ),
+                provenance=MemoryProvenance.AGENT,
+                source=PersonaFactSource.DREAM,
+            )
+            if result.created:
+                stats.facts_created += 1
+            else:
+                stats.facts_merged += 1
+        logger.info(
+            "梦境人物事实提取完成: created={}, merged={}, dropped={}",
+            stats.facts_created,
+            stats.facts_merged,
+            stats.facts_dropped,
+        )
+
+    def _fact_evidence(self, record: EpisodeRecordDTO) -> FactEvidenceRefModel | None:
+        """候选事件 → 证据引用（逐字截取——无文本载荷 / 非可信来源返回 None）。
+
+        来源防御：peer / untrusted 事件**永不**作为事实证据（规则门已
+        硬排除二者，此处为纵深防御——若未来候选面放宽，证据面仍不被
+        同侪断言污染）。
+
+        Args:
+            record: 被引用的候选事件记录。
+
+        Returns:
+            证据引用（摘录恒为被引用事件正文的逐字前缀，≤200 字符）；
+            事件无文本载荷或来源为 peer/untrusted 时返回 None（该证据
+            不落库——事实仍可落库）。
+        """
+        if record.provenance in (MemoryProvenance.PEER, MemoryProvenance.UNTRUSTED):
+            return None
+        quote = self._facts.evidence_text(record)
+        if not quote:
+            return None
+        return FactEvidenceRefModel(
+            episode_id=record.id,
+            quote=quote,
+            ts_ms=record.ts_ms,
+            provenance=record.provenance,
+        )
+
+    async def _extract_skills(
+        self,
+        session: AsyncSession,
+        *,
+        gateway: LlmGateway,
+        persona_scope: str,
+        selected: list[EpisodeRecordDTO],
+        stats: DreamRunStatsModel,
+        decisions: list[DreamDecisionModel],
+        decided_ids: set[int],
+    ) -> None:
+        """LLM 技能挖矿 + 逐条复核 + 落库（异常时补齐决策后上抛）。
+
+        异常中断决策补齐（与事实 / 合并阶段同一语义）：挖矿阶段任何异常
+        上抛前，过门但未决策的候选补 skipped 决策（reason 标注技能提取
+        中断）——失败运行的决策面对全部可信候选同样全覆盖。
+
+        Args:
+            session: 注入的异步 Session。
+            gateway: LLM 网关（dream 角色）。
+            persona_scope: 人格作用域 ID。
+            selected: 过门候选（分数降序——与事实 / 合并阶段同一批）。
+            stats: 运行统计（skills_created / skills_merged /
+                skills_dropped 就地累加）。
+            decisions: 决策列表（中断补齐时就地追加）。
+            decided_ids: 已决策事件 id 集（就地更新——防重复决策）。
+
+        Raises:
+            _DreamPhaseError: 模型返回空内容（fail-closed——零合并 / 零日记）。
+            BusinessException: 解析结构失败 / LLM 调用异常 / 落库失败（归
+                run_dream 终态记录）。
+        """
+        try:
+            await self._extract_skills_inner(
+                session,
+                gateway=gateway,
+                persona_scope=persona_scope,
+                selected=selected,
+                stats=stats,
+            )
+        except Exception:
+            _backfill_undecided(selected, decided_ids, decisions, reason=_SKILLS_INTERRUPT_REASON)
+            raise
+
+    async def _extract_skills_inner(
+        self,
+        session: AsyncSession,
+        *,
+        gateway: LlmGateway,
+        persona_scope: str,
+        selected: list[EpisodeRecordDTO],
+        stats: DreamRunStatsModel,
+    ) -> None:
+        """技能挖矿主体（异常上抛由 ``_extract_skills`` 补决策）。
+
+        复核矩阵（逐条应用，文档化）：字段校验失败（解析级）→ 计数
+        ``skills_dropped``；证据编号越出候选集 → 丢弃计数；置信度低于
+        ``SKILL_MIN_CONFIDENCE`` → 丢弃计数；超出单次
+        ``SKILL_PROPOSAL_CAP`` 条 → 丢弃计数。通过复核的提案经
+        ``SkillsService.upsert_mined`` 落库：同 slug 既有技能走元数据
+        刷新（计数 ``skills_merged``）、新 slug 落 active 行（计数
+        ``skills_created``）。证据编号只作提案有效性校验——技能表不存
+        证据链（技能是操作指令，不是可溯源断言）。
+
+        Args:
+            session: 注入的异步 Session。
+            gateway: LLM 网关（dream 角色）。
+            persona_scope: 人格作用域 ID（用量归属）。
+            selected: 过门候选（分数降序）。
+            stats: 运行统计（三计数就地累加）。
+
+        Raises:
+            _DreamPhaseError: 模型返回空内容。
+            BusinessException: 解析结构失败 / LLM 调用异常 / 落库失败。
+        """
+        active_skills = await self._skills.active_skill_refs(session)
+        prompt = render_skills_prompt(selected, active_skills)
+        response = await gateway.chat_by_role(
+            ModelRole.DREAM,
+            [ChatMessageModel(role=ChatMessageRole.SYSTEM, content=prompt)],
+            persona_id=persona_scope,
+            purpose=DREAM_PURPOSE,
+        )
+        raw = response.content.strip()
+        if not raw:
+            raise _DreamPhaseError("梦境技能提取模型返回空内容")
+        valid_items, dropped_count = parse_skills_proposals(raw)
+        stats.skills_dropped += dropped_count
+        episodes_by_id = {record.id: record for record in selected}
+        accepted: list[DreamSkillProposedItemModel] = []
+        for item in valid_items:
+            if len(accepted) >= SKILL_PROPOSAL_CAP:
+                stats.skills_dropped += 1
+                logger.info("技能提案超出单次上限，已丢弃: name={}", item.name)
+                continue
+            unknown_ids = [
+                episode_id
+                for episode_id in item.evidence_episode_ids
+                if episode_id not in episodes_by_id
+            ]
+            if unknown_ids:
+                stats.skills_dropped += 1
+                logger.warning(
+                    "技能提案引用未知事件，已丢弃: name={}, unknown={}",
+                    item.name,
+                    unknown_ids,
+                )
+                continue
+            if item.confidence < SKILL_MIN_CONFIDENCE:
+                stats.skills_dropped += 1
+                logger.info(
+                    "技能提案置信度低于下限，已丢弃: name={}, confidence={:.2f}",
+                    item.name,
+                    item.confidence,
+                )
+                continue
+            accepted.append(item)
+        for item in accepted:
+            result = await self._skills.upsert_mined(
+                session,
+                SkillCreateModel(
+                    name=item.name,
+                    description=item.description,
+                    triggers=list(item.triggers),
+                    content=item.content,
+                    confidence=item.confidence,
+                ),
+            )
+            if result.created:
+                stats.skills_created += 1
+            else:
+                stats.skills_merged += 1
+        logger.info(
+            "梦境技能挖矿完成: created={}, merged={}, dropped={}",
+            stats.skills_created,
+            stats.skills_merged,
+            stats.skills_dropped,
+        )
 
     async def _merge_and_promote(
         self,
@@ -678,6 +1295,7 @@ class DreamService:
         persona_scope: str,
         selected: list[EpisodeRecordDTO],
         active_topics: list[CuratedRecordDTO],
+        frozen_keys: frozenset[tuple[str, str]],
         stats: DreamRunStatsModel,
         decisions: list[DreamDecisionModel],
         decided_ids: set[int],
@@ -693,7 +1311,10 @@ class DreamService:
             gateway: LLM 网关（dream 角色）。
             persona_scope: 人格作用域 ID。
             selected: 过门候选（分数降序）。
-            active_topics: 既有 active 策展记忆。
+            active_topics: 可参与合并的既有 active 策展记忆（冻结行已
+                排除——prompt 主题列表数据面）。
+            frozen_keys: 冻结主题键集（kind 值, topic）——提案目标命中
+                即整条丢弃（merged_from 逐事件落 skipped/frozen 决策）。
             stats: 运行统计（failed 就地累加）。
             decisions: 决策列表（晋升 / 并入 / 未收录决策就地追加）。
             decided_ids: 已决策事件 id 集（就地更新——防重复决策）。
@@ -712,23 +1333,14 @@ class DreamService:
                 persona_scope=persona_scope,
                 selected=selected,
                 active_topics=active_topics,
+                frozen_keys=frozen_keys,
                 stats=stats,
                 decisions=decisions,
                 decided_ids=decided_ids,
             )
         except Exception:
             # 合并中断：过门但未决策的候选补 skipped 决策（决策面全覆盖）
-            for candidate in selected:
-                if candidate.id in decided_ids:
-                    continue
-                decisions.append(
-                    DreamDecisionModel(
-                        episode_id=candidate.id,
-                        action=DreamDecisionAction.SKIPPED,
-                        reason="合并中断，本次未完成该事件的决策",
-                    )
-                )
-                decided_ids.add(candidate.id)
+            _backfill_undecided(selected, decided_ids, decisions, reason=_MERGE_INTERRUPT_REASON)
             raise
 
     async def _merge_and_promote_inner(
@@ -739,6 +1351,7 @@ class DreamService:
         persona_scope: str,
         selected: list[EpisodeRecordDTO],
         active_topics: list[CuratedRecordDTO],
+        frozen_keys: frozenset[tuple[str, str]],
         stats: DreamRunStatsModel,
         decisions: list[DreamDecisionModel],
         decided_ids: set[int],
@@ -750,7 +1363,10 @@ class DreamService:
             gateway: LLM 网关（dream 角色）。
             persona_scope: 人格作用域 ID。
             selected: 过门候选（分数降序）。
-            active_topics: 既有 active 策展记忆。
+            active_topics: 可参与合并的既有 active 策展记忆（冻结行已排除）。
+            frozen_keys: 冻结主题键集（kind 值, topic）——提案目标命中即
+                丢弃（deltas 文档化：merged_from 逐事件落 skipped 决策，
+                理由含 frozen；不计入 failed——非校验失败）。
             stats: 运行统计（failed 就地累加）。
             decisions: 决策列表（晋升 / 并入 / 未收录决策就地追加）。
             decided_ids: 已决策事件 id 集（就地更新——防重复决策）。
@@ -786,6 +1402,26 @@ class DreamService:
                     item.topic,
                     unknown_ids,
                 )
+                continue
+            if (item.kind.value, item.topic) in frozen_keys:
+                logger.info(
+                    "梦境提案目标主题已冻结，丢弃: topic={}, kind={}",
+                    item.topic,
+                    item.kind.value,
+                )
+                for episode_id in item.merged_from:
+                    if episode_id in decided_ids:
+                        continue
+                    decisions.append(
+                        DreamDecisionModel(
+                            episode_id=episode_id,
+                            topic=item.topic,
+                            kind=item.kind,
+                            action=DreamDecisionAction.SKIPPED,
+                            reason=SKIP_REASON_FROZEN,
+                        )
+                    )
+                    decided_ids.add(episode_id)
                 continue
             actionable.append(item)
         for item in actionable:
@@ -890,6 +1526,74 @@ class DreamService:
             ),
         )
         return episode.id
+
+    # ------------------------------------------------------------------
+    # 生命周期归档阶段（纯规则——零模型调用）
+    # ------------------------------------------------------------------
+
+    async def _archive_pass(
+        self,
+        session: AsyncSession,
+        *,
+        run_now: int,
+        active_topics: list[CuratedRecordDTO],
+        stats: DreamRunStatsModel,
+        decisions: list[DreamDecisionModel],
+    ) -> int:
+        """生命周期归档阶段（active 策展行按有效强度批量归档）。
+
+        判定与执行分离：:func:`select_archive_candidates` 纯规则求出候选
+        （非置顶 / 非冻结 / 现行 active / 年龄超阈值 / 强度低于阈值），
+        再由 :meth:`MemoryService.archive_curated` 批量落库——归档执行点
+        会重新校验 ``status='active'``（候选快照与执行之间被 supersede /
+        已归档的行被跳过），落库结果为 :class:`ArchiveCuratedResultModel`
+        的**实际归档集合**。
+
+        决策面口径：只对**实际归档**的 id 产生 ``action=archived`` 决策
+        （``episode_id=0`` / ``curated_id=行主键`` / 理由
+        ``strength_below_threshold``）——``stats.archived`` 与 archived
+        决策条数恒等（逐行可审计；候选快照中未实际归档的行既不计入统计、
+        也不产生决策）。
+
+        Args:
+            session: 注入的异步 Session。
+            run_now: 注入时钟（epoch 毫秒——强度判定参考轴）。
+            active_topics: 既有 active 策展记忆（本轮取回面——候选快照；
+                执行点以 ``archive_curated`` 的复核结果为准）。
+            stats: 运行统计（archived 按实际归档数就地累加）。
+            decisions: 决策列表（归档决策仅对实际归档 id 就地追加）。
+
+        Returns:
+            本次实际归档行数（0 = 无候选 / 候选在执行点均已非 active）。
+        """
+        candidates = select_archive_candidates(
+            active_topics, now_ms=run_now, cfg=self._lifecycle_config
+        )
+        if not candidates:
+            return 0
+        result = await self._memory.archive_curated(
+            session, [candidate.id for candidate in candidates]
+        )
+        stats.archived += result.count
+        candidates_by_id = {candidate.id: candidate for candidate in candidates}
+        for archived_id in result.archived_ids:
+            candidate = candidates_by_id[archived_id]
+            decisions.append(
+                DreamDecisionModel(
+                    episode_id=0,
+                    topic=candidate.topic,
+                    kind=candidate.kind,
+                    action=DreamDecisionAction.ARCHIVED,
+                    reason=ARCHIVE_REASON_STRENGTH,
+                    curated_id=candidate.id,
+                )
+            )
+        logger.info(
+            "梦境生命周期归档完成: archived={}, candidates={}",
+            result.count,
+            len(candidates),
+        )
+        return result.count
 
     # ------------------------------------------------------------------
     # 运行日志读写面（API 消费）

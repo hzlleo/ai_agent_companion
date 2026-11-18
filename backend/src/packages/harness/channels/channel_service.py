@@ -58,6 +58,7 @@ from packages.harness.channels.channel_models import (
 from packages.harness.chat.chat_models import ChatSessionStateModel
 from packages.harness.chat.service import ChatService
 from packages.harness.core.errors import BusinessException, ErrorCode
+from packages.harness.memory.models import MemoryProvenance
 from packages.harness.persona.service import bind_persona_context
 
 __all__ = [
@@ -216,7 +217,14 @@ class ChannelRouter:
             try:
                 state = await self._get_or_create_session(context)
                 async with bind_persona_context(state.persona_id):
-                    reply_text = await self._chat_service_factory().reply(state, message.text)
+                    sender_provenance = (
+                        MemoryProvenance.PEER
+                        if message.is_group_chat
+                        else MemoryProvenance.OWNER
+                    )
+                    reply_text = await self._chat_service_factory().reply(
+                        state, message.text, sender_provenance=sender_provenance
+                    )
                 return await adapter.send_message(
                     OutboundMessageModel(
                         chat_id=message.chat_id,

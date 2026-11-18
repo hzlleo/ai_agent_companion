@@ -16,6 +16,7 @@ import {
   deleteCurated,
   deleteEpisode,
   deleteSession,
+  freezeCurated,
   getCuratedHistory,
   getDreamRun,
   getEpisode,
@@ -24,10 +25,13 @@ import {
   listDreamRuns,
   listEpisodes,
   listSessions,
+  pinCurated,
   regenerateVariants,
   searchMemories,
   selectVariant,
   triggerDream,
+  unfreezeCurated,
+  unpinCurated,
   upsertCurated,
 } from '@/api/memories'
 import { getCursorPageParam } from '@/api/pagination'
@@ -37,6 +41,7 @@ import type {
   ChatVariantSelectRequest,
   CuratedKind,
   CuratedRecord,
+  CuratedSort,
   CuratedStatus,
   CuratedUpsertRequest,
   DreamTriggerRequest,
@@ -143,10 +148,12 @@ export interface UseCuratedListParams {
   kind?: CuratedKind
   topic?: string
   status?: CuratedStatus
+  sort?: CuratedSort
+  includeArchived?: boolean
   limit?: number
 }
 
-/** 策展记忆游标分页列表（kind / topic / status 过滤 + load more）。 */
+/** 策展记忆游标分页列表（过滤 + 排序 + 归档开关 + load more）。 */
 export function useCuratedList(params: UseCuratedListParams) {
   return useInfiniteQuery({
     queryKey: [...MEMORIES_QUERY_KEY, 'curated', params],
@@ -155,11 +162,49 @@ export function useCuratedList(params: UseCuratedListParams) {
         kind: params.kind,
         topic: params.topic,
         status: params.status,
+        sort: params.sort,
+        include_archived: params.includeArchived,
         cursor: pageParam,
         limit: params.limit,
       }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: getCursorPageParam,
+  })
+}
+
+/** 策展记忆置顶态切换（pinned=true 置顶 / false 取消；幂等端点）。 */
+export function useSetCuratedPinned() {
+  const invalidate = useInvalidateMemories()
+  return useMutation({
+    mutationFn: ({
+      personaId,
+      memoryId,
+      pinned,
+    }: {
+      personaId: number | undefined
+      memoryId: number
+      pinned: boolean
+    }): Promise<CuratedRecord> =>
+      pinned ? pinCurated(personaId, memoryId) : unpinCurated(personaId, memoryId),
+    onSuccess: invalidate,
+  })
+}
+
+/** 策展记忆冻结态切换（frozen=true 冻结 / false 解冻；幂等端点）。 */
+export function useSetCuratedFrozen() {
+  const invalidate = useInvalidateMemories()
+  return useMutation({
+    mutationFn: ({
+      personaId,
+      memoryId,
+      frozen,
+    }: {
+      personaId: number | undefined
+      memoryId: number
+      frozen: boolean
+    }): Promise<CuratedRecord> =>
+      frozen ? freezeCurated(personaId, memoryId) : unfreezeCurated(personaId, memoryId),
+    onSuccess: invalidate,
   })
 }
 

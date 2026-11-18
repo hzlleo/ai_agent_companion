@@ -7,8 +7,9 @@
       （kind / provenance / 时间范围过滤 + 游标分页）/ 批量删除三件套
       （部分成功形态）；
     - 策展层：:class:`CuratedUpsertDTO`（upsert 写入面）/
-      :class:`CuratedRecordDTO`（读取面）/ :class:`CuratedQueryDTO`
-      （kind / topic / status 过滤 + 游标分页）；
+      :class:`CuratedRecordDTO`（读取面——含生命周期读时投影：置顶 /
+      冻结 / 访问统计 / 有效强度）/:class:`CuratedQueryDTO`
+      （kind / topic / status 过滤 + 排序 + include_archived + 游标分页）；
     - 会话层：:class:`ChatSessionQueryDTO` / :class:`ChatSessionSummaryDTO`
       / :class:`ChatSessionDetailDTO` / :class:`ChatMessageDTO`。
 
@@ -18,6 +19,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -42,9 +44,11 @@ __all__ = [
     "EpisodeBatchDeleteRequest",
     "EpisodeBatchDeleteItemDTO",
     "EpisodeBatchDeleteResponseDTO",
+    "CuratedSort",
     "CuratedUpsertDTO",
     "CuratedRecordDTO",
     "CuratedQueryDTO",
+    "ArchiveCuratedResultModel",
     "ChatSessionQueryDTO",
     "ChatSessionSummaryDTO",
     "ChatSessionDetailDTO",
@@ -261,6 +265,35 @@ class EpisodeBatchDeleteResponseDTO(BaseModel):
         default_factory=list, description="逐 id 结果"
     )
 
+class ArchiveCuratedResultModel(BaseModel):
+    """批量归档的执行结果（**内部服务返回值，非 wire DTO**——不注册契约 fixture）。
+
+    执行时 active 复核后，候选快照与真实落库集合可能不一致（快照生成
+    后、归档执行前被 supersede 的行会被跳过）——调用方的统计与决策
+    必须消费本 Model 的实际集合，而非候选快照。
+
+    Attributes:
+        count: 实际归档行数（与 ``archived_ids`` 长度恒等）。
+        archived_ids: 实际归档行主键（按执行序）。
+    """
+
+    count: int = Field(ge=0, description="实际归档行数")
+    archived_ids: list[int] = Field(default_factory=list, description="实际归档行主键")
+
+
+class CuratedSort(StrEnum):
+    """策展记忆列表排序值域（GET /api/v1/memories/curated 的 sort 参数）。
+
+    - ``updated_desc``：按行更新时间降序（缺省——管理面最近操作优先；
+      与既有 id 降序形态对齐）；
+    - ``strength_desc``：按**读时计算**的有效强度降序（生命周期排序面
+      ——强度由行值 + 注入时钟 + LifecycleConfig 现场计算，故该排序在
+      服务层内存完成并受单页扫描上限约束，见 memory.service 查询面）。
+    """
+
+    UPDATED_DESC = "updated_desc"
+    STRENGTH_DESC = "strength_desc"
+
 
 class CuratedUpsertDTO(BaseModel):
     """策展记忆 upsert DTO（写入面——supersede 语义）。
@@ -284,7 +317,7 @@ class CuratedUpsertDTO(BaseModel):
 
 
 class CuratedRecordDTO(BaseModel):
-    """策展记忆读取 DTO（ORM 行归一）。
+    """策展记忆读取 DTO（ORM 行归一 + 生命周期读时投影）。
 
     Attributes:
         id: 记忆主键。
@@ -294,11 +327,18 @@ class CuratedRecordDTO(BaseModel):
         content: 记忆正文。
         importance: 重要度（1-10）。
         provenance: 来源可信度（owner/agent）。
-        status: 状态（active/superseded）。
+        status: 状态（active/superseded/archived）。
         superseded_by_id: 取代者行主键（active 行为 None）。
         version: 链内版本号（首版 1）。
         created_at: 落库时间（epoch 毫秒）。
         updated_at: 行更新时间（epoch 毫秒）。
+        pinned: 是否置顶（免于时间衰减与归档）。
+        frozen: 是否冻结（不参与梦境合并 / 不被归档）。
+        access_count: 检索命中累计次数（写读强化轴）。
+        last_accessed_ms: 最近检索命中时刻（epoch 毫秒；None = 未命中）。
+        effective_strength: 有效强度（**读时计算**——由服务层以注入时钟 +
+            LifecycleConfig 现场求得，非落库列；归档行仍返回该值仅供
+            观测，前端对归档行展示占位符）。
     """
 
     model_config = ConfigDict(from_attributes=True, protected_namespaces=())
@@ -310,20 +350,41 @@ class CuratedRecordDTO(BaseModel):
     content: str = Field(description="记忆正文")
     importance: int = Field(description="重要度（1-10）")
     provenance: MemoryProvenance = Field(description="来源可信度")
-    status: CuratedStatus = Field(description="状态（active/superseded）")
+    status: CuratedStatus = Field(description="状态（active/superseded/archived）")
     superseded_by_id: int | None = Field(description="取代者行主键（active 为 None）")
     version: int = Field(description="链内版本号")
     created_at: int = Field(description="落库时间（epoch 毫秒）")
     updated_at: int = Field(description="行更新时间（epoch 毫秒）")
+    pinned: bool = Field(default=False, description="是否置顶（免于衰减与归档）")
+    frozen: bool = Field(default=False, description="是否冻结（不参与合并 / 不被归档）")
+    access_count: int = Field(default=0, ge=0, description="检索命中累计次数")
+    last_accessed_ms: int | None = Field(
+        default=None, description="最近检索命中时刻（epoch 毫秒；None = 未命中）"
+    )
+    effective_strength: float = Field(
+        default=0.0, ge=0, description="有效强度（读时计算，非落库列）"
+    )
 
 
 class CuratedQueryDTO(BaseModel):
-    """策展记忆查询 DTO（kind / topic / status 过滤 + 游标分页——id 降序）。
+    """策展记忆查询 DTO（过滤 + 排序 + 游标分页）。
+
+    ``strength_desc`` 的排序语义与已知限制（自包含说明）：该排序只对
+    **最新 2000 行**做 id 降序预取（服务层扫描上限），再在应用层按读时
+    有效强度重排；有效强度由创建时刻 + 访问计数 + 注入时钟现场计算并
+    随时间衰减，因此偏移游标翻页期间排序键本就会漂移——翻页结果不保证
+    快照一致，跨页可能重复 / 遗漏。这是读时计算的已知限制（非缺陷）；
+    需要稳定全量排序时使用 ``updated_desc`` 或缩小过滤面。
 
     Attributes:
         kind: 策展类型过滤（None = 全部）。
         topic: 主题键精确过滤（None = 全部）。
         status: 状态过滤（None = 全部；active = 现行版本面）。
+        sort: 排序（``updated_desc`` 缺省——行更新时间降序；
+            ``strength_desc`` 按读时计算的有效强度降序，受上述扫描上限
+            与排序键漂移限制）。
+        include_archived: 是否包含归档行（默认 False——归档行不进入
+            管理面默认列表；显式 ``status`` 过滤时该开关让位于状态过滤）。
         cursor: 上一页返回的不透明游标（None = 首页）。
         limit: 页大小（1-200，默认 20）。
     """
@@ -331,6 +392,12 @@ class CuratedQueryDTO(BaseModel):
     kind: CuratedKind | None = Field(default=None, description="策展类型过滤")
     topic: str | None = Field(default=None, description="主题键精确过滤")
     status: CuratedStatus | None = Field(default=None, description="状态过滤")
+    sort: CuratedSort = Field(
+        default=CuratedSort.UPDATED_DESC, description="排序（updated_desc / strength_desc）"
+    )
+    include_archived: bool = Field(
+        default=False, description="是否包含归档行（显式 status 过滤时让位）"
+    )
     cursor: str | None = Field(default=None, description="分页游标（首页为 None）")
     limit: int = Field(default=20, ge=1, le=200, description="页大小")
 

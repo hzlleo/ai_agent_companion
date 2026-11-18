@@ -13,7 +13,12 @@ import pytest
 
 from packages.harness.core.errors import BusinessException
 from packages.harness.memory import dreaming_prompts
-from packages.harness.memory.dreaming_prompts import render_diary_prompt, render_merge_prompt
+from packages.harness.memory.dreaming_prompts import (
+    render_diary_prompt,
+    render_facts_prompt,
+    render_merge_prompt,
+    render_skills_prompt,
+)
 from packages.harness.memory.dtos import CuratedRecordDTO, EpisodeRecordDTO
 from packages.harness.memory.models import (
     ChatTurnPayloadModel,
@@ -22,10 +27,13 @@ from packages.harness.memory.models import (
     EpisodeKind,
     MemoryProvenance,
 )
+from packages.harness.persona.skills_models import SkillRecordDTO, SkillSource, SkillStatus
 
 #: 逐模板 sha256 摘要锁（UTF-8 字节）——变更 prompt 须同步本表与版本常量。
 _BYTE_LOCKS: dict[str, str] = {
     "MERGE_TEMPLATE": "59d92e5ca3caf8b19ec16eb8c0edc7d01f616b797cb454cdb48c7c571789e7ba",
+    "FACTS_TEMPLATE": "0990d05fc02a361863cf19ff8c74de857f6b7a43db9b1d9d2a9fd93116de4b03",
+    "SKILLS_TEMPLATE": "23455ccfe2ef38e4b23d317154d7014189c1cc4362281a2d72524eba482447ce",
     "DIARY_TEMPLATE": "90015c7f108d91feeda4012bc2c5cbed1a47d8fba7a7a1707fa8f4579e66ea8a",
 }
 
@@ -33,6 +41,8 @@ _BYTE_LOCKS: dict[str, str] = {
 _VERSION_CONSTANTS = (
     "DREAMING_PROMPTS_VERSION",
     "MERGE_TEMPLATE_VERSION",
+    "FACTS_TEMPLATE_VERSION",
+    "SKILLS_TEMPLATE_VERSION",
     "DIARY_TEMPLATE_VERSION",
 )
 
@@ -57,6 +67,31 @@ def _episode(
         provenance=provenance,
         content_hash=f"hash-{episode_id:04d}",
         ts_ms=ts_ms,
+        created_at=0,
+        updated_at=0,
+    )
+
+
+def _skill(
+    name: str = "周报流程",
+    *,
+    slug: str = "周报流程",
+    content: str = "1. 先列三件事\n2. 再写进展",
+) -> SkillRecordDTO:
+    """构造最小启用技能记录（prompt 渲染测试铺底）。"""
+    return SkillRecordDTO(
+        id=1,
+        name=name,
+        slug=slug,
+        description="主人说「写周报」时使用",
+        triggers=["写周报"],
+        content=content,
+        status=SkillStatus.ACTIVE,
+        source=SkillSource.MANUAL,
+        confidence=0.8,
+        use_count=0,
+        last_used_ms=None,
+        version=1,
         created_at=0,
         updated_at=0,
     )
@@ -182,3 +217,67 @@ async def test_render_diary_prompt_template_override_wins() -> None:
     assert text.startswith("给 大肥鱼 的日记")
     assert "第41条用户消息" in text
     assert "【日记写作任务】" not in text
+
+
+# ---------------------------------------------------------------------------
+# 人物事实 prompt 渲染契约
+# ---------------------------------------------------------------------------
+
+
+async def test_render_facts_prompt_numbered_episodes_persona_agnostic() -> None:
+    """事实 prompt：编号事件块 + 类别 / 证据字段说明 + 无人格字段。"""
+    text = render_facts_prompt([_episode(51, ts_ms=1_760_000_000_000, importance=6)])
+    assert text.startswith("【人物事实提取任务】")
+    assert "事件 #51" in text
+    assert "第51条用户消息" in text
+    assert '"category"' in text
+    assert '"evidence_episode_ids"' in text
+    assert "最多输出 10 条" in text
+    assert "dream-prompt" not in text
+
+
+async def test_render_facts_prompt_template_override_wins() -> None:
+    """覆写语义：template_override 整体替换正典模板（自带同名占位符）。"""
+    override = "自定义事实模板\n{episodes_block}"
+    text = render_facts_prompt([_episode(61)], template_override=override)
+    assert text.startswith("自定义事实模板")
+    assert "事件 #61" in text
+    assert "【人物事实提取任务】" not in text
+
+
+# ---------------------------------------------------------------------------
+# 技能挖矿 prompt 渲染契约
+# ---------------------------------------------------------------------------
+
+
+async def test_render_skills_prompt_numbered_episodes_and_skill_refs() -> None:
+    """技能 prompt：编号事件块 + 既有技能名称 / slug 清单 + 人格中立。"""
+    text = render_skills_prompt(
+        [_episode(71, ts_ms=1_760_000_000_000, importance=6)], [_skill()]
+    )
+    assert text.startswith("【技能挖矿任务】")
+    assert "事件 #71" in text
+    assert "第71条用户消息" in text
+    assert "- 周报流程（slug: 周报流程）" in text
+    assert '"triggers"' in text
+    assert '"evidence_episode_ids"' in text
+    assert "最多输出 5 条" in text
+    assert "dream-prompt" not in text
+    assert "1. 先列三件事" not in text  # 既有技能正文不进入 prompt
+
+
+async def test_render_skills_prompt_empty_skills_placeholder() -> None:
+    """无既有技能：清单块为占位文本（不产出空块）。"""
+    text = render_skills_prompt([_episode(81)], [])
+    assert "事件 #81" in text
+    assert "（无）" in text
+
+
+async def test_render_skills_prompt_template_override_wins() -> None:
+    """覆写语义：template_override 整体替换正典模板（自带同名占位符）。"""
+    override = "自定义技能模板\n{episodes_block}\n技能：{skills_block}"
+    text = render_skills_prompt([_episode(91)], [_skill()], template_override=override)
+    assert text.startswith("自定义技能模板")
+    assert "事件 #91" in text
+    assert "周报流程" in text
+    assert "【技能挖矿任务】" not in text

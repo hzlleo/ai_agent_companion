@@ -80,12 +80,15 @@ class MemoryProvenance(StrEnum):
 
     - ``owner``：主人说的（最高可信）；
     - ``agent``：智能体推断的（可信）；
+    - ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——
+      永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；
     - ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层
       强制拒绝，检索 / 晋升链路依赖此不变式）。
     """
 
     OWNER = "owner"
     AGENT = "agent"
+    PEER = "peer"
     UNTRUSTED = "untrusted"
 
 
@@ -106,11 +109,15 @@ class CuratedStatus(StrEnum):
     """策展记忆状态值域（ff_curated_memory.status）。
 
     - ``active``：现行版本（同 (persona, kind, topic) 至多一条）；
-    - ``superseded``：已被新版本取代（superseded_by_id 指向取代者）。
+    - ``superseded``：已被新版本取代（superseded_by_id 指向取代者）；
+    - ``archived``：已归档（生命周期终态——梦境巩固按有效强度批量置入，
+      归档行不参与默认列表、免于再次归档；``active_marker`` 置 NULL 使
+      同主题可重新起链，见 memory.lifecycle 与 memory.dreaming）。
     """
 
     ACTIVE = "active"
     SUPERSEDED = "superseded"
+    ARCHIVED = "archived"
 
 
 # =========================================================================== []

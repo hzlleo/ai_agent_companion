@@ -123,6 +123,15 @@ class SQLiteFallbackStore:
     # MemoryStore 协议面
     # ------------------------------------------------------------------
 
+    @property
+    def supports_vectors(self) -> bool:
+        """存储能力面：恒 False（keyword-only——无向量列，不消费向量）。
+
+        索引管道在调用嵌入器之前读取该能力面——False 时跳过嵌入（零
+        embed 用量），``upsert`` 以 None 向量写入标量 / 正文列。
+        """
+        return False
+
     async def ensure_schema(self) -> None:
         """确保回退表就绪（幂等——once 守卫 + checkfirst 建表）。
 
@@ -145,21 +154,27 @@ class SQLiteFallbackStore:
         self._schema_ensured = True
         logger.debug("检索回退表已就绪: table=ff_memory_index_lite")
 
-    async def upsert(self, entries: list[MemoryIndexEntryDTO], vectors: list[list[float]]) -> None:
+    async def upsert(
+        self,
+        entries: list[MemoryIndexEntryDTO],
+        vectors: list[list[float]] | None = None,
+    ) -> None:
         """批量写入索引条目（同键覆盖——sqlite ON CONFLICT DO UPDATE）。
 
-        vectors 参数**收下即弃**（keyword-only 回退——协议统一性；条目
-        与向量数量仍做一致性校验——调用方契约面）。
+        vectors 参数**收下即弃**（keyword-only 回退——协议统一性）；传入
+        具体向量列表时仍做条目 / 数量一致性校验（调用方契约面），传入
+        None（``supports_vectors=False`` 的索引管道形态）时跳过该校验。
 
         Args:
             entries: 索引条目列表（空批量短路返回）。
-            vectors: 与条目同序的向量列表（回退路径不消费）。
+            vectors: 与条目同序的向量列表（回退路径不消费；None = 调用方
+                已按能力面短路嵌入）。
 
         Raises:
             BusinessException: 条目 / 向量数量不一致（``VALIDATION_ERROR``）；
                 引擎未初始化 / 写入失败（``INTERNAL_ERROR``）。
         """
-        if len(entries) != len(vectors):
+        if vectors is not None and len(entries) != len(vectors):
             raise BusinessException(
                 code=ErrorCode.VALIDATION_ERROR,
                 message="索引条目与向量数量不一致",

@@ -14,8 +14,11 @@
 | `dtos.py` | 创建 / 更新 / 复制 / 记录 / 卡片 / 状态 / 查询 / 批量 / 导入 / 特质库 DTO（Unit 文件） | `PersonaCreateDTO` / `PersonaUpdateDTO` / `PersonaCopyDTO` / `PersonaRecordDTO` / `PersonaCardDTO` / `PersonaStateUpsertDTO` / `PersonaStateDTO` / `PersonaQueryDTO` / `PersonaBatchDelete*` / `PersonaImportRequestDTO` / `PersonaImportResultModel` / `PersonaImportBatch*` / `TraitLibraryDTO` |
 | `service.py` | 注册 CRUD / 事务性主人格切换 / 可寻址集 / 状态层读写 / 批量删除 / 导入（幂等 + 冲突策略）+ `bind_persona_context` 运行期绑定 | `PersonaService` / `bind_persona_context` / `canonical_card_hash` |
 | `directives.py` / `directives_models.py` | 长期指令（USER.md 式常备指令）服务与 DTO——策展记忆 `user_note` + `directive:` 前缀命名空间的收窄面（R2b D7-14） | `DirectivesService` / `DirectiveCreateDTO` / `DirectiveUpdateDTO` / `DirectiveRecordDTO` / `DIRECTIVE_TOPIC_PREFIX` |
+| `facts.py` / `facts_models.py` / `facts_orm.py` | 人物事实（结构化事实 / 证据链 / 更正循环）服务、DTO 与 `ff_persona_facts` ORM（R2c） | `FactsService` / `FactCreateDTO` / `FactCorrectDTO` / `FactRecordDTO` / `FactQueryDTO` / `PersonaFactRow` / `PersonaFactCategory` |
+| `skills.py` / `skills_models.py` / `skills_orm.py` | 程序性技能（触发短语 / 原地版本 / 启用状态 / compose 匹配 / 梦境合并）服务、DTO 与 `ff_persona_skills` ORM（R2c） | `SkillsService` / `SkillCreateModel` / `SkillUpdateModel` / `SkillRecordDTO` / `SkillQueryDTO` / `PersonaSkillRow` / `SkillStatus` |
+| `core_memory.py` / `core_memory_models.py` / `core_memory_orm.py` | 自编辑核心记忆（四块自我模型 / 主人锁定 / append-only 修订 / 工具注册）服务、DTO 与 `ff_core_memory_blocks` / `ff_core_memory_revisions` ORM（R2c） | `CoreMemoryService` / `register_core_memory_tools` / `CoreMemoryBlockDTO` / `CoreMemoryRevDTO` / `OwnerEditModel` / `AgentEditModel` / `CoreMemoryBlockRow` / `CoreBlockKey` |
 
-依赖方向：persona → core（dtos 分页 / errors / context）+ database（Base Mixins / get_async_db）+ voice（预设建议语音 `VoiceProfileModel`）；app 层（api/personas + middleware/error_handler）→ persona + core + database。**两张表均非 PersonaMixin**（见下）。
+依赖方向：persona → core（dtos 分页 / errors / context）+ database（Base Mixins / get_async_db）+ voice（预设建议语音 `VoiceProfileModel`）+ memory（人物事实的证据校验复用 `MemoryService.get_episode` 与检索层取段规则；梦境编排反向消费 `FactsService` / `SkillsService`——见 memory.md 夜间梦境）+ tools（核心记忆工具注册复用 `ToolRegistry` / `ToolSpecModel`）；app 层（api/personas + api/directives + api/facts + api/skills + api/core_memory + middleware/error_handler）→ persona + core + database。**`ff_personas` / `ff_persona_states` 两张表非 PersonaMixin**（见下）；**`ff_persona_facts` / `ff_persona_skills` / `ff_core_memory_blocks` 是 PersonaMixin 人格作用域表**（画像 / 做事方式 / 自我模型都属某个人格对主人的认知；`ff_core_memory_revisions` 经 `block_id` 外键间接归属，见该表说明）。
 
 ## L / M / S 三层心理状态模型
 
@@ -95,13 +98,87 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | `state` | JSON | 非空 | 状态 JSON 文档（整体替换式更新；M 层可含 `emotion` 子文档——R2b 轻情绪引擎，见 [emotion.md](emotion.md)） |
 | `created_at` / `updated_at` | BIGINT | 非空 | epoch 毫秒（TimestampMixin） |
 
-迁移链：`backend/alembic/versions/000000000003_add_personas.py`（Revision 000000000003，Revises 000000000002——两表 + 索引 + 唯一约束）→ `000000000006_add_persona_voice_profile.py`（Revision 000000000006，Revises 000000000005——`ff_personas` 增 `voice_profile` JSON 可空列，纯增列、既有行落 NULL）→ `000000000008_persona_primary_marker.py`（Revision 000000000008，Revises 000000000007——多激活可寻址模型重构：增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active=1` 行回填 `'primary'`（旧单激活不变式保证至多一行），删 `is_active` 列；降级逆向重建；升级 / 降级 / 再升级均经 SQLite 冒烟验证）。
+### ff_persona_facts（人物事实——R2c，迁移 0013）
+
+| 列 | 类型 | 约束 / 索引 | 说明 |
+|---|---|---|---|
+| `id` | BIGINT | PK 自增（SQLite 渲染 INTEGER） | 主键 |
+| `persona_id` | VARCHAR(64) | 非空；索引（PersonaMixin 自动注入 / 过滤） | 所属人格 |
+| `category` | VARCHAR(16) | 非空；索引 | 类别（preference / biography / relationship / context） |
+| `content` | VARCHAR(1000) | 非空 | 事实陈述（服务层归一化后落库） |
+| `normalized_hash` | VARCHAR(64) | 非空；索引 | 正文归一化 sha256（事实身份轴） |
+| `confidence` | FLOAT | 非空 | 置信度（0-1） |
+| `status` | VARCHAR(16) | 非空；索引 | active / superseded / rejected |
+| `provenance` | VARCHAR(16) | 非空 | owner / agent（untrusted 服务层拒绝） |
+| `source` | VARCHAR(16) | 非空 | dream / manual / correction |
+| `evidence` | JSON | 非空 | 证据引用数组（`FactEvidenceRefModel` 序列化形态） |
+| `superseded_by_id` | BIGINT | 可空；FK `ff_persona_facts.id`（ON DELETE SET NULL） | 取代者（更正链） |
+| `version` | INT | 非空 | 更正链版本号（首版 1） |
+| `active_marker` | VARCHAR(16) | 可空；**唯一键 `uq_ff_persona_facts_active (persona_id, category, normalized_hash, active_marker)`**（NULL 共存——两方言唯一键均忽略 NULL） | 单 active 守卫标记 |
+| `created_at` / `updated_at` | BIGINT | 非空 | epoch 毫秒（TimestampMixin） |
+
+### ff_persona_skills（程序性技能——R2c，迁移 0014）
+
+| 列 | 类型 | 约束 / 索引 | 说明 |
+|---|---|---|---|
+| `id` | BIGINT | PK 自增（SQLite 渲染 INTEGER） | 主键 |
+| `persona_id` | VARCHAR(64) | 非空；索引（PersonaMixin 自动注入 / 过滤） | 所属人格 |
+| `name` | VARCHAR(120) | 非空 | 技能名（slug 由服务层按名称归一化派生） |
+| `slug` | VARCHAR(80) | 非空；**唯一键 `uq_ff_persona_skills_slug (persona_id, slug)`** | 归一化 kebab 标识（同人格唯一——原地编辑身份轴） |
+| `description` | VARCHAR(500) | 非空 | 何时使用的触发描述 |
+| `triggers` | JSON | 非空 | 触发短语数组（1-8 条、每条 1-40 字符——字面包含匹配） |
+| `content` | TEXT | 非空 | markdown 步骤正文（1-8000 字符） |
+| `status` | VARCHAR(16) | 非空；索引 | active / disabled |
+| `source` | VARCHAR(16) | 非空 | manual / mined |
+| `confidence` | FLOAT | 非空 | 置信度（0-1） |
+| `use_count` | INT | 非空 | compose 命中次数（排序强化轴） |
+| `last_used_ms` | BIGINT | 可空 | 最近一次命中时刻（epoch 毫秒） |
+| `version` | INT | 非空 | 原地编辑版本号（首版 1，编辑递增——无历史链） |
+| `created_at` / `updated_at` | BIGINT | 非空 | epoch 毫秒（TimestampMixin） |
+
+迁移链：`backend/alembic/versions/000000000003_add_personas.py`（Revision 000000000003，Revises 000000000002——两表 + 索引 + 唯一约束）→ `000000000006_add_persona_voice_profile.py`（Revision 000000000006，Revises 000000000005——`ff_personas` 增 `voice_profile` JSON 可空列，纯增列、既有行落 NULL）→ `000000000008_persona_primary_marker.py`（Revision 000000000008，Revises 000000000007——多激活可寻址模型重构：增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active=1` 行回填 `'primary'`（旧单激活不变式保证至多一行），删 `is_active` 列；降级逆向重建；升级 / 降级 / 再升级均经 SQLite 冒烟验证）→ `000000000013_persona_facts.py`（Revision 000000000013，Revises 000000000012——新建 `ff_persona_facts` + 单 active 唯一键 + 索引；SQLite 冒烟与 SeekDB 真引擎 round-trip 双双覆盖）→ `000000000014_persona_skills.py`（Revision 000000000014，Revises 000000000013——新建 `ff_persona_skills` + slug 唯一键 + 状态索引；SQLite 冒烟与 SeekDB 真引擎 round-trip 双双覆盖）→ `000000000015_core_memory.py`（Revision 000000000015，Revises 000000000014——新建 `ff_core_memory_blocks`（四块唯一键 + persona 索引）与 `ff_core_memory_revisions`（block_id 级联外键 + block_id / ts_ms 索引）；降级先删修订表再删块表；SQLite 冒烟与 SeekDB 真引擎 round-trip 双双覆盖）。
+
+### ff_core_memory_blocks / ff_core_memory_revisions（自编辑核心记忆——R2c，迁移 0015）
+
+块表（`ff_core_memory_blocks`，PersonaMixin 人格作用域——固定四块 × 每块一行）：
+
+| 列 | 类型 | 约束 / 索引 | 说明 |
+|---|---|---|---|
+| `id` | BIGINT | PK 自增（SQLite 渲染 INTEGER） | 主键 |
+| `persona_id` | VARCHAR(64) | 非空；索引（PersonaMixin 自动注入 / 过滤） | 所属人格 |
+| `block_key` | VARCHAR(32) | 非空；**唯一键 `uq_ff_core_memory_blocks_key (persona_id, block_key)`** | 块键（self_identity / owner_profile / relationship_story / open_notes——封闭四元组） |
+| `content` | TEXT | 非空 | 块正文（0-2000 字符；主人可清空、人格写入须非空） |
+| `locked` | BOOLEAN | 非空（缺省 false） | 主人专属写闸（true = 人格工具路径被拒绝） |
+| `version` | INT | 非空（首版 1） | 编辑版本号（内容 / 锁定状态变更递增） |
+| `updated_by` | VARCHAR(16) | 非空 | owner / agent（最近一次写入者） |
+| `last_edited_session_id` | BIGINT | 可空 | 最近一次对话内编辑的会话主键（管理面编辑为 NULL） |
+| `created_at` / `updated_at` | BIGINT | 非空 | epoch 毫秒（TimestampMixin） |
+
+修订表（`ff_core_memory_revisions`，**append-only——服务层只插入、从不更新 / 删除**）：
+
+| 列 | 类型 | 约束 / 索引 | 说明 |
+|---|---|---|---|
+| `id` | BIGINT | PK 自增（SQLite 渲染 INTEGER） | 主键（越大越新） |
+| `block_id` | BIGINT | 非空；索引；FK `ff_core_memory_blocks.id`（ON DELETE CASCADE） | 归属块（块删除级联清理修订） |
+| `version` | INT | 非空 | 修订产生时的块版本号（与块行当时版本一致） |
+| `content` | TEXT | 非空 | 修订后的块全文（逐字留存——历史不可变） |
+| `provenance` | VARCHAR(16) | 非空 | owner / agent（写入者） |
+| `source` | VARCHAR(16) | 非空 | admin / chat（写入来源） |
+| `session_id` | BIGINT | 可空 | 对话内编辑的会话主键（管理面修订为 NULL） |
+| `ts_ms` | BIGINT | 非空；索引 | 修订时刻（epoch 毫秒） |
+| `created_at` / `updated_at` | BIGINT | 非空 | epoch 毫秒（TimestampMixin） |
+
+修订表不挂 PersonaMixin：归属经 `block_id` 指向已作用域化的块行（读取先按块键取块、再按 `block_id` 展开），避免两处人格轴需要同步。
 
 ## 值域
 
 - `PersonaStatus`：`active`（可用——进入可寻址集，允许被设为主人格）/ `disabled`（停用——退出可寻址集，设主守卫拒绝；停用当前主人格被守卫拒绝）；
 - `PersonaStateLayer`：`M`（中期心情 / 关系）/ `S`（短期会话状态）——`L` 不入状态表（见三层模型）；
-- `CharaBookPosition`：`before_char` / `after_char`（v2 字符串形态）。
+- `CharaBookPosition`：`before_char` / `after_char`（v2 字符串形态）；
+- `CoreBlockKey`：`self_identity`（自我认知）/ `owner_profile`（关于对方）/ `relationship_story`（我们的故事）/ `open_notes`（备忘）——封闭四元组，不存在第五块；
+- `CoreMemoryActor`：`owner`（主人）/ `agent`（人格自身）——块的 `updated_by` 与修订的 `provenance` 同轴；
+- `CoreMemorySource`：`admin`（管理面）/ `chat`（对话内工具调用）——与 actor 强制配对（admin↔owner、chat↔agent）；
+- `AgentEditMode`：`replace`（整块替换）/ `append`（末尾追加）。
 
 ## chara card v2 字段表（CharaCardModel）
 
@@ -390,6 +467,296 @@ compose 读不到指令时自相矛盾）。副作用恒不阻断回复链路。
 前端消费面（`frontend/src/pages/personas/DirectivesPanel.tsx`）：人格编辑页
 「常备指令」卡片——列表 / 新建 / 编辑（supersede）/ 删除（确认）。
 
+## 人物画像（R2c——人物事实 / 证据链 / 更正循环）
+
+人物画像是人格对**主人（对方）**的结构化认知——与长期指令（对人格的行为约定）
+分界：指令约束「怎么回应」，事实描述对方「是什么样的人」。每轮对话组装的系统
+提示在长期指令块之后注入【关于对方】块（见 [chat.md](chat.md) 组装链）。
+
+**存储决策（锁定）**：**独立表** `ff_persona_facts`（PersonaMixin 人格作用域 +
+证据 JSON + supersede 语义）——事实是结构化数据（类别 / 置信度 / 证据回链 /
+更正链），策展记忆的自由文本 `topic` 面无法承载类别轴与证据链。
+
+| 项 | 取值 | 说明 |
+|---|---|---|
+| `category` | preference 偏好 / biography 背景 / relationship 关系 / context 近况 | 封闭值域（DTO 边界拒绝越界） |
+| `content` | 1-1000 字符（提取面提案 1-200） | NFKC + 空白折叠 + 裁剪后落库；`normalized_hash` = sha256（事实身份轴） |
+| `confidence` | 0-1 | 梦境提取 < 0.3 丢弃（`FACT_MIN_CONFIDENCE`）；手工缺省 0.8 |
+| `provenance` | owner / agent | **服务层强制配对**：dream → agent；manual / correction → owner；untrusted 一律拒绝 |
+| `source` | dream / manual / correction | 写入来源（面板展示） |
+| `evidence` | `[{episode_id, quote ≤200, ts_ms, provenance}]` | 手工事实可无事件背书（episode_id=None）；**摘录由系统从被引用事件正文逐字截取**（梦境面），证据追加合并语义 |
+
+supersede / 更正语义（与策展层同一已验证模式）：事实身份 =
+`(persona, category, normalized_hash)`；现行行 `active_marker='active'` 由唯一键
+强制（历史 / 驳回行 NULL，两方言唯一键忽略 NULL）。**同身份重复写入 = 元数据
+刷新**（置信度取最大值 + 证据合并，不推进版本）；**更正 = 新版本现行行**
+（`version` 旧行 + 1、来源 correction、旧行 superseded + `superseded_by_id`
+链接，旧证据保留并追加「主人纠正：…」证据）；**驳回 = rejected + 标记清空**
+（幂等；同内容可重新提取起链）；**删除 = 硬删除**（清空指向本行的链链接）。
+
+`FactsService` API（人格作用域——调用方先 `bind_persona_context`）：
+
+```python
+service = FactsService()                                            # 无状态；Session 逐调用注入
+result = await service.upsert_fact(session, FactCreateDTO(...))      # 创建 / 同身份元数据刷新（result.created 区分）
+record = await service.correct_fact(session, fact_id, FactCorrectDTO(...))  # 主人更正（supersede 链）
+record = await service.reject_fact(session, fact_id)                # 驳回（幂等）
+await service.delete_fact(session, fact_id)                         # 硬删除（管理面）
+page = await service.list_facts(session, FactQueryDTO(...))         # 游标分页（类别 / 状态 + 置信度降序）
+lines = await service.top_facts_for_compose(session)                # compose 注入行（12 条 / 1500 字符帽）
+```
+
+证据校验口径：带 `episode_id` 的证据须指向当前人格作用域内真实存在的情景事件；
+校验失败 / untrusted 证据按「丢弃该条证据 + 告警」处理，**不**阻断事实写入
+（证据是增强面）。他人格事实在读取 / 更正 / 驳回 / 删除面均 `NOT_FOUND`。
+
+### 管理 API 面（app/api/facts.py）
+
+前缀 `/api/v1/facts`；全部响应经 `ResultDTO` 封装，DB Session 经 `get_async_db`
+注入（事务边界归服务层）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/facts` | 事实列表（`category` / `status` 过滤 + `cursor` / `limit`；缺省 active；`persona_id` 可选——缺省主人格） |
+| POST | `/api/v1/facts` | 手工录入（body `{category, content, confidence?, evidence?}`；owner 来源） |
+| PUT | `/api/v1/facts/{id}` | 主人更正（body `{content, confidence?}`；supersede 链 +1） |
+| POST | `/api/v1/facts/{id}/reject` | 驳回（active → rejected；幂等） |
+| DELETE | `/api/v1/facts/{id}` | 硬删除（不可恢复） |
+
+前端消费面（`frontend/src/pages/personas/FactsPanel.tsx`）：人格编辑页「了解 TA」
+卡片——按类别分组的事实列表（置信度 / 来源徽章、证据展开器含逐字摘录与情景
+回链）、新建 / 更正 / 驳回 / 删除。
+
+## 程序性技能（R2c——触发短语 / 原地版本 / 启用状态）
+
+技能是人格对**主人做事方式**的程序性记忆——反复出现的偏好动作（「先给结论再
+解释」）、固定工作流（「写周报先列三件事」）、风格约定（「回消息短句」）。
+与人物事实的分界：事实描述对方「是什么样的人」，技能描述「事情该怎么做」；
+前者是画像，后者是操作指令。启用的技能在每轮对话组装时按**当前用户输入**
+匹配命中后注入【相关技能】块（见 [chat.md](chat.md) 组装链）。
+
+**存储决策（锁定）**：**独立表** `ff_persona_skills`（PersonaMixin 人格作用域
++ 触发短语 JSON + slug 唯一键）。**原地版本语义（与事实的 supersede 链刻意
+不同）**：技能是操作指令而非信念断言——同一人格同一时刻只按一套指令办事，
+旧版全文没有回溯语义价值；因此编辑走原地更新（`version` 递增），不产生历史
+行、不链式指向；需要留档时由调用方在编辑前自行导出。
+
+| 项 | 取值 | 说明 |
+|---|---|---|
+| `name` | 1-120 字符 | 服务层据此派生 `slug`（NFKC 小写 + 非单词字符折叠为 `-`；CJK 保留） |
+| `slug` | ≤80 字符 | `(persona_id, slug)` 唯一——手工创建 / 改名撞既有 slug 即 409 `CONFLICT`（不静默覆盖） |
+| `description` | 1-500 字符 | 面板展示 + compose 的弱匹配轴（按非单词字符切分的 2-40 字符片段，最多 12 个） |
+| `triggers` | JSON 数组 1-8 条、每条 1-40 字符 | 主人可能说出的**字面短语**；compose 匹配只做 NFKC + casefold 后的包含判定，不做模糊推理 |
+| `content` | 1-8000 字符（梦境提案 ≤4000） | markdown 步骤正文；compose 注入时最多两条、总字符 2000 帽 |
+| `status` | active / disabled | disabled 不参与匹配，仍可查看 / 编辑 / 重新启用 |
+| `source` | manual / mined | mined 只标记梦境来源——与手工行同等可编辑 / 停用 / 删除（主人始终有最终控制权） |
+| `confidence` | 0-1 | 手工缺省 0.6；梦境提案 < 0.4 丢弃（`SKILL_MIN_CONFIDENCE`） |
+| `use_count` / `last_used_ms` | INT / BIGINT | compose 命中后的写读强化：命中次数决定同场景注入优先级；写入是 fire-and-forget（计数失败只告警，不影响回复） |
+
+`SkillsService` API（人格作用域——调用方先 `bind_persona_context`）：
+
+```python
+service = SkillsService()                                            # 无状态；Session 逐调用注入
+record = await service.create(session, SkillCreateModel(...))        # 手工创建（slug 冲突 → CONFLICT）
+record = await service.update(session, skill_id, SkillUpdateModel(...))  # 原地编辑（version +1）
+record = await service.set_status(session, skill_id, SkillStatus.DISABLED)  # 启用 / 停用（幂等）
+await service.delete(session, skill_id)                              # 硬删除（管理面）
+page = await service.list_skills(session, SkillQueryDTO(...))        # 游标分页（状态过滤 + use_count 降序）
+hits = await service.match_for_compose(session, user_text)           # 命中技能（≤2 条；触发写读强化）
+refs = await service.active_skill_refs(session)                      # 梦境提案的去重参考（名称 / slug）
+result = await service.upsert_mined(session, SkillCreateModel(...))  # 梦境写入（result.created / merged）
+```
+
+compose 匹配语义：候选集为启用态技能；命中 = 任一触发短语（归一化后）出现在
+本轮用户文本中，或描述关键词任一片段出现；排序 = `use_count` 降序、同次数按
+名称升序；最多取 2 条（`SKILL_COMPOSE_MAX_SKILLS`）；命中后调度后台任务把
+`use_count + 1` / `last_used_ms` 落当前时刻。梦境写入（`upsert_mined`）对同
+slug 既有行只做**元数据合并**——置信度取最大值 + 触发短语并集（上限 8 条），
+正文 / 名称 / 状态 / 版本均不变（重复挖到同一技能不膨胀版本，主人停用的技能
+不会被梦境悄悄重新启用）。证据编号在提案阶段只作有效性校验（技能表不存证据
+链——操作指令不是可溯源断言）。
+
+### 管理 API 面（app/api/skills.py）
+
+前缀 `/api/v1/skills`；全部响应经 `ResultDTO` 封装，DB Session 经 `get_async_db`
+注入（事务边界归服务层）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/skills` | 技能列表（`status` 过滤 + `cursor` / `limit`；`persona_id` 可选——缺省主人格） |
+| POST | `/api/v1/skills` | 手工创建（body `{name, description, triggers, content, confidence?}`；同名 slug 409） |
+| PUT | `/api/v1/skills/{id}` | 原地编辑（body 字段全部可选；version +1） |
+| POST | `/api/v1/skills/{id}/enable` | 启用（幂等） |
+| POST | `/api/v1/skills/{id}/disable` | 停用（幂等） |
+| DELETE | `/api/v1/skills/{id}` | 硬删除（不可恢复） |
+
+前端消费面（`frontend/src/pages/personas/SkillsPanel.tsx`）：人格编辑页「做事
+方式」卡片——技能列表（名称 / 描述 / 触发短语徽章 / 状态 / 来源 / 命中次数）、
+新建 / 编辑（每行一条触发短语 + markdown 正文）、启用 / 停用、删除。
+
+## 核心记忆（R2c——自编辑自我模型 / 修订链 / 写入闸）
+
+核心记忆是人格的**可自编辑长期自我模型**：固定四个短文本块（自我认知 /
+关于对方 / 我们的故事 / 备忘），人格在对话中经 `edit_core_memory` 工具主动
+维护，主人可在管理面直接改写或整块锁定。与人物事实 / 程序性技能的分界：
+
+| 域 | 形态 | 写入者 | 历史 |
+|---|---|---|---|
+| 人物事实 | 多条结构化断言（类别 / 置信度 / 证据链） | 系统提取 + 主人更正 | supersede 链 |
+| 程序性技能 | 每技能一条操作指令（触发短语 + 步骤） | 手工 + 梦境挖矿 | 原地版本（无历史行） |
+| 核心记忆 | 每块一篇连续自我叙述（固定四块） | 主人管理面 + 人格对话自编辑 | **append-only 修订全文** |
+
+块集合与种子：四个块键为封闭四元组；服务层首次读取（任何读 / 写入口）先
+补齐四个空行（`content=''` / `locked=false` / `version=1` /
+`updated_by=owner`），并发懒建撞唯一键时静默收敛（另一请求已完成种子）。
+空块不进入 compose 注入。
+
+| 项 | 取值 | 说明 |
+|---|---|---|
+| `block_key` | 四元组（见「值域」） | 「每人格每块至多一行」由唯一键强制 |
+| `content` | 0-2000 字符 | 主人可清空；人格写入须非空；服务构造可收窄上限（构造旋钮） |
+| `locked` | bool | 主人专属写闸：true 时人格工具调用被拒绝（中文可读反馈），解锁只能经管理面 |
+| `version` | 首版 1 | 内容或锁定状态实际变更才递增（零变更保存幂等） |
+| `updated_by` / `last_edited_session_id` | owner/agent / BIGINT | 最近写入者与对话内编辑的会话归属（管理面编辑清空会话列） |
+
+**修订语义（append-only，锁定）**：内容变更时同步插入一条修订（写入后全文 +
+当次版本号 + provenance + source + session_id + ts_ms）；服务层没有 update /
+delete 修订的语句，块删除时由 `ON DELETE CASCADE` 随块清理。仅切换锁定不写
+修订（修订记录「文本历史」，锁定是状态位）。配对强制：管理面恒
+`owner`/`admin`、工具恒 `agent`/`chat`。
+
+**自编辑工具契约（`edit_core_memory`）**：
+
+```json
+{
+  "name": "edit_core_memory",
+  "arguments": {
+    "block": "self_identity",
+    "content": "我是一条会写字的鱼，喜欢在深夜陪主人聊天。",
+    "mode": "append"
+  }
+}
+```
+
+参数面：`block`（四元组 enum）、`content`（1-2000 字符）、`mode`
+（`replace` 整块替换 / `append` 末尾追加——既有正文非空时以换行分隔）。
+执行结果（registry 统一终态；工具执行器异常由 registry 归一 `ok=false`）：
+
+```json
+{
+  "tool": "edit_core_memory",
+  "ok": true,
+  "result": {
+    "ok": true,
+    "message": "核心记忆块「自我认知」已更新（当前 28 字）",
+    "length": 28
+  },
+  "error": null,
+  "latency_ms": 18
+}
+```
+
+锁定 / 超限属**业务可读拒绝**（registry 层 `ok=true`、载荷 `ok=false`——模型
+可换块或精简后重试）：
+
+```json
+{
+  "tool": "edit_core_memory",
+  "ok": true,
+  "result": {
+    "ok": false,
+    "message": "核心记忆块「自我认知」已锁定，仅主人可修改",
+    "length": 28
+  },
+  "error": null,
+  "latency_ms": 6
+}
+```
+
+超限口径：`append` / `replace` 均按**目标全文**在落库前计长（`append` 为既有
+正文 + 换行 + 新段），超限即拒绝且不改任何行，`length` 回传当前正文长度。
+
+**结构性写入闸（不在工具内部）**：聊天服务按本轮发送者来源分级
+（`sender_provenance`）从单轮工具列表里移除 `edit_core_memory`——只有
+`owner` 回合的模型看得到它；群聊 `peer` 回合的工具面根本没有该工具（模型
+无从「忘记不调用」），平台 `untrusted` 内容同理不能改写自我模型。工具执行期
+的会话主键经 `core_memory_session_id_var` 绑定（修订 `session_id` 归属），
+工具循环结束即复位。
+
+**compose 注入面**：非空块按固定块序渲染【自我认知】块（`### 块名称` + 正文；
+锁定块标题追加「（锁定）」），总字符 2400 帽（`CORE_MEMORY_COMPOSE_MAX_CHARS`，
+超出即截断停止）；链位置在【关于对方】之后、【相关技能】之前（见
+[chat.md](chat.md) 组装链）。注入面仅在持久化会话已落库时读取，读取失败不
+阻断回复（日志 + 空块）。
+
+**装配边界（锁定）**：工具只注册在**聊天注册表**（app 通道路径 ChatService
+工厂消费；无搜索 / 浏览器工具面时也建表携带）——duty 是无头计划任务，不自
+编辑自我模型；CLI 不注入工具面，行为零变化。
+
+### 管理 API 面（app/api/core_memory.py）
+
+前缀 `/api/v1/core-memory`；全部响应经 `ResultDTO` 封装，DB Session 经
+`get_async_db` 注入（事务边界归服务层）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/core-memory/blocks` | 四块读取（首次读取懒建空行；`persona_id` 可选——缺省主人格） |
+| PUT | `/api/v1/core-memory/blocks/{block_key}` | 主人编辑（body `{content, locked?}`——可清空 / 可锁定 / 可解锁） |
+| GET | `/api/v1/core-memory/blocks/{block_key}/revisions` | 修订历史（最新在前；`limit` 1-100，缺省 20） |
+
+PUT 请求与响应示例：
+
+```json
+{"content": "主人喜欢无糖乌龙茶，讨厌香菜。", "locked": true}
+```
+
+```json
+{
+  "success": true,
+  "code": "200",
+  "message": "核心记忆已保存",
+  "data": {
+    "id": 2,
+    "block": "owner_profile",
+    "content": "主人喜欢无糖乌龙茶，讨厌香菜。",
+    "locked": true,
+    "version": 4,
+    "updated_by": "owner",
+    "last_edited_session_id": null,
+    "created_at": 1731000000000,
+    "updated_at": 1731000000000
+  }
+}
+```
+
+修订列表示例（单条）：
+
+```json
+{
+  "success": true,
+  "code": "200",
+  "message": "核心记忆修订已获取",
+  "data": [
+    {
+      "id": 12,
+      "block": "owner_profile",
+      "version": 4,
+      "content": "主人喜欢无糖乌龙茶，讨厌香菜。",
+      "provenance": "owner",
+      "source": "admin",
+      "session_id": null,
+      "ts_ms": 1731000000000,
+      "created_at": 1731000000000
+    }
+  ]
+}
+```
+
+前端消费面（`frontend/src/pages/personas/CoreMemoryPanel.tsx`）：人格编辑页
+「自我认知」卡片——四块编辑卡（正文 + 锁定开关 + 保存 + 版本 / 写入者标识）
++ 修订历史抽屉（最新在前，展示版本 / 写入者 / 来源 / 全文；空块与已清空正文
+有明确占位）。
+
 ## 管理 API 面（app/api/personas.py）
 
 前缀 `/api/v1/personas`；全部响应经 `ResultDTO` 封装，分页经 `PageResponse`，DB Session 经 `get_async_db` 注入（事务边界归服务层）：
@@ -418,7 +785,7 @@ compose 读不到指令时自相矛盾）。副作用恒不阻断回复链路。
 
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_directives_service.py`（长期指令：topic 派生 / 同文收敛 / 显式 topic 覆盖 / 边界 / 命名空间收窄 / 注入帽 / 链更新 / 删除 / 人格隔离）/ `test_directives_api.py`（长期指令 HTTP 面：CRUD + 隔离 404）/ `src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元：v2 基础校验 + R2b 高级字段界校验 / include_group 归一 / recursive 总开关规格一致性 / 加性字段 JSON 往返）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_trait_library.py`（R2b-2 特质库：组件 / 预设模型规格（kebab / 分类值域 / 空组合拒绝）+ 纯函数生成（后缀拼接 / 分号拼接序 / 指令行拼接 / `<START>` 台词块 / 建议世界书并入 / 冲突软警告双向去重 / 未知组件 fail loud）+ 官方库装载（真实随包 YAML——8 预设名单序 / 全引用合法 / 发行零冲突 / 缓存命中）+ 显式目录违约形态 fail loud（缺失 / 结构 / 重复 id / 未知引用 / 发行冲突预设 / 空库））/ `test_persona_import_service.py`（R2b-2 导入服务：判定序（内容同卡三策略恒幂等）+ 名称冲突三策略矩阵（skip / rename 自动后缀链 / overwrite 保状态保标记保语音）+ 期望名 / 载荷恰一 + 批量部分成功（合法跳过成功项 / 解析失败失败项 / 计数面））/ `test_persona_import_api.py`（R2b-2 导入 HTTP 面：预设库读取 + JSON / multipart 双面矩阵（预设生成 / 期望名 + 后缀 / 同卡幂等 / 冲突三策略 / 未知预设 404 / 载荷恰一 422 / 策略非法 422 / 空体 400 / 非法 JSON 400/422）+ 批量部分成功（rename 策略表单字段）+ 处理器直调契约面）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；世界书选择算法链的运行语义测试在 chat 域 `test_chat_world_book.py`（见 chat.md）；
+- 测试位置：`src/tests/unit/test_facts_service.py`（人物事实：归一化 / 身份指纹 / 创建与元数据刷新 / provenance 配对 / 证据校验丢弃 / 更正链与证据追加 / 驳回幂等 / 删除引用清理 / 列表过滤与游标 / compose 裁剪 / 人格隔离）/ `test_facts_api.py`（人物事实 HTTP 面：CRUD + 驳回 + 过滤 / 游标 + 隔离 404）/ `test_migration_persona_facts.py`（迁移 0013 SQLite round-trip）/ `test_skills_service.py`（技能：slug 归一 / 创建与同名冲突 / 触发短语归一 / 原地编辑与冲突 / 状态切换幂等 / 删除 / 列表过滤与游标 / compose 字面与描述命中 / 条数帽与排序 / 使用计数写入 / 梦境元数据合并与并集上限 / 人格隔离）/ `test_skills_api.py`（技能 HTTP 面：CRUD + 启停 + 同名 409 + 边界 / 游标 + 隔离 404）/ `test_migration_persona_skills.py`（迁移 0014 SQLite round-trip）/ `test_core_memory_service.py`（核心记忆：懒建四块 / 主人编辑与修订 / 锁定切换无修订 / 零变更幂等 / 构造上限 / 人格 replace 与 append / 锁定可读拒绝 / 目标全文超限不改行 / 修订倒序与截断 / append-only / 人格隔离）/ `test_core_memory_tool.py`（edit_core_memory：工具规格与 enum / 执行落会话归属 / 锁定可读拒绝 / 人格上下文缺失 / 非法块键）/ `test_core_memory_api.py`（核心记忆 HTTP 面：四块 / 编辑 / 修订 / 上限 400 / 非法块键 400 / 无主人格 404 / 跨人格隔离）/ `test_migration_core_memory.py`（迁移 0015 SQLite round-trip——两表 / 唯一键 / 级联外键 / 索引）/ `test_chat_core_memory.py`（见 chat.md）/ `test_chat_skills.py`（见 chat.md）/ `test_dreaming_skills.py`（见 memory.md）/ `src/tests/unit/test_directives_service.py`（长期指令：topic 派生 / 同文收敛 / 显式 topic 覆盖 / 边界 / 命名空间收窄 / 注入帽 / 链更新 / 删除 / 人格隔离）/ `test_directives_api.py`（长期指令 HTTP 面：CRUD + 隔离 404）/ `src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元：v2 基础校验 + R2b 高级字段界校验 / include_group 归一 / recursive 总开关规格一致性 / 加性字段 JSON 往返）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_trait_library.py`（R2b-2 特质库：组件 / 预设模型规格（kebab / 分类值域 / 空组合拒绝）+ 纯函数生成（后缀拼接 / 分号拼接序 / 指令行拼接 / `<START>` 台词块 / 建议世界书并入 / 冲突软警告双向去重 / 未知组件 fail loud）+ 官方库装载（真实随包 YAML——8 预设名单序 / 全引用合法 / 发行零冲突 / 缓存命中）+ 显式目录违约形态 fail loud（缺失 / 结构 / 重复 id / 未知引用 / 发行冲突预设 / 空库））/ `test_persona_import_service.py`（R2b-2 导入服务：判定序（内容同卡三策略恒幂等）+ 名称冲突三策略矩阵（skip / rename 自动后缀链 / overwrite 保状态保标记保语音）+ 期望名 / 载荷恰一 + 批量部分成功（合法跳过成功项 / 解析失败失败项 / 计数面））/ `test_persona_import_api.py`（R2b-2 导入 HTTP 面：预设库读取 + JSON / multipart 双面矩阵（预设生成 / 期望名 + 后缀 / 同卡幂等 / 冲突三策略 / 未知预设 404 / 载荷恰一 422 / 策略非法 422 / 空体 400 / 非法 JSON 400/422）+ 批量部分成功（rename 策略表单字段）+ 处理器直调契约面）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；世界书选择算法链的运行语义测试在 chat 域 `test_chat_world_book.py`（见 chat.md）；
 - 全部 `async def test_`；引擎经共享会话级 SQLite fixture（StaticPool 单连接 + 每测试自动清表）；HTTP 面零真实网络（ASGITransport 本地装配 app）；预设库装载测试用真实随包 YAML（仓库数据即 hermetic）；
-- 覆盖率（scoped 实测）：harness/persona **100%**、app/api **100%**、app/middleware **100%**；
+- 覆盖率（scoped 实测）：harness/persona ≥95%（含人物事实 / 技能 / 核心记忆面）、app/api ≥85%、app/middleware **100%**；
 - 运行：`cd backend && pixi run tests-unit`。

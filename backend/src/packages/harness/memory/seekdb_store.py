@@ -158,6 +158,15 @@ class SeekDBStore:
     # MemoryStore 协议面
     # ------------------------------------------------------------------
 
+    @property
+    def supports_vectors(self) -> bool:
+        """存储能力面：恒 True（本实现持久化向量并支持 dense / hybrid 检索）。
+
+        索引管道在调用嵌入器之前读取该能力面——True 时正常向量化并写入
+        ``embedding`` 列；keyword-only 回退实现为 False（跳过嵌入）。
+        """
+        return True
+
     async def ensure_schema(self) -> None:
         """确保索引表 DDL 就绪（幂等——once 守卫 + 锁防并发双建）。
 
@@ -176,7 +185,11 @@ class SeekDBStore:
                 self._config.vector_dim,
             )
 
-    async def upsert(self, entries: list[MemoryIndexEntryDTO], vectors: list[list[float]]) -> None:
+    async def upsert(
+        self,
+        entries: list[MemoryIndexEntryDTO],
+        vectors: list[list[float]] | None = None,
+    ) -> None:
         """批量写入索引条目（同键覆盖——ON DUPLICATE KEY UPDATE）。
 
         写前自动确保 schema（惰性 once）；条目与向量同序同长，向量
@@ -185,12 +198,20 @@ class SeekDBStore:
 
         Args:
             entries: 索引条目列表（非空——空批量短路返回）。
-            vectors: 与条目同序的向量列表（JSON 字符串化后绑定）。
+            vectors: 与条目同序的向量列表（JSON 字符串化后绑定）；本实现
+                支持向量（``supports_vectors=True``），None 是调用方契约
+                违规（``VALIDATION_ERROR``）。
 
         Raises:
-            BusinessException: 条目 / 向量数量不一致或维度不符
+            BusinessException: 未携带向量 / 条目与向量数量不一致或维度不符
                 （``VALIDATION_ERROR``）；驱动执行失败（``INTERNAL_ERROR``）。
         """
+        if vectors is None:
+            raise BusinessException(
+                code=ErrorCode.VALIDATION_ERROR,
+                message="SeekDB 索引写入需要向量",
+                details={"entries": len(entries), "vectors": None},
+            )
         if len(entries) != len(vectors):
             raise BusinessException(
                 code=ErrorCode.VALIDATION_ERROR,

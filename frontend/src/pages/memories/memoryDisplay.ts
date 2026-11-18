@@ -55,12 +55,14 @@ export const CURATED_KIND_LABELS: Record<CuratedKind, string> = {
 export const CURATED_STATUS_LABELS: Record<CuratedStatus, string> = {
   active: '现行',
   superseded: '已取代',
+  archived: '已归档',
 }
 
 /** 策展状态 → 徽章变体。 */
 export const CURATED_STATUS_BADGE_VARIANTS: Record<CuratedStatus, BadgeProps['variant']> = {
   active: 'success',
   superseded: 'secondary',
+  archived: 'warning',
 }
 
 /** 梦境运行状态 → 中文标签。 */
@@ -82,6 +84,7 @@ export const DREAM_ACTION_LABELS: Record<DreamDecisionAction, string> = {
   promoted: '晋升',
   skipped: '跳过',
   merged: '并入',
+  archived: '归档',
 }
 
 /** 梦境决策动作 → 徽章变体。 */
@@ -89,6 +92,7 @@ export const DREAM_ACTION_BADGE_VARIANTS: Record<DreamDecisionAction, BadgeProps
   promoted: 'success',
   skipped: 'secondary',
   merged: 'info',
+  archived: 'warning',
 }
 
 /** 检索模式 → 中文标签。 */

@@ -4,9 +4,9 @@
 
     - :func:`create_app` —— FastAPI 工厂（共享异常处理器 + personas /
       memories / usage / voice / look_at / models / search / reminders /
-      directives / channels-qq / health 共十一路由 + 管理面 owner-token
-      鉴权（九管理路由统一挂接，health / qq webhook 豁免——豁免契约见
-      :func:`_include_routers`）+ CORS + lifespan）；
+      directives / facts / skills / channels-qq / health 共十三路由 + 管理面
+      owner-token 鉴权（十一管理路由统一挂接，health / qq webhook 豁免——
+      豁免契约见 :func:`_include_routers`）+ CORS + lifespan）；
     - :func:`startup_app_state` / :func:`shutdown_app_state` —— **可独立
       驱动的纯异步函数对**（不藏在 lifespan 闭包内——测试无需 ASGI
       lifespan runner 即可直调，本工程不引入 asgi-lifespan 依赖）；
@@ -95,7 +95,9 @@ from loguru import logger
 import packages.harness.persona.orm as persona_orm
 import packages.harness.usage.orm as usage_orm
 from app.api.channels_qq import router as qq_channels_router
+from app.api.core_memory import router as core_memory_router
 from app.api.directives import router as directives_router
+from app.api.facts import router as facts_router
 from app.api.health import APP_VERSION
 from app.api.health import router as health_router
 from app.api.look_at import router as look_at_router
@@ -104,6 +106,7 @@ from app.api.models import router as models_router
 from app.api.personas import router as personas_router
 from app.api.reminders import router as reminders_router
 from app.api.search import router as search_router
+from app.api.skills import router as skills_router
 from app.api.usage import router as usage_router
 from app.api.voice import router as voice_router
 from app.middleware.admin_auth import (
@@ -133,12 +136,28 @@ from packages.harness.duty.duty_service import DutyService
 from packages.harness.intent.service import IntentShortcutService
 from packages.harness.llm.gateway import LlmGateway, wire_default_usage_recorder
 from packages.harness.memory.dreaming import DreamService
-from packages.harness.memory.retrieval import MemorySearchService, build_memory_store
-from packages.harness.memory.service import ChatSessionService, MemoryService
+from packages.harness.memory.episode_sink import ChatTurnEpisodeSink
+from packages.harness.memory.retrieval import (
+    MemoryIndexer,
+    MemorySearchService,
+    build_memory_store,
+)
+from packages.harness.memory.service import (
+    ChatSessionService,
+    CuratedAccessReinforcer,
+    MemoryService,
+)
 from packages.harness.multimodal.look_at import LookAtService, register_look_at_tool
+from packages.harness.persona.core_memory import (
+    CoreMemoryService,
+    core_memory_session_id_var,
+    register_core_memory_tools,
+)
 from packages.harness.persona.directives import DirectivesService
 from packages.harness.persona.directives_models import DirectiveCreateDTO
+from packages.harness.persona.facts import FactsService
 from packages.harness.persona.service import PersonaService
+from packages.harness.persona.skills import SkillsService
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
 from packages.harness.reminders.job import (
     REMINDER_SCAN_INTERVAL_SECONDS,
@@ -222,10 +241,62 @@ async def startup_app_state(
         usage_recorder=wire_default_usage_recorder(),
     )
     app.state.memory_store = build_memory_store(settings)
+    _assemble_memory_services(app)
     await _startup_search(app, settings, config_dir=config_dir)
     await _startup_browser_sidecar(app, settings)
     await _startup_channels(app, settings)
     await _startup_scheduler(app, settings)
+
+
+def _assemble_memory_services(app: FastAPI) -> None:
+    """装配记忆管道（索引管道 + 情景 sink + 检索 / 梦境服务——单一长寿实例）。
+
+    装配链（记忆管道闭合——两条既有阶段性边界在此收口）：
+
+        1. ``MemoryIndexer``（embedder = 装配网关的 embed 角色绑定）绑定
+           全局后台任务管理器——索引链 fire-and-forget，停机经管理器 drain；
+        2. ``MemoryService``（indexer 绑定）→ ``app.state.memory_service``
+           ——情景写入提交后触发索引、删除 / 归档触发索引移除；
+        3. ``ChatTurnEpisodeSink`` → ``app.state.episode_sink``——通道
+           ChatService 工厂消费（对话回合落库即写 kind=chat 情景事件）；
+        4. ``MemorySearchService``（写读强化面注入）→
+           ``app.state.memory_search_service``——检索命中策展行的访问
+           计数经后台管理器异步推进；
+        5. ``DreamService``（记忆服务绑定）→ ``app.state.dream_service``
+           ——夜间巩固的归档阶段同步移除索引。
+
+    装配前置：``app.state.memory_store`` / ``app.state.gateway`` 已就绪
+    （本函数在存储 / 网关装配之后、通道 / 调度器装配之前调用——后者
+    消费上述槽位）。
+
+    Args:
+        app: 待装配的 FastAPI 应用（服务槽位上挂 ``app.state``）。
+    """
+    store = app.state.memory_store
+    gateway = app.state.gateway
+    indexer = MemoryIndexer(
+        embedder=gateway.embed_by_role,
+        store=store,
+        background_manager=background_task_manager,
+    )
+    memory_service = MemoryService(indexer=indexer)
+    app.state.memory_service = memory_service
+    app.state.memory_indexer = indexer
+    app.state.episode_sink = ChatTurnEpisodeSink(
+        session_factory=session_scope,
+        memory_service=memory_service,
+        background_manager=background_task_manager,
+    )
+    app.state.memory_search_service = MemorySearchService(
+        store=store,
+        embedder=gateway.embed_by_role,
+        reinforcer=CuratedAccessReinforcer(
+            session_factory=session_scope, memory_service=memory_service
+        ),
+        background_manager=background_task_manager,
+    )
+    app.state.dream_service = DreamService(memory_service=memory_service)
+    logger.info("记忆管道已装配（索引 / 情景 sink / 检索强化 / 梦境服务）")
 
 
 async def shutdown_app_state(app: FastAPI) -> None:
@@ -252,6 +323,11 @@ async def shutdown_app_state(app: FastAPI) -> None:
     shutdown_shared_thread_pool(wait=True)
     app.state.gateway = None
     app.state.memory_store = None
+    app.state.memory_service = None
+    app.state.memory_indexer = None
+    app.state.episode_sink = None
+    app.state.memory_search_service = None
+    app.state.dream_service = None
     # 搜索槽位复位（服务无自有资源——共享池 client 生命周期归 pools）。
     app.state.search_service = None
     app.state.search_tool_registry = None
@@ -330,14 +406,18 @@ async def _startup_search(
         config.web_search.tool_enabled,
     )
     if not config.web_search.tool_enabled:
-        logger.info("web_search 工具面未启用（SEARCH_TOOL_ENABLED / search.web_search.tool_enabled 关闭）")
+        logger.info(
+            "web_search 工具面未启用（SEARCH_TOOL_ENABLED / search.web_search.tool_enabled 关闭）"
+        )
         return
     chat_registry = ToolRegistry()
     register_web_search_tool(chat_registry, service)
     web_spec, _ = build_web_search_tool(service)
     app.state.search_tool_registry = chat_registry
     app.state.search_tool_specs = [web_spec]
-    logger.info("web_search 工具已注册（duty 注册表在调度器装配时追加；chat 工具循环经通道工厂消费）")
+    logger.info(
+        "web_search 工具已注册（duty 注册表在调度器装配时追加；chat 工具循环经通道工厂消费）"
+    )
 
 
 async def _startup_browser_sidecar(app: FastAPI, settings: Settings) -> None:
@@ -423,8 +503,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     装配链（单一 ChannelRouter 服务全部通道——会话按 ``channel:chat_id``
     维度天然隔离）：任一通道启用时先装配 rhythm / intent 会话性组件
     （共享随机源——见下方），再构造 ChannelRouter（逐消息 ChatService
-    工厂闭包 ``app.state.gateway`` + ``session_scope`` 持久化 + 快径面
-    注入）；telegram 启用时再装配 TelegramClient +
+    工厂闭包 ``app.state.gateway`` + ``session_scope`` 持久化 + 核心记忆
+    读写面 + 快径面注入）；telegram 启用时再装配 TelegramClient +
     TelegramChannelRunner → create_task + ``background_task_manager``
     托管；QQ 启用时装配 NapCatOneBotClient + NapCatQQAdapter →
     ``router.register_adapter`` + 启动校验 get_login_info。全部关闭时
@@ -493,6 +573,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
         rng=rhythm_rng,
     )
     directives_service = DirectivesService()
+    facts_service = FactsService()
+    skills_service = SkillsService()
 
     async def _capture_directive(text: str) -> bool:
         """对话捕获长期指令（DIRECTIVE 快径副作用面——恒不抛异常）。
@@ -520,38 +602,48 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
         logger.info("意图快径未启用（INTENT_ENABLED=false）——通道回复全量走 LLM")
     app.state.intent_shortcut = intent_shortcut
 
+    episode_sink = getattr(app.state, "episode_sink", None)
+    core_memory_service = CoreMemoryService()
+
+    def _core_memory_session_id() -> int | None:
+        """当前对话会话主键（工具执行期由 ChatService 绑定——无会话为 None）。"""
+        return core_memory_session_id_var.get()
+
+    # 聊天工具注册表（单一注册表面）：搜索槽位优先、浏览器槽位兜底、皆无
+    # 则独立建表；核心记忆自编辑工具恒并入——通道 ChatService 逐轮消费，
+    # 工具列表在 ChatService 内按发送者来源分级裁剪（peer 回合看不到它）。
+    chat_tool_specs = list(getattr(app.state, "search_tool_specs", None) or [])
+    chat_tool_registry = getattr(app.state, "search_tool_registry", None)
+    if chat_tool_registry is None:
+        chat_tool_specs = list(getattr(app.state, "browser_tool_specs", None) or [])
+        chat_tool_registry = getattr(app.state, "browser_tool_registry", None)
+    if chat_tool_registry is None:
+        chat_tool_specs = []
+        chat_tool_registry = ToolRegistry()
+    chat_tool_specs.append(
+        register_core_memory_tools(
+            chat_tool_registry, core_memory_service, _core_memory_session_id
+        )
+    )
+    logger.info(
+        "通道路径聊天工具面已装配: tools=[{}]（核心记忆自编辑工具仅聊天注册表——duty 不自编辑）",
+        ", ".join(spec.name for spec in chat_tool_specs),
+    )
+
     def _chat_service_factory() -> ChatService:
-        """逐消息 ChatService 工厂（工具面按当前装配态收缩——搜索工具
-        注册表 + 规格列表就绪时绑定 chat 工具循环；浏览器槽位兜底；
-        两者皆无时零工具形态；快径面按 INTENT_ENABLED 注入——通道
-        专属消费面）。"""
-        tool_specs = getattr(app.state, "search_tool_specs", None)
-        tool_registry = getattr(app.state, "search_tool_registry", None)
-        if tool_specs and tool_registry is not None:
-            return ChatService(
-                gateway=gateway,
-                session_service=ChatSessionService(),
-                tools=tool_specs,
-                tool_executor=tool_registry,
-                intent_shortcut=intent_shortcut,
-                directive_service=directives_service,
-            )
-        browser_specs = getattr(app.state, "browser_tool_specs", None)
-        browser_registry = getattr(app.state, "browser_tool_registry", None)
-        if browser_specs and browser_registry is not None:
-            return ChatService(
-                gateway=gateway,
-                session_service=ChatSessionService(),
-                tools=browser_specs,
-                tool_executor=browser_registry,
-                intent_shortcut=intent_shortcut,
-                directive_service=directives_service,
-            )
+        """逐消息 ChatService 工厂（聊天工具面 + 核心记忆读写面 + 快径面
+        ——通道专属消费面；工具列表按发送者来源分级由 ChatService 施加）。"""
         return ChatService(
             gateway=gateway,
             session_service=ChatSessionService(),
+            tools=chat_tool_specs,
+            tool_executor=chat_tool_registry,
             intent_shortcut=intent_shortcut,
             directive_service=directives_service,
+            facts_reader=facts_service,
+            core_memory_reader=core_memory_service,
+            skills_reader=skills_service,
+            episode_sink=episode_sink,
         )
 
     router = ChannelRouter(
@@ -719,11 +811,16 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
     scheduler = Scheduler(tick_seconds=settings.scheduler.tick_seconds)
     if duty_enabled:
         registry = ToolRegistry()
+        memory_search_service = getattr(app.state, "memory_search_service", None)
         register_builtin_tools(
             registry,
-            search_service=MemorySearchService(
-                store=store,
-                embedder=app.state.gateway.embed_by_role,
+            search_service=(
+                memory_search_service
+                if memory_search_service is not None
+                else MemorySearchService(
+                    store=store,
+                    embedder=app.state.gateway.embed_by_role,
+                )
             ),
         )
         await _register_sandbox_tools(app, settings, registry)
@@ -738,12 +835,15 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
         # 沙盒 + look_at 工具后注册（仅搜索服务装配且工具面启用时；
         # 预算 / failover 在 SearchService 内闭环）。
         search_service = getattr(app.state, "search_service", None)
-        if search_service is not None and search_registry.runtime_search_config.web_search.tool_enabled:
+        if (
+            search_service is not None
+            and search_registry.runtime_search_config.web_search.tool_enabled
+        ):
             register_web_search_tool(registry, search_service)
         duty_service = DutyService(
             gateway=app.state.gateway,
             registry=registry,
-            memory_service=MemoryService(),
+            memory_service=getattr(app.state, "memory_service", None) or MemoryService(),
             persona_service=PersonaService(),
             channel_router=app.state.channels_router,
             owner_chat_id=settings.channels.telegram.owner_chat_id,
@@ -771,7 +871,7 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
         app.state.duty_registry = registry
     if dream_enabled:
         dream_job = build_dream_trigger_job(
-            dream_service=DreamService(),
+            dream_service=getattr(app.state, "dream_service", None) or DreamService(),
             gateway=app.state.gateway,
             persona_service=PersonaService(),
             session_factory=session_scope,
@@ -835,15 +935,13 @@ async def _register_sandbox_tools(app: FastAPI, settings: Settings, registry: To
     client = build_sandbox_client(manager.get_http_client(), sandbox)
     if not client.has_token:
         logger.warning(
-            "工具沙盒 token 未配置（环境变量 {} 为空）——跳过沙盒工具注册，"
-            "duty 工具面仅内置工具",
+            "工具沙盒 token 未配置（环境变量 {} 为空）——跳过沙盒工具注册，duty 工具面仅内置工具",
             sandbox.token_env,
         )
         return
     if not await client.probe_health():
         logger.warning(
-            "工具沙盒健康探测失败（{}，超时 {}s 上限）——跳过沙盒工具注册，"
-            "duty 工具面仅内置工具",
+            "工具沙盒健康探测失败（{}，超时 {}s 上限）——跳过沙盒工具注册，duty 工具面仅内置工具",
             sandbox.base_url,
             sandbox.request_timeout_seconds,
         )
@@ -875,9 +973,7 @@ async def _register_browser_sidecar_tools(
     client = getattr(app.state, "browser_sidecar_client", None)
     if client is None:
         if settings.tools_browser_sidecar.enabled:
-            logger.info(
-                "浏览器 sidecar 客户端未就绪（启动期跳过）——duty 工具面不含浏览器工具"
-            )
+            logger.info("浏览器 sidecar 客户端未就绪（启动期跳过）——duty 工具面不含浏览器工具")
         return
     register_browser_sidecar_tools(registry, client)
 
@@ -1001,8 +1097,8 @@ def _include_routers(app: FastAPI) -> None:
     挂载契约（R2 审计放行条件——新端点不得扩张无鉴权面）：
 
         - **受保护路由集**：personas / memories / usage / voice /
-          look_at / models / search / reminders / directives 九个管理路由
-          统一挂 ``require_admin_token``
+          look_at / models / search / reminders / directives / facts /
+          skills / core-memory 十二个管理路由统一挂 ``require_admin_token``
           依赖——经单一 ``APIRouter(dependencies=[...])`` 包装路由**一次
           注册**（依赖定义在 ``app/middleware/admin_auth``；token 经
           ``ServerConfig.admin_token_env`` env 间接，空 = 鉴权关闭）；
@@ -1030,6 +1126,9 @@ def _include_routers(app: FastAPI) -> None:
     admin_api.include_router(search_router)
     admin_api.include_router(reminders_router)
     admin_api.include_router(directives_router)
+    admin_api.include_router(facts_router)
+    admin_api.include_router(skills_router)
+    admin_api.include_router(core_memory_router)
     app.include_router(admin_api)
     # 豁免面（见本函数 docstring 豁免契约——不挂 require_admin_token）。
     app.include_router(qq_channels_router)

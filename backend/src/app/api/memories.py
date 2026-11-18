@@ -5,9 +5,14 @@
     - POST   /api/v1/memories/episodes/batch-delete       —— 批量删除（部分成功形态）
     - GET    /api/v1/memories/episodes/{id}               —— 读取
     - DELETE /api/v1/memories/episodes/{id}               —— 删除（append-only 的管理面出口）
-    - GET    /api/v1/memories/curated                     —— 策展记忆游标分页（过滤面）
+    - GET    /api/v1/memories/curated                     —— 策展记忆游标分页（过滤 + 排序面；
+                                                                    include_archived 缺省排除归档行）
     - POST   /api/v1/memories/curated/upsert              —— upsert（supersede 语义）
     - GET    /api/v1/memories/curated/{id}/history        —— 历史链读取
+    - POST   /api/v1/memories/curated/{id}/pin            —— 置顶（免衰减 / 免归档）
+    - POST   /api/v1/memories/curated/{id}/unpin          —— 取消置顶
+    - POST   /api/v1/memories/curated/{id}/freeze         —— 冻结（不参与梦境合并 / 不被归档）
+    - POST   /api/v1/memories/curated/{id}/unfreeze       —— 解冻
     - DELETE /api/v1/memories/curated/{id}                —— 删除
     - GET    /api/v1/memories/sessions                    —— 会话游标分页
     - GET    /api/v1/memories/sessions/{id}               —— 会话详情（正典消息；
@@ -68,6 +73,7 @@ from packages.harness.memory.dtos import (
     ChatVariantSelectRequestDTO,
     CuratedQueryDTO,
     CuratedRecordDTO,
+    CuratedSort,
     CuratedUpsertDTO,
     EpisodeBatchDeleteRequest,
     EpisodeBatchDeleteResponseDTO,
@@ -94,12 +100,18 @@ from packages.harness.persona.service import PersonaService, bind_persona_contex
 
 router = APIRouter(prefix="/api/v1/memories", tags=["memories"])
 
-#: 记忆服务实例（无状态——Session 逐请求注入，服务可安全共享；indexer
-#: 未绑定——经本路由写入的情景事件只落库，不同步检索索引）。
+#: 直调面（测试直接调用 handler）的 request 缺省值——FastAPI 运行期恒注入
+#: 真实 Request，本哨兵只服务「不传 request 的函数直调」形态。
+_NO_REQUEST: Request = cast("Request", None)
+
+#: 记忆服务实例（**回落形态**——未装配 lifespan 的本地测试 / 直调面；
+#: 生产请求经 ``app.state.memory_service`` 解析（索引管道绑定形态——
+#: 情景写入提交后触发检索索引、删除 / 归档移除索引）。
 memory_service = MemoryService()
 #: 会话持久化服务实例（同上）。
 chat_session_service = ChatSessionService()
-#: 梦境整理编排服务实例（同上——网关 / 存储 / 时钟逐次调用注入）。
+#: 梦境整理编排服务实例（**回落形态**——同上；生产请求经
+#: ``app.state.dream_service`` 解析，装配形态持有索引绑定的记忆服务）。
 dream_service = DreamService()
 #: 人格服务实例（目标人格解析面）。
 persona_service = PersonaService()
@@ -150,6 +162,49 @@ def _resolve_request_gateway(request: Request) -> LlmGateway:
     return gateway
 
 
+def _resolve_request_memory_service(request: Request | None) -> MemoryService:
+    """解析请求可用的记忆域服务（app.state.memory_service 优先）。
+
+    解析序：``app.state.memory_service``（lifespan 装配的进程级实例——
+    索引管道绑定形态：情景写入提交后触发检索索引、删除 / 归档移除索引）
+    → 缺省回落模块级无索引实例（未装配 lifespan 的本地测试面 / 直调
+    契约面——行为与既有完全一致）。**直调面（测试）不传 request 时**
+    同样回落模块级实例（``request=None``）。
+
+    Args:
+        request: 当前请求（None = 直调形态——回落模块级实例）。
+
+    Returns:
+        记忆域服务实例。
+    """
+    if request is None:
+        return memory_service
+    resolved = cast(
+        "MemoryService | None", getattr(request.app.state, "memory_service", None)
+    )
+    return resolved if resolved is not None else memory_service
+
+
+def _resolve_request_dream_service(request: Request | None) -> DreamService:
+    """解析请求可用的梦境服务（app.state.dream_service 优先）。
+
+    装配形态的梦境服务持有索引绑定的记忆服务（归档同步移除索引）；
+    缺省回落模块级实例（无索引联动——既有测试面零变更）。
+
+    Args:
+        request: 当前请求（None = 直调形态——回落模块级实例）。
+
+    Returns:
+        梦境编排服务实例。
+    """
+    if request is None:
+        return dream_service
+    resolved = cast(
+        "DreamService | None", getattr(request.app.state, "dream_service", None)
+    )
+    return resolved if resolved is not None else dream_service
+
+
 async def _resolve_target_persona(
     db: AsyncSession, persona_id: int | None
 ) -> PersonaRecordDTO:
@@ -198,6 +253,7 @@ async def list_episodes(
     limit: int = Query(20, ge=1, le=200, description="页大小（1-200）"),
     persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
 ) -> ResultDTO[PageResponse[EpisodeRecordDTO]]:
     """情景事件游标分页列表（id 降序；kind / provenance / 时间范围过滤）。
 
@@ -216,7 +272,7 @@ async def list_episodes(
     """
     record = await _resolve_target_persona(db, persona_id)
     async with bind_persona_context(record.id):
-        page = await memory_service.query_episodes(
+        page = await _resolve_request_memory_service(request).query_episodes(
             db,
             EpisodeQueryDTO(
                 kind=kind,
@@ -235,6 +291,7 @@ async def create_episode(
     req: EpisodeCreateDTO,
     persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
 ) -> ResultDTO[EpisodeRecordDTO]:
     """手工注入情景事件（管理面；provenance 缺省 owner）。
 
@@ -253,7 +310,7 @@ async def create_episode(
     """
     record = await _resolve_target_persona(db, persona_id)
     async with bind_persona_context(record.id):
-        episode = await memory_service.append_episode(db, req)
+        episode = await _resolve_request_memory_service(request).append_episode(db, req)
     return ResultDTO.ok(data=episode, message="情景事件已记录")
 
 
@@ -262,6 +319,7 @@ async def batch_delete_episodes(
     req: EpisodeBatchDeleteRequest,
     persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
 ) -> ResultDTO[EpisodeBatchDeleteResponseDTO]:
     """批量删除情景事件（部分成功形态——逐 id 独立事务）。
 
@@ -276,7 +334,9 @@ async def batch_delete_episodes(
     """
     record = await _resolve_target_persona(db, persona_id)
     async with bind_persona_context(record.id):
-        result = await memory_service.batch_delete_episodes(db, req.ids)
+        result = await _resolve_request_memory_service(request).batch_delete_episodes(
+            db, req.ids
+        )
     return ResultDTO.ok(
         data=result, message=f"批量删除完成（成功 {result.succeeded} / 失败 {result.failed}）"
     )
@@ -287,6 +347,7 @@ async def get_episode(
     episode_id: int,
     persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
 ) -> ResultDTO[EpisodeRecordDTO]:
     """按主键读取情景事件（人格作用域外 / 缺失均 404）。
 
@@ -303,7 +364,7 @@ async def get_episode(
     """
     record = await _resolve_target_persona(db, persona_id)
     async with bind_persona_context(record.id):
-        episode = await memory_service.get_episode(db, episode_id)
+        episode = await _resolve_request_memory_service(request).get_episode(db, episode_id)
     return ResultDTO.ok(data=episode)
 
 
@@ -312,6 +373,7 @@ async def delete_episode(
     episode_id: int,
     persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
 ) -> ResultDTO[None]:
     """删除单条情景事件（append-only 的管理面显式出口）。
 
@@ -328,7 +390,7 @@ async def delete_episode(
     """
     record = await _resolve_target_persona(db, persona_id)
     async with bind_persona_context(record.id):
-        await memory_service.delete_episode(db, episode_id)
+        await _resolve_request_memory_service(request).delete_episode(db, episode_id)
     return ResultDTO[None].ok(message="情景事件已删除")
 
 
@@ -342,31 +404,48 @@ async def list_curated(
     kind: CuratedKind | None = Query(None, description="策展类型过滤（None = 全部）"),
     topic: str | None = Query(None, description="主题键精确过滤"),
     status: CuratedStatus | None = Query(None, description="状态过滤（None = 全部）"),
+    sort: CuratedSort = CuratedSort.UPDATED_DESC,
+    include_archived: bool = False,
     cursor: str | None = Query(None, description="分页游标（首页为 None）"),
     limit: int = Query(20, ge=1, le=200, description="页大小（1-200）"),
     persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
 ) -> ResultDTO[PageResponse[CuratedRecordDTO]]:
-    """策展记忆游标分页列表（id 降序；kind / topic / status 过滤）。
+    """策展记忆游标分页列表（过滤 + 排序；归档行默认排除）。
+
+    排序语义：``updated_desc``（缺省——行更新时间降序）；``strength_desc``
+    按**读时计算**的有效强度降序（生命周期排序面——服务层内存排序 +
+    偏移游标，见 CuratedQueryDTO 文档）。``include_archived`` 仅在未显式
+    指定 ``status`` 时生效（显式状态过滤优先）。
 
     Args:
         kind: 策展类型过滤（None = 全部）。
         topic: 主题键精确过滤（None = 全部）。
         status: 状态过滤（None = 全部；active = 现行版本面）。
+        sort: 排序（updated_desc / strength_desc）。
+        include_archived: 是否包含归档行（默认 False）。
         cursor: 上一页返回的不透明游标（None = 首页）。
         limit: 页大小（1-200）。
         persona_id: 目标人格主键（None = 当前主人格）。
         db: 注入的异步 Session。
+        request: 当前请求（app.state.memory_service 解析——直调面不传）。
 
     Returns:
-        分页响应（``next_cursor`` 非空表示还有更早记录；total 恒 -1）。
+        分页响应（``next_cursor`` 非空表示还有下一页；total 恒 -1）。
     """
     record = await _resolve_target_persona(db, persona_id)
     async with bind_persona_context(record.id):
-        page = await memory_service.query_curated(
+        page = await _resolve_request_memory_service(request).query_curated(
             db,
             CuratedQueryDTO(
-                kind=kind, topic=topic, status=status, cursor=cursor, limit=limit
+                kind=kind,
+                topic=topic,
+                status=status,
+                sort=sort,
+                include_archived=include_archived,
+                cursor=cursor,
+                limit=limit,
             ),
         )
     return ResultDTO.ok(data=page)
@@ -377,6 +456,7 @@ async def upsert_curated(
     req: CuratedUpsertDTO,
     persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
 ) -> ResultDTO[CuratedRecordDTO]:
     """策展记忆 upsert（supersede 语义——同 (persona, kind, topic) 单 active）。
 
@@ -394,7 +474,7 @@ async def upsert_curated(
     """
     record = await _resolve_target_persona(db, persona_id)
     async with bind_persona_context(record.id):
-        curated = await memory_service.upsert_curated(db, req)
+        curated = await _resolve_request_memory_service(request).upsert_curated(db, req)
     return ResultDTO.ok(data=curated, message="策展记忆已保存")
 
 
@@ -403,6 +483,7 @@ async def get_curated_history(
     memory_id: int,
     persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
 ) -> ResultDTO[list[CuratedRecordDTO]]:
     """读取策展记忆历史链（supersede 链全量——版本升序）。
 
@@ -419,7 +500,9 @@ async def get_curated_history(
     """
     record = await _resolve_target_persona(db, persona_id)
     async with bind_persona_context(record.id):
-        history = await memory_service.get_curated_history(db, memory_id)
+        history = await _resolve_request_memory_service(request).get_curated_history(
+            db, memory_id
+        )
     return ResultDTO.ok(data=history)
 
 
@@ -428,6 +511,7 @@ async def delete_curated(
     memory_id: int,
     persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
     db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
 ) -> ResultDTO[None]:
     """删除单条策展记忆（管理面显式动作）。
 
@@ -444,8 +528,124 @@ async def delete_curated(
     """
     record = await _resolve_target_persona(db, persona_id)
     async with bind_persona_context(record.id):
-        await memory_service.delete_curated(db, memory_id)
+        await _resolve_request_memory_service(request).delete_curated(db, memory_id)
     return ResultDTO[None].ok(message="策展记忆已删除")
+
+
+@router.post("/curated/{memory_id}/pin", response_model=ResultDTO[CuratedRecordDTO])
+async def pin_curated(
+    memory_id: int,
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
+    db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
+) -> ResultDTO[CuratedRecordDTO]:
+    """置顶策展记忆（幂等——置顶行免于时间衰减与归档）。
+
+    Args:
+        memory_id: 记忆主键。
+        persona_id: 目标人格主键（None = 当前主人格）。
+        db: 注入的异步 Session。
+        request: 当前请求（app.state.memory_service 解析——直调面不传）。
+
+    Returns:
+        更新后的记录 DTO（pinned=true）。
+
+    Raises:
+        BusinessException: 记忆不存在或不在目标人格作用域（``NOT_FOUND``）。
+    """
+    record = await _resolve_target_persona(db, persona_id)
+    async with bind_persona_context(record.id):
+        curated = await _resolve_request_memory_service(request).set_curated_pinned(
+            db, memory_id, pinned=True
+        )
+    return ResultDTO.ok(data=curated, message="策展记忆已置顶")
+
+
+@router.post("/curated/{memory_id}/unpin", response_model=ResultDTO[CuratedRecordDTO])
+async def unpin_curated(
+    memory_id: int,
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
+    db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
+) -> ResultDTO[CuratedRecordDTO]:
+    """取消置顶策展记忆（幂等——未置顶行调用无副作用）。
+
+    Args:
+        memory_id: 记忆主键。
+        persona_id: 目标人格主键（None = 当前主人格）。
+        db: 注入的异步 Session。
+        request: 当前请求（app.state.memory_service 解析——直调面不传）。
+
+    Returns:
+        更新后的记录 DTO（pinned=false）。
+
+    Raises:
+        BusinessException: 记忆不存在或不在目标人格作用域（``NOT_FOUND``）。
+    """
+    record = await _resolve_target_persona(db, persona_id)
+    async with bind_persona_context(record.id):
+        curated = await _resolve_request_memory_service(request).set_curated_pinned(
+            db, memory_id, pinned=False
+        )
+    return ResultDTO.ok(data=curated, message="策展记忆已取消置顶")
+
+
+@router.post("/curated/{memory_id}/freeze", response_model=ResultDTO[CuratedRecordDTO])
+async def freeze_curated(
+    memory_id: int,
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
+    db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
+) -> ResultDTO[CuratedRecordDTO]:
+    """冻结策展记忆（幂等——不参与梦境合并提案 / 不被归档）。
+
+    Args:
+        memory_id: 记忆主键。
+        persona_id: 目标人格主键（None = 当前主人格）。
+        db: 注入的异步 Session。
+        request: 当前请求（app.state.memory_service 解析——直调面不传）。
+
+    Returns:
+        更新后的记录 DTO（frozen=true）。
+
+    Raises:
+        BusinessException: 记忆不存在或不在目标人格作用域（``NOT_FOUND``）。
+    """
+    record = await _resolve_target_persona(db, persona_id)
+    async with bind_persona_context(record.id):
+        curated = await _resolve_request_memory_service(request).set_curated_frozen(
+            db, memory_id, frozen=True
+        )
+    return ResultDTO.ok(data=curated, message="策展记忆已冻结")
+
+
+@router.post("/curated/{memory_id}/unfreeze", response_model=ResultDTO[CuratedRecordDTO])
+async def unfreeze_curated(
+    memory_id: int,
+    persona_id: int | None = Query(None, description="目标人格主键（None = 当前主人格）"),
+    db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
+) -> ResultDTO[CuratedRecordDTO]:
+    """解冻策展记忆（幂等——未冻结行调用无副作用）。
+
+    Args:
+        memory_id: 记忆主键。
+        persona_id: 目标人格主键（None = 当前主人格）。
+        db: 注入的异步 Session。
+        request: 当前请求（app.state.memory_service 解析——直调面不传）。
+
+    Returns:
+        更新后的记录 DTO（frozen=false）。
+
+    Raises:
+        BusinessException: 记忆不存在或不在目标人格作用域（``NOT_FOUND``）。
+    """
+    record = await _resolve_target_persona(db, persona_id)
+    async with bind_persona_context(record.id):
+        curated = await _resolve_request_memory_service(request).set_curated_frozen(
+            db, memory_id, frozen=False
+        )
+    return ResultDTO.ok(data=curated, message="策展记忆已解冻")
 
 
 # ---------------------------------------------------------------------------
@@ -676,11 +876,16 @@ async def search_memories(
             ``MODEL_NOT_FOUND`` 等）。
     """
     record = await _resolve_target_persona(db, req.persona_id)
-    gateway = _resolve_request_gateway(request)
-    service = MemorySearchService(
-        store=_resolve_request_memory_store(request),
-        embedder=gateway.embed_by_role,
+    service = cast(
+        "MemorySearchService | None",
+        getattr(request.app.state, "memory_search_service", None),
     )
+    if service is None:
+        gateway = _resolve_request_gateway(request)
+        service = MemorySearchService(
+            store=_resolve_request_memory_store(request),
+            embedder=gateway.embed_by_role,
+        )
     query = MemorySearchQueryDTO(
         persona_id=record.id,
         query=req.query,
@@ -739,7 +944,7 @@ async def trigger_dream(
     record = await _resolve_target_persona(db, req.persona_id)
     gateway = _resolve_request_gateway(request)
     async with bind_persona_context(record.id):
-        run = await dream_service.run_dream(
+        run = await _resolve_request_dream_service(request).run_dream(
             db,
             gateway=gateway,
             persona_name=record.display_name,

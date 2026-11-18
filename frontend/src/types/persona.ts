@@ -440,3 +440,218 @@ export interface DirectiveUpdateRequest {
   /** 指令正文（1-500 字符）。 */
   content: string
 }
+
+// ---------------------------------------------------------------------------
+// 人物事实（facts——结构化事实 / 证据链 / 更正循环）
+// ---------------------------------------------------------------------------
+
+/** 事实类别（preference 偏好 / biography 背景 / relationship 关系 / context 近况）。 */
+export type PersonaFactCategory = 'preference' | 'biography' | 'relationship' | 'context'
+
+/** 事实状态（active 现行 / superseded 被更正取代 / rejected 已驳回）。 */
+export type PersonaFactStatus = 'active' | 'superseded' | 'rejected'
+
+/** 事实来源（dream 梦境提取 / manual 手工录入 / correction 主人更正）。 */
+export type PersonaFactSource = 'dream' | 'manual' | 'correction'
+
+/** 记忆来源可信度（owner 主人 / agent 智能体；untrusted 永不入事实表）。 */
+export type FactProvenance = 'owner' | 'agent' | 'untrusted'
+
+/** 事实证据引用（情景事件回链 + 逐字摘录）。 */
+export interface FactEvidenceRef {
+  /** 情景事件主键（null = 手工事实无事件背书）。 */
+  episode_id: number | null
+  /** 逐字摘录（≤200 字符）。 */
+  quote: string
+  /** 证据事件时间（epoch 毫秒）。 */
+  ts_ms: number
+  /** 证据来源可信度（owner / agent）。 */
+  provenance: FactProvenance
+}
+
+/** 人物事实记录（管理面 / 面板读取面）。 */
+export interface FactRecord {
+  /** 事实主键（更正 / 驳回 / 删除锚点）。 */
+  id: number
+  /** 事实类别。 */
+  category: PersonaFactCategory
+  /** 事实陈述。 */
+  content: string
+  /** 置信度（0-1）。 */
+  confidence: number
+  /** 事实状态。 */
+  status: PersonaFactStatus
+  /** 来源可信度（owner / agent）。 */
+  provenance: FactProvenance
+  /** 事实来源（dream / manual / correction）。 */
+  source: PersonaFactSource
+  /** 证据引用列表。 */
+  evidence: FactEvidenceRef[]
+  /** 取代者主键（被更正版本的链链接；现行事实为 null）。 */
+  superseded_by_id: number | null
+  /** 更正链版本号（首版 1，更正递增）。 */
+  version: number
+  /** 落库时间（epoch 毫秒）。 */
+  created_at: number
+  /** 行更新时间（epoch 毫秒）。 */
+  updated_at: number
+}
+
+/** 人物事实手工录入请求（同归一化身份收敛为元数据刷新）。 */
+export interface FactCreateRequest {
+  /** 事实类别。 */
+  category: PersonaFactCategory
+  /** 事实陈述（1-1000 字符）。 */
+  content: string
+  /** 置信度（0-1，缺省 0.8）。 */
+  confidence?: number
+  /** 证据引用列表（缺省空）。 */
+  evidence?: FactEvidenceRef[]
+}
+
+/** 人物事实更正请求（supersede 链 +1）。 */
+export interface FactCorrectRequest {
+  /** 更正后的事实陈述（1-1000 字符）。 */
+  content: string
+  /** 更正后置信度（undefined = 保留原值）。 */
+  confidence?: number
+}
+
+// ---------------------------------------------------------------------------
+// 程序性技能（skills——触发短语 / 原地版本 / 启用状态）
+// ---------------------------------------------------------------------------
+
+/** 技能状态（active 启用参与匹配 / disabled 停用不参与匹配）。 */
+export type SkillStatus = 'active' | 'disabled'
+
+/** 技能来源（manual 手工录入 / mined 梦境挖矿）。 */
+export type SkillSource = 'manual' | 'mined'
+
+/** 技能记录（管理面 / 面板读取面）。 */
+export interface SkillRecord {
+  /** 技能主键（编辑 / 状态切换 / 删除锚点）。 */
+  id: number
+  /** 技能名。 */
+  name: string
+  /** 归一化 kebab 标识（同人格唯一）。 */
+  slug: string
+  /** 何时使用的触发描述。 */
+  description: string
+  /** 触发短语列表（主人可能说出的字面短语）。 */
+  triggers: string[]
+  /** markdown 步骤正文。 */
+  content: string
+  /** 状态（active / disabled）。 */
+  status: SkillStatus
+  /** 来源（manual / mined）。 */
+  source: SkillSource
+  /** 置信度（0-1）。 */
+  confidence: number
+  /** compose 命中次数（写读强化轴）。 */
+  use_count: number
+  /** 最近一次命中时间（epoch 毫秒；未命中为 null）。 */
+  last_used_ms: number | null
+  /** 原地编辑版本号（首版 1）。 */
+  version: number
+  /** 落库时间（epoch 毫秒）。 */
+  created_at: number
+  /** 行更新时间（epoch 毫秒）。 */
+  updated_at: number
+}
+
+/** 技能创建请求（slug 由后端按名称派生；同名冲突 409）。 */
+export interface SkillCreateRequest {
+  /** 技能名（1-120 字符）。 */
+  name: string
+  /** 何时使用的触发描述（1-500 字符）。 */
+  description: string
+  /** 触发短语（1-8 条、每条 1-40 字符）。 */
+  triggers: string[]
+  /** markdown 步骤正文（1-8000 字符）。 */
+  content: string
+  /** 置信度（0-1，缺省 0.6）。 */
+  confidence?: number
+}
+
+/** 技能编辑请求（字段全部可选；版本由后端递增）。 */
+export interface SkillUpdateRequest {
+  /** 新技能名（undefined = 保留）。 */
+  name?: string
+  /** 新触发描述（undefined = 保留）。 */
+  description?: string
+  /** 新触发短语集（undefined = 保留；提供时整集替换）。 */
+  triggers?: string[]
+  /** 新步骤正文（undefined = 保留）。 */
+  content?: string
+  /** 新置信度（undefined = 保留）。 */
+  confidence?: number
+}
+
+// ---------------------------------------------------------------------------
+// 核心记忆（core memory——四块自编辑自我模型 / 修订链）
+// ---------------------------------------------------------------------------
+
+/** 核心记忆块键（自我认知 / 关于对方 / 我们的故事 / 备忘——封闭四元组）。 */
+export type CoreBlockKey =
+  | 'self_identity'
+  | 'owner_profile'
+  | 'relationship_story'
+  | 'open_notes'
+
+/** 核心记忆写入者（owner 主人 / agent 人格自身）。 */
+export type CoreMemoryActor = 'owner' | 'agent'
+
+/** 核心记忆修订来源（admin 管理面 / chat 对话内工具调用）。 */
+export type CoreMemorySource = 'admin' | 'chat'
+
+/** 核心记忆块记录（四块固定集合——内容 / 锁定态 / 版本）。 */
+export interface CoreMemoryBlock {
+  /** 块主键（修订列表的归属锚点）。 */
+  id: number
+  /** 块键。 */
+  block: CoreBlockKey
+  /** 块正文（0-2000 字符；空块不进入 compose 注入）。 */
+  content: string
+  /** 是否锁定（true = 仅主人可改写）。 */
+  locked: boolean
+  /** 编辑版本号（首版 1）。 */
+  version: number
+  /** 最近一次写入者（owner / agent）。 */
+  updated_by: CoreMemoryActor
+  /** 最近一次对话内编辑的会话主键（管理面编辑为 null）。 */
+  last_edited_session_id: number | null
+  /** 落库时间（epoch 毫秒）。 */
+  created_at: number
+  /** 行更新时间（epoch 毫秒）。 */
+  updated_at: number
+}
+
+/** 核心记忆修订记录（append-only 历史——面板抽屉读取面）。 */
+export interface CoreMemoryRevision {
+  /** 修订主键（越大越新）。 */
+  id: number
+  /** 修订所属块键。 */
+  block: CoreBlockKey
+  /** 修订产生时的块版本号。 */
+  version: number
+  /** 修订后的块全文。 */
+  content: string
+  /** 写入者（owner / agent）。 */
+  provenance: CoreMemoryActor
+  /** 写入来源（admin / chat）。 */
+  source: CoreMemorySource
+  /** 对话内编辑的会话主键（管理面修订为 null）。 */
+  session_id: number | null
+  /** 修订时刻（epoch 毫秒）。 */
+  ts_ms: number
+  /** 落库时间（epoch 毫秒）。 */
+  created_at: number
+}
+
+/** 核心记忆主人编辑请求（0-2000 字符；锁定开关可缺省保留）。 */
+export interface CoreMemoryOwnerUpdateRequest {
+  /** 新块正文（0-2000 字符；空串 = 清空）。 */
+  content: string
+  /** 锁定开关（undefined = 保持不变）。 */
+  locked?: boolean
+}
