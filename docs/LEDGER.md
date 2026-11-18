@@ -87,7 +87,7 @@
 | R2b 人格表达 | ①世界书高级（depth/recursive/groups/probability/cooldown）②性格组件库（33组件×8原型预设+导入API+冲突UI，DTO 68组）③内心独白协议+轻情绪引擎（8维/M层）④swipes 变体（迁移0010）⑤提醒（ff_reminders 迁移0011+扫描作业）+常备指令 | ✅ 代码完成，**PR #11 OPEN（未合并）**，分支 `feat/r2b-persona-expression` 最新 `c65b930` |
 | R2c 记忆关系 | c1 管线闭环+生命周期（迁移0012/索引真接线/归档/审计二审整改）✅`99317c6`；c2 人物画像事实链（迁移0013/facts 域/梦境提取阶段/纠错闭环）✅`0880cc1`；c2b provenance 分级紧急修（PEER 枚举/群聊 peer 落档/梦境双排除/skipped_peer 统计/证据面纵深防御）✅ 已实现并全量验收；c3 SKILL层+历史挖矿（迁移 0014 `ff_persona_skills` / `SkillsService` / 梦境 skills 提取阶段 / compose 相关技能块 / API+面板+文档）✅ 代码完成、全门禁绿；c4 自编辑核心记忆+溯源闸（迁移 0015 `ff_core_memory_blocks` / `ff_core_memory_revisions` / `CoreMemoryService` / `edit_core_memory` 工具 + 发送者来源分级结构性工具闸 / compose【自我认知】块 / API+面板+文档）✅ 代码完成、全门禁绿（含活 SeekDB 0015 round-trip）；c5 终验PR —— **待做** | 🔄 进行中 |
 | R2-defense | 丙+丁：D1 结构隔离 + 宪章五条 + nonce 定界、D2 注入检测 + 角色内反击（毒舌 / 温柔 / 傲娇）、D3 peer 记忆免疫与来源标注、D4 38 条红队回归集 | ✅ 代码完成、全门禁绿（2026-11；`INJECTION_*` 示例模板生成待主 Agent 补齐） |
-| R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | 🔄 甲套件 core（角色契约 compose 常驻块 + 助手腔检测 + 1 次强化重试）+ 组件库A/成熟度分层（126 组件 × 十二类目 × 3 条示例台词；33 suggestive / 15 explicit；11 预设 × intimacy_level 1-3 × 四态场景脚本（10 个 SFW 预设 + 1 个 explicit 亲密包）；生成期覆盖过滤 + 导入端点 override）✅ 代码完成、全门禁绿；余：示例台词 few-shot / 乙分轨 / 关系连续性A |
+| R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | 🔄 甲套件 core（角色契约 compose 常驻块 + 助手腔检测 + 1 次强化重试）+ 组件库A/成熟度分层（126 组件 × 十二类目 × 3 条示例台词；33 suggestive / 15 explicit；11 预设 × intimacy_level 1-3 × 四态场景脚本（10 个 SFW 预设 + 1 个 explicit 亲密包）；生成期覆盖过滤 + 导入端点 override）+ 关系连续性A（关系进展摘要：关系类事实派生 / 衰减得分 / 阶段阶梯 / compose 恒注入块）✅ 代码完成、全门禁绿；余：示例台词 few-shot / 乙分轨 |
 | R2d 心流社交 | 心流门控/群聊多人格/声纹/表情包库+VLM标注 | ⏳ |
 | R2e 通道扩展 | 企微智能机器人（长连接）/GUI 微信容器化（PoC 门）/抖音 web（同底座）/表情包收发/Canvas | ⏳ |
 | R2f 实时语音 | 独立全双工会话（VAD+流式ASR+句级TTS+打断），允许溢出 R3 | ⏳ |
@@ -158,6 +158,15 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 6. docs：persona.md 核心记忆一节 / chat.md 链路与工具闸 / README 行 / 本台账。
 **验证**：后端 2106 passed / 23 组覆盖率 / mypy 148 文件零问题 / ruff / 门禁集（36 项漂移 + noqa 冻结 + 注释门 + 棘轮）/ 活 SeekDB 6 用例；前端 555 passed / coverage / lint / build。
 **剩余**：PR#12（head `9d6c331`，CI 四 job 全绿、CLEAN）待用户在页面合并；合并后三条堆叠分支（r2-defense / llm-confidence-logprobs / r2b-plus-intimacy）按 `rebase --onto origin/main <base>` 收敛并逐一开 PR。
+
+### 已完成切片：R2b+ 关系连续性 A（关系进展摘要注入）
+**已完成**：
+1. `harness/persona/relationship_models.py` / `relationship.py`：关系进展 Model Classes（阶段 / 事件 / 摘要 / 锁定阈值表）与确定性纯逻辑——证据唯一来源为事实层 `category=relationship` 且 `status=active` 的现行记录（读 `facts_models` 现成类别 / 置信度 / `updated_at`，不新增存储、不迁移、不改 DTO）；`importance = confidence × 10`、`score = Σ importance × 衰减(年龄分档：≤7d 1.0 / ≤30d 0.75 / ≤90d 0.5 / ≤365d 0.25 / 更早 0.1)`、阶段阶梯 stranger<2.0≤familiar<10.0≤close<24.0≤intimate、`intimacy_level` 夹取 0-3；时间一律由调用方注入 `now_ms`（模块内不读系统时钟）；人格 / 预设 `intimacy_level` 仅存在于生成期，运行期只输出事实派生值（构建函数保留 `intimacy_ceiling` 形参，决策与边界写进模块文档）。
+2. `chat/prompts.py`：`RELATIONSHIP_BLOCK_TEMPLATE` + 事件标题 / 事件行 / 边界行模板 + `render_relationship_block`（中文阶段称谓、最近 5 条事件、边界行、1200 字符硬帽与确定性截断）；`PROMPTS_VERSION` 1.7.0 → 1.8.0，既有模板字节零变更（byte-lock 仅增补四条新模板）。
+3. `chat/service.py`：compose 链在【自我认知】之后、【相关技能】之前恒注入【关系进展】块（后续块序号顺移，链路十六段）；`reply` / `stream_reply` / 工具循环 / 合规重试分支全部一致携带；关系事实经既有 `FactsService.list_facts` 读取（公共池 + 既有异步面），派生失败记 warning 并降级为空摘要（初识）、不阻断回复；`ChatService` 可注入 `RelationshipThresholdsModel`（缺省 = 锁定表），无新 env 键。
+4. 测试：`test_relationship_summary.py`（派生矩阵 31 例（23 个用例含参数化）：空事实 / 混类与历史过滤 / 阶梯上下沿 / 衰减档边界与未来时间戳 / 夹取与阶段回落 / 事件裁剪顺序 / 边界上限 / 确定性 / 时间轴拒绝 / 阈值表不变式）+ `test_chat_relationship.py`（渲染 7 例 / 链序 2 例 / 服务集成 8 例：正常注入 / 阈值注入 / 读失败降级 / 未接线 / 纯内存零 I/O / 流式 / 工具循环 / 合规重试）+ prompts byte-lock 增补。
+5. docs：persona.md 关系进展摘要一节（来源 / 公式与阈值表 / 衰减档 / 夹取语义 / 注入位置 / 降级行为 / JSON 示例）、chat.md 组装链十六段完整重写与关系进展块示例、backend README 行、本台账状态行。
+**验证**：见下方门禁节（定向用例 + 全量测试 + 覆盖率 + lint / mypy / 门禁链）。
 
 ### 已完成切片：R2b+ 组件库 A + 成熟度分层（亲密补强）
 **已完成**：

@@ -17,8 +17,9 @@
 | `facts.py` / `facts_models.py` / `facts_orm.py` | 人物事实（结构化事实 / 证据链 / 更正循环）服务、DTO 与 `ff_persona_facts` ORM（R2c） | `FactsService` / `FactCreateDTO` / `FactCorrectDTO` / `FactRecordDTO` / `FactQueryDTO` / `PersonaFactRow` / `PersonaFactCategory` |
 | `skills.py` / `skills_models.py` / `skills_orm.py` | 程序性技能（触发短语 / 原地版本 / 启用状态 / compose 匹配 / 梦境合并）服务、DTO 与 `ff_persona_skills` ORM（R2c） | `SkillsService` / `SkillCreateModel` / `SkillUpdateModel` / `SkillRecordDTO` / `SkillQueryDTO` / `PersonaSkillRow` / `SkillStatus` |
 | `core_memory.py` / `core_memory_models.py` / `core_memory_orm.py` | 自编辑核心记忆（四块自我模型 / 主人锁定 / append-only 修订 / 工具注册）服务、DTO 与 `ff_core_memory_blocks` / `ff_core_memory_revisions` ORM（R2c） | `CoreMemoryService` / `register_core_memory_tools` / `CoreMemoryBlockDTO` / `CoreMemoryRevDTO` / `OwnerEditModel` / `AgentEditModel` / `CoreMemoryBlockRow` / `CoreBlockKey` |
+| `relationship.py` / `relationship_models.py` | 关系进展摘要（关系类事实派生 / 时间衰减得分 / 阶段阶梯 / 边界识别，Unit 文件——无独立存储与 API） | `build_relationship_summary` / `empty_relationship_summary` / `decay_weight` / `derive_stage` / `RelationshipSummaryModel` / `RelationshipEventModel` / `RelationshipThresholdsModel` / `RelationshipStage` / `DEFAULT_RELATIONSHIP_THRESHOLDS` |
 
-依赖方向：persona → core（dtos 分页 / errors / context）+ database（Base Mixins / get_async_db）+ voice（预设建议语音 `VoiceProfileModel`）+ memory（人物事实的证据校验复用 `MemoryService.get_episode` 与检索层取段规则；梦境编排反向消费 `FactsService` / `SkillsService`——见 memory.md 夜间梦境）+ tools（核心记忆工具注册复用 `ToolRegistry` / `ToolSpecModel`）；app 层（api/personas + api/directives + api/facts + api/skills + api/core_memory + middleware/error_handler）→ persona + core + database。**`ff_personas` / `ff_persona_states` 两张表非 PersonaMixin**（见下）；**`ff_persona_facts` / `ff_persona_skills` / `ff_core_memory_blocks` 是 PersonaMixin 人格作用域表**（画像 / 做事方式 / 自我模型都属某个人格对主人的认知；`ff_core_memory_revisions` 经 `block_id` 外键间接归属，见该表说明）。
+依赖方向：persona → core（dtos 分页 / errors / context）+ database（Base Mixins / get_async_db）+ voice（预设建议语音 `VoiceProfileModel`）+ memory（人物事实的证据校验复用 `MemoryService.get_episode` 与检索层取段规则；梦境编排反向消费 `FactsService` / `SkillsService`——见 memory.md 夜间梦境）+ tools（核心记忆工具注册复用 `ToolRegistry` / `ToolSpecModel`）；app 层（api/personas + api/directives + api/facts + api/skills + api/core_memory + middleware/error_handler）→ persona + core + database。**`ff_personas` / `ff_persona_states` 两张表非 PersonaMixin**（见下）；**`ff_persona_facts` / `ff_persona_skills` / `ff_core_memory_blocks` 是 PersonaMixin 人格作用域表**（画像 / 做事方式 / 自我模型都属某个人格对主人的认知；`ff_core_memory_revisions` 经 `block_id` 外键间接归属，见该表说明）。关系进展摘要（`relationship.py` / `relationship_models.py`）只依赖事实值域与标准库——纯派生、无存储、无 API，由 chat 域消费。
 
 ## L / M / S 三层心理状态模型
 
@@ -568,6 +569,92 @@ lines = await service.top_facts_for_compose(session)                # compose �
 卡片——按类别分组的事实列表（置信度 / 来源徽章、证据展开器含逐字摘录与情景
 回链）、新建 / 更正 / 驳回 / 删除。
 
+## 关系进展摘要（R2b+——关系类事实派生 / 注入面）
+
+关系进展摘要回答「我们之间走到哪一步」：它是人物事实层里**关系类
+（`category=relationship`）现行事实**的派生视图——不新增表、不迁移、不改
+DTO、不改前端，也不提供独立 API。对话组装时由 `ChatService` 经既有
+`FactsService.list_facts` 读取事实记录，再用纯函数
+`build_relationship_summary` 聚合为摘要并注入【关系进展】块（注入位置与链路
+顺序见 [chat.md](chat.md) 提示词组装链）。
+
+| 项 | 取值 | 说明 |
+|---|---|---|
+| 证据来源 | 现行（`status=active`）关系类事实 | 唯一来源；读取面为既有 `list_facts`（类别 + 状态过滤），不新增存储 |
+| `importance` | `confidence × 10`（0-10） | 事实表无独立重要度列——置信度是唯一强度信号，映射系数集中在阈值表 |
+| 事件时间 | 事实行 `updated_at` | 最近确认 / 更正时刻（epoch 毫秒），作为衰减参考轴 |
+| `score` | `Σ importance × decay(age)` | 确定性纯函数；同一输入同一 `now_ms` 逐字段可复现（模块内不读系统时钟） |
+| 阶段阶梯 | stranger < 2.0 ≤ familiar < 10.0 ≤ close < 24.0 ≤ intimate | 得分达到下限即入该段（含边界）；`intimacy_level` 与阶段同轴（0-3） |
+| 衰减分档 | ≤7 天 1.0 / ≤30 天 0.75 / ≤90 天 0.5 / ≤365 天 0.25 / 更早 0.1 | 年龄按天分档、上限含边界；未来时间戳按年龄 0 处理（时钟回拨不打到底档） |
+| 最近事件 | 5 条上限、时间倒序 | 单条摘要 ≤80 字符（空白折叠后截断）；`event_count` 计全部参与事实 |
+| 边界约定 | 3 条上限、命中边界短语者 | 短语表 `RELATIONSHIP_BOUNDARY_MARKERS`（「不要 / 不许 / 不能说 / 说好 / 约定 / 边界」等明确措辞）——宁窄勿宽 |
+| 块字符帽 | 1200 | 模板 + 阶段行 + 事件行 + 边界行合计；确定性截断（放不下即截断当前行并停止追加） |
+
+**等级夹取语义（锁定）**：`intimacy_level` 恒夹取 0-3（阈值表的
+`max_intimacy_level` 上界同样生效，阶段随夹取后的等级回落）。人格 / 预设的
+`intimacy_level` 只存在于生成期（组件成熟度过滤的输入），不落在人格记录或
+卡片里——**运行期聊天上下文拿不到该值**，因此摘要只输出事实派生值；构建函数
+保留 `intimacy_ceiling` 形参，未来拿到人格侧上限时可直接接线（传值即按 0-3
+夹取，`score` 保留原始得分不回写）。空事实 = stranger / 0 / 零事件。
+
+事实记录示例（派生输入）与摘要输出示例：
+
+```json
+{
+  "input_facts": [
+    {
+      "id": 12,
+      "category": "relationship",
+      "content": "说好每天都要说晚安",
+      "confidence": 0.9,
+      "status": "active",
+      "updated_at": 1762939200000
+    },
+    {
+      "id": 9,
+      "category": "relationship",
+      "content": "主人开始叫我小鱼",
+      "confidence": 0.7,
+      "status": "active",
+      "updated_at": 1762852800000
+    }
+  ],
+  "summary": {
+    "stage": "close",
+    "intimacy_level": 2,
+    "score": 16.0,
+    "event_count": 2,
+    "recent_events": [
+      {
+        "fact_id": 12,
+        "summary": "说好每天都要说晚安",
+        "importance": 9.0,
+        "ts_ms": 1762939200000
+      },
+      {
+        "fact_id": 9,
+        "summary": "主人开始叫我小鱼",
+        "importance": 7.0,
+        "ts_ms": 1762852800000
+      }
+    ],
+    "boundaries": ["说好每天都要说晚安"],
+    "generated_at_ms": 1762939200000
+  }
+}
+```
+
+派生参数集中在 `RelationshipThresholdsModel`（锁定缺省值
+`DEFAULT_RELATIONSHIP_THRESHOLDS`）：不新增 env 键；`ChatService` 构造可注入
+替换表（测试 / 运营调参），阶段下限、衰减分档与各条上限因此无需散落魔数。
+阈值表校验不变式在构造期 fail loud（阶段下限严格递增、分档年龄严格递增、
+权重非递增、只有末档可无上限、扫描上限不超过事实分页上界 200）。
+
+**降级行为（锁定）**：事实读取 / 派生异常记 warning 并降级为空摘要
+（stranger / 0 / 零事件），回复链路照常——关系摘要不阻断回复；读取面未接线
+（CLI / 纯内存直调形态）时整块跳过，既有行为零变更。纯内存形态（无持久化
+会话）零附加 I/O。
+
 ## 程序性技能（R2c——触发短语 / 原地版本 / 启用状态）
 
 技能是人格对**主人做事方式**的程序性记忆——反复出现的偏好动作（「先给结论再
@@ -826,7 +913,7 @@ PUT 请求与响应示例：
 
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_facts_service.py`（人物事实：归一化 / 身份指纹 / 创建与元数据刷新 / provenance 配对 / 证据校验丢弃 / 更正链与证据追加 / 驳回幂等 / 删除引用清理 / 列表过滤与游标 / compose 裁剪 / 人格隔离）/ `test_facts_api.py`（人物事实 HTTP 面：CRUD + 驳回 + 过滤 / 游标 + 隔离 404）/ `test_migration_persona_facts.py`（迁移 0013 SQLite round-trip）/ `test_skills_service.py`（技能：slug 归一 / 创建与同名冲突 / 触发短语归一 / 原地编辑与冲突 / 状态切换幂等 / 删除 / 列表过滤与游标 / compose 字面与描述命中 / 条数帽与排序 / 使用计数写入 / 梦境元数据合并与并集上限 / 人格隔离）/ `test_skills_api.py`（技能 HTTP 面：CRUD + 启停 + 同名 409 + 边界 / 游标 + 隔离 404）/ `test_migration_persona_skills.py`（迁移 0014 SQLite round-trip）/ `test_core_memory_service.py`（核心记忆：懒建四块 / 主人编辑与修订 / 锁定切换无修订 / 零变更幂等 / 构造上限 / 人格 replace 与 append / 锁定可读拒绝 / 目标全文超限不改行 / 修订倒序与截断 / append-only / 人格隔离）/ `test_core_memory_tool.py`（edit_core_memory：工具规格与 enum / 执行落会话归属 / 锁定可读拒绝 / 人格上下文缺失 / 非法块键）/ `test_core_memory_api.py`（核心记忆 HTTP 面：四块 / 编辑 / 修订 / 上限 400 / 非法块键 400 / 无主人格 404 / 跨人格隔离）/ `test_migration_core_memory.py`（迁移 0015 SQLite round-trip——两表 / 唯一键 / 级联外键 / 索引）/ `test_chat_core_memory.py`（见 chat.md）/ `test_chat_skills.py`（见 chat.md）/ `test_dreaming_skills.py`（见 memory.md）/ `src/tests/unit/test_directives_service.py`（长期指令：topic 派生 / 同文收敛 / 显式 topic 覆盖 / 边界 / 命名空间收窄 / 注入帽 / 链更新 / 删除 / 人格隔离）/ `test_directives_api.py`（长期指令 HTTP 面：CRUD + 隔离 404）/ `src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元：v2 基础校验 + R2b 高级字段界校验 / include_group 归一 / recursive 总开关规格一致性 / 加性字段 JSON 往返）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_trait_library.py`（特质库：组件 / 预设模型规格（kebab / 十二类分类值域 / 成熟度分档 / 示例台词与场景脚本界 / 空组合拒绝）+ 纯函数生成（后缀拼接 / 分号拼接序 / 指令行 + 场景脚本命名段 / `<START>` 台词块与条数上限 / 建议世界书并入 / 冲突软警告双向去重 / 未知组件 fail loud）+ 成熟度过滤矩阵（等级 0-3 × 三档成熟度 / 覆盖升降 / 预设缺省）+ 遗留 sample_speech 折叠 + 官方库装载（真实随包 YAML——126 组件十二类目覆盖与成熟度分布 / 11 预设名单序与亲密等级上限 / 全引用合法 / 发行零冲突 / 缓存命中）+ 显式目录违约形态 fail loud（缺失 / 结构 / 重复 id / 未知引用 / 发行冲突预设 / 示例台词越界 / 成熟度越级 / 空库））/ `test_persona_import_service.py`（R2b-2 导入服务：判定序（内容同卡三策略恒幂等）+ 名称冲突三策略矩阵（skip / rename 自动后缀链 / overwrite 保状态保标记保语音）+ 期望名 / 载荷恰一 + 批量部分成功（合法跳过成功项 / 解析失败失败项 / 计数面））/ `test_persona_import_api.py`（R2b-2 导入 HTTP 面：预设库读取 + JSON / multipart 双面矩阵（预设生成 / 期望名 + 后缀 / 同卡幂等 / 冲突三策略 / 未知预设 404 / 载荷恰一 422 / 策略非法 422 / 空体 400 / 非法 JSON 400/422）+ 批量部分成功（rename 策略表单字段）+ 处理器直调契约面）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；世界书选择算法链的运行语义测试在 chat 域 `test_chat_world_book.py`（见 chat.md）；
+- 测试位置：`src/tests/unit/test_facts_service.py`（人物事实：归一化 / 身份指纹 / 创建与元数据刷新 / provenance 配对 / 证据校验丢弃 / 更正链与证据追加 / 驳回幂等 / 删除引用清理 / 列表过滤与游标 / compose 裁剪 / 人格隔离）/ `test_facts_api.py`（人物事实 HTTP 面：CRUD + 驳回 + 过滤 / 游标 + 隔离 404）/ `test_migration_persona_facts.py`（迁移 0013 SQLite round-trip）/ `test_skills_service.py`（技能：slug 归一 / 创建与同名冲突 / 触发短语归一 / 原地编辑与冲突 / 状态切换幂等 / 删除 / 列表过滤与游标 / compose 字面与描述命中 / 条数帽与排序 / 使用计数写入 / 梦境元数据合并与并集上限 / 人格隔离）/ `test_skills_api.py`（技能 HTTP 面：CRUD + 启停 + 同名 409 + 边界 / 游标 + 隔离 404）/ `test_migration_persona_skills.py`（迁移 0014 SQLite round-trip）/ `test_core_memory_service.py`（核心记忆：懒建四块 / 主人编辑与修订 / 锁定切换无修订 / 零变更幂等 / 构造上限 / 人格 replace 与 append / 锁定可读拒绝 / 目标全文超限不改行 / 修订倒序与截断 / append-only / 人格隔离）/ `test_core_memory_tool.py`（edit_core_memory：工具规格与 enum / 执行落会话归属 / 锁定可读拒绝 / 人格上下文缺失 / 非法块键）/ `test_core_memory_api.py`（核心记忆 HTTP 面：四块 / 编辑 / 修订 / 上限 400 / 非法块键 400 / 无主人格 404 / 跨人格隔离）/ `test_migration_core_memory.py`（迁移 0015 SQLite round-trip——两表 / 唯一键 / 级联外键 / 索引）/ `test_chat_core_memory.py`（见 chat.md）/ `test_chat_skills.py`（见 chat.md）/ `test_relationship_summary.py`（关系进展派生：空事实 / 混类与历史过滤 / 阶段阶梯上下沿 / 衰减档边界与未来时间戳 / 等级上限夹取与阶段回落 / 事件条数·倒序·摘要截断 / 边界短语识别与上限 / 确定性 / 时间轴拒绝 / 阈值表不变式）/ `test_chat_relationship.py`（见 chat.md）/ `test_dreaming_skills.py`（见 memory.md）/ `src/tests/unit/test_directives_service.py`（长期指令：topic 派生 / 同文收敛 / 显式 topic 覆盖 / 边界 / 命名空间收窄 / 注入帽 / 链更新 / 删除 / 人格隔离）/ `test_directives_api.py`（长期指令 HTTP 面：CRUD + 隔离 404）/ `src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元：v2 基础校验 + R2b 高级字段界校验 / include_group 归一 / recursive 总开关规格一致性 / 加性字段 JSON 往返）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_trait_library.py`（特质库：组件 / 预设模型规格（kebab / 十二类分类值域 / 成熟度分档 / 示例台词与场景脚本界 / 空组合拒绝）+ 纯函数生成（后缀拼接 / 分号拼接序 / 指令行 + 场景脚本命名段 / `<START>` 台词块与条数上限 / 建议世界书并入 / 冲突软警告双向去重 / 未知组件 fail loud）+ 成熟度过滤矩阵（等级 0-3 × 三档成熟度 / 覆盖升降 / 预设缺省）+ 遗留 sample_speech 折叠 + 官方库装载（真实随包 YAML——126 组件十二类目覆盖与成熟度分布 / 11 预设名单序与亲密等级上限 / 全引用合法 / 发行零冲突 / 缓存命中）+ 显式目录违约形态 fail loud（缺失 / 结构 / 重复 id / 未知引用 / 发行冲突预设 / 示例台词越界 / 成熟度越级 / 空库））/ `test_persona_import_service.py`（R2b-2 导入服务：判定序（内容同卡三策略恒幂等）+ 名称冲突三策略矩阵（skip / rename 自动后缀链 / overwrite 保状态保标记保语音）+ 期望名 / 载荷恰一 + 批量部分成功（合法跳过成功项 / 解析失败失败项 / 计数面））/ `test_persona_import_api.py`（R2b-2 导入 HTTP 面：预设库读取 + JSON / multipart 双面矩阵（预设生成 / 期望名 + 后缀 / 同卡幂等 / 冲突三策略 / 未知预设 404 / 载荷恰一 422 / 策略非法 422 / 空体 400 / 非法 JSON 400/422）+ 批量部分成功（rename 策略表单字段）+ 处理器直调契约面）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；世界书选择算法链的运行语义测试在 chat 域 `test_chat_world_book.py`（见 chat.md）；
 - 全部 `async def test_`；引擎经共享会话级 SQLite fixture（StaticPool 单连接 + 每测试自动清表）；HTTP 面零真实网络（ASGITransport 本地装配 app）；预设库装载测试用真实随包 YAML（仓库数据即 hermetic）；
 - 覆盖率（scoped 实测）：harness/persona ≥95%（含人物事实 / 技能 / 核心记忆面）、app/api ≥85%、app/middleware **100%**；
 - 运行：`cd backend && pixi run tests-unit`。

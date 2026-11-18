@@ -43,6 +43,9 @@
       结构化事实注入——高置信事实按类别标签逐行列出；无事实不注入）；
     - :data:`CORE_MEMORY_BLOCK_TEMPLATE`      —— 核心记忆块（【自我认知】
       四块自编辑自我模型的非空块注入——锁定块带锁定标识；总字符 2400 帽）；
+    - :data:`RELATIONSHIP_BLOCK_TEMPLATE`     —— 关系进展块（【关系进展】
+      阶段 / 最近变化 / 边界约定的恒注入摘要——空事实渲染「初识」；总字符
+      1200 帽）；
     - :data:`SKILLS_BLOCK_TEMPLATE`           —— 相关技能块（【相关技能】
       命中当前用户文本的程序性技能注入——命中才注入，总字符 2000 帽）。
 
@@ -64,6 +67,11 @@ from packages.harness.persona.core_memory_models import (
     CORE_MEMORY_LOCKED_SUFFIX,
     CoreMemoryBlockDTO,
 )
+from packages.harness.persona.relationship_models import (
+    RELATIONSHIP_BLOCK_MAX_CHARS,
+    RELATIONSHIP_STAGE_LABELS,
+    RelationshipSummaryModel,
+)
 from packages.harness.persona.skills_models import SKILL_COMPOSE_MAX_CHARS, SkillRecordDTO
 
 __all__ = [
@@ -83,11 +91,13 @@ __all__ = [
     "DIRECTIVES_BLOCK_TEMPLATE_VERSION",
     "FACTS_BLOCK_TEMPLATE_VERSION",
     "CORE_MEMORY_BLOCK_TEMPLATE_VERSION",
+    "RELATIONSHIP_BLOCK_TEMPLATE_VERSION",
     "SKILLS_BLOCK_TEMPLATE_VERSION",
     "DIRECTIVES_MAX_ENTRIES",
     "DIRECTIVES_MAX_CHARS",
     "SKILL_COMPOSE_MAX_CHARS",
     "CORE_MEMORY_COMPOSE_MAX_CHARS",
+    "RELATIONSHIP_BLOCK_MAX_CHARS",
     "CHARTER_TEMPLATE",
     "CONSTITUTION_TEMPLATE",
     "PERSONA_CONTRACT_TEMPLATE",
@@ -113,10 +123,15 @@ __all__ = [
     "DIRECTIVES_TRUNCATION_NOTE",
     "FACTS_BLOCK_TEMPLATE",
     "CORE_MEMORY_BLOCK_TEMPLATE",
+    "RELATIONSHIP_BLOCK_TEMPLATE",
+    "RELATIONSHIP_EVENTS_HEADER",
+    "RELATIONSHIP_EVENT_LINE_TEMPLATE",
+    "RELATIONSHIP_BOUNDARY_LINE_TEMPLATE",
     "SKILLS_BLOCK_TEMPLATE",
     "render_directives_block",
     "render_facts_block",
     "render_core_memory_block",
+    "render_relationship_block",
     "render_skills_block",
     "render_charter",
     "render_constitution",
@@ -133,7 +148,7 @@ __all__ = [
 ]
 
 #: prompt 套件总版本（任一模板变更时同步上调）。
-PROMPTS_VERSION: str = "1.7.0"
+PROMPTS_VERSION: str = "1.8.0"
 
 # ---------------------------------------------------------------------------
 # 版本常量——逐模板独立版本（byte-lock 测试按模板分别锁定摘要）
@@ -169,6 +184,8 @@ DIRECTIVES_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
 FACTS_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
 #: 核心记忆块模板版本（【自我认知】四块自编辑自我模型注入）。
 CORE_MEMORY_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
+#: 关系进展块模板版本（【关系进展】阶段 / 最近变化 / 边界约定注入）。
+RELATIONSHIP_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
 #: 相关技能块模板版本（【相关技能】程序性技能注入）。
 SKILLS_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
 
@@ -319,6 +336,20 @@ FACTS_BLOCK_TEMPLATE: str = "【关于对方】\n{facts}"
 #: 锁定块名称后带锁定标识；无内容不注入；总字符帽由
 #: :func:`render_core_memory_block` 施加，见 persona.core_memory）。
 CORE_MEMORY_BLOCK_TEMPLATE: str = "【自我认知】\n{blocks}"
+
+#: 关系进展块（占位符 ``{stage}``——阶段中文称谓 + 亲密等级；最近变化与
+#: 边界行由 :func:`render_relationship_block` 按预算追加；空事实仍注入
+#: 阶段行——关系状态是恒注入面，见 persona.relationship）。
+RELATIONSHIP_BLOCK_TEMPLATE: str = "【关系进展】\n当前阶段：{stage}"
+
+#: 关系进展块的事件段标题行（有最近事件时追加）。
+RELATIONSHIP_EVENTS_HEADER: str = "最近的变化："
+
+#: 关系进展块的事件行（占位符 ``{summary}``——逐条一行）。
+RELATIONSHIP_EVENT_LINE_TEMPLATE: str = "- {summary}"
+
+#: 关系进展块的边界约定行（占位符 ``{boundaries}``——「；」连接的摘要）。
+RELATIONSHIP_BOUNDARY_LINE_TEMPLATE: str = "相处边界：{boundaries}"
 
 #: 相关技能块（占位符 ``{skills}``——命中技能逐条以「### 名称 + 正文」
 #: 渲染；无命中不注入；总字符帽由 :func:`render_skills_block` 施加）。
@@ -596,6 +627,75 @@ def render_core_memory_block(
     if not sections:
         return ""
     return CORE_MEMORY_BLOCK_TEMPLATE.format(blocks="\n\n".join(sections))
+
+
+def render_relationship_block(
+    summary: RelationshipSummaryModel | None,
+    *,
+    max_chars: int = RELATIONSHIP_BLOCK_MAX_CHARS,
+) -> str:
+    """渲染关系进展块（【关系进展】——阶段 / 最近变化 / 边界约定）。
+
+    渲染语义（锁定）：首行标题 + 「当前阶段」行恒产出（阶段用中文称谓 +
+    亲密等级，空事实的 stranger 摘要也照样注入——关系状态是恒注入面，
+    不是「有内容才注入」的记忆块）；有最近事件时追加「最近的变化：」标题
+    与逐条 ``- 摘要`` 行；有边界约定时追加「相处边界：…」行（「；」连接）。
+    累计字符（含标题、换行与行符号）不超过 ``max_chars``（缺省
+    :data:`~packages.harness.persona.relationship_models.RELATIONSHIP_BLOCK_MAX_CHARS`
+    ——1200）。
+
+    确定性截断规则：事件按摘要给出的时间倒序逐条追加，某条放不下时按剩余
+    预算截断该行并**停止**追加后续事件与边界行（先注入者优先，不跳条）；
+    预算不足以容纳事件标题行时直接跳过事件段但仍尝试边界行；边界行在
+    事件段未触发截断时按剩余预算追加 / 截断；阶段行本身超出预算时按
+    ``max_chars`` 硬截断。同输入必得同输出。
+
+    Args:
+        summary: 关系进展摘要（None = 聊天链路未接线读取面——返回空串，
+            组装链跳过整块）。
+        max_chars: 总字符预算（含标题与行符号；缺省 1200）。
+
+    Returns:
+        关系进展块文本；``summary`` 为 None 时返回空串。
+    """
+    if summary is None:
+        return ""
+    stage_label = RELATIONSHIP_STAGE_LABELS[summary.stage]
+    base = RELATIONSHIP_BLOCK_TEMPLATE.format(
+        stage=f"{stage_label}（亲密等级 {summary.intimacy_level}/3）"
+    )
+    if len(base) >= max_chars:
+        return base[:max_chars]
+    lines: list[str] = []
+    used_chars = len(base)
+    exhausted = False
+    if summary.recent_events:
+        if used_chars + 1 + len(RELATIONSHIP_EVENTS_HEADER) <= max_chars:
+            lines.append(RELATIONSHIP_EVENTS_HEADER)
+            used_chars += 1 + len(RELATIONSHIP_EVENTS_HEADER)
+            for event in summary.recent_events:
+                line = RELATIONSHIP_EVENT_LINE_TEMPLATE.format(summary=event.summary)
+                if used_chars + 1 + len(line) <= max_chars:
+                    lines.append(line)
+                    used_chars += 1 + len(line)
+                    continue
+                remaining = max_chars - used_chars - 1
+                if remaining > 0:
+                    lines.append(line[:remaining])
+                exhausted = True
+                break
+        else:
+            exhausted = True
+    if not exhausted and summary.boundaries:
+        boundary_line = RELATIONSHIP_BOUNDARY_LINE_TEMPLATE.format(
+            boundaries="；".join(summary.boundaries)
+        )
+        remaining = max_chars - used_chars - 1
+        if remaining > 0:
+            lines.append(boundary_line[:remaining])
+    if not lines:
+        return base
+    return base + "\n" + "\n".join(lines)
 
 
 def render_skills_block(

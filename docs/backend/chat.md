@@ -6,7 +6,7 @@
 
 | 模块 | 职责 | 关键导出 |
 |---|---|---|
-| `prompts.py` | **全部 LLM 提示词文本的唯一存放地**（Unit 文件）：模板 + 逐模板版本常量 + 纯渲染函数 | `CHARTER_TEMPLATE` / `CONSTITUTION_TEMPLATE` / `PERSONA_CONTRACT_TEMPLATE` / `COMPLIANCE_NUDGE_TEMPLATE` / `UNTRUSTED_WRAP_*_TEMPLATE` / `INJECTION_HINT_TEMPLATE` / `PERSONA_*_SECTION_TEMPLATE` / `WORLD_BOOK_ENTRY_TEMPLATE` / `POST_HISTORY_TEMPLATE` / `FIRST_GREETING_FALLBACK_TEMPLATE` / `render_*` |
+| `prompts.py` | **全部 LLM 提示词文本的唯一存放地**（Unit 文件）：模板 + 逐模板版本常量 + 纯渲染函数 | `CHARTER_TEMPLATE` / `CONSTITUTION_TEMPLATE` / `PERSONA_CONTRACT_TEMPLATE` / `COMPLIANCE_NUDGE_TEMPLATE` / `UNTRUSTED_WRAP_*_TEMPLATE` / `INJECTION_HINT_TEMPLATE` / `PERSONA_*_SECTION_TEMPLATE` / `WORLD_BOOK_ENTRY_TEMPLATE` / `POST_HISTORY_TEMPLATE` / `FIRST_GREETING_FALLBACK_TEMPLATE` / `RELATIONSHIP_BLOCK_TEMPLATE` / `render_*` |
 | `compliance_models.py` | 人格输出合规 Model Classes（Unit 文件）：助手腔种类 / 命中原因 / 检测结果 / 规则表 / `COMPLIANCE_` 配置 | `ComplianceKind` / `ComplianceSignalModel` / `COMPLIANCE_RULES` / `ComplianceGuardSettings` |
 | `compliance_guard.py` | 人格输出合规纯函数（Unit 文件）：助手腔加权检测 / 重试采样参数构建 | `detect_assistant_violation` / `build_retry_params` / `COMPLIANCE_RETRY_BASELINE_TEMPERATURE` |
 | `injection_models.py` | 注入防御 Model Classes（Unit 文件）：信号种类 / 命中原因 / 检测结果 / 规则表 / 包裹结果 / 反击风格 / `INJECTION_` 配置 | `InjectionKind` / `InjectionSignalModel` / `INJECTION_RULES` / `WrappedContentModel` / `CounterStyle` / `InjectionGuardSettings` |
@@ -33,50 +33,57 @@
         └─ 否则 name 自称头 + 非空叙事段（description / personality / scenario，
            空字段段跳过）
     ④ render_constitution()                            宪章（注入面防护五条：
-                                                       身份 / 规则 / 引用 /
-                                                       标签 / 挑衅应对——见
-                                                       [defense.md](defense.md)）
+                                                        身份 / 规则 / 引用 /
+                                                        标签 / 挑衅应对——见
+                                                        [defense.md](defense.md)）
     ⑤ render_persona_contract(card.name)               人格输出契约五条
-                                                       （见下方「人格输出
-                                                       契约与合规守卫」）
+                                                        （见下方「人格输出
+                                                        契约与合规守卫」）
     ⑥ 心情状态块（emotion_summary 非空时）              R2b 轻情绪——M 态
-                                                       非中性摘要（见
-                                                       [emotion.md](emotion.md)）
+                                                        非中性摘要（见
+                                                        [emotion.md](emotion.md)）
     ⑦ 长期指令块（directives 非空时）                   R2b D7-14 USER.md
-                                                       式常备指令（见
-                                                       [persona.md](persona.md)
-                                                       长期指令一节）
+                                                        式常备指令（见
+                                                        [persona.md](persona.md)
+                                                        长期指令一节）
     ⑧ 人物事实块（facts 非空时）                        R2c「关于对方」——
-                                                       现行高置信事实（见
-                                                       [persona.md](persona.md)
-                                                       人物画像一节）
+                                                        现行高置信事实（见
+                                                        [persona.md](persona.md)
+                                                        人物画像一节）
     ⑨ 核心记忆块（core_memory 非空时）                 R2c「自我认知」——
-                                                       四块自编辑自我模型
-                                                       的非空块（见
-                                                       [persona.md](persona.md)
-                                                       核心记忆一节）
-    ⑩ 相关技能块（skills 命中时）                       R2c「相关技能」——
-                                                       仅命中本轮用户文本的
-                                                       技能（见
-                                                       [persona.md](persona.md)
-                                                       程序性技能一节）
-    ⑪ render_output_protocol()                          R2b 输出格式协议
-                                                       （心声 / 情绪标签指令）
-    ⑫ 世界书 after_char 条目块                          检索增强（行为补充）
+                                                        四块自编辑自我模型
+                                                        的非空块（见
+                                                        [persona.md](persona.md)
+                                                        核心记忆一节）
+    ⑩ 关系进展块（relationship 非空时）                R2b+「关系进展」——
+                                                        关系类事实派生的阶段 /
+                                                        最近变化 / 边界约定
+                                                        （恒注入——空事实渲染
+                                                        「初识」；见
+                                                        [persona.md](persona.md)
+                                                        关系进展摘要一节）
+    ⑪ 相关技能块（skills 命中时）                       R2c「相关技能」——
+                                                        仅命中本轮用户文本的
+                                                        技能（见
+                                                        [persona.md](persona.md)
+                                                        程序性技能一节）
+    ⑫ render_output_protocol()                          R2b 输出格式协议
+                                                        （心声 / 情绪标签指令）
+    ⑬ 世界书 after_char 条目块                          检索增强（行为补充）
 [历史回合]
-    ⑬ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合；当轮入站
+    ⑭ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合；当轮入站
        回合在注入防御启用时被 nonce 定界包裹——历史回合保持原文）
 [system 注入提示]
-    ⑭ render_injection_hint(...)                       仅检测命中且提示开关
-                                                       开启时（紧接包裹回合；
-                                                       见 [defense.md](defense.md)）
+    ⑮ render_injection_hint(...)                       仅检测命中且提示开关
+                                                        开启时（紧接包裹回合；
+                                                        见 [defense.md](defense.md)）
 [system 末块]
-    ⑮ render_post_history_message(card)                历史后再注入（deep
-                                                       anti-drift nudge——
-                                                       卡片声明 post_history_instructions 时）
+    ⑯ render_post_history_message(card)                历史后再注入（deep
+                                                        anti-drift nudge——
+                                                        卡片声明 post_history_instructions 时）
 ```
 
-各块以 `\n\n` 连接；⑭ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
+各块以 `\n\n` 连接；⑮ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
 
 长期指令块（⑦）的渲染语义（`render_directives_block`）：每条指令一行
 `- 正文`；最多 20 条且总字符 ≤ 2000（含列表符号）——超帽追加
@@ -98,7 +105,50 @@
 （`CORE_MEMORY_BLOCK_TEMPLATE`）属 prompt Unit 文件 byte-lock 面（版本常量
 `CORE_MEMORY_BLOCK_TEMPLATE_VERSION`）。
 
-相关技能块（⑩）的渲染语义（`render_skills_block`）：**仅当命中本轮用户文本
+关系进展块（⑩）的渲染语义（`render_relationship_block`）：摘要由
+`ChatService` 经 `FactsService.list_facts`（类别 `relationship`、状态 `active`）
+读取关系类事实，再用 `build_relationship_summary` 派生（来源 / 公式 / 阈值表 /
+衰减档 / 夹取语义见 [persona.md](persona.md) 关系进展摘要一节）。渲染为
+「【关系进展】+ 当前阶段（中文称谓 + 亲密等级）」恒注入行，有最近事件时追加
+「最近的变化：」与逐条 `- 摘要` 行，有边界约定时追加「相处边界：…」行；累计
+字符 ≤ 1200，事件按时间倒序逐条追加，放不下即截断当前行并停止追加后续事件与
+边界行（确定性截断）。空事实摘要渲染「当前阶段：初识（亲密等级 0/3）」——
+关系状态是恒注入面，不是「有内容才注入」。块文本模板
+（`RELATIONSHIP_BLOCK_TEMPLATE` / `RELATIONSHIP_EVENTS_HEADER` /
+`RELATIONSHIP_EVENT_LINE_TEMPLATE` / `RELATIONSHIP_BOUNDARY_LINE_TEMPLATE`）属
+prompt Unit 文件 byte-lock 面（版本常量 `RELATIONSHIP_BLOCK_TEMPLATE_VERSION`）。
+读取失败降级为空摘要（初识）并记 warning，回复照常；读取面未接线（CLI / 纯内存
+直调形态）整块跳过。
+
+关系进展块示例（派生摘要 JSON + 渲染文本）：
+
+```json
+{
+  "relationship": {
+    "stage": "close",
+    "intimacy_level": 2,
+    "score": 16.0,
+    "event_count": 2,
+    "recent_events": [
+      {"fact_id": 12, "summary": "说好每天都要说晚安", "importance": 9.0, "ts_ms": 1762939200000},
+      {"fact_id": 9, "summary": "主人开始叫我小鱼", "importance": 7.0, "ts_ms": 1762852800000}
+    ],
+    "boundaries": ["说好每天都要说晚安"],
+    "generated_at_ms": 1762939200000
+  }
+}
+```
+
+```
+【关系进展】
+当前阶段：亲近（亲密等级 2/3）
+最近的变化：
+- 说好每天都要说晚安
+- 主人开始叫我小鱼
+相处边界：说好每天都要说晚安
+```
+
+相关技能块（⑪）的渲染语义（`render_skills_block`）：**仅当命中本轮用户文本
 时**注入——命中由 `SkillsService.match_for_compose` 按启用技能的触发短语字面
 包含（NFKC + casefold）或描述关键词片段判定，条数帽 2 条在读取面施加；每条
 技能渲染为 `### 名称` 标题行 + markdown 正文，技能之间空行分隔，总字符
@@ -109,13 +159,14 @@
 写入（回复链路不等待、计数失败只告警）。
 
 注：`compose_messages(state, rng=None, emotion_summary=None, directives=None,
-facts=None, core_memory=None, skills=None, wrap_current_message=False,
-current_message_label="", injection_hint=None)` 仍是纯函数——M 态读取 / 衰减、常备
-指令、人物事实、核心记忆与技能匹配均在 `ChatService` 侧（仅持久化会话已落库
-且对应服务已接线时激活），纯内存形态 / 无持久化测试面零附加 I/O。长期指令 /
-人物事实 / 核心记忆 / 技能读取失败均不阻断回复（日志 + 空块——增强面语义；
-读取面协议见 `FactsReaderFace` / `CoreMemoryReaderFace` /
-`SkillsReaderFace`）。
+facts=None, core_memory=None, relationship=None, skills=None,
+wrap_current_message=False, current_message_label="", injection_hint=None)`
+仍是纯函数——M 态读取 / 衰减、常备指令、人物事实、核心记忆、关系进展派生与
+技能匹配均在 `ChatService` 侧（仅持久化会话已落库且对应服务已接线时激活），
+纯内存形态 / 无持久化测试面零附加 I/O。长期指令 / 人物事实 / 核心记忆 / 技能
+读取失败均不阻断回复（日志 + 空块——增强面语义；关系进展读取失败降级为空摘要
+并同样不阻断回复）；读取面协议见 `FactsReaderFace` / `CoreMemoryReaderFace` /
+`SkillsReaderFace`（关系进展复用 `FactsReaderFace.list_facts`）。
 
 宪章块（④）恒注入且紧跟人格正典——五条规则先于一切记忆层与对话内容生效；
 角色契约块（⑤）紧随宪章之后：宪章管身份与规则从哪来，契约管说出来的话像不像
@@ -246,7 +297,7 @@ nonce 定界帧（标签按 `sender_provenance`：主人消息 / 群友消息）
 
 `prompts.py` 的 `PERSONA_CONTRACT_TEMPLATE`（版本常量
 `PERSONA_CONTRACT_TEMPLATE_VERSION`；套件总版本 `PROMPTS_VERSION` 随之为
-1.7.0）在 compose 链第 ⑤ 步注入，紧跟宪章之后、先于一切记忆层与格式协议。
+1.8.0——关系进展块模板加入后的当前套件版本）在 compose 链第 ⑤ 步注入，紧跟宪章之后、先于一切记忆层与格式协议。
 五条约束：① 你是 `{persona}`，是角色不是助手——不用「作为 AI / 作为一个语言
 模型」的腔调；② 不道歉式开场（抱歉 / 对不起 / 不好意思），除非真的做错了事；
 ③ 不自我审查式软化（「不过其实」「希望这对你有帮助」这类总结腔能省则省）；
@@ -484,12 +535,13 @@ COMPLIANCE_MAX_RETRIES=1
 
 ## prompt 版本与 byte-lock
 
-prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本——角色契约与
-合规提醒模板加入后为 1.7.0）+ 逐模板 `*_TEMPLATE_VERSION`（含
+prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本——关系进展块
+模板加入后为 1.8.0）+ 逐模板 `*_TEMPLATE_VERSION`（含
 `CONSTITUTION_TEMPLATE_VERSION` / `PERSONA_CONTRACT_TEMPLATE_VERSION` /
 `COMPLIANCE_NUDGE_TEMPLATE_VERSION` / `UNTRUSTED_WRAP_TEMPLATE_VERSION` /
 `INJECTION_HINT_TEMPLATE_VERSION` / `OUTPUT_PROTOCOL_TEMPLATE_VERSION` /
 `EMOTION_STATE_TEMPLATE_VERSION` / `CORE_MEMORY_BLOCK_TEMPLATE_VERSION` /
+`RELATIONSHIP_BLOCK_TEMPLATE_VERSION` /
 `SKILLS_BLOCK_TEMPLATE_VERSION`）。模板文本变更 = 行为变更，须同步：① 上调版本常量；② 更新 `tests/unit/test_chat_prompts.py` 的 sha256 摘要锁（`_BYTE_LOCKS`）——测试红即「知情确认」关卡。
 
 ## 控制台 CLI（pixi run chat）
@@ -574,7 +626,9 @@ lifespan                                          上述函数对的 asynccontex
 `compose_messages` 产出的请求消息序列（两轮对话后；此处为直调缺省形态——
 `wrap_current_message=False`，当轮消息不包裹。经 `ChatService.reply` /
 `stream_reply` 且注入防御启用时，最后一条 user 回合会被 nonce 定界帧替换、
-命中时其后追加【注入提示】system 块——见 [defense.md](defense.md)）：
+命中时其后追加【注入提示】system 块——见 [defense.md](defense.md)；关系进展
+块只在 `ChatService` 接上事实读取面且会话已落库时出现——系统首块此时另含
+【关系进展】段，格式见上方「关系进展块示例」，直调缺省形态不出现）：
 
 ```json
 {
@@ -629,6 +683,15 @@ lifespan                                          上述函数对的 asynccontex
   注入四块 / 全空跳过 / 未接线与纯内存形态零 I/O / 读取失败退化 / 工具列表按
   发送者来源裁剪（owner 全量、peer 剔除 edit_core_memory、仅剩该工具时工具面
   为空）/ 工具执行期会话主键绑定与循环后复位；
+- `tests/unit/test_chat_relationship.py`——关系进展注入：块渲染（未接线空串 /
+  空摘要阶段行 / 中文阶段称谓与事件·边界行 / 1200 帽确定性截断）/ 链位置
+  （自我认知之后、相关技能之前）/ 持久化会话经事实读面派生注入 / 阈值表构造
+  注入 / 读取失败降级为空摘要且回复照常 / 未接线与纯内存形态零 I/O / 流式·
+  工具循环·合规重试请求一致携带；
+- `tests/unit/test_relationship_summary.py`——关系进展派生纯函数：空事实 /
+  混类与历史过滤 / 阶段阶梯上下沿 / 衰减档边界与未来时间戳 / 等级上限夹取与
+  阶段回落 / 事件条数与顺序·摘要截断 / 边界识别与上限 / 确定性 / 时间轴拒绝 /
+  阈值表不变式；
 - `tests/unit/test_chat_swipe.py`——消息变体全语义（候选落库形态 / 脊柱-only 上下文 / 序号续编 / 空正文零残留 / 父回合校验 / 选定替换 + 单次 M 态推进 + 注记 / include_variants 读侧 / 引擎停用零推进）；
 - `tests/unit/test_chat_swipe_api.py`——变体端点（ASGITransport）：重生成 / 详情嵌套 / 选定 / 错误面（父回合语义 / 数量边界 / 缺失资源）；
 - `tests/unit/test_migration_chat_message_variants.py`——迁移 0010 SQLite 升 / 降 / 复升 + 复合唯一键语义；
