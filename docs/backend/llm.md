@@ -151,6 +151,47 @@ data: {"id":"resp-1","model":"glm-5.3","choices":[],"usage":{"prompt_tokens":52,
 data: [DONE]
 ```
 
+## logprobs 与置信度（强制字段）
+
+新版 vLLM 仅在请求**显式声明** logprob 字段时才回传对应数据——因此网关的
+每个 chat/completions 请求（含流式与工具请求）固定携带以下三字段（缺省
+构造旋钮：``DEFAULT_TOP_LOGPROBS=20`` / ``DEFAULT_PROMPT_LOGPROBS=20``，
+client/gateway 构造参数置 ``None`` 可省略对应字段，仅用于旧端点兼容；
+三项全关时 ``logprobs`` 亦不发送）：
+
+| 请求字段 | 缺省值 | 语义 |
+|---|---|---|
+| ``logprobs`` | ``true`` | 要求回传生成 token 的对数概率数据 |
+| ``top_logprobs`` | ``20`` | 每个生成位置回传前 N 候选分布 |
+| ``prompt_logprobs`` | ``20`` | 提示词每个位置回传对数概率（可识别提示词各 token 的置信度） |
+
+响应侧归一（``ChatResponseModel``）：``content_logprobs``（生成 token 的
+token/logprob/候选分布列表）、``prompt_logprobs``（提示词条目列表，
+端点以 ``null`` 占位的位次原样保留为 ``None`` 元素）、以及派生字段
+``mean_token_logprob``（生成 token 平均对数概率）与 ``confidence``
+（``exp(平均对数概率)``——几何平均 token 概率的观测信号，不参与生成
+逻辑）。流式块（``ChatStreamChunkModel``）尽力捕获增量 logprobs 与首块
+prompt_logprobs；端点未回传 / 旧端点缺失时对应字段为 ``None``，解析
+对畸形条目不抛异常（跳过 + debug 日志）。
+
+请求 / 响应示例（裁剪自真机形态；``prompt_logprobs`` 首元素为 null 表示
+该位次不计分——无权值 token 位）：
+
+```json
+// 请求（网关自动附加——调用方无需手写）
+{"model": "...", "messages": [...], "logprobs": true,
+ "top_logprobs": 20, "prompt_logprobs": 20}
+
+// 响应片段
+{"choices": [{"index": 0, "message": {"role": "assistant", "content": "量子计算"},
+  "logprobs": {"content": [{"token": "量子", "logprob": -0.000017,
+    "bytes": [233, 135, 143, 229, 173, 144],
+    "top_logprobs": [{"token": "量子", "logprob": -0.000017}]}]},
+  "finish_reason": "stop"}],
+ "prompt_logprobs": [null, {"128799": {"logprob": -20.89, "rank": 127879,
+   "decoded_token": "的"}}]}
+```
+
 ## embeddings 传输面（记忆检索的向量化前置）
 
 `gateway.embed_by_role(texts, persona_id=None, request_id=None) -> EmbeddingsResponseModel`：解析 **embed 角色**条目（本地向量化端点为生产形态；测试 MockTransport）→ wire 构建 → `entry_gate`（熔断 + 信号量）→ `client.embeddings(texts)`（`POST {base_url}/embeddings`）→ 用量发射（**purpose 恒 `embed`**——usage 域枚举既有成员；token 计数取响应 `usage.prompt_tokens / total_tokens`，未回传按零用量落账）。

@@ -50,6 +50,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -70,16 +71,23 @@ from packages.harness.config.llm_wire import LlmClientConfigModel
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.time_utils import now_ms
 from packages.harness.llm.llm_models import (
+    DEFAULT_PROMPT_LOGPROBS,
+    DEFAULT_TOP_LOGPROBS,
     ChatMessageModel,
     ChatRequestParams,
     ChatResponseModel,
     ChatStreamChunkModel,
     EmbeddingsResponseModel,
+    LogprobCandidateModel,
+    LogprobTokenModel,
+    PromptLogprobEntryModel,
     TokenUsageModel,
     ToolCallModel,
     ToolDefinitionModel,
     WireChatCompletionResponse,
     WireEmbeddingsResponse,
+    WireLogprobContent,
+    WirePromptLogprobValue,
     WireStreamChunk,
     WireTokenUsage,
     WireToolCall,
@@ -211,6 +219,97 @@ def _map_wire_usage(usage: WireTokenUsage) -> TokenUsageModel:
     )
 
 
+def _map_wire_logprobs(
+    wire: WireLogprobContent | None,
+) -> list[LogprobTokenModel] | None:
+    """wire content logprobs → 域内归一（缺失 / 空 = None；坏元素跳过）。
+
+    Args:
+        wire: wire logprobs 容器（可为 None）。
+
+    Returns:
+        :class:`LogprobTokenModel` 列表（None = 端点未回传/为空）。
+    """
+    if wire is None or not wire.content:
+        return None
+    mapped: list[LogprobTokenModel] = []
+    for token in wire.content:
+        if not token.token and token.logprob == 0.0 and not token.top_logprobs:
+            continue
+        mapped.append(
+            LogprobTokenModel(
+                token=token.token,
+                logprob=token.logprob,
+                bytes=token.bytes,
+                top_logprobs=[
+                    LogprobCandidateModel(
+                        token=candidate.token,
+                        logprob=candidate.logprob,
+                        bytes=candidate.bytes,
+                    )
+                    for candidate in token.top_logprobs
+                ],
+            )
+        )
+    return mapped or None
+
+
+def _map_wire_prompt_logprobs(
+    raw: list[dict[str, WirePromptLogprobValue] | None] | None,
+) -> list[PromptLogprobEntryModel | None] | None:
+    """wire prompt_logprobs → 域内归一（null 占位保留位次；缺失 = None）。
+
+    Args:
+        raw: wire prompt_logprobs 数组（元素为 null 或 token_id 映射）。
+
+    Returns:
+        :class:`PromptLogprobEntryModel` 列表（含 None 占位；None = 未回传）。
+    """
+    if raw is None:
+        return None
+    entries: list[PromptLogprobEntryModel | None] = []
+    for item in raw:
+        if item is None:
+            entries.append(None)
+            continue
+        for token_id_raw, value in item.items():
+            try:
+                token_id = int(token_id_raw)
+            except (TypeError, ValueError):
+                continue
+            entries.append(
+                PromptLogprobEntryModel(
+                    token_id=token_id,
+                    logprob=value.logprob,
+                    rank=value.rank,
+                    decoded_token=value.decoded_token,
+                )
+            )
+            break
+    return entries or None
+
+
+def _derive_confidence(
+    content_logprobs: list[LogprobTokenModel] | None,
+) -> tuple[float | None, float | None]:
+    """由 content logprobs 派生平均对数概率与置信度（exp 均值）。
+
+    Args:
+        content_logprobs: 生成 token logprobs（None / 空 = 不可派生）。
+
+    Returns:
+        ``(mean_token_logprob, confidence)``；不可派生时均为 None。
+        置信度定义为 ``exp(平均对数概率)``（几何平均 token 概率）——
+        仅作观测信号，不参与生成逻辑。
+    """
+    if not content_logprobs:
+        return None, None
+    mean_logprob = sum(entry.logprob for entry in content_logprobs) / len(
+        content_logprobs
+    )
+    return mean_logprob, min(1.0, max(0.0, math.exp(mean_logprob)))
+
+
 class LlmHttpClient:
     """OpenAI 兼容端点客户端（共享 ``httpx.AsyncClient`` 注入）。
 
@@ -231,6 +330,8 @@ class LlmHttpClient:
         retry_attempts: int = 3,
         retry_wait_seconds: float = 0.5,
         retry_after_max_seconds: float = 30.0,
+        top_logprobs: int | None = DEFAULT_TOP_LOGPROBS,
+        prompt_logprobs: int | None = DEFAULT_PROMPT_LOGPROBS,
     ) -> None:
         """初始化客户端。
 
@@ -243,6 +344,9 @@ class LlmHttpClient:
             retry_wait_seconds: 指数退避基数秒（Retry-After 缺失时生效）。
             retry_after_max_seconds: Retry-After 等待封顶秒数（端点声明
                 超长冷却时按封顶执行——请求路径不悬挂）。
+            top_logprobs: 每次生成位置回传的前 N 候选数（缺省 20——端点
+                仅在显式声明时回传 logprob 数据；None 省略该字段）。
+            prompt_logprobs: 提示词 token logprobs 数（缺省 20；None 省略）。
         """
         self._wire = wire
         self._http = http_client
@@ -250,6 +354,8 @@ class LlmHttpClient:
         self._retry_attempts = max(1, retry_attempts)
         self._retry_wait_seconds = retry_wait_seconds
         self._retry_after_max_seconds = retry_after_max_seconds
+        self._top_logprobs = top_logprobs
+        self._prompt_logprobs = prompt_logprobs
 
     @property
     def model(self) -> str:
@@ -295,6 +401,9 @@ class LlmHttpClient:
             stream=False,
             tools=tools,
             tool_choice=tool_choice,
+            logprobs=self._top_logprobs is not None or self._prompt_logprobs is not None,
+            top_logprobs=self._top_logprobs,
+            prompt_logprobs=self._prompt_logprobs,
         )
         response = await self._post_with_retry(body)
         wire = self._parse_response_json(response)
@@ -371,7 +480,15 @@ class LlmHttpClient:
                 ReadTimeout 落 ``LLM_REQUEST_FAILED``（均不重试——首块
                 产出后重放非幂等）。
         """
-        body = build_chat_request_body(self._wire.model, list(messages), params, stream=True)
+        body = build_chat_request_body(
+            self._wire.model,
+            list(messages),
+            params,
+            stream=True,
+            logprobs=self._top_logprobs is not None or self._prompt_logprobs is not None,
+            top_logprobs=self._top_logprobs,
+            prompt_logprobs=self._prompt_logprobs,
+        )
         response = await self._open_stream_with_retry(body)
         try:
             async for line in response.aiter_lines():
@@ -652,6 +769,9 @@ class LlmHttpClient:
             )
         choice = wire.choices[0]
         tool_calls = self._parse_wire_tool_calls(choice.message.tool_calls)
+        content_logprobs = _map_wire_logprobs(choice.logprobs)
+        prompt_logprobs = _map_wire_prompt_logprobs(wire.prompt_logprobs)
+        mean_token_logprob, confidence = _derive_confidence(content_logprobs)
         return ChatResponseModel(
             content=choice.message.content or "",
             tool_calls=tool_calls,
@@ -659,6 +779,10 @@ class LlmHttpClient:
             model=wire.model or self._wire.model,
             usage=_map_wire_usage(wire.usage) if wire.usage is not None else None,
             latency_ms=latency_ms,
+            content_logprobs=content_logprobs,
+            prompt_logprobs=prompt_logprobs,
+            mean_token_logprob=mean_token_logprob,
+            confidence=confidence,
         )
 
     def _parse_wire_tool_calls(self, wire_calls: list[WireToolCall] | None) -> list[ToolCallModel]:
@@ -815,4 +939,6 @@ class LlmHttpClient:
             content=choice.delta.content or "",
             finish_reason=choice.finish_reason,
             usage=_map_wire_usage(wire.usage) if wire.usage is not None else None,
+            content_logprobs=_map_wire_logprobs(choice.logprobs),
+            prompt_logprobs=_map_wire_prompt_logprobs(wire.prompt_logprobs),
         )

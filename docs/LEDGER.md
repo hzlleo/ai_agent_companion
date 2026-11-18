@@ -146,7 +146,9 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 - 测试环境：全异步 asyncio_mode=auto；SQLite 共享 fixture；不依赖真实配置；conftest 硬覆盖 env。
 - 关键模块坐标：harness/{core,config,database,pools,llm,usage,persona,chat,memory,channels,tools,duty,scheduler,voice,multimodal,search,emotion,intent,rhythm,reminders}、app/api/{personas,memories,usage,models,voice,look_at,facts,reminders,directives,skills,core_memory,health,channels_qq}、前台 pages/{personas,memories,usage,models}。
 
-### 当前切片：R2c-4（自编辑核心记忆 + 溯源闸）
+**LLM 网关强制 logprobs 字段**：新版 vLLM 仅在请求显式携带 `logprobs/top_logprobs/prompt_logprobs` 时回传 logprob 数据（置信度计算输入面）——网关全请求（含流式/工具）固定携带（缺省 20/20，构造旋钮 None 可省略）；响应侧解析为 `content_logprobs/prompt_logprobs` 并派生 `mean_token_logprob/confidence`（exp 均值，观测信号）。
+
+### 当前切片：强制 logprobs 字段修正（feat/llm-confidence-logprobs）
 **已完成**：
 1. 迁移 0015：`ff_core_memory_blocks`（四块唯一键 + persona 索引）与 `ff_core_memory_revisions`（block_id 级联外键 + block_id / ts_ms 索引；append-only）；降级先删修订表，block_id 索引随表清理（5320 方言面已真引擎验证）。
 2. `harness/persona/core_memory.py` / `core_memory_models.py` / `core_memory_orm.py`：四块懒建种子 / 主人编辑（版本 + 修订 + 锁定开关）/ 人格自编辑（锁定与目标全文超限可读拒绝、append 换行追加）/ 修订倒序读取 / `register_core_memory_tools`（`edit_core_memory` + `core_memory_session_id_var`）。
@@ -180,5 +182,5 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 1. 读本台账第 3/4/5 节确认分支与拍板；
 2. `cd` 工程 → `git status`/`git log --oneline -5` 核对与台账一致；
 3. 若上下文中的「当前进行中」段存在未提交工作 → 先按第 5 节剩余步骤收口再开新切片；
-4. 任何切片开工前：确认无重型子 Agent 在跑（串行纪律）；任务书必须包含硬约束全文、信息卫生要求（禁「参考工程」类字样）、15.2-15.4 注释口径、真引擎验证要求（若涉迁移/并发/唯一键）、范围清单（禁 git、禁范围外文件、禁子代理）。
+4. 任何切片开工前：确认无重型子 Agent 在跑（串行纪律）；任务书必须包含硬约束全文、信息卫生要求（禁止影射其他工程/仓库作为约定来源）、15.2-15.4 注释口径、真引擎验证要求（若涉迁移/并发/唯一键）、范围清单（禁 git、禁范围外文件、禁子代理）。
 5. 完成后更新本台账对应状态段并提交。
