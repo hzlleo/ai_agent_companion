@@ -54,6 +54,8 @@ __all__ = [
     "ToolDefinitionModel",
     "ToolCallModel",
     "TOOL_CHOICE_AUTO",
+    "DEFAULT_TOP_LOGPROBS",
+    "DEFAULT_PROMPT_LOGPROBS",
     "WireChatMessage",
     "WireToolCallFunction",
     "WireToolCall",
@@ -72,6 +74,11 @@ __all__ = [
 
 #: 工具选择策略缺省值（OpenAI 兼容协议语义——模型自行决定是否调用工具）。
 TOOL_CHOICE_AUTO: str = "auto"
+
+#: logprobs 强制字段缺省值——端点仅在显式声明时回传 logprob 数据
+#: （置信度计算的输入面）；构造旋钮置 None 可省略对应字段（旧端点兼容）。
+DEFAULT_TOP_LOGPROBS: int = 20
+DEFAULT_PROMPT_LOGPROBS: int = 20
 
 
 class ChatMessageRole(StrEnum):
@@ -305,6 +312,18 @@ class ChatResponseModel(BaseModel):
     model: str = Field(default="", description="实际服务的模型名")
     usage: TokenUsageModel | None = Field(default=None, description="token 用量")
     latency_ms: int = Field(default=0, ge=0, description="端到端时延（毫秒）")
+    content_logprobs: list[LogprobTokenModel] | None = Field(
+        default=None, description="生成 token logprobs（未声明 / 未回传为 None）"
+    )
+    prompt_logprobs: list[PromptLogprobEntryModel | None] | None = Field(
+        default=None, description="提示词 token logprobs（null 占位保留位次）"
+    )
+    mean_token_logprob: float | None = Field(
+        default=None, description="生成 token 平均对数概率（logprobs 派生）"
+    )
+    confidence: float | None = Field(
+        default=None, ge=0.0, le=1.0, description="置信度（exp(平均对数概率)）"
+    )
 
 
 class ChatStreamChunkModel(BaseModel):
@@ -320,6 +339,12 @@ class ChatStreamChunkModel(BaseModel):
     content: str = Field(default="", description="本块增量文本")
     finish_reason: str | None = Field(default=None, description="结束原因")
     usage: TokenUsageModel | None = Field(default=None, description="token 用量（末块）")
+    content_logprobs: list[LogprobTokenModel] | None = Field(
+        default=None, description="本块增量 logprobs（端点流式回传时）"
+    )
+    prompt_logprobs: list[PromptLogprobEntryModel | None] | None = Field(
+        default=None, description="提示词 logprobs（端点通常在首块回传）"
+    )
 
 
 class EmbeddingsResponseModel(BaseModel):
@@ -378,6 +403,102 @@ class LlmUsageEvent(BaseModel):
 # =========================================================================== []
 # wire DTO（OpenAI 兼容端点请求 / 响应形态——仅 client 传输层消费）
 # =========================================================================== []
+
+
+class LogprobCandidateModel(BaseModel):
+    """单 token 候选的 logprob 分量（top_logprobs 元素——置信度分析原料）。
+
+    Attributes:
+        token: 候选 token 文本。
+        logprob: 对数概率。
+        bytes: token 的字节序列（端点提供时；否则 None）。
+    """
+
+    token: str = Field(description="候选 token")
+    logprob: float = Field(description="对数概率")
+    bytes: list[int] | None = Field(default=None, description="token 字节序列")
+
+
+class LogprobTokenModel(BaseModel):
+    """生成 token 的 logprob 条目（content logprobs 元素）。
+
+    Attributes:
+        token: 生成文本片段。
+        logprob: 该片段的对数概率（置信度派生输入）。
+        bytes: token 的字节序列（端点提供时；否则 None）。
+        top_logprobs: 同位置前 N 候选分布（请求声明的 top_logprobs）。
+    """
+
+    token: str = Field(description="生成文本片段")
+    logprob: float = Field(description="对数概率")
+    bytes: list[int] | None = Field(default=None, description="token 字节序列")
+    top_logprobs: list[LogprobCandidateModel] = Field(
+        default_factory=list, description="前 N 候选分布"
+    )
+
+
+class PromptLogprobEntryModel(BaseModel):
+    """提示词 token 的 logprob 条目（prompt_logprobs 非空元素）。
+
+    Attributes:
+        token_id: 提示词 token 编号。
+        logprob: 该 token 在提示位置的对数概率。
+        rank: 概率排序位次（端点提供时）。
+        decoded_token: 解码文本（端点提供时）。
+    """
+
+    token_id: int = Field(description="提示词 token 编号")
+    logprob: float = Field(description="对数概率")
+    rank: int | None = Field(default=None, description="概率排序位次")
+    decoded_token: str | None = Field(default=None, description="解码文本")
+
+
+class WireLogprobToken(BaseModel):
+    """wire logprob token（content 元素 / 候选元素共用形态）。
+
+    Attributes:
+        token: token 文本。
+        logprob: 对数概率。
+        bytes: 字节序列。
+        top_logprobs: 候选分布（候选元素自身为空列表）。
+    """
+
+    model_config = ConfigDict(protected_namespaces=(), extra="ignore")
+
+    token: str = Field(default="", description="token 文本")
+    logprob: float = Field(default=0.0, description="对数概率")
+    bytes: list[int] | None = Field(default=None, description="字节序列")
+    top_logprobs: list[WireLogprobToken] = Field(
+        default_factory=list, description="候选分布"
+    )
+
+
+class WireLogprobContent(BaseModel):
+    """wire logprobs 容器（choices[].logprobs 形态）。
+
+    Attributes:
+        content: 生成 token 的 logprob 列表。
+    """
+
+    model_config = ConfigDict(protected_namespaces=(), extra="ignore")
+
+    content: list[WireLogprobToken] = Field(default_factory=list, description="logprob 列表")
+
+
+class WirePromptLogprobValue(BaseModel):
+    """wire prompt_logprobs 值（token_id → 值映射的元素）。
+
+    Attributes:
+        logprob: 对数概率。
+        rank: 排序位次。
+        decoded_token: 解码文本。
+    """
+
+    model_config = ConfigDict(protected_namespaces=(), extra="ignore")
+
+    logprob: float = Field(default=0.0, description="对数概率")
+    rank: int | None = Field(default=None, description="排序位次")
+    decoded_token: str | None = Field(default=None, description="解码文本")
 
 
 class WireToolCallFunction(BaseModel):
@@ -454,6 +575,7 @@ class WireChatChoice(BaseModel):
     index: int = Field(default=0, description="choice 序号")
     message: WireChatMessage = Field(description="回复消息")
     finish_reason: str | None = Field(default=None, description="结束原因")
+    logprobs: WireLogprobContent | None = Field(default=None, description="生成 token logprobs")
 
 
 class WireChatCompletionResponse(BaseModel):
@@ -472,6 +594,9 @@ class WireChatCompletionResponse(BaseModel):
     model: str = Field(default="", description="实际服务的模型名")
     choices: list[WireChatChoice] = Field(default_factory=list, description="回复列表")
     usage: WireTokenUsage | None = Field(default=None, description="token 用量")
+    prompt_logprobs: list[dict[str, WirePromptLogprobValue] | None] | None = Field(
+        default=None, description="提示词 token logprobs（null 占位）"
+    )
 
 
 class WireStreamDelta(BaseModel):
@@ -498,6 +623,7 @@ class WireStreamChoice(BaseModel):
     index: int = Field(default=0, description="choice 序号")
     delta: WireStreamDelta = Field(default_factory=WireStreamDelta, description="增量载荷")
     finish_reason: str | None = Field(default=None, description="结束原因")
+    logprobs: WireLogprobContent | None = Field(default=None, description="增量 logprobs")
 
 
 class WireStreamChunk(BaseModel):
@@ -516,6 +642,9 @@ class WireStreamChunk(BaseModel):
     model: str = Field(default="", description="实际服务的模型名")
     choices: list[WireStreamChoice] = Field(default_factory=list, description="增量列表")
     usage: WireTokenUsage | None = Field(default=None, description="token 用量（末块）")
+    prompt_logprobs: list[dict[str, WirePromptLogprobValue] | None] | None = Field(
+        default=None, description="提示词 token logprobs（通常在首块）"
+    )
 
 
 class WireEmbeddingItem(BaseModel):
@@ -652,6 +781,9 @@ def build_chat_request_body(
     stream: bool,
     tools: Sequence[ToolDefinitionModel] | None = None,
     tool_choice: str | None = None,
+    logprobs: bool = True,
+    top_logprobs: int | None = DEFAULT_TOP_LOGPROBS,
+    prompt_logprobs: int | None = DEFAULT_PROMPT_LOGPROBS,
 ) -> dict[str, Any]:
     """构建 chat/completions 请求体（wire 序列化前的 dict 形态）。
 
@@ -716,6 +848,12 @@ def build_chat_request_body(
     if stream:
         body["stream"] = True
         body["stream_options"] = {"include_usage": True}
+    if logprobs:
+        body["logprobs"] = True
+        if top_logprobs is not None:
+            body["top_logprobs"] = top_logprobs
+        if prompt_logprobs is not None:
+            body["prompt_logprobs"] = prompt_logprobs
     if params is not None:
         if params.temperature is not None:
             body["temperature"] = params.temperature
