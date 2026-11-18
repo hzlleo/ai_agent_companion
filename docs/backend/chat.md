@@ -38,18 +38,23 @@
                                                        现行高置信事实（见
                                                        [persona.md](persona.md)
                                                        人物画像一节）
-    ⑦ render_output_protocol()                          R2b 输出格式协议
+    ⑦ 相关技能块（skills 命中时）                       R2c「相关技能」——
+                                                       仅命中本轮用户文本的
+                                                       技能（见
+                                                       [persona.md](persona.md)
+                                                       程序性技能一节）
+    ⑧ render_output_protocol()                          R2b 输出格式协议
                                                        （心声 / 情绪标签指令）
-    ⑧ 世界书 after_char 条目块                          检索增强（行为补充）
+    ⑨ 世界书 after_char 条目块                          检索增强（行为补充）
 [历史回合]
-    ⑨ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合）
+    ⑩ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合）
 [system 末块]
-    ⑩ render_post_history_message(card)                历史后再注入（deep
+    ⑪ render_post_history_message(card)                历史后再注入（deep
                                                        anti-drift nudge——
                                                        卡片声明 post_history_instructions 时）
 ```
 
-各块以 `\n\n` 连接；⑩ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
+各块以 `\n\n` 连接；⑪ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
 
 长期指令块（⑤）的渲染语义（`render_directives_block`）：每条指令一行
 `- 正文`；最多 20 条且总字符 ≤ 2000（含列表符号）——超帽追加
@@ -63,11 +68,22 @@
 跳过。块文本模板（`FACTS_BLOCK_TEMPLATE`）属 prompt Unit 文件 byte-lock 面
 （版本常量 `FACTS_BLOCK_TEMPLATE_VERSION`）。
 
+相关技能块（⑦）的渲染语义（`render_skills_block`）：**仅当命中本轮用户文本
+时**注入——命中由 `SkillsService.match_for_compose` 按启用技能的触发短语字面
+包含（NFKC + casefold）或描述关键词片段判定，条数帽 2 条在读取面施加；每条
+技能渲染为 `### 名称` 标题行 + markdown 正文，技能之间空行分隔，总字符
+≤ 2000（含标题与分隔），预算不足时按命中顺序截断当前技能正文并停止追加后续
+技能。无命中时整块跳过（技能内容不随历史累积——只跟当前输入走）。块文本模板
+（`SKILLS_BLOCK_TEMPLATE`）属 prompt Unit 文件 byte-lock 面（版本常量
+`SKILLS_BLOCK_TEMPLATE_VERSION`）。命中后的使用计数由服务层 fire-and-forget
+写入（回复链路不等待、计数失败只告警）。
+
 注：`compose_messages(state, rng=None, emotion_summary=None, directives=None,
-facts=None)` 仍是纯函数——M 态读取 / 衰减、常备指令与人物事实读取均在
-`ChatService` 侧（仅持久化会话已落库且对应服务已接线时激活），纯内存形态 /
-无持久化测试面零附加 I/O。长期指令 / 人物事实读取失败均不阻断回复（日志 +
-空块——增强面语义；事实读取面协议见 `FactsReaderFace`）。
+facts=None, skills=None)` 仍是纯函数——M 态读取 / 衰减、常备指令、人物事实
+与技能匹配均在 `ChatService` 侧（仅持久化会话已落库且对应服务已接线时激活），
+纯内存形态 / 无持久化测试面零附加 I/O。长期指令 / 人物事实 / 技能读取失败均
+不阻断回复（日志 + 空块——增强面语义；读取面协议见 `FactsReaderFace` /
+`SkillsReaderFace`）。
 
 ### 意图快径（含 DIRECTIVE 常备指令捕获——R2b D7-14）
 
@@ -292,9 +308,10 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 
 ## prompt 版本与 byte-lock
 
-prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本——人物事实块加入后
-为 1.3.0）+ 逐模板 `*_TEMPLATE_VERSION`（含新增
-`OUTPUT_PROTOCOL_TEMPLATE_VERSION` / `EMOTION_STATE_TEMPLATE_VERSION`）。模板文本变更 = 行为变更，须同步：① 上调版本常量；② 更新 `tests/unit/test_chat_prompts.py` 的 sha256 摘要锁（`_BYTE_LOCKS`）——测试红即「知情确认」关卡。
+prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本——相关技能块加入后
+为 1.4.0）+ 逐模板 `*_TEMPLATE_VERSION`（含
+`OUTPUT_PROTOCOL_TEMPLATE_VERSION` / `EMOTION_STATE_TEMPLATE_VERSION` /
+`SKILLS_BLOCK_TEMPLATE_VERSION`）。模板文本变更 = 行为变更，须同步：① 上调版本常量；② 更新 `tests/unit/test_chat_prompts.py` 的 sha256 摘要锁（`_BYTE_LOCKS`）——测试红即「知情确认」关卡。
 
 ## 控制台 CLI（pixi run chat）
 
@@ -413,6 +430,10 @@ lifespan                                          上述函数对的 asynccontex
 - `tests/unit/test_chat_emotion.py`——协议 + 情绪引擎集成（真实 SQLite：可见
   正文返回 / meta 落库 + 详情 DTO 读回 / M 态推进 / 心情块注入位置 / 无标签
   零状态 / 引擎停用 / 流式边界不落 meta）；
+- `tests/unit/test_chat_skills.py`——相关技能注入：块渲染（空跳过 / 标题与
+  正文 / 字符帽截断 / 双技能分隔）/ 链位置（事实之后、协议之前）/ 持久化会话
+  按本轮用户文本命中注入 / 无命中不注入 / 未接线与纯内存形态零 I/O / 读取
+  失败退化；
 - `tests/unit/test_chat_swipe.py`——消息变体全语义（候选落库形态 / 脊柱-only 上下文 / 序号续编 / 空正文零残留 / 父回合校验 / 选定替换 + 单次 M 态推进 + 注记 / include_variants 读侧 / 引擎停用零推进）；
 - `tests/unit/test_chat_swipe_api.py`——变体端点（ASGITransport）：重生成 / 详情嵌套 / 选定 / 错误面（父回合语义 / 数量边界 / 缺失资源）；
 - `tests/unit/test_migration_chat_message_variants.py`——迁移 0010 SQLite 升 / 降 / 复升 + 复合唯一键语义；

@@ -424,6 +424,12 @@ export interface DreamRunStats {
   facts_merged: number
   /** 人物事实提案丢弃计数（事实提取阶段）。 */
   facts_dropped: number
+  /** 技能新建行数（技能挖矿阶段）。 */
+  skills_created: number
+  /** 技能元数据刷新行数（技能挖矿阶段——同 slug 置信度 / 触发短语合并）。 */
+  skills_merged: number
+  /** 技能提案丢弃计数（技能挖矿阶段）。 */
+  skills_dropped: number
 }
 
 /** 梦境逐事件决策记录。 */

@@ -12,11 +12,13 @@
              注入，20 条 / 2000 字符帽截断；无指令跳过）
         ↓ ⑥ 人物事实块（render_facts_block——R2c；【关于对方】现行高置信
              事实注入，12 条 / 1500 字符帽由读取面裁剪；无事实跳过）
-        ↓ ⑦ prompts.render_output_protocol()               输出格式协议（心声 /
+        ↓ ⑦ 相关技能块（render_skills_block——R2c；【相关技能】仅当命中
+             本轮用户文本时注入，2 条 / 2000 字符帽；无命中跳过）
+        ↓ ⑧ prompts.render_output_protocol()               输出格式协议（心声 /
              情绪标签指令——R2b）
-        ↓ ⑧ 世界书 after_char 条目块                       检索增强（后段）
-        ↓ ⑨ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合）
-        ↓ ⑩ prompts.render_post_history_message(card)      历史后再注入（末块）
+        ↓ ⑨ 世界书 after_char 条目块                       检索增强（后段）
+        ↓ ⑩ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合）
+        ↓ ⑪ prompts.render_post_history_message(card)      历史后再注入（末块）
 
 世界书筛选语义（chara card v2 规格 + R2b 高级触发——算法链全文见
 ``world_book`` 模块文档，此处为消费面摘要）：
@@ -98,6 +100,18 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
       回复（日志 + 空块——画像注入是增强面而非回复前提），无现行事实时
       整块跳过。
 
+相关技能注入（R2c——构造注入 ``skills_reader`` 后）：
+
+    - compose 链在人物事实块之后、输出格式协议之前注入【相关技能】块
+      （``render_skills_block``——仅当命中**本轮用户文本**时注入；命中
+      由 ``SkillsService.match_for_compose`` 按技能触发短语的字面包含
+      判定，条数 / 字符帽由服务与渲染函数分别施加）；
+    - 注入面与人物事实同轴：仅在持久化会话绑定且已落库时读取（
+      ``session_scope`` 独立短事务 + 人格上下文绑定）；读取失败不阻断
+      回复（日志 + 空块——技能是操作增强面而非回复前提），无命中时整块
+      跳过；命中后的使用计数写入由服务层 fire-and-forget 调度（回复
+      链路不等待、不因计数失败而失败）。
+
 意图快径前钩（R2a-6——构造注入 ``intent_shortcut`` 后，``reply`` 前端
 先试快径；缺省 ``intent_shortcut=None`` 保持既有零快径形态）：
 
@@ -176,6 +190,7 @@ from packages.harness.chat.prompts import (
     render_output_protocol,
     render_persona_system_prompt,
     render_post_history_message,
+    render_skills_block,
     render_world_book_block,
 )
 from packages.harness.chat.world_book import (
@@ -205,6 +220,7 @@ from packages.harness.persona.chara_card import (
 from packages.harness.persona.directives import DirectivesService
 from packages.harness.persona.dtos import PersonaRecordDTO
 from packages.harness.persona.service import PersonaService, bind_persona_context
+from packages.harness.persona.skills_models import SkillRecordDTO
 from packages.harness.tools.tool_models import (
     ToolCallRequestModel,
     ToolResultModel,
@@ -293,13 +309,15 @@ def compose_messages(
     emotion_summary: str | None = None,
     directives: Sequence[str] | None = None,
     facts: Sequence[str] | None = None,
+    skills: Sequence[SkillRecordDTO] | None = None,
 ) -> MessageCompositionResult:
     """组装完整请求消息序列（纯函数——无 I/O / 无网关调用 / 无会话回写）。
 
     消息序列结构::
 
         [system]  章程 + 世界书 before 段 + 人格正典 + 心情状态块 +
-                  长期指令块 + 人物事实块 + 输出格式协议块 + 世界书 after 段
+                  长期指令块 + 人物事实块 + 相关技能块 + 输出格式协议块 +
+                  世界书 after 段
         [user/assistant ...]  全部历史回合（含刚追加的用户回合）
         [system]  历史后再注入（卡片声明 post_history_instructions 时；
                   位于**最后一条历史回合之后**——deep anti-drift 位置）
@@ -310,8 +328,11 @@ def compose_messages(
     DirectivesService 读取；20 条 / 2000 字符帽由
     ``render_directives_block`` 施加）；人物事实块仅在 ``facts`` 有有效
     条目时注入（【关于对方】——由 ChatService 经事实读取面提供；条数 /
-    字符帽在读取面施加）；输出格式协议块恒注入（心声 / 情绪标签指令
-    ——解析面见 ``chat/output_protocol``）。
+    字符帽在读取面施加）；相关技能块仅在 ``skills`` 有命中条目时注入
+    （【相关技能】——由 ChatService 经技能读取面按本轮用户文本匹配；
+    条数帽在读取面、字符帽在 ``render_skills_block`` 施加）；输出格式
+    协议块恒注入（心声 / 情绪标签指令——解析面见
+    ``chat/output_protocol``）。
 
     世界书选择经 ``world_book.select_world_book_entries``（算法链与
     渲染序裁定见该模块文档）；推进后的回合状态（冷却时钟 + 注入
@@ -329,6 +350,9 @@ def compose_messages(
         facts: 现行人物事实注入行列表（``【类别标签】正文``——None / 空 =
             不注入人物事实块；读取与裁剪在调用方——本函数保持纯函数无
             I/O）。
+        skills: 命中本轮用户文本的技能记录列表（None / 空 = 不注入相关
+            技能块；匹配与条数帽在调用方、字符帽在 ``render_skills_block``
+            ——本函数保持纯函数无 I/O）。
 
     Returns:
         组装结果（消息序列 + 观测元数据 + 推进后的世界书回合状态）。
@@ -358,6 +382,9 @@ def compose_messages(
     facts_block = render_facts_block(facts or [])
     if facts_block:
         system_parts.append(facts_block)
+    skills_block = render_skills_block(skills or [])
+    if skills_block:
+        system_parts.append(skills_block)
     system_parts.append(render_output_protocol())
     after_block = render_world_book_block(after_entries)
     if after_block:
@@ -463,6 +490,31 @@ class FactsReaderFace(Protocol):
         ...
 
 
+class SkillsReaderFace(Protocol):
+    """compose 技能读取面协议（persona 域技能服务的结构化消费契约）。
+
+    结构化类型：真实 :class:`~packages.harness.persona.skills.SkillsService`
+    天然满足（``match_for_compose``——按本轮用户文本匹配现行技能，条数帽
+    在实现侧施加；命中后的使用计数写入由实现侧 fire-and-forget 调度）；
+    测试注入 fake 同形态。注入面与人物事实同轴：仅在持久化会话已落库时
+    读取（见模块 docstring「相关技能注入」）。
+    """
+
+    async def match_for_compose(
+        self, session: AsyncSession, user_text: str
+    ) -> list[SkillRecordDTO]:
+        """匹配本轮用户文本可用的技能（实现侧裁剪与强化）。
+
+        Args:
+            session: 注入的异步 Session（人格上下文已绑定）。
+            user_text: 本轮用户输入原文。
+
+        Returns:
+            命中技能记录列表（最多两条；空列表 = 无命中）。
+        """
+        ...
+
+
 class ChatService:
     """人格感知聊天会话服务（组装 + 网关调用 + 会话内存态维护 + 可选持久化）。
 
@@ -485,6 +537,7 @@ class ChatService:
         emotion_service: EmotionService | None = None,
         directive_service: DirectivesService | None = None,
         facts_reader: FactsReaderFace | None = None,
+        skills_reader: SkillsReaderFace | None = None,
         episode_sink: EpisodeSinkFace | None = None,
     ) -> None:
         """初始化服务。
@@ -514,6 +567,10 @@ class ChatService:
                 与既有完全一致；注入后持久化会话回合在 compose 前读取
                 现行高置信事实——纯内存形态零附加 I/O，见模块
                 docstring「人物事实注入」）。
+            skills_reader: 技能读取面（None = 不注入相关技能块——行为与
+                既有完全一致；注入后持久化会话回合在 compose 前按本轮
+                用户文本匹配现行技能——纯内存形态零附加 I/O，见模块
+                docstring「相关技能注入」）。
             episode_sink: chat 回合情景落库面（None = 零情景写入——CLI /
                 未装配记忆服务的形态行为与既有完全一致；注入后每回合
                 消息落库即写入 kind=chat 情景事件——fire-and-forget 语义
@@ -534,6 +591,8 @@ class ChatService:
         self._directive_service = directive_service
         #: 人物事实读取面绑定（None = 不注入——纯内存 / 未接线形态零 I/O）。
         self._facts_reader = facts_reader
+        #: 技能读取面绑定（None = 不注入——纯内存 / 未接线形态零 I/O）。
+        self._skills_reader = skills_reader
         #: 情景落库面绑定（None = 零情景写入——记忆管道未接线形态）。
         self._episode_sink = episode_sink
         bound_tools = list(tools) if tools else []
@@ -765,8 +824,13 @@ class ChatService:
         emotion_summary = await self._current_emotion_summary(state)
         directives = await self._current_directives(state)
         facts = await self._current_facts(state)
+        skills = await self._current_skills(state, user_text)
         result = compose_messages(
-            state, emotion_summary=emotion_summary, directives=directives, facts=facts
+            state,
+            emotion_summary=emotion_summary,
+            directives=directives,
+            facts=facts,
+            skills=skills,
         )
         # 功能式回合状态回存：组装纯函数不回写会话态，冷却时钟推进由
         # 本服务消费后落回（快径路径不组装、不推进——时钟只度量真实
@@ -833,8 +897,13 @@ class ChatService:
         emotion_summary = await self._current_emotion_summary(state)
         directives = await self._current_directives(state)
         facts = await self._current_facts(state)
+        skills = await self._current_skills(state, user_text)
         result = compose_messages(
-            state, emotion_summary=emotion_summary, directives=directives, facts=facts
+            state,
+            emotion_summary=emotion_summary,
+            directives=directives,
+            facts=facts,
+            skills=skills,
         )
         # 功能式回合状态回存（与 reply 同构——冷却时钟只度量真实组装回合）。
         state.world_book_state = result.world_book_state
@@ -1173,6 +1242,35 @@ class ChatService:
         except Exception:  # best-effort：事实读取失败不阻断回复链路
             logger.opt(exception=True).warning(
                 "人物事实读取失败（本轮不注入人物事实块）: persona_id={}", state.persona_id
+            )
+            return []
+
+    async def _current_skills(
+        self, state: ChatSessionStateModel, user_text: str
+    ) -> list[SkillRecordDTO]:
+        """匹配本轮可用的技能（compose 相关技能块注入面）。
+
+        运行判定：持久化会话已落库 + 读取面已接线（与人物事实同轴——
+        技能依赖数据库；纯内存形态零附加 I/O）。读取失败不阻断回复
+        （日志 + 空列表——技能是操作增强面）。服务质量面自身已按条数帽
+        裁剪，命中计数写入由其 fire-and-forget 调度（本方法不等待）。
+
+        Args:
+            state: 会话状态。
+            user_text: 本轮用户输入原文（匹配面输入——只有命中当前输入
+                的技能才会注入）。
+
+        Returns:
+            命中技能记录列表；未接线 / 未落库 / 读取失败时为空列表。
+        """
+        if self._skills_reader is None or self._session_service is None or state.session_id is None:
+            return []
+        try:
+            async with session_scope() as db_session, bind_persona_context(state.persona_id):
+                return await self._skills_reader.match_for_compose(db_session, user_text)
+        except Exception:  # best-effort：技能读取失败不阻断回复链路
+            logger.opt(exception=True).warning(
+                "技能匹配失败（本轮不注入相关技能块）: persona_id={}", state.persona_id
             )
             return []
 

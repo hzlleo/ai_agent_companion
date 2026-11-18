@@ -189,7 +189,7 @@ async def test_run_dream_archives_stale_curated(db_session: AsyncSession) -> Non
         )
         await _age_curated(db_session, stale.id, days=90)
         await _age_curated(db_session, kept.id, days=90)
-        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "今天很安静，心里很平稳。"])
+        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "[]", "今天很安静，心里很平稳。"])
         run = await _dream_service().run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )
@@ -245,7 +245,7 @@ async def test_run_dream_does_not_archive_pinned_or_frozen(
         await memory_service.set_curated_frozen(db_session, frozen.id, frozen=True)
         await _age_curated(db_session, pinned.id, days=120)
         await _age_curated(db_session, frozen.id, days=120)
-        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "今天很安静。"])
+        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "[]", "今天很安静。"])
         run = await _dream_service().run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )
@@ -321,12 +321,12 @@ async def test_frozen_topic_excluded_from_merge_prompt(
                 kind=CuratedKind.MEMORY, topic="可见主题键", content="可以合并"
             ),
         )
-        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "今天很安静。"])
+        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "[]", "今天很安静。"])
         run = await _dream_service().run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )
     assert run.status == "success"
-    merge_prompt = gateway.calls[1]
+    merge_prompt = gateway.calls[2]
     assert "冻结主题键" not in merge_prompt
     assert "可见主题键" in merge_prompt
     assert visible.id != frozen.id
@@ -359,7 +359,7 @@ async def test_frozen_topic_proposal_dropped_with_decision(
             ],
             ensure_ascii=False,
         )
-        gateway = FakeDreamGateway([_FACTS_EMPTY, proposal, "今天下雨，心情很好。"])
+        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", proposal, "今天下雨，心情很好。"])
         run = await _dream_service().run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )

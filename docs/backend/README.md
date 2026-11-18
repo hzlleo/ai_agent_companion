@@ -10,11 +10,11 @@
 | pools（manager/http/llm/seekdb 共享池 + 熔断） | [pools.md](pools.md) | 已交付（含 SeekDB 检索池） |
 | llm（模型网关：多 provider / roles 路由 / 用量埋点；含注册表管理 API：models 路由 + 原子持久化 / 热重建 / 回滚） | [llm.md](llm.md) | 已交付（含注册表管理面） |
 | usage（token 用量记录与多维聚合；含用量观测 API：records / aggregates / summary 路由——跨人格口径） | [usage.md](usage.md) | 已交付（含管理 API） |
-| persona（chara card / 注册表 / 主人格切换与可寻址集 / 切换复制 / L-M-S 状态；长期指令（D7-14——策展 user_note 收窄面 + 对话捕获）；含人格语音绑定 voice_profile；R2b-2：特质组件库（组件 / 预设模型 + 确定性生成 + 官方库装载）+ 导入端点（预设生成 / 卡片文件——内容哈希幂等 + 名称冲突三策略 + 批量部分成功）） | [persona.md](persona.md) | 已交付（多激活可寻址模型——多人格同时可用、主人格唯一（DB 唯一键强制）；含首个 app 层：personas 管理 API + 共享异常处理器；语音绑定增列见 [voice.md](voice.md)；官方预设库以纯特质组合集发行（版权洁净），用户完整卡片经导入端点私有导入） |
+| persona（chara card / 注册表 / 主人格切换与可寻址集 / 切换复制 / L-M-S 状态；长期指令（D7-14——策展 user_note 收窄面 + 对话捕获）；含人格语音绑定 voice_profile；R2b-2：特质组件库（组件 / 预设模型 + 确定性生成 + 官方库装载）+ 导入端点（预设生成 / 卡片文件——内容哈希幂等 + 名称冲突三策略 + 批量部分成功）；R2c：人物事实（证据链 / 更正循环）+ 程序性技能（触发短语 / 原地版本 / 启用状态 / compose 匹配）） | [persona.md](persona.md) | 已交付（多激活可寻址模型——多人格同时可用、主人格唯一（DB 唯一键强制）；含首个 app 层：personas 管理 API + 共享异常处理器；语音绑定增列见 [voice.md](voice.md)；官方预设库以纯特质组合集发行（版权洁净），用户完整卡片经导入端点私有导入） |
 | chat（会话循环 / prompt 组装 / 世界书 / 控制台 CLI / 会话持久化 / 可选工具循环（R2a-4——构造注入 tools 后 reply 走有界循环，见 [search.md](search.md)）/ R2b D7-5 消息变体 swipes（单回合多候选重生成 + 选定提升，见 [memory.md](memory.md) 变体列）） | [chat.md](chat.md) | 已交付（含持久化与恢复；工具循环经 web_search 装配消费——CLI 零变更；变体上下文只回放正典脊柱、变体不推进 M 态（探索面）） |
 | emotion（轻情绪引擎：8 维情绪枚举 + 输出协议 `<情绪>` 增量 → M 态推进 / 半衰期衰减 / 摘要行 + compose 心情块；心声 / 情绪快照经会话消息 `meta` 持久化（9 号迁移）与会话详情 API 读侧） | [emotion.md](emotion.md) | 已交付（R2b D7-7：EMOTION_ env 面**默认开启**——纯本地零成本；TTS 风格 / 前端表情消费面 R2d / R2e 接入） |
 | app 装配（create_app + lifespan + health 存活面 + CORS（ServerConfig.cors_origins 驱动，Vite dev 默认来源）+ 管理面 owner-token 鉴权（见下方「认证」一节）） | [chat.md](chat.md#app-装配appmainpy--appapihealthpy) | 已交付（随 chat 域文档建档；含 memories / usage / models 路由 + CORS + owner-token 鉴权） |
-| memory（三层记忆：情景 / 策展 / 工作层存储 + 管理 API + 检索层 + 夜间梦境 + 记忆生命周期（R2c：置顶 / 冻结 / 时间衰减 / 使用强化 / 归档，迁移 0012）+ 会话消息变体列（迁移 0010）） | [memory.md](memory.md) | 已交付（存储 / 持久化 / API；检索层：MemoryStore + SeekDB / SQLite 回退 + 索引管道（R2c 生产接线 + 删除 / 归档索引移除）+ search API + 写读强化；夜间梦境：巩固合并 + 日记 + 生命周期归档 + 运行日志 + 手工触发 API；R2c 记忆管道闭合：对话回合 → 情景层 episode sink；迁移 0012 经 SeekDB 真引擎 round-trip 验证） |
+| memory（三层记忆：情景 / 策展 / 工作层存储 + 管理 API + 检索层 + 夜间梦境 + 记忆生命周期（R2c：置顶 / 冻结 / 时间衰减 / 使用强化 / 归档，迁移 0012）+ 会话消息变体列（迁移 0010）） | [memory.md](memory.md) | 已交付（存储 / 持久化 / API；检索层：MemoryStore + SeekDB / SQLite 回退 + 索引管道（R2c 生产接线 + 删除 / 归档索引移除）+ search API + 写读强化；夜间梦境：fact / skill 双提取阶段 + 巩固合并 + 日记 + 生命周期归档 + 运行日志 + 手工触发 API（迁移 0013 / 0014 经 SeekDB 真引擎 round-trip 验证）；R2c 记忆管道闭合：对话回合 → 情景层 episode sink） |
 | duty / scheduler（值班轮与中央调度：LLM 原生工具调用 + 工具注册表 + 章程驱动值班工具循环 + 手滚调度器 + 梦境定时触发 + 提醒扫描作业） | [duty.md](duty.md) | 已交付（含 harness/tools 工具注册表与内置工具——沙盒执行器见 [tools-sandbox.md](tools-sandbox.md)；提醒扫描作业见 [reminders.md](reminders.md)） |
 | reminders（持久化提醒：`ff_reminders` 表（迁移 0011）+ CRUD / 批量取消部分成功 + 到期扫描（FOR UPDATE SKIP LOCKED）+ 属主通道投递作业（60s 间隔）+ 投递失败计数与上限） | [reminders.md](reminders.md) | 已交付（P10=B——跨重启存活；无通道时保持 pending 的补投语义；零新增 env 键） |
 | tools / sandbox（工具沙盒：docker/tool-sandbox-agent 独立隔离运行时 + wire 契约双树镜像 + 后端沙盒客户端 / registry 代理注册 + http_fetch 示例工具 + compose 加固部署） | [tools-sandbox.md](tools-sandbox.md) | 已交付（沙盒为可选运行时——enabled=false 默认，平台工具按 http_fetch 范式接入） |
@@ -63,7 +63,7 @@ R2 设计审计放行条件：管理 API（含成本驱动与账号驱动能力�
 
 | 路由集 | 挂载 | 豁免理由 |
 |---|---|---|
-| personas / memories / usage / voice / look_at / models / search / reminders / directives / facts | **受保护**（统一挂 `require_admin_token`） | 管理面全操作集（含模型注册表 / 搜索 provider 注册表与沙盒消费的成本 / 账号驱动能力；提醒 / 长期指令 / 人物事实为人格作用域数据面） |
+| personas / memories / usage / voice / look_at / models / search / reminders / directives / facts / skills | **受保护**（统一挂 `require_admin_token`） | 管理面全操作集（含模型注册表 / 搜索 provider 注册表与沙盒消费的成本 / 账号驱动能力；提醒 / 长期指令 / 人物事实 / 程序性技能为人格作用域数据面） |
 | `GET /api/v1/health` | **豁免** | 零依赖存活面（health.py docstring 契约：liveness 探针不触 DB / 池 / LLM，同理不得因鉴权配置拒答） |
 | `POST /api/v1/channels/qq/webhook` | **豁免** | 自鉴权面：NapCat 事件上报经自身 `webhook_token_env` Bearer 校验（见 [channels.md](channels.md)）；再叠 admin token 会要求部署机持有管理凭据——双重鉴权破坏上报链路 |
 

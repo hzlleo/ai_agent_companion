@@ -17,6 +17,7 @@ import type {
   FactRecord,
   PersonaRecord,
   PersonaState,
+  SkillRecord,
   TraitComponent,
   TraitLibrary,
   TraitPreset,
@@ -640,6 +641,9 @@ export function mockDreamRun(overrides: Partial<DreamRunRecord> = {}): DreamRunR
       facts_created: 1,
       facts_merged: 1,
       facts_dropped: 0,
+      skills_created: 1,
+      skills_merged: 1,
+      skills_dropped: 0,
     },
     decisions: [
       { episode_id: 1, topic: 'favorite-food', kind: 'memory', action: 'promoted', reason: '分数达标，晋升为新主题' },
@@ -1557,6 +1561,136 @@ export const factHandlers = [
   }),
 ]
 
+// ---------------------------------------------------------------------------
+// skills 域（程序性技能——触发短语 / 原地版本 / 启用状态）
+// ---------------------------------------------------------------------------
+
+/** 测试用技能记录（wire 形态——启用 + 梦境挖矿来源）。 */
+export function mockSkill(overrides: Partial<SkillRecord> = {}): SkillRecord {
+  return {
+    id: 1,
+    name: '周报流程',
+    slug: '周报流程',
+    description: '主人说「写周报」时使用：先列三件事再写进展',
+    triggers: ['写周报', '本周总结'],
+    content: '1. 先列三件事\n2. 再写进展',
+    status: 'active',
+    source: 'mined',
+    confidence: 0.8,
+    use_count: 3,
+    last_used_ms: 1731000000000,
+    version: 1,
+    created_at: 1731000000000,
+    updated_at: 1731000000000,
+    ...overrides,
+  }
+}
+
+/** skills 域默认 handlers（成功形态 + 404 面）。 */
+export const skillHandlers = [
+  // 列表：一条启用（mined）+ 一条停用（manual）。
+  http.get(`${BACKEND_ORIGIN}/skills`, () => {
+    return HttpResponse.json(
+      okResult({
+        items: [
+          mockSkill(),
+          mockSkill({
+            id: 2,
+            name: '日报流程',
+            slug: '日报流程',
+            description: '主人说「写日报」时使用',
+            triggers: ['写日报'],
+            content: '1. 写今日完成\n2. 写明日计划',
+            status: 'disabled',
+            source: 'manual',
+            confidence: 0.6,
+            use_count: 0,
+            last_used_ms: null,
+          }),
+        ],
+        total: -1,
+        page: 1,
+        page_size: 200,
+        next_cursor: null,
+        has_more: false,
+      }),
+    )
+  }),
+  // 创建：回显新记录（manual 来源）。
+  http.post(`${BACKEND_ORIGIN}/skills`, async ({ request }) => {
+    const body = (await request.json()) as {
+      name: string
+      description: string
+      triggers: string[]
+      content: string
+      confidence?: number
+    }
+    return HttpResponse.json(
+      okResult(
+        mockSkill({
+          id: 9,
+          name: body.name,
+          slug: body.name.toLowerCase().replaceAll(' ', '-'),
+          description: body.description,
+          triggers: body.triggers,
+          content: body.content,
+          confidence: body.confidence ?? 0.6,
+          source: 'manual',
+          use_count: 0,
+          last_used_ms: null,
+        }),
+        '技能已创建',
+      ),
+    )
+  }),
+  // 编辑：id=404 → 404；其余 → version+1。
+  http.put(`${BACKEND_ORIGIN}/skills/:skillId`, async ({ request, params }) => {
+    const id = Number(params.skillId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('技能不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    const body = (await request.json()) as Record<string, unknown>
+    return HttpResponse.json(
+      okResult(
+        mockSkill({
+          id,
+          ...(typeof body.name === 'string' ? { name: body.name } : {}),
+          ...(typeof body.description === 'string' ? { description: body.description } : {}),
+          ...(Array.isArray(body.triggers) ? { triggers: body.triggers as string[] } : {}),
+          ...(typeof body.content === 'string' ? { content: body.content } : {}),
+          ...(typeof body.confidence === 'number' ? { confidence: body.confidence } : {}),
+          version: 2,
+        }),
+        '技能已保存',
+      ),
+    )
+  }),
+  // 启用：id=404 → 404；其余 → active。
+  http.post(`${BACKEND_ORIGIN}/skills/:skillId/enable`, ({ params }) => {
+    const id = Number(params.skillId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('技能不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    return HttpResponse.json(okResult(mockSkill({ id, status: 'active' }), '技能已启用'))
+  }),
+  // 停用：id=404 → 404；其余 → disabled。
+  http.post(`${BACKEND_ORIGIN}/skills/:skillId/disable`, ({ params }) => {
+    const id = Number(params.skillId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('技能不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    return HttpResponse.json(okResult(mockSkill({ id, status: 'disabled' }), '技能已停用'))
+  }),
+  // 删除：id=404 → 404；其余成功。
+  http.delete(`${BACKEND_ORIGIN}/skills/:skillId`, ({ params }) => {
+    const id = Number(params.skillId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('技能不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    return HttpResponse.json(okResult(null, '技能已删除'))
+  }),
+]
+
 /** 共享 msw 服务器（setup.ts 管理生命周期）。 */
 export const server = setupServer(
   ...personaHandlers,
@@ -1566,4 +1700,5 @@ export const server = setupServer(
   ...reminderHandlers,
   ...directiveHandlers,
   ...factHandlers,
+  ...skillHandlers,
 )

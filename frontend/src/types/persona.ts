@@ -516,3 +516,73 @@ export interface FactCorrectRequest {
   /** 更正后置信度（undefined = 保留原值）。 */
   confidence?: number
 }
+
+// ---------------------------------------------------------------------------
+// 程序性技能（skills——触发短语 / 原地版本 / 启用状态）
+// ---------------------------------------------------------------------------
+
+/** 技能状态（active 启用参与匹配 / disabled 停用不参与匹配）。 */
+export type SkillStatus = 'active' | 'disabled'
+
+/** 技能来源（manual 手工录入 / mined 梦境挖矿）。 */
+export type SkillSource = 'manual' | 'mined'
+
+/** 技能记录（管理面 / 面板读取面）。 */
+export interface SkillRecord {
+  /** 技能主键（编辑 / 状态切换 / 删除锚点）。 */
+  id: number
+  /** 技能名。 */
+  name: string
+  /** 归一化 kebab 标识（同人格唯一）。 */
+  slug: string
+  /** 何时使用的触发描述。 */
+  description: string
+  /** 触发短语列表（主人可能说出的字面短语）。 */
+  triggers: string[]
+  /** markdown 步骤正文。 */
+  content: string
+  /** 状态（active / disabled）。 */
+  status: SkillStatus
+  /** 来源（manual / mined）。 */
+  source: SkillSource
+  /** 置信度（0-1）。 */
+  confidence: number
+  /** compose 命中次数（写读强化轴）。 */
+  use_count: number
+  /** 最近一次命中时间（epoch 毫秒；未命中为 null）。 */
+  last_used_ms: number | null
+  /** 原地编辑版本号（首版 1）。 */
+  version: number
+  /** 落库时间（epoch 毫秒）。 */
+  created_at: number
+  /** 行更新时间（epoch 毫秒）。 */
+  updated_at: number
+}
+
+/** 技能创建请求（slug 由后端按名称派生；同名冲突 409）。 */
+export interface SkillCreateRequest {
+  /** 技能名（1-120 字符）。 */
+  name: string
+  /** 何时使用的触发描述（1-500 字符）。 */
+  description: string
+  /** 触发短语（1-8 条、每条 1-40 字符）。 */
+  triggers: string[]
+  /** markdown 步骤正文（1-8000 字符）。 */
+  content: string
+  /** 置信度（0-1，缺省 0.6）。 */
+  confidence?: number
+}
+
+/** 技能编辑请求（字段全部可选；版本由后端递增）。 */
+export interface SkillUpdateRequest {
+  /** 新技能名（undefined = 保留）。 */
+  name?: string
+  /** 新触发描述（undefined = 保留）。 */
+  description?: string
+  /** 新触发短语集（undefined = 保留；提供时整集替换）。 */
+  triggers?: string[]
+  /** 新步骤正文（undefined = 保留）。 */
+  content?: string
+  /** 新置信度（undefined = 保留）。 */
+  confidence?: number
+}

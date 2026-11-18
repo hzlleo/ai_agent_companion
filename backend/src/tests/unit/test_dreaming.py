@@ -425,13 +425,13 @@ async def test_run_dream_window_left_closed_right_open(db_session: AsyncSession)
         before = await memory_service.append_episode(
             db_session, _chat_dto(user="窗口之前事件", ts_ms=NOW - DAY_MS - 1, importance=5)
         )
-        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "今天很平静。"])
+        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "[]", "今天很平静。"])
         run = await dream_service.run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )
     assert run.status == "success"
     assert run.stats.candidates == 1
-    merge_prompt = gateway.calls[1]["messages"][0].content
+    merge_prompt = gateway.calls[2]["messages"][0].content
     assert f"事件 #{at_start.id}" in merge_prompt
     assert f"事件 #{at_end.id}" not in merge_prompt
     assert f"事件 #{before.id}" not in merge_prompt
@@ -452,15 +452,15 @@ async def test_run_dream_untrusted_excluded_everywhere(db_session: AsyncSession)
                 ts_ms=NOW - 2_000,
             ),
         )
-        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "今天主人很开心。"])
+        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "[]", "今天主人很开心。"])
         run = await dream_service.run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )
     assert run.status == "success"
     assert run.stats.candidates == 1
     assert run.stats.skipped_untrusted == 1
-    merge_prompt = gateway.calls[1]["messages"][0].content
-    diary_prompt = gateway.calls[2]["messages"][0].content
+    merge_prompt = gateway.calls[2]["messages"][0].content
+    diary_prompt = gateway.calls[3]["messages"][0].content
     assert "不可信的平台垃圾内容" not in merge_prompt
     assert f"事件 #{untrusted.id}" not in merge_prompt
     assert "不可信的平台垃圾内容" not in diary_prompt
@@ -495,6 +495,7 @@ async def test_run_dream_merge_happy_path(db_session: AsyncSession) -> None:
         gateway = FakeDreamGateway(
             [
                 _FACTS_EMPTY,
+                "[]",
                 _merge_response(
                     [_proposal("口味偏好", [ep1.id], importance=6), _proposal("运动习惯", [ep2.id])]
                 ),
@@ -535,13 +536,13 @@ async def test_run_dream_merge_happy_path(db_session: AsyncSession) -> None:
         facts_prompt = gateway.calls[0]["messages"][0].content
         assert "大肥鱼" not in facts_prompt
         assert f"事件 #{ep1.id}" in facts_prompt
-        merge_prompt = gateway.calls[1]["messages"][0].content
+        merge_prompt = gateway.calls[2]["messages"][0].content
         assert "大肥鱼" not in merge_prompt
         assert f"事件 #{ep1.id}" in merge_prompt
         assert "- 口味偏好（kind=memory importance=5）：主人喜欢小鱼干" in merge_prompt
-        diary_prompt = gateway.calls[2]["messages"][0].content
+        diary_prompt = gateway.calls[3]["messages"][0].content
         assert "你是 大肥鱼" in diary_prompt
-        for index in (0, 1):
+        for index in (0, 1, 2):
             assert gateway.calls[index]["role"] == ModelRole.DREAM
             assert gateway.calls[index]["purpose"] == "dream"
             assert gateway.calls[index]["persona_id"] == PERSONA_A
@@ -555,7 +556,7 @@ async def test_run_dream_malformed_json_fail_closed_zero_upserts(
         await memory_service.append_episode(
             db_session, _chat_dto(user="今天去公园散步了", ts_ms=NOW - 1_000, importance=6)
         )
-        gateway = FakeDreamGateway([_FACTS_EMPTY, "这不是JSON{{{"])
+        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "这不是JSON{{{"])
         run = await dream_service.run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )
@@ -563,7 +564,7 @@ async def test_run_dream_malformed_json_fail_closed_zero_upserts(
         assert "不是合法 JSON" in (run.error or "")
         assert await _count_curated(db_session) == 0
         assert run.diary_episode_id is None
-        assert len(gateway.calls) == 2  # 事实阶段成功 + 合并失败后不再调用日记
+        assert len(gateway.calls) == 3  # 事实 / 技能阶段成功 + 合并失败后不再调用日记
         assert run.stats.promoted == 0
 
 
@@ -573,7 +574,7 @@ async def test_run_dream_non_array_output_fails(db_session: AsyncSession) -> Non
         await memory_service.append_episode(
             db_session, _chat_dto(user="今天读了书", ts_ms=NOW - 1_000, importance=6)
         )
-        gateway = FakeDreamGateway([_FACTS_EMPTY, '{"items": []}'])
+        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", '{"items": []}'])
         run = await dream_service.run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )
@@ -587,7 +588,7 @@ async def test_run_dream_empty_merge_output_fails(db_session: AsyncSession) -> N
         await memory_service.append_episode(
             db_session, _chat_dto(user="今天写字了", ts_ms=NOW - 1_000, importance=6)
         )
-        gateway = FakeDreamGateway([_FACTS_EMPTY, "   "])
+        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "   "])
         run = await dream_service.run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )
@@ -621,6 +622,7 @@ async def test_run_dream_unknown_merged_from_dropped_and_counted(
         gateway = FakeDreamGateway(
             [
                 _FACTS_EMPTY,
+                "[]",
                 _merge_response(
                     [
                         _proposal("幻觉主题", [999]),
@@ -650,6 +652,7 @@ async def test_run_dream_invalid_item_fields_dropped(db_session: AsyncSession) -
         gateway = FakeDreamGateway(
             [
                 _FACTS_EMPTY,
+                "[]",
                 _merge_response([_proposal("越界主题", [ep.id], importance=99)]),
                 "今天主人浇了花。",
             ]
@@ -676,7 +679,7 @@ async def test_run_dream_diary_failure_keeps_promotions(db_session: AsyncSession
             db_session, _chat_dto(user="今天整理了房间", ts_ms=NOW - 1_000, importance=6)
         )
         gateway = FakeDreamGateway(
-            [_FACTS_EMPTY, _merge_response([_proposal("家务", [ep.id])]), ""]
+            [_FACTS_EMPTY, "[]", _merge_response([_proposal("家务", [ep.id])]), ""]
         )
         run = await dream_service.run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
@@ -696,7 +699,9 @@ async def test_run_dream_diary_disabled_skips_phase(db_session: AsyncSession) ->
         ep = await memory_service.append_episode(
             db_session, _chat_dto(user="今天听了歌", ts_ms=NOW - 1_000, importance=6)
         )
-        gateway = FakeDreamGateway([_FACTS_EMPTY, _merge_response([_proposal("音乐", [ep.id])])])
+        gateway = FakeDreamGateway(
+            [_FACTS_EMPTY, "[]", _merge_response([_proposal("音乐", [ep.id])])]
+        )
         run = await dream_service.run_dream(
             db_session,
             gateway=gateway,
@@ -706,7 +711,7 @@ async def test_run_dream_diary_disabled_skips_phase(db_session: AsyncSession) ->
         )
         assert run.status == "success"
         assert run.diary_episode_id is None
-        assert len(gateway.calls) == 2
+        assert len(gateway.calls) == 3
         page = await memory_service.query_episodes(
             db_session, EpisodeQueryDTO(kind=EpisodeKind.DREAM)
         )
@@ -766,7 +771,12 @@ async def test_run_dream_cap_truncation(db_session: AsyncSession) -> None:
         ]
         top_ids = [eps[1].id, eps[0].id]
         gateway = FakeDreamGateway(
-            [_FACTS_EMPTY, _merge_response([_proposal("合并主题", top_ids)]), "今天发生了不少事。"]
+            [
+                _FACTS_EMPTY,
+                "[]",
+                _merge_response([_proposal("合并主题", top_ids)]),
+                "今天发生了不少事。",
+            ]
         )
         run = await dream_service.run_dream(
             db_session,
@@ -777,7 +787,7 @@ async def test_run_dream_cap_truncation(db_session: AsyncSession) -> None:
         )
     assert run.status == "success"
     assert run.stats.gated == 2
-    merge_prompt = gateway.calls[1]["messages"][0].content
+    merge_prompt = gateway.calls[2]["messages"][0].content
     assert f"事件 #{eps[2].id}" not in merge_prompt
     decision_by_id = {decision.episode_id: decision for decision in run.decisions}
     assert decision_by_id[eps[2].id].action == DreamDecisionAction.SKIPPED
@@ -798,7 +808,12 @@ async def test_run_dream_already_promoted_from_previous_success(
         first = await dream_service.run_dream(
             db_session,
             gateway=FakeDreamGateway(
-                [_FACTS_EMPTY, _merge_response([_proposal("首夜主题", [ep1.id])]), "第一天的日记。"]
+                [
+                    _FACTS_EMPTY,
+                    "[]",
+                    _merge_response([_proposal("首夜主题", [ep1.id])]),
+                    "第一天的日记。",
+                ]
             ),
             persona_name="大肥鱼",
             now_ms=NOW,
@@ -807,7 +822,12 @@ async def test_run_dream_already_promoted_from_previous_success(
         second = await dream_service.run_dream(
             db_session,
             gateway=FakeDreamGateway(
-                [_FACTS_EMPTY, _merge_response([_proposal("次夜主题", [ep2.id])]), "第二天的日记。"]
+                [
+                    _FACTS_EMPTY,
+                    "[]",
+                    _merge_response([_proposal("次夜主题", [ep2.id])]),
+                    "第二天的日记。",
+                ]
             ),
             persona_name="大肥鱼",
             now_ms=NOW,
@@ -857,6 +877,7 @@ async def test_run_dream_store_hits_apply_boost(db_session: AsyncSession) -> Non
         gateway = FakeDreamGateway(
             [
                 _FACTS_EMPTY,
+                "[]",
                 _merge_response([_proposal("运动习惯", [ep.id])]),
                 "今天主人去跑步了。",
             ]
@@ -916,7 +937,7 @@ async def test_run_dream_lifecycle_row_states(db_session: AsyncSession) -> None:
             db_session, _chat_dto(user="生命周期事件", importance=6, ts_ms=NOW - 1_000)
         )
         gateway = FakeDreamGateway(
-            [_FACTS_EMPTY, _merge_response([_proposal("生命主题", [ep.id])]), "今天的日记。"]
+            [_FACTS_EMPTY, "[]", _merge_response([_proposal("生命主题", [ep.id])]), "今天的日记。"]
         )
         run = await dream_service.run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
@@ -940,7 +961,7 @@ async def test_run_dream_failed_row_states(db_session: AsyncSession) -> None:
         await memory_service.append_episode(
             db_session, _chat_dto(user="失败路径事件", importance=6, ts_ms=NOW - 1_000)
         )
-        gateway = FakeDreamGateway([_FACTS_EMPTY, "坏输出"])
+        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "坏输出"])
         run = await dream_service.run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )
@@ -961,7 +982,12 @@ async def test_dream_runs_read_and_isolation(db_session: AsyncSession) -> None:
             await dream_service.run_dream(
                 db_session,
                 gateway=FakeDreamGateway(
-                    [_FACTS_EMPTY, _merge_response([_proposal("读面主题", [ep.id])]), "日记。"]
+                    [
+                        _FACTS_EMPTY,
+                        "[]",
+                        _merge_response([_proposal("读面主题", [ep.id])]),
+                        "日记。",
+                    ]
                 ),
                 persona_name="大肥鱼",
                 now_ms=NOW,
@@ -1093,7 +1119,7 @@ async def test_run_dream_promoted_lookback_window_excludes_old_runs(
         )
         await db_session.commit()
         gateway = FakeDreamGateway(
-            [_FACTS_EMPTY, _merge_response([_proposal("重新巩固", [ep.id])]), "今天的日记。"]
+            [_FACTS_EMPTY, "[]", _merge_response([_proposal("重新巩固", [ep.id])]), "今天的日记。"]
         )
         run = await dream_service.run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
@@ -1153,7 +1179,7 @@ async def test_run_dream_max_episodes_cap_truncates(db_session: AsyncSession) ->
             db_session, _chat_dto(user="深夜的事", importance=6, ts_ms=NOW - 1_000)
         )
         gateway = FakeDreamGateway(
-            [_FACTS_EMPTY, _merge_response([_proposal("截断主题", [early.id])]), "今天的日记。"]
+            [_FACTS_EMPTY, "[]", _merge_response([_proposal("截断主题", [early.id])]), "今天的日记。"]
         )
         run = await dream_service.run_dream(
             db_session,
@@ -1164,7 +1190,7 @@ async def test_run_dream_max_episodes_cap_truncates(db_session: AsyncSession) ->
         )
     assert run.status == "success"
     assert run.stats.candidates == 1  # 截断后仅 1 条可信事件
-    merge_prompt = gateway.calls[1]["messages"][0].content
+    merge_prompt = gateway.calls[2]["messages"][0].content
     assert f"事件 #{early.id}" in merge_prompt  # 时间序截断保留最早事件
     assert f"事件 #{late.id}" not in merge_prompt
     decision_ids = {decision.episode_id for decision in run.decisions}
@@ -1188,7 +1214,7 @@ async def test_run_dream_merge_interrupt_backfills_decisions(
         ep2 = await memory_service.append_episode(
             db_session, _chat_dto(user="中断前的事二", importance=6, ts_ms=NOW - 1_000)
         )
-        gateway = FailingDreamGateway([_FACTS_EMPTY])
+        gateway = FailingDreamGateway([_FACTS_EMPTY, "[]"])
         run = await dream_service.run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )
@@ -1201,7 +1227,7 @@ async def test_run_dream_merge_interrupt_backfills_decisions(
 
 
 # ---------------------------------------------------------------------------
-# 人物事实提取阶段（gate → facts → merge 的第二阶段）
+# 人物事实 / 技能挖矿阶段（gate → facts → skills → merge 的前序阶段）
 # ---------------------------------------------------------------------------
 
 
@@ -1269,6 +1295,7 @@ async def test_run_dream_facts_created_with_evidence_chain(db_session: AsyncSess
                         ),
                     ]
                 ),
+                "[]",
                 _merge_response([_proposal("口味偏好", [ep.id])]),
                 "今天主人聊到了喝茶。",
             ]
@@ -1316,6 +1343,7 @@ async def test_run_dream_facts_identical_content_refreshes_metadata(
         gateway = FakeDreamGateway(
             [
                 _facts_response([_fact_proposal("主人喜欢无糖乌龙茶", [ep.id], confidence=0.95)]),
+                "[]",
                 _merge_response([_proposal("口味偏好", [ep.id])]),
                 "今天的日记。",
             ]
@@ -1352,6 +1380,7 @@ async def test_run_dream_facts_dropped_items_counted(db_session: AsyncSession) -
                         _fact_proposal("主人每周跑步三次", [ep.id], category="context"),
                     ]
                 ),
+                "[]",
                 _merge_response([_proposal("运动习惯", [ep.id])]),
                 "今天的日记。",
             ]
@@ -1377,7 +1406,12 @@ async def test_run_dream_facts_proposal_cap(db_session: AsyncSession) -> None:
             for index in range(FACTS_PROPOSAL_CAP + 2)
         ]
         gateway = FakeDreamGateway(
-            [_facts_response(items), _merge_response([_proposal("日常", [ep.id])]), "日记。"]
+            [
+                _facts_response(items),
+                "[]",
+                _merge_response([_proposal("日常", [ep.id])]),
+                "日记。",
+            ]
         )
         run = await dream_service.run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
@@ -1435,6 +1469,7 @@ async def test_facts_service_persona_isolation_from_dream(
         gateway = FakeDreamGateway(
             [
                 _facts_response([_fact_proposal("主人喜欢猫", [ep.id])]),
+                "[]",
                 _merge_response([_proposal("宠物", [ep.id])]),
                 "日记。",
             ]
@@ -1471,15 +1506,15 @@ async def test_run_dream_peer_excluded_and_counted(db_session: AsyncSession) -> 
             )
         ).scalars().all()
         assert {row.id: row.provenance for row in rows}[peer.id] == MemoryProvenance.PEER
-        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "今天主人很开心。"])
+        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "[]", "今天主人很开心。"])
         run = await dream_service.run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )
     assert run.status == "success"
     assert run.stats.candidates == 1
     assert run.stats.skipped_peer == 1
-    merge_prompt = gateway.calls[1]["messages"][0].content
-    diary_prompt = gateway.calls[2]["messages"][0].content
+    merge_prompt = gateway.calls[2]["messages"][0].content
+    diary_prompt = gateway.calls[3]["messages"][0].content
     assert "别的鱼说主人其实讨厌甜食" not in merge_prompt
     assert f"事件 #{peer.id}" not in merge_prompt
     assert "别的鱼说主人其实讨厌甜食" not in diary_prompt

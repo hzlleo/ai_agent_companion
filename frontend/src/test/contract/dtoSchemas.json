@@ -164,6 +164,21 @@
         "schema_key": "FactRecordDTO"
       },
       {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "SkillCreateRequest",
+        "schema_key": "SkillCreateModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "SkillUpdateRequest",
+        "schema_key": "SkillUpdateModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "SkillRecord",
+        "schema_key": "SkillRecordDTO"
+      },
+      {
         "frontend_file": "frontend/src/types/memory.ts",
         "frontend_type": "EpisodeCreateRequest",
         "schema_key": "EpisodeCreateDTO"
@@ -2524,7 +2539,7 @@
           "type": "object"
         },
         "DreamRunStatsModel": {
-          "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``skipped_peer``：窗口内被硬排除的 peer 事件数（群聊同侪 /\n      其他智能体的发言——不晋升策展层、不作事实证据）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）；\n    - ``facts_created``：事实提取阶段新建的人物事实行数（新身份\n      事实 / 更正链首版的梦境侧产物）；\n    - ``facts_merged``：事实提取阶段收敛到既有现行事实的行数（同\n      归一化身份 → 置信度取最大值 + 证据合并的元数据刷新，不推进\n      版本）；\n    - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条\n      丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    skipped_peer: peer 硬排除计数（群聊同侪 / 其他智能体的发言）。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。\n    facts_created: 人物事实新建行数（事实提取阶段）。\n    facts_merged: 人物事实元数据刷新行数（事实提取阶段）。\n    facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。",
+          "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``skipped_peer``：窗口内被硬排除的 peer 事件数（群聊同侪 /\n      其他智能体的发言——不晋升策展层、不作事实证据）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）；\n    - ``facts_created``：事实提取阶段新建的人物事实行数（新身份\n      事实 / 更正链首版的梦境侧产物）；\n    - ``facts_merged``：事实提取阶段收敛到既有现行事实的行数（同\n      归一化身份 → 置信度取最大值 + 证据合并的元数据刷新，不推进\n      版本）；\n    - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条\n      丢弃计数，不整体失败）；\n    - ``skills_created``：技能挖矿阶段新建的技能行数（新 slug 的\n      mined 产物）；\n    - ``skills_merged``：技能挖矿阶段收敛到既有技能的行数（同 slug\n      → 置信度取最大值 + 触发短语并集的元数据刷新，不推进版本）；\n    - ``skills_dropped``：技能提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 5 条上限——逐条\n      丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    skipped_peer: peer 硬排除计数（群聊同侪 / 其他智能体的发言）。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。\n    facts_created: 人物事实新建行数（事实提取阶段）。\n    facts_merged: 人物事实元数据刷新行数（事实提取阶段）。\n    facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。\n    skills_created: 技能新建行数（技能挖矿阶段）。\n    skills_merged: 技能元数据刷新行数（技能挖矿阶段）。\n    skills_dropped: 技能提案丢弃计数（技能挖矿阶段）。",
           "properties": {
             "archived": {
               "default": 0,
@@ -2580,6 +2595,27 @@
               "description": "晋升事件数（新起链）",
               "minimum": 0,
               "title": "Promoted",
+              "type": "integer"
+            },
+            "skills_created": {
+              "default": 0,
+              "description": "技能新建行数（技能挖矿阶段）",
+              "minimum": 0,
+              "title": "Skills Created",
+              "type": "integer"
+            },
+            "skills_dropped": {
+              "default": 0,
+              "description": "技能提案丢弃计数（技能挖矿阶段）",
+              "minimum": 0,
+              "title": "Skills Dropped",
+              "type": "integer"
+            },
+            "skills_merged": {
+              "default": 0,
+              "description": "技能元数据刷新行数（技能挖矿阶段）",
+              "minimum": 0,
+              "title": "Skills Merged",
               "type": "integer"
             },
             "skipped_peer": {
@@ -2714,7 +2750,7 @@
       "type": "object"
     },
     "DreamRunStatsModel": {
-      "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``skipped_peer``：窗口内被硬排除的 peer 事件数（群聊同侪 /\n      其他智能体的发言——不晋升策展层、不作事实证据）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）；\n    - ``facts_created``：事实提取阶段新建的人物事实行数（新身份\n      事实 / 更正链首版的梦境侧产物）；\n    - ``facts_merged``：事实提取阶段收敛到既有现行事实的行数（同\n      归一化身份 → 置信度取最大值 + 证据合并的元数据刷新，不推进\n      版本）；\n    - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条\n      丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    skipped_peer: peer 硬排除计数（群聊同侪 / 其他智能体的发言）。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。\n    facts_created: 人物事实新建行数（事实提取阶段）。\n    facts_merged: 人物事实元数据刷新行数（事实提取阶段）。\n    facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。",
+      "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``skipped_peer``：窗口内被硬排除的 peer 事件数（群聊同侪 /\n      其他智能体的发言——不晋升策展层、不作事实证据）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）；\n    - ``facts_created``：事实提取阶段新建的人物事实行数（新身份\n      事实 / 更正链首版的梦境侧产物）；\n    - ``facts_merged``：事实提取阶段收敛到既有现行事实的行数（同\n      归一化身份 → 置信度取最大值 + 证据合并的元数据刷新，不推进\n      版本）；\n    - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条\n      丢弃计数，不整体失败）；\n    - ``skills_created``：技能挖矿阶段新建的技能行数（新 slug 的\n      mined 产物）；\n    - ``skills_merged``：技能挖矿阶段收敛到既有技能的行数（同 slug\n      → 置信度取最大值 + 触发短语并集的元数据刷新，不推进版本）；\n    - ``skills_dropped``：技能提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 5 条上限——逐条\n      丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    skipped_peer: peer 硬排除计数（群聊同侪 / 其他智能体的发言）。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。\n    facts_created: 人物事实新建行数（事实提取阶段）。\n    facts_merged: 人物事实元数据刷新行数（事实提取阶段）。\n    facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。\n    skills_created: 技能新建行数（技能挖矿阶段）。\n    skills_merged: 技能元数据刷新行数（技能挖矿阶段）。\n    skills_dropped: 技能提案丢弃计数（技能挖矿阶段）。",
       "properties": {
         "archived": {
           "default": 0,
@@ -2770,6 +2806,27 @@
           "description": "晋升事件数（新起链）",
           "minimum": 0,
           "title": "Promoted",
+          "type": "integer"
+        },
+        "skills_created": {
+          "default": 0,
+          "description": "技能新建行数（技能挖矿阶段）",
+          "minimum": 0,
+          "title": "Skills Created",
+          "type": "integer"
+        },
+        "skills_dropped": {
+          "default": 0,
+          "description": "技能提案丢弃计数（技能挖矿阶段）",
+          "minimum": 0,
+          "title": "Skills Dropped",
+          "type": "integer"
+        },
+        "skills_merged": {
+          "default": 0,
+          "description": "技能元数据刷新行数（技能挖矿阶段）",
+          "minimum": 0,
+          "title": "Skills Merged",
           "type": "integer"
         },
         "skipped_peer": {
@@ -7193,6 +7250,267 @@
         "bound"
       ],
       "title": "RoleBindingDTO",
+      "type": "object"
+    },
+    "SkillCreateModel": {
+      "description": "技能创建入参（管理面手工录入面）。\n\nAttributes:\n    name: 技能名（1-120 字符——slug 由服务层按名称归一化派生）。\n    description: 何时使用的触发描述（1-500 字符）。\n    triggers: 触发短语（1-8 条、每条 1-40 字符——主人可能说出的\n        字面短语）。\n    content: markdown 步骤正文（1-8000 字符）。\n    confidence: 置信度（0-1；缺省 0.6——手工录入属较高可信）。",
+      "properties": {
+        "confidence": {
+          "default": 0.6,
+          "description": "置信度（0-1）",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "content": {
+          "description": "markdown 步骤正文（1-8000 字符）",
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "description": {
+          "description": "何时使用的触发描述（1-500 字符）",
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "name": {
+          "description": "技能名（1-120 字符）",
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "triggers": {
+          "description": "触发短语（1-8 条、每条 1-40 字符）",
+          "items": {
+            "maxLength": 40,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Triggers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "triggers",
+        "content"
+      ],
+      "title": "SkillCreateModel",
+      "type": "object"
+    },
+    "SkillRecordDTO": {
+      "$defs": {
+        "SkillSource": {
+          "description": "技能来源值域（ff_persona_skills.source）。\n\n- ``manual``：管理面手工录入（不缺省进入梦境提案）；\n- ``mined``：夜间梦境从历史事件中挖矿产出（与手工行同等可编辑）。",
+          "enum": [
+            "manual",
+            "mined"
+          ],
+          "title": "SkillSource",
+          "type": "string"
+        },
+        "SkillStatus": {
+          "description": "技能状态值域（ff_persona_skills.status）。\n\n- ``active``：启用（参与 compose 匹配与注入）；\n- ``disabled``：停用（不参与匹配，面板仍可查看 / 编辑 / 重新启用）。",
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "title": "SkillStatus",
+          "type": "string"
+        }
+      },
+      "description": "技能记录读取 DTO（ORM 行归一——管理面 / 面板 / compose 读取面）。\n\nAttributes:\n    id: 技能主键（编辑 / 停用 / 删除锚点）。\n    name: 技能名。\n    slug: 归一化 kebab 标识（同人格唯一）。\n    description: 何时使用的触发描述。\n    triggers: 触发短语列表。\n    content: markdown 步骤正文。\n    status: 状态（active / disabled）。\n    source: 来源（manual / mined）。\n    confidence: 置信度（0-1）。\n    use_count: compose 命中次数（写读强化轴）。\n    last_used_ms: 最近一次命中时间（epoch 毫秒；未命中为 None）。\n    version: 原地编辑版本号（首版 1）。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒）。",
+      "properties": {
+        "confidence": {
+          "description": "置信度（0-1）",
+          "title": "Confidence",
+          "type": "number"
+        },
+        "content": {
+          "description": "markdown 步骤正文",
+          "title": "Content",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "落库时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "description": {
+          "description": "何时使用的触发描述",
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "description": "技能主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "last_used_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "最近一次命中时间（epoch 毫秒）",
+          "title": "Last Used Ms"
+        },
+        "name": {
+          "description": "技能名",
+          "title": "Name",
+          "type": "string"
+        },
+        "slug": {
+          "description": "归一化 kebab 标识（同人格唯一）",
+          "title": "Slug",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SkillSource",
+          "description": "来源（manual/mined）"
+        },
+        "status": {
+          "$ref": "#/$defs/SkillStatus",
+          "description": "状态（active/disabled）"
+        },
+        "triggers": {
+          "description": "触发短语列表",
+          "items": {
+            "type": "string"
+          },
+          "title": "Triggers",
+          "type": "array"
+        },
+        "updated_at": {
+          "description": "行更新时间（epoch 毫秒）",
+          "title": "Updated At",
+          "type": "integer"
+        },
+        "use_count": {
+          "description": "compose 命中次数",
+          "title": "Use Count",
+          "type": "integer"
+        },
+        "version": {
+          "description": "原地编辑版本号（首版 1）",
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "slug",
+        "description",
+        "content",
+        "status",
+        "source",
+        "confidence",
+        "use_count",
+        "version",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "SkillRecordDTO",
+      "type": "object"
+    },
+    "SkillUpdateModel": {
+      "description": "技能编辑入参（原地更新——字段全部可选，版本递增）。\n\n编辑不产生历史行（技能是操作指令而非信念断言，理由见 ``skills_orm``\n模块文档）；``name`` 变更会重新派生 slug 并按唯一键校验冲突。\n\nAttributes:\n    name: 新技能名（None = 保留）。\n    description: 新触发描述（None = 保留）。\n    triggers: 新触发短语集（None = 保留；提供时整集替换）。\n    content: 新步骤正文（None = 保留）。\n    confidence: 新置信度（None = 保留）。",
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新置信度（None = 保留）",
+          "title": "Confidence"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "maxLength": 8000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新步骤正文（None = 保留）",
+          "title": "Content"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新触发描述（None = 保留）",
+          "title": "Description"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新技能名（None = 保留）",
+          "title": "Name"
+        },
+        "triggers": {
+          "anyOf": [
+            {
+              "items": {
+                "maxLength": 40,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "新触发短语集（None = 保留；提供时整集替换）",
+          "title": "Triggers"
+        }
+      },
+      "title": "SkillUpdateModel",
       "type": "object"
     },
     "TraitComponentModel": {

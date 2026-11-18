@@ -17,6 +17,9 @@ API 等逻辑文件禁止内联 prompt 字符串）；模板文本变更属于�
     - :data:`FACTS_TEMPLATE` —— 人物事实提取模板（候选事件 → 关于
       主人的稳定事实提案；同样**人格中立**——提取只消费事件正文，
       收获物的归属由编排层写入人格作用域的事实表）；
+    - :data:`SKILLS_TEMPLATE` —— 技能挖矿模板（候选事件 + 既有技能清单
+      → 「以后怎么做」的程序性技能提案；**人格中立**——提取只看事件
+      正文与既有技能名，收获物归属由编排层写入人格作用域的技能表）；
     - :data:`DIARY_TEMPLATE` —— 日记模板（当日事件 → 第一人称中文
       日记；人格声线**仅**经调用方替换 ``{persona_name}`` 渲染变量进入
       ——模板本身不携带任何人格字段）。
@@ -35,22 +38,26 @@ from collections.abc import Sequence
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.memory.dtos import CuratedRecordDTO, EpisodeRecordDTO
 from packages.harness.memory.retrieval import flatten_episode_content
+from packages.harness.persona.skills_models import SkillRecordDTO
 
 __all__ = [
     "DREAMING_PROMPTS_VERSION",
     "MERGE_TEMPLATE_VERSION",
     "FACTS_TEMPLATE_VERSION",
+    "SKILLS_TEMPLATE_VERSION",
     "DIARY_TEMPLATE_VERSION",
     "MERGE_TEMPLATE",
     "FACTS_TEMPLATE",
+    "SKILLS_TEMPLATE",
     "DIARY_TEMPLATE",
     "render_merge_prompt",
     "render_facts_prompt",
+    "render_skills_prompt",
     "render_diary_prompt",
 ]
 
 #: 梦境 prompt 套件总版本（任一模板变更时同步上调）。
-DREAMING_PROMPTS_VERSION: str = "1.1.0"
+DREAMING_PROMPTS_VERSION: str = "1.2.0"
 
 # ---------------------------------------------------------------------------
 # 版本常量——逐模板独立版本（byte-lock 测试按模板分别锁定摘要）
@@ -60,6 +67,8 @@ DREAMING_PROMPTS_VERSION: str = "1.1.0"
 MERGE_TEMPLATE_VERSION: str = "1.0.0"
 #: 人物事实提取模板版本。
 FACTS_TEMPLATE_VERSION: str = "1.0.0"
+#: 技能挖矿模板版本。
+SKILLS_TEMPLATE_VERSION: str = "1.0.0"
 #: 日记模板版本。
 DIARY_TEMPLATE_VERSION: str = "1.0.0"
 
@@ -123,6 +132,40 @@ FACTS_TEMPLATE: str = (
     "2. 不臆造事件里没有的信息；一条事实只陈述一件事；最多输出 10 条；\n"
     "3. 每条事实必须由所引用事件的原文直接支撑（系统会从被引用事件里逐字截取证据摘录）；\n"
     "4. 事件编号之外的引用无效；没有值得保留的事实时输出空数组 []。"
+)
+
+#: 技能挖矿模板（人格中立；占位符 ``{episodes_block}`` / ``{skills_block}``
+#: ——编号即情景事件主键，提案 ``evidence_episode_ids`` 直接引用该编号；
+#: 既有技能清单只列名称与 slug，供模型沿用同一技能名以触发合并）。
+SKILLS_TEMPLATE: str = (
+    "【技能挖矿任务】\n"
+    "你正在执行一次夜间的技能整理。下面给出候选事件（已按编号列出）与既有技能清单。"
+    "请从这些事件里归纳出主人希望「以后怎么做」的稳定做法。\n"
+    "\n"
+    "【候选事件】\n"
+    "{episodes_block}\n"
+    "\n"
+    "【既有技能】\n"
+    "{skills_block}\n"
+    "\n"
+    "【输出要求】\n"
+    "严格输出一个 JSON 数组，不要输出数组以外的任何文字或代码块标记。"
+    "数组每个元素包含以下字段：\n"
+    '- "name"：技能名（简短中文短语，1-120 字符；与既有技能是同一做法时必须沿用该名称）；\n'
+    '- "description"：何时使用该技能的触发描述（简洁的中文陈述句，1-500 字符）；\n'
+    '- "triggers"：触发短语数组（1-8 条，每条 1-40 字符，写主人可能直接说出口的原话片段）；\n'
+    '- "content"：技能正文，markdown 步骤列表（1-4000 字符，用「1. 2. 3.」分步写清楚怎么做）；\n'
+    '- "confidence"：置信度，0 到 1 的小数；\n'
+    '- "evidence_episode_ids"：本条技能依据的候选事件编号列表（数组，至少一个，'
+    "必须是上面列出的编号）。\n"
+    "\n"
+    "【挖矿原则】\n"
+    "1. 只归纳可复用的做事方式：主人反复强调的做法、偏好的回复结构、固定的工作流、"
+    "明确的风格约定；一次性的具体事件不挖；\n"
+    "2. 技能描述「怎么做」，不重复事实层已有的「对方是谁」；\n"
+    "3. 触发短语必须是主人日常会说出的字面短语，不要写抽象类别名；\n"
+    "4. 与既有技能是同一做法时沿用其名称（系统按名称合并，不会重复新建）；\n"
+    "5. 不臆造事件里没有的要求；最多输出 5 条；没有可挖的技能时输出空数组 []。"
 )
 
 #: 日记模板（占位符 ``{persona_name}`` / ``{episodes_block}``——人格声线
@@ -214,6 +257,23 @@ def _format_diary_episodes(episodes: Sequence[EpisodeRecordDTO]) -> str:
     )
 
 
+def _format_skills_block(skills: Sequence[SkillRecordDTO]) -> str:
+    """既有启用技能 → 技能挖矿 prompt 的清单块。
+
+    只列名称与 slug（模型需要认出「这是同一技能」以触发合并；正文与
+    触发短语不进入 prompt——控制 prompt 体积并避免模型照抄旧内容）。
+
+    Args:
+        skills: 启用态技能记录（调用方保证已按 active 过滤、名称升序）。
+
+    Returns:
+        逐行文本块（``- 名称（slug: ...）``；无技能时为占位文本）。
+    """
+    if not skills:
+        return _EMPTY_BLOCK_PLACEHOLDER
+    return "\n".join(f"- {skill.name}（slug: {skill.slug}）" for skill in skills)
+
+
 def render_merge_prompt(
     candidates: Sequence[EpisodeRecordDTO],
     active_topics: Sequence[CuratedRecordDTO],
@@ -256,6 +316,32 @@ def render_facts_prompt(
     """
     template = template_override if template_override is not None else FACTS_TEMPLATE
     return template.format(episodes_block=_format_merge_episodes(candidates))
+
+
+def render_skills_prompt(
+    candidates: Sequence[EpisodeRecordDTO],
+    active_skills: Sequence[SkillRecordDTO],
+    *,
+    template_override: str | None = None,
+) -> str:
+    """渲染技能挖矿 prompt（人格中立——输入只有候选事件与既有技能名）。
+
+    Args:
+        candidates: 过门候选事件（分数降序——门控输出；编号即事件主键，
+            提案 ``evidence_episode_ids`` 引用该编号）。
+        active_skills: 启用态技能清单（只有名称 / slug 进入模板——供模型
+            沿用同名以触发合并；正文不进入 prompt）。
+        template_override: 覆写模板（None = 正典模板；非空时整体替换——
+            须自带 ``{episodes_block}`` / ``{skills_block}`` 同名占位符）。
+
+    Returns:
+        技能挖矿 prompt 最终文本。
+    """
+    template = template_override if template_override is not None else SKILLS_TEMPLATE
+    return template.format(
+        episodes_block=_format_merge_episodes(candidates),
+        skills_block=_format_skills_block(active_skills),
+    )
 
 
 def render_diary_prompt(

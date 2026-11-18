@@ -37,6 +37,9 @@ const STATS_ITEMS: { key: keyof DreamRunRecord['stats']; label: string }[] = [
   { key: 'skipped_untrusted', label: 'untrusted 硬排除' },
   { key: 'skipped_peer', label: 'peer 硬排除' },
   { key: 'failed', label: '提案丢弃' },
+  { key: 'skills_created', label: '技能新建' },
+  { key: 'skills_merged', label: '技能合并' },
+  { key: 'skills_dropped', label: '技能丢弃' },
 ]
 
 /** 日记事件面板：diary_episode_id 回源情景层（kind=dream 注记）。 */

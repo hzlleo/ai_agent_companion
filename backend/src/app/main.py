@@ -4,8 +4,8 @@
 
     - :func:`create_app` —— FastAPI 工厂（共享异常处理器 + personas /
       memories / usage / voice / look_at / models / search / reminders /
-      directives / facts / channels-qq / health 共十二路由 + 管理面
-      owner-token 鉴权（十管理路由统一挂接，health / qq webhook 豁免——
+      directives / facts / skills / channels-qq / health 共十三路由 + 管理面
+      owner-token 鉴权（十一管理路由统一挂接，health / qq webhook 豁免——
       豁免契约见 :func:`_include_routers`）+ CORS + lifespan）；
     - :func:`startup_app_state` / :func:`shutdown_app_state` —— **可独立
       驱动的纯异步函数对**（不藏在 lifespan 闭包内——测试无需 ASGI
@@ -105,6 +105,7 @@ from app.api.models import router as models_router
 from app.api.personas import router as personas_router
 from app.api.reminders import router as reminders_router
 from app.api.search import router as search_router
+from app.api.skills import router as skills_router
 from app.api.usage import router as usage_router
 from app.api.voice import router as voice_router
 from app.middleware.admin_auth import (
@@ -150,6 +151,7 @@ from packages.harness.persona.directives import DirectivesService
 from packages.harness.persona.directives_models import DirectiveCreateDTO
 from packages.harness.persona.facts import FactsService
 from packages.harness.persona.service import PersonaService
+from packages.harness.persona.skills import SkillsService
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
 from packages.harness.reminders.job import (
     REMINDER_SCAN_INTERVAL_SECONDS,
@@ -566,6 +568,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     )
     directives_service = DirectivesService()
     facts_service = FactsService()
+    skills_service = SkillsService()
 
     async def _capture_directive(text: str) -> bool:
         """对话捕获长期指令（DIRECTIVE 快径副作用面——恒不抛异常）。
@@ -611,6 +614,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
                 intent_shortcut=intent_shortcut,
                 directive_service=directives_service,
                 facts_reader=facts_service,
+                skills_reader=skills_service,
                 episode_sink=episode_sink,
             )
         browser_specs = getattr(app.state, "browser_tool_specs", None)
@@ -624,6 +628,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
                 intent_shortcut=intent_shortcut,
                 directive_service=directives_service,
                 facts_reader=facts_service,
+                skills_reader=skills_service,
                 episode_sink=episode_sink,
             )
         return ChatService(
@@ -632,6 +637,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
             intent_shortcut=intent_shortcut,
             directive_service=directives_service,
             facts_reader=facts_service,
+            skills_reader=skills_service,
             episode_sink=episode_sink,
         )
 
@@ -1086,8 +1092,8 @@ def _include_routers(app: FastAPI) -> None:
     挂载契约（R2 审计放行条件——新端点不得扩张无鉴权面）：
 
         - **受保护路由集**：personas / memories / usage / voice /
-          look_at / models / search / reminders / directives / facts 十个
-          管理路由统一挂 ``require_admin_token``
+          look_at / models / search / reminders / directives / facts /
+          skills 十一个管理路由统一挂 ``require_admin_token``
           依赖——经单一 ``APIRouter(dependencies=[...])`` 包装路由**一次
           注册**（依赖定义在 ``app/middleware/admin_auth``；token 经
           ``ServerConfig.admin_token_env`` env 间接，空 = 鉴权关闭）；
@@ -1116,6 +1122,7 @@ def _include_routers(app: FastAPI) -> None:
     admin_api.include_router(reminders_router)
     admin_api.include_router(directives_router)
     admin_api.include_router(facts_router)
+    admin_api.include_router(skills_router)
     app.include_router(admin_api)
     # 豁免面（见本函数 docstring 豁免契约——不挂 require_admin_token）。
     app.include_router(qq_channels_router)

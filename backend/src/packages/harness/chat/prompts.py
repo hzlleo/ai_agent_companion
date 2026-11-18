@@ -29,7 +29,9 @@
     - :data:`DIRECTIVES_BLOCK_TEMPLATE`       —— 长期指令块（USER.md 式
       常备指令注入——R2b D7-14；截断说明见 :data:`DIRECTIVES_TRUNCATION_NOTE`）；
     - :data:`FACTS_BLOCK_TEMPLATE`            —— 人物事实块（【关于对方】
-      结构化事实注入——高置信事实按类别标签逐行列出；无事实不注入）。
+      结构化事实注入——高置信事实按类别标签逐行列出；无事实不注入）；
+    - :data:`SKILLS_BLOCK_TEMPLATE`           —— 相关技能块（【相关技能】
+      命中当前用户文本的程序性技能注入——命中才注入，总字符 2000 帽）。
 
 渲染函数（纯函数——只做文本装配，不做条目选择 / 关键词匹配等逻辑；
 世界书筛选逻辑在 service 层）：chara card 字段 → 上述模板的最终文本。
@@ -43,6 +45,7 @@ from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
     CharaCardModel,
 )
+from packages.harness.persona.skills_models import SKILL_COMPOSE_MAX_CHARS, SkillRecordDTO
 
 __all__ = [
     "PROMPTS_VERSION",
@@ -55,8 +58,10 @@ __all__ = [
     "EMOTION_STATE_TEMPLATE_VERSION",
     "DIRECTIVES_BLOCK_TEMPLATE_VERSION",
     "FACTS_BLOCK_TEMPLATE_VERSION",
+    "SKILLS_BLOCK_TEMPLATE_VERSION",
     "DIRECTIVES_MAX_ENTRIES",
     "DIRECTIVES_MAX_CHARS",
+    "SKILL_COMPOSE_MAX_CHARS",
     "CHARTER_TEMPLATE",
     "PERSONA_NAME_HEADER_TEMPLATE",
     "PERSONA_DESCRIPTION_SECTION_TEMPLATE",
@@ -71,8 +76,10 @@ __all__ = [
     "DIRECTIVES_BLOCK_TEMPLATE",
     "DIRECTIVES_TRUNCATION_NOTE",
     "FACTS_BLOCK_TEMPLATE",
+    "SKILLS_BLOCK_TEMPLATE",
     "render_directives_block",
     "render_facts_block",
+    "render_skills_block",
     "render_charter",
     "render_persona_system_prompt",
     "render_world_book_block",
@@ -83,7 +90,7 @@ __all__ = [
 ]
 
 #: prompt 套件总版本（任一模板变更时同步上调）。
-PROMPTS_VERSION: str = "1.3.0"
+PROMPTS_VERSION: str = "1.4.0"
 
 # ---------------------------------------------------------------------------
 # 版本常量——逐模板独立版本（byte-lock 测试按模板分别锁定摘要）
@@ -107,6 +114,8 @@ EMOTION_STATE_TEMPLATE_VERSION: str = "1.0.0"
 DIRECTIVES_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
 #: 人物事实块模板版本（【关于对方】结构化事实注入）。
 FACTS_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
+#: 相关技能块模板版本（【相关技能】程序性技能注入）。
+SKILLS_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
 
 #: 长期指令注入上限——条数（超出部分不进系统提示；截断说明行提示存在
 #: 其余指令）。
@@ -188,6 +197,10 @@ DIRECTIVES_TRUNCATION_NOTE: str = "（其余长期指令已省略）"
 #: 人物事实块（占位符 ``{facts}``——每条一行「- 【类别标签】正文」；
 #: 无现行事实不注入；条数 / 字符帽由读取面施加，见 persona.facts）。
 FACTS_BLOCK_TEMPLATE: str = "【关于对方】\n{facts}"
+
+#: 相关技能块（占位符 ``{skills}``——命中技能逐条以「### 名称 + 正文」
+#: 渲染；无命中不注入；总字符帽由 :func:`render_skills_block` 施加）。
+SKILLS_BLOCK_TEMPLATE: str = "【相关技能】\n{skills}"
 
 # ---------------------------------------------------------------------------
 # 渲染函数（纯文本装配——无状态 / 无 I/O / 无条目选择逻辑）
@@ -327,6 +340,51 @@ def render_facts_block(facts: Sequence[str]) -> str:
     if not lines:
         return ""
     return FACTS_BLOCK_TEMPLATE.format(facts="\n".join(lines))
+
+
+def render_skills_block(
+    skills: Sequence[SkillRecordDTO],
+    *,
+    max_chars: int = SKILL_COMPOSE_MAX_CHARS,
+) -> str:
+    """渲染相关技能块（【相关技能】——命中当前用户文本的技能注入）。
+
+    渲染语义（锁定）：每条技能以 ``### 名称`` 标题行 + markdown 正文渲染，
+    技能之间空行分隔；累计字符（含标题、换行与分隔）不超过
+    ``max_chars``（缺省
+    :data:`~packages.harness.persona.skills_models.SKILL_COMPOSE_MAX_CHARS`）。
+    预算不足时按出现顺序截断：当前技能正文截到剩余预算即停止（不继续
+    追加后续技能——命中顺序已按使用次数降序，先注入的优先级更高）。
+    空列表返回空串（组装链跳过空块）。
+
+    Args:
+        skills: 命中技能记录（服务层已按使用次数降序、条数帽裁剪；
+            调用方保证顺序）。
+        max_chars: 总字符预算（含标题与分隔；缺省 2000）。
+
+    Returns:
+        相关技能块文本；无技能或预算容不下任何标题时返回空串。
+    """
+    if not skills:
+        return ""
+    sections: list[str] = []
+    used_chars = 0
+    for skill in skills:
+        header = f"### {skill.name}\n"
+        separator_len = 2 if sections else 0
+        remaining = max_chars - used_chars - separator_len
+        if remaining <= len(header):
+            break
+        body = skill.content.strip()
+        body_budget = remaining - len(header)
+        body_text = body[:body_budget]
+        sections.append(header + body_text)
+        used_chars += separator_len + len(header) + len(body_text)
+        if len(body_text) < len(body):
+            break
+    if not sections:
+        return ""
+    return SKILLS_BLOCK_TEMPLATE.format(skills="\n\n".join(sections))
 
 
 def render_post_history_message(card: CharaCardModel) -> str:

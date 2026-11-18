@@ -103,6 +103,11 @@ from packages.harness.persona.facts_models import (
     FactEvidenceRefModel,
     FactRecordDTO,
 )
+from packages.harness.persona.skills_models import (
+    SkillCreateModel,
+    SkillRecordDTO,
+    SkillUpdateModel,
+)
 from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
     CharaBookModel,
@@ -247,6 +252,10 @@ def build_manifest() -> list[SchemaExportEntry]:
         SchemaExportEntry("FactCreateDTO", FactCreateDTO, "FactCreateRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("FactCorrectDTO", FactCorrectDTO, "FactCorrectRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("FactRecordDTO", FactRecordDTO, "FactRecord", _FRONTEND_PERSONA),
+        # persona 域——程序性技能（R2c；触发短语 / 原地版本 / 启用状态）。
+        SchemaExportEntry("SkillCreateModel", SkillCreateModel, "SkillCreateRequest", _FRONTEND_PERSONA),
+        SchemaExportEntry("SkillUpdateModel", SkillUpdateModel, "SkillUpdateRequest", _FRONTEND_PERSONA),
+        SchemaExportEntry("SkillRecordDTO", SkillRecordDTO, "SkillRecord", _FRONTEND_PERSONA),
         # memory 域——情景事件。
         SchemaExportEntry("EpisodeCreateDTO", EpisodeCreateDTO, "EpisodeCreateRequest", _FRONTEND_MEMORY),
         SchemaExportEntry("EpisodeRecordDTO", EpisodeRecordDTO, "EpisodeRecord", _FRONTEND_MEMORY),

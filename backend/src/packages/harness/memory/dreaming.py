@@ -24,18 +24,24 @@
           身份收敛（同身份现行事实只做置信度最大值 + 证据合并的元数据刷新
           ——统计 facts_merged；新身份落 active 行——统计 facts_created；
           丢弃条目录入 facts_dropped）
-        ↓ ⑦ LLM 合并（ModelRole.DREAM，purpose="dream"——人格中立 prompt）：
+        ↓ ⑦ LLM 技能挖矿（ModelRole.DREAM，purpose="dream"——人格中立
+          prompt）：严格 JSON 数组提案 → 解析（剥代码围栏 + 逐条 Model Class
+          校验）→ 证据编号 ⊆ 候选 / 置信度下限 / 单次 5 条上限复核 →
+          upsert_mined（同 slug 既有技能只做置信度最大值 + 触发短语并集的
+          元数据刷新——统计 skills_merged；新 slug 落 active 行——统计
+          skills_created；丢弃条目录入 skills_dropped）
+        ↓ ⑧ LLM 合并（ModelRole.DREAM，purpose="dream"——人格中立 prompt）：
           严格 JSON 数组提案 → 解析（剥代码围栏 + 逐条 Model Class 校验）
-        ↓ ⑧ 逐条提案复核（merged_from ⊆ 候选 id——未知引用丢弃计数）→
+        ↓ ⑨ 逐条提案复核（merged_from ⊆ 候选 id——未知引用丢弃计数）→
           upsert_curated（provenance=agent——supersede 语义自动推进链）
-        ↓ ⑨ 日记（dream 角色）：当日可信事件 → 第一人称日记 →
+        ↓ ⑩ 日记（dream 角色）：当日可信事件 → 第一人称日记 →
           append_episode（kind=dream / source="dream:diary" / provenance=agent）
-        ↓ ⑩ 生命周期归档（**纯规则**，零模型调用）：既有 active 策展行按
+        ↓ ⑪ 生命周期归档（**纯规则**，零模型调用）：既有 active 策展行按
           memory.lifecycle.should_archive 判定 → archive_curated（执行点
           复核 status=active，快照后已被取代的行跳过；status=archived +
           索引移除）→ stats.archived / decisions(action=archived) 只按
           实际归档集合生成
-        ↓ ⑪ DreamRunRow 终态落库（status/error/stats/decisions）→ 返回记录 DTO
+        ↓ ⑫ DreamRunRow 终态落库（status/error/stats/decisions）→ 返回记录 DTO
 
 冻结 / 置顶语义（生命周期保护面——文档化决策）：
 
@@ -61,17 +67,23 @@ fail-closed 语义（锁定决策，逐条）：
       段的既有事实写入同样已提交）；逐条事实提案失败（类别越界 / 正文
       越界 / 证据编号越出候选 / 置信度低于下限 / 超单次上限）→ 逐条丢弃
       计数（stats.facts_dropped），其余提案正常落库；
-    - **事实提取后置于规则门、前置于合并**（锁定阶段序）：事实与合并
-      消费**同一批过门候选**——事实是「对方是谁」的结构化蒸馏、合并是
-      「发生了什么」的策展蒸馏，两者互不阻断（事实阶段的丢弃只影响
-      事实表，不改变合并提案面）；
+    - **技能挖矿阶段 fail-closed（与事实 / 合并同轴）**：技能提取的输出
+      结构失败（非 JSON / 非数组 / 空输出 / 调用异常）→ 运行标记 failed，
+      **零合并 / 零日记**（事实阶段与技能阶段已提交的写入保留）；逐条
+      技能提案失败（名称 / 描述 / 触发短语 / 正文越界、证据编号越出候选、
+      置信度低于下限、超单次 5 条上限）→ 逐条丢弃计数
+      （stats.skills_dropped），其余提案正常落库；
+    - **事实提取后置于规则门、前置于技能挖矿与合并**（锁定阶段序）：
+      事实、技能与合并消费**同一批过门候选**——事实是「对方是谁」、
+      技能是「事情怎么做」、合并是「发生了什么」的三层蒸馏，彼此互不
+      阻断（单层丢弃只影响该层产物，不改变其他层的提案面）；
     - **日记后置于晋升**（文档化排序决策）：晋升全部提交后才生成日记
       ——日记失败标记运行 failed 但**保留已提交的晋升并在 decisions
       中如实记录**（晋升是本任务的主产物、日记是叙事附产物；倒序会让
       日记失败回滚掉已有效的记忆巩固，代价更高）；
-    - **合并中断决策补齐**：事实提取 / 合并 / 晋升阶段异常中断时，过门
-      但未决策的候选事件补 skipped 决策（reason 标注中断阶段）——失败
-      运行的决策面对全部可信候选同样全覆盖；
+    - **合并中断决策补齐**：事实提取 / 技能挖矿 / 合并 / 晋升阶段异常
+      中断时，过门但未决策的候选事件补 skipped 决策（reason 标注中断
+      阶段）——失败运行的决策面对全部可信候选同样全覆盖；
     - **孤儿 running 行收敛**：run_dream 入口把本人格
       ``started_ms < now - stale_running_threshold_ms`` 且无终态的
       running 行批量置 failed（error=进程崩溃遗留）——进程崩溃是
@@ -120,12 +132,14 @@ from packages.harness.memory.dreaming_models import (
     DreamRunRecordDTO,
     DreamRunStatsModel,
     DreamRunStatus,
+    DreamSkillProposedItemModel,
 )
 from packages.harness.memory.dreaming_orm import DreamRunRow
 from packages.harness.memory.dreaming_prompts import (
     render_diary_prompt,
     render_facts_prompt,
     render_merge_prompt,
+    render_skills_prompt,
 )
 from packages.harness.memory.dtos import (
     CuratedRecordDTO,
@@ -155,6 +169,12 @@ from packages.harness.persona.facts_models import (
     FactEvidenceRefModel,
     PersonaFactSource,
 )
+from packages.harness.persona.skills import SkillsService
+from packages.harness.persona.skills_models import (
+    SKILL_MIN_CONFIDENCE,
+    SKILL_PROPOSAL_CAP,
+    SkillCreateModel,
+)
 
 __all__ = [
     "MS_PER_DAY",
@@ -167,6 +187,7 @@ __all__ = [
     "select_dream_candidates",
     "parse_merge_proposals",
     "parse_facts_proposals",
+    "parse_skills_proposals",
     "select_archive_candidates",
     "DreamService",
     "ARCHIVE_REASON_STRENGTH",
@@ -192,6 +213,8 @@ SKIP_REASON_FROZEN: str = "目标主题已冻结（frozen），提案丢弃"
 FACTS_PROPOSAL_CAP: int = 10
 #: 事实提取阶段中断的决策补齐理由（过门未决策候选的 skipped 理由）。
 _FACTS_INTERRUPT_REASON: str = "事实提取中断，本次未完成该事件的决策"
+#: 技能挖矿阶段中断的决策补齐理由（与事实 / 合并阶段措辞区分——可审计）。
+_SKILLS_INTERRUPT_REASON: str = "技能提取中断，本次未完成该事件的决策"
 #: 合并阶段中断的决策补齐理由（与事实阶段的措辞区分——可审计）。
 _MERGE_INTERRUPT_REASON: str = "合并中断，本次未完成该事件的决策"
 
@@ -503,6 +526,55 @@ def parse_facts_proposals(raw: str) -> tuple[list[DreamFactProposedItemModel], i
     return valid, dropped
 
 
+def parse_skills_proposals(raw: str) -> tuple[list[DreamSkillProposedItemModel], int]:
+    """解析 LLM 技能提案输出（robust parse——围栏剥离 + 逐条 Model Class 校验）。
+
+    结构性失败（整体 fail-closed——上抛由运行标记 failed，零合并 / 零
+    日记）与 :func:`parse_facts_proposals` 同轴：
+
+        - 输出不是合法 JSON（``json.JSONDecodeError``）；
+        - 顶层不是 JSON 数组。
+
+    逐条失败（丢弃计数，不整体失败）：元素无法通过
+    :class:`DreamSkillProposedItemModel` 校验（名称 / 描述 / 触发短语 /
+    正文越界、置信度越界、证据编号列表为空）。
+
+    Args:
+        raw: 模型原始输出文本（可含代码围栏）。
+
+    Returns:
+        ``(valid_items, dropped_count)`` 二元组。
+
+    Raises:
+        BusinessException: 结构性解析失败（``VALIDATION_ERROR``——运行
+            标记 failed 的原因面）。
+    """
+    text = _strip_code_fences(raw)
+    try:
+        payload: Any = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise BusinessException(
+            code=ErrorCode.VALIDATION_ERROR,
+            message="梦境技能提取输出不是合法 JSON",
+            details={"reason": str(exc)},
+        ) from exc
+    if not isinstance(payload, list):
+        raise BusinessException(
+            code=ErrorCode.VALIDATION_ERROR,
+            message="梦境技能提取输出必须是 JSON 数组",
+            details={"got": type(payload).__name__},
+        )
+    valid: list[DreamSkillProposedItemModel] = []
+    dropped = 0
+    for element in payload:
+        try:
+            valid.append(DreamSkillProposedItemModel.model_validate(element))
+        except ValidationError:
+            dropped += 1
+            logger.warning("梦境技能提案条目校验失败，已丢弃: {}", str(element)[:200])
+    return valid, dropped
+
+
 def _backfill_undecided(
     selected: Sequence[EpisodeRecordDTO],
     decided_ids: set[int],
@@ -591,6 +663,7 @@ class DreamService:
         memory_service: MemoryService | None = None,
         lifecycle_config: LifecycleConfig | None = None,
         facts_service: FactsService | None = None,
+        skills_service: SkillsService | None = None,
     ) -> None:
         """初始化服务。
 
@@ -602,6 +675,8 @@ class DreamService:
                 值——归档阶段的强度判定旋钮）。
             facts_service: 人物事实服务（None = 以本服务的记忆服务构造
                 默认实例——事实提取阶段的写入面与证据校验面）。
+            skills_service: 技能服务（None = 新实例——技能挖矿阶段的
+                写入面：同 slug 元数据合并 / 新 slug 落库）。
         """
         self._memory = memory_service if memory_service is not None else MemoryService()
         self._lifecycle_config = (
@@ -612,6 +687,7 @@ class DreamService:
             if facts_service is not None
             else FactsService(memory_service=self._memory)
         )
+        self._skills = skills_service if skills_service is not None else SkillsService()
 
     # ------------------------------------------------------------------
     # 夜间梦境主链路
@@ -789,13 +865,14 @@ class DreamService:
         stats: DreamRunStatsModel,
         decisions: list[DreamDecisionModel],
     ) -> None:
-        """执行取数 → 门控 → 事实提取 → 合并 → 晋升 → 日记 → 生命周期归档各阶段。
+        """执行取数 → 门控 → 事实提取 → 技能挖矿 → 合并 → 晋升 → 日记 → 生命周期归档各阶段。
 
-        阶段顺序锁定（gate → facts → merge → diary → archive → finalize）：
-        事实提取消费与合并同一批过门候选、且先于合并（事实是画像素描、
-        合并是事件蒸馏——事实层的丢弃不改变合并提案面）；日记之后执行
-        归档（归档是**整理产物**，失败归 run_dream 终态记录；归档前序
-        阶段异常时本次跳过归档——下个周期重试）。
+        阶段顺序锁定（gate → facts → skills → merge → diary → archive →
+        finalize）：事实提取、技能挖矿与合并消费同一批过门候选且依次
+        前置（事实是画像素描、技能是操作指令蒸馏、合并是事件蒸馏——
+        前序层的丢弃不改变后序层的提案面）；日记之后执行归档（归档是
+        **整理产物**，失败归 run_dream 终态记录；归档前序阶段异常时本次
+        跳过归档——下个周期重试）。
 
         Args:
             session: 注入的异步 Session。
@@ -857,6 +934,15 @@ class DreamService:
 
         if selected:
             await self._extract_facts(
+                session,
+                gateway=gateway,
+                persona_scope=persona_scope,
+                selected=selected,
+                stats=stats,
+                decisions=decisions,
+                decided_ids=decided_ids,
+            )
+            await self._extract_skills(
                 session,
                 gateway=gateway,
                 persona_scope=persona_scope,
@@ -1060,6 +1146,145 @@ class DreamService:
             quote=quote,
             ts_ms=record.ts_ms,
             provenance=record.provenance,
+        )
+
+    async def _extract_skills(
+        self,
+        session: AsyncSession,
+        *,
+        gateway: LlmGateway,
+        persona_scope: str,
+        selected: list[EpisodeRecordDTO],
+        stats: DreamRunStatsModel,
+        decisions: list[DreamDecisionModel],
+        decided_ids: set[int],
+    ) -> None:
+        """LLM 技能挖矿 + 逐条复核 + 落库（异常时补齐决策后上抛）。
+
+        异常中断决策补齐（与事实 / 合并阶段同一语义）：挖矿阶段任何异常
+        上抛前，过门但未决策的候选补 skipped 决策（reason 标注技能提取
+        中断）——失败运行的决策面对全部可信候选同样全覆盖。
+
+        Args:
+            session: 注入的异步 Session。
+            gateway: LLM 网关（dream 角色）。
+            persona_scope: 人格作用域 ID。
+            selected: 过门候选（分数降序——与事实 / 合并阶段同一批）。
+            stats: 运行统计（skills_created / skills_merged /
+                skills_dropped 就地累加）。
+            decisions: 决策列表（中断补齐时就地追加）。
+            decided_ids: 已决策事件 id 集（就地更新——防重复决策）。
+
+        Raises:
+            _DreamPhaseError: 模型返回空内容（fail-closed——零合并 / 零日记）。
+            BusinessException: 解析结构失败 / LLM 调用异常 / 落库失败（归
+                run_dream 终态记录）。
+        """
+        try:
+            await self._extract_skills_inner(
+                session,
+                gateway=gateway,
+                persona_scope=persona_scope,
+                selected=selected,
+                stats=stats,
+            )
+        except Exception:
+            _backfill_undecided(selected, decided_ids, decisions, reason=_SKILLS_INTERRUPT_REASON)
+            raise
+
+    async def _extract_skills_inner(
+        self,
+        session: AsyncSession,
+        *,
+        gateway: LlmGateway,
+        persona_scope: str,
+        selected: list[EpisodeRecordDTO],
+        stats: DreamRunStatsModel,
+    ) -> None:
+        """技能挖矿主体（异常上抛由 ``_extract_skills`` 补决策）。
+
+        复核矩阵（逐条应用，文档化）：字段校验失败（解析级）→ 计数
+        ``skills_dropped``；证据编号越出候选集 → 丢弃计数；置信度低于
+        ``SKILL_MIN_CONFIDENCE`` → 丢弃计数；超出单次
+        ``SKILL_PROPOSAL_CAP`` 条 → 丢弃计数。通过复核的提案经
+        ``SkillsService.upsert_mined`` 落库：同 slug 既有技能走元数据
+        刷新（计数 ``skills_merged``）、新 slug 落 active 行（计数
+        ``skills_created``）。证据编号只作提案有效性校验——技能表不存
+        证据链（技能是操作指令，不是可溯源断言）。
+
+        Args:
+            session: 注入的异步 Session。
+            gateway: LLM 网关（dream 角色）。
+            persona_scope: 人格作用域 ID（用量归属）。
+            selected: 过门候选（分数降序）。
+            stats: 运行统计（三计数就地累加）。
+
+        Raises:
+            _DreamPhaseError: 模型返回空内容。
+            BusinessException: 解析结构失败 / LLM 调用异常 / 落库失败。
+        """
+        active_skills = await self._skills.active_skill_refs(session)
+        prompt = render_skills_prompt(selected, active_skills)
+        response = await gateway.chat_by_role(
+            ModelRole.DREAM,
+            [ChatMessageModel(role=ChatMessageRole.SYSTEM, content=prompt)],
+            persona_id=persona_scope,
+            purpose=DREAM_PURPOSE,
+        )
+        raw = response.content.strip()
+        if not raw:
+            raise _DreamPhaseError("梦境技能提取模型返回空内容")
+        valid_items, dropped_count = parse_skills_proposals(raw)
+        stats.skills_dropped += dropped_count
+        episodes_by_id = {record.id: record for record in selected}
+        accepted: list[DreamSkillProposedItemModel] = []
+        for item in valid_items:
+            if len(accepted) >= SKILL_PROPOSAL_CAP:
+                stats.skills_dropped += 1
+                logger.info("技能提案超出单次上限，已丢弃: name={}", item.name)
+                continue
+            unknown_ids = [
+                episode_id
+                for episode_id in item.evidence_episode_ids
+                if episode_id not in episodes_by_id
+            ]
+            if unknown_ids:
+                stats.skills_dropped += 1
+                logger.warning(
+                    "技能提案引用未知事件，已丢弃: name={}, unknown={}",
+                    item.name,
+                    unknown_ids,
+                )
+                continue
+            if item.confidence < SKILL_MIN_CONFIDENCE:
+                stats.skills_dropped += 1
+                logger.info(
+                    "技能提案置信度低于下限，已丢弃: name={}, confidence={:.2f}",
+                    item.name,
+                    item.confidence,
+                )
+                continue
+            accepted.append(item)
+        for item in accepted:
+            result = await self._skills.upsert_mined(
+                session,
+                SkillCreateModel(
+                    name=item.name,
+                    description=item.description,
+                    triggers=list(item.triggers),
+                    content=item.content,
+                    confidence=item.confidence,
+                ),
+            )
+            if result.created:
+                stats.skills_created += 1
+            else:
+                stats.skills_merged += 1
+        logger.info(
+            "梦境技能挖矿完成: created={}, merged={}, dropped={}",
+            stats.skills_created,
+            stats.skills_merged,
+            stats.skills_dropped,
         )
 
     async def _merge_and_promote(

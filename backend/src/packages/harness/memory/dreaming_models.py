@@ -21,6 +21,9 @@
     - :class:`DreamFactProposedItemModel` —— LLM 人物事实提案条目（事实
       提取阶段严格 JSON 数组输出的元素契约——类别 / 正文 1-200 /
       置信度 / 证据事件编号；校验失败即丢弃计数）；
+    - :class:`DreamSkillProposedItemModel` —— LLM 技能提案条目（技能挖矿
+      阶段严格 JSON 数组输出的元素契约——名称 / 描述 / 触发短语 /
+      markdown 正文 1-4000 / 置信度 / 证据事件编号；校验失败即丢弃计数）；
     - :class:`DreamRunRecordDTO`     —— 运行记录读取面（ORM 行归一）；
     - :class:`DreamRunQueryDTO`      —— 运行日志游标分页查询面；
     - :class:`DreamTriggerRequestDTO` —— 手工触发请求体（persona_id 可选
@@ -40,6 +43,13 @@ from pydantic import BaseModel, Field
 
 from packages.harness.memory.models import CuratedKind
 from packages.harness.persona.facts_models import PersonaFactCategory
+from packages.harness.persona.skills_models import (
+    SKILL_DESCRIPTION_MAX_LENGTH,
+    SKILL_MINED_CONTENT_MAX_LENGTH,
+    SKILL_NAME_MAX_LENGTH,
+    SKILL_TRIGGERS_MAX,
+    SkillTriggerModel,
+)
 
 __all__ = [
     "DreamRunStatus",
@@ -49,6 +59,7 @@ __all__ = [
     "DreamDecisionModel",
     "DreamProposedItemModel",
     "DreamFactProposedItemModel",
+    "DreamSkillProposedItemModel",
     "DreamRunRecordDTO",
     "DreamRunQueryDTO",
     "DreamTriggerRequestDTO",
@@ -177,6 +188,13 @@ class DreamRunStatsModel(BaseModel):
           版本）；
         - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号
           越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条
+          丢弃计数，不整体失败）；
+        - ``skills_created``：技能挖矿阶段新建的技能行数（新 slug 的
+          mined 产物）；
+        - ``skills_merged``：技能挖矿阶段收敛到既有技能的行数（同 slug
+          → 置信度取最大值 + 触发短语并集的元数据刷新，不推进版本）；
+        - ``skills_dropped``：技能提案丢弃计数（字段校验失败 / 证据编号
+          越出候选集 / 置信度低于提取下限 / 超出单次 5 条上限——逐条
           丢弃计数，不整体失败）。
 
     Attributes:
@@ -191,6 +209,9 @@ class DreamRunStatsModel(BaseModel):
         facts_created: 人物事实新建行数（事实提取阶段）。
         facts_merged: 人物事实元数据刷新行数（事实提取阶段）。
         facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。
+        skills_created: 技能新建行数（技能挖矿阶段）。
+        skills_merged: 技能元数据刷新行数（技能挖矿阶段）。
+        skills_dropped: 技能提案丢弃计数（技能挖矿阶段）。
     """
 
     candidates: int = Field(default=0, ge=0, description="可信候选事件数")
@@ -204,6 +225,9 @@ class DreamRunStatsModel(BaseModel):
     facts_created: int = Field(default=0, ge=0, description="人物事实新建行数（事实提取阶段）")
     facts_merged: int = Field(default=0, ge=0, description="人物事实元数据刷新行数（事实提取阶段）")
     facts_dropped: int = Field(default=0, ge=0, description="人物事实提案丢弃计数（事实提取阶段）")
+    skills_created: int = Field(default=0, ge=0, description="技能新建行数（技能挖矿阶段）")
+    skills_merged: int = Field(default=0, ge=0, description="技能元数据刷新行数（技能挖矿阶段）")
+    skills_dropped: int = Field(default=0, ge=0, description="技能提案丢弃计数（技能挖矿阶段）")
 
 
 class DreamDecisionModel(BaseModel):
@@ -277,6 +301,53 @@ class DreamFactProposedItemModel(BaseModel):
 
     category: PersonaFactCategory = Field(description="事实类别")
     content: str = Field(min_length=1, max_length=200, description="事实陈述（1-200 字符）")
+    confidence: float = Field(ge=0, le=1, description="置信度（0-1）")
+    evidence_episode_ids: list[int] = Field(
+        min_length=1, description="来源候选事件主键列表（至少一条）"
+    )
+
+
+class DreamSkillProposedItemModel(BaseModel):
+    """LLM 技能提案条目（技能挖矿阶段输出的严格 JSON 数组元素契约）。
+
+    校验语义（dreaming 编排逐条校验，失败丢弃并计入 ``skills_dropped``）：
+    name / description / triggers 条数与单条长度 / content 长度 /
+    confidence 0-1 由本 Model Class 边界强制；``evidence_episode_ids ⊆
+    候选事件 id 集`` 与置信度下限（``SKILL_MIN_CONFIDENCE``）由编排校验
+    （需要候选上下文与阈值）。
+
+    证据编号只作提案有效性校验（技能表不存证据链——技能是操作指令，
+    不是可溯源断言；事件回链的价值已在事实 / 策展层保留）。
+
+    Attributes:
+        name: 技能名（1-120 字符——服务层由此派生 slug）。
+        description: 何时使用的触发描述（1-500 字符）。
+        triggers: 触发短语（1-8 条、每条 1-40 字符——主人可能说出的
+            字面短语）。
+        content: markdown 步骤正文（1-4000 字符——挖矿面比手工面更窄）。
+        confidence: 置信度（0-1）。
+        evidence_episode_ids: 来源候选事件主键列表（至少一条——提案必须
+            有事件背书）。
+    """
+
+    name: str = Field(
+        min_length=1, max_length=SKILL_NAME_MAX_LENGTH, description="技能名（1-120 字符）"
+    )
+    description: str = Field(
+        min_length=1,
+        max_length=SKILL_DESCRIPTION_MAX_LENGTH,
+        description="何时使用的触发描述（1-500 字符）",
+    )
+    triggers: list[SkillTriggerModel] = Field(
+        min_length=1,
+        max_length=SKILL_TRIGGERS_MAX,
+        description="触发短语（1-8 条、每条 1-40 字符）",
+    )
+    content: str = Field(
+        min_length=1,
+        max_length=SKILL_MINED_CONTENT_MAX_LENGTH,
+        description="markdown 步骤正文（1-4000 字符）",
+    )
     confidence: float = Field(ge=0, le=1, description="置信度（0-1）")
     evidence_episode_ids: list[int] = Field(
         min_length=1, description="来源候选事件主键列表（至少一条）"
