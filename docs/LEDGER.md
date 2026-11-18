@@ -146,9 +146,9 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 - 测试环境：全异步 asyncio_mode=auto；SQLite 共享 fixture；不依赖真实配置；conftest 硬覆盖 env。
 - 关键模块坐标：harness/{core,config,database,pools,llm,usage,persona,chat,memory,channels,tools,duty,scheduler,voice,multimodal,search,emotion,intent,rhythm,reminders}、app/api/{personas,memories,usage,models,voice,look_at,facts,reminders,directives,skills,core_memory,health,channels_qq}、前台 pages/{personas,memories,usage,models}。
 
-**LLM 网关强制 logprobs 字段**：新版 vLLM 仅在请求显式携带 `logprobs/top_logprobs/prompt_logprobs` 时回传 logprob 数据（置信度计算输入面）——网关全请求（含流式/工具）固定携带（缺省 20/20，构造旋钮 None 可省略）；响应侧解析为 `content_logprobs/prompt_logprobs` 并派生 `mean_token_logprob/confidence`（exp 均值，观测信号）。
+**LLM 网关强制 logprobs 字段**：新版 vLLM 仅在请求显式携带 `logprobs/top_logprobs/prompt_logprobs` 时回传 logprob 数据（置信度计算输入面）——网关全请求（含流式/工具）固定携带（缺省 20/20，构造旋钮 None 可省略）；响应侧解析为 `content_logprobs/prompt_logprobs` 并派生 `mean_token_logprob/confidence`（exp 均值，观测信号）。已实现于 `feat/llm-confidence-logprobs`（`08dd81e`）；请求构造测试 7 例（含流式 / 工具分支 / 旋钮略省）全异步。
 
-### 当前切片：强制 logprobs 字段修正（feat/llm-confidence-logprobs）
+### 已完成切片：R2c 记忆能力（核心记忆 + 关系进展 + 前端面板）——PR#12 待合并
 **已完成**：
 1. 迁移 0015：`ff_core_memory_blocks`（四块唯一键 + persona 索引）与 `ff_core_memory_revisions`（block_id 级联外键 + block_id / ts_ms 索引；append-only）；降级先删修订表，block_id 索引随表清理（5320 方言面已真引擎验证）。
 2. `harness/persona/core_memory.py` / `core_memory_models.py` / `core_memory_orm.py`：四块懒建种子 / 主人编辑（版本 + 修订 + 锁定开关）/ 人格自编辑（锁定与目标全文超限可读拒绝、append 换行追加）/ 修订倒序读取 / `register_core_memory_tools`（`edit_core_memory` + `core_memory_session_id_var`）。
@@ -157,7 +157,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 5. 前端 `CoreMemoryPanel`（四块编辑卡 + 锁定 + 修订抽屉）+ types/api/hooks/msw/测试；DTO fixture 78 组双侧重生成。
 6. docs：persona.md 核心记忆一节 / chat.md 链路与工具闸 / README 行 / 本台账。
 **验证**：后端 2106 passed / 23 组覆盖率 / mypy 148 文件零问题 / ruff / 门禁集（36 项漂移 + noqa 冻结 + 注释门 + 棘轮）/ 活 SeekDB 6 用例；前端 555 passed / coverage / lint / build。
-**剩余**：c5 终验 PR（分支收敛 + PR 描述）。
+**剩余**：PR#12（head `9d6c331`，CI 四 job 全绿、CLEAN）待用户在页面合并；合并后三条堆叠分支（r2-defense / llm-confidence-logprobs / r2b-plus-intimacy）按 `rebase --onto origin/main <base>` 收敛并逐一开 PR。
 
 ### 已完成切片：R2b+ 甲套件 core（人格输出契约 + 合规守卫）
 **已完成**：
@@ -166,8 +166,8 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 3. `chat/service.py`：compose 链宪章之后、心情块之前恒注入角色契约（后续块序号顺移一位）；`reply` 在网关响应后、输出协议解析前检测助手腔并做一次强化重试（末尾角色提醒 system 块 + 提升温度、结果无条件采用、不循环；工具循环分支重试不带工具面与 tool 轮；`max_retries=0` 只记日志）；`stream_reply` 不重试（流式边界文档化）。
 4. 测试：`test_compliance_guard.py`（25 用例：四类信号矩阵 / 保守阈值 / 正常台词零误报 / 协议标签之后的开场判定 / 重试参数 / env 面）+ `test_chat_compliance.py`（11 用例：契约链位置 / 一次重试携带提醒与提升温度 / 两次违规只重试一次 / 停用与零重试 / 重试文本走协议解析 / 工具循环分支 / 流式不重试）+ prompts byte-lock 增补两条。
 5. docs：chat.md「人格输出契约与合规守卫」整节（契约五条 / 规则矩阵 / 重试语义 / 请求 JSON / 流式边界 / `COMPLIANCE_` env 表）+ backend README 行 + 本台账。
-**验证**：后端 2232 passed / 23 组覆盖率（harness/chat 95.9%）/ mypy 153 文件零问题 / ruff / 注释门 + noqa 冻结 + 沙盒漂移 36 / DTO fixture 零变更（78 组）；既有测试零改动（prompts 锁仅增补）。
-**剩余**：`COMPLIANCE_*` 四键纳入 `.env.example` / Setup Wizard 生成器（根脚本不在本切片允许清单）；sync-test 棘轮的 4 条同步用例在 `test_llm_logprobs.py`（属 logprobs 切片，非本切片新增）。
+**验证**（主 Agent 终验）：后端 2232 passed / 23 组覆盖率（harness/chat 95.9%）/ mypy 153 文件零问题 / ruff / 门禁链全绿（注释门 + noqa 冻结 + 沙盒漂移 36 + sync 棘轮 0）/ 活 SeekDB 6 用例 / DTO fixture 零变更（78 组）；既有测试零改动（prompts 锁仅增补）。
+**办结**：`COMPLIANCE_*` 四键已由主 Agent 纳入 `.env.example` / Setup Wizard 生成器（+15 行，闭包测试 51 绿）；`test_llm_logprobs.py` 4 条同步用例已在 logprobs 分支修正（等量重写 + 原文语义不动）。已提交并推送 `feat/r2b-plus-intimacy`（`60eee37`，堆叠于 `08dd81e` → `82cb052`）。
 
 ### 已完成切片：R2-defense（丙+丁——提示注入防线）
 **已完成**：
@@ -178,7 +178,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 5. 测试：`test_injection_guard.py`（机制）+ `test_prompt_injection_red_team.py`（38 条模板 / 20 阳性 / 18 阴性 + 服务层开关与流式）+ prompts byte-lock 增补；既有测试仅按新契约更新 3 处断言（tool 反馈包裹正文、resume 续聊当轮包裹）。
 6. docs：`backend/defense.md`（攻击面 × 防线 × 缺口矩阵 / 包裹格式 / 检测矩阵 / JSON 示例 / env 表）、chat.md / channels.md / backend README。
 **验证**：后端 2189 passed / 23 组覆盖率（harness/chat 95.5%）/ mypy 151 文件 / ruff / 注释门 + 棘轮 + noqa 冻结 + 漂移 36 / 活 SeekDB 6 用例；前端未改（DTO fixture 零变更）。
-**剩余**：`INJECTION_*` 四键纳入 `.env.example` / Setup Wizard 生成器（脚本不在本切片允许清单）；R2b+ 的 compliance_guard 联动按排期衔接。
+**办结**：`INJECTION_*` 四键已由主 Agent 纳入 `.env.example` / Setup Wizard 生成器（已验证两处各 4 键）；R2b+ 的 compliance_guard 联动已落地（见上节）。
 
 ## 6. 遗留与部署台账（非阻塞）
 
