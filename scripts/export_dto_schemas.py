@@ -97,6 +97,12 @@ from packages.harness.persona.directives_models import (
     DirectiveRecordDTO,
     DirectiveUpdateDTO,
 )
+from packages.harness.persona.facts_models import (
+    FactCorrectDTO,
+    FactCreateDTO,
+    FactEvidenceRefModel,
+    FactRecordDTO,
+)
 from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
     CharaBookModel,
@@ -236,6 +242,11 @@ def build_manifest() -> list[SchemaExportEntry]:
         SchemaExportEntry("DirectiveCreateDTO", DirectiveCreateDTO, "DirectiveCreateRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("DirectiveUpdateDTO", DirectiveUpdateDTO, "DirectiveUpdateRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("DirectiveRecordDTO", DirectiveRecordDTO, "DirectiveRecord", _FRONTEND_PERSONA),
+        # persona 域——人物事实（R2c；结构化事实 / 证据链 / 更正循环）。
+        SchemaExportEntry("FactEvidenceRefModel", FactEvidenceRefModel, "FactEvidenceRef", _FRONTEND_PERSONA),
+        SchemaExportEntry("FactCreateDTO", FactCreateDTO, "FactCreateRequest", _FRONTEND_PERSONA),
+        SchemaExportEntry("FactCorrectDTO", FactCorrectDTO, "FactCorrectRequest", _FRONTEND_PERSONA),
+        SchemaExportEntry("FactRecordDTO", FactRecordDTO, "FactRecord", _FRONTEND_PERSONA),
         # memory 域——情景事件。
         SchemaExportEntry("EpisodeCreateDTO", EpisodeCreateDTO, "EpisodeCreateRequest", _FRONTEND_MEMORY),
         SchemaExportEntry("EpisodeRecordDTO", EpisodeRecordDTO, "EpisodeRecord", _FRONTEND_MEMORY),

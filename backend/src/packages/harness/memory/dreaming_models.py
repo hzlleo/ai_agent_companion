@@ -18,6 +18,9 @@
       决策构成「已晋升事件集」——后续运行的跳过依据）；
     - :class:`DreamProposedItemModel` —— LLM 合并提案条目（梦境模型
       严格 JSON 数组输出的元素契约——校验失败即丢弃计数）；
+    - :class:`DreamFactProposedItemModel` —— LLM 人物事实提案条目（事实
+      提取阶段严格 JSON 数组输出的元素契约——类别 / 正文 1-200 /
+      置信度 / 证据事件编号；校验失败即丢弃计数）；
     - :class:`DreamRunRecordDTO`     —— 运行记录读取面（ORM 行归一）；
     - :class:`DreamRunQueryDTO`      —— 运行日志游标分页查询面；
     - :class:`DreamTriggerRequestDTO` —— 手工触发请求体（persona_id 可选
@@ -36,6 +39,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from packages.harness.memory.models import CuratedKind
+from packages.harness.persona.facts_models import PersonaFactCategory
 
 __all__ = [
     "DreamRunStatus",
@@ -44,6 +48,7 @@ __all__ = [
     "DreamRunStatsModel",
     "DreamDecisionModel",
     "DreamProposedItemModel",
+    "DreamFactProposedItemModel",
     "DreamRunRecordDTO",
     "DreamRunQueryDTO",
     "DreamTriggerRequestDTO",
@@ -162,7 +167,15 @@ class DreamRunStatsModel(BaseModel):
         - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物
           ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的
           记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions
-          的 ``frozen`` 理由）。
+          的 ``frozen`` 理由）；
+        - ``facts_created``：事实提取阶段新建的人物事实行数（新身份
+          事实 / 更正链首版的梦境侧产物）；
+        - ``facts_merged``：事实提取阶段收敛到既有现行事实的行数（同
+          归一化身份 → 置信度取最大值 + 证据合并的元数据刷新，不推进
+          版本）；
+        - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号
+          越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条
+          丢弃计数，不整体失败）。
 
     Attributes:
         candidates: 可信候选事件数。
@@ -172,6 +185,9 @@ class DreamRunStatsModel(BaseModel):
         skipped_untrusted: untrusted 硬排除计数。
         failed: 提案丢弃计数。
         archived: 策展记忆归档行数（生命周期阶段）。
+        facts_created: 人物事实新建行数（事实提取阶段）。
+        facts_merged: 人物事实元数据刷新行数（事实提取阶段）。
+        facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。
     """
 
     candidates: int = Field(default=0, ge=0, description="可信候选事件数")
@@ -181,6 +197,9 @@ class DreamRunStatsModel(BaseModel):
     skipped_untrusted: int = Field(default=0, ge=0, description="untrusted 硬排除计数")
     failed: int = Field(default=0, ge=0, description="提案丢弃计数")
     archived: int = Field(default=0, ge=0, description="策展记忆归档行数（生命周期阶段）")
+    facts_created: int = Field(default=0, ge=0, description="人物事实新建行数（事实提取阶段）")
+    facts_merged: int = Field(default=0, ge=0, description="人物事实元数据刷新行数（事实提取阶段）")
+    facts_dropped: int = Field(default=0, ge=0, description="人物事实提案丢弃计数（事实提取阶段）")
 
 
 class DreamDecisionModel(BaseModel):
@@ -202,9 +221,7 @@ class DreamDecisionModel(BaseModel):
             决策的主体是策展行；其余决策为 None）。
     """
 
-    episode_id: int = Field(
-        default=0, ge=0, description="情景事件主键（策展归档决策为 0）"
-    )
+    episode_id: int = Field(default=0, ge=0, description="情景事件主键（策展归档决策为 0）")
     topic: str = Field(default="", description="关联策展主题键（纯跳过为空串）")
     kind: CuratedKind | None = Field(default=None, description="关联策展类型（纯跳过为 None）")
     action: DreamDecisionAction = Field(description="决策动作")
@@ -235,6 +252,31 @@ class DreamProposedItemModel(BaseModel):
     content: str = Field(min_length=1, description="蒸馏后的记忆正文")
     importance: int = Field(ge=1, le=10, description="重要度（1-10）")
     merged_from: list[int] = Field(min_length=1, description="来源候选事件主键列表（至少一条）")
+
+
+class DreamFactProposedItemModel(BaseModel):
+    """LLM 人物事实提案条目（事实提取阶段输出的严格 JSON 数组元素契约）。
+
+    校验语义（dreaming 编排逐条校验，失败丢弃并计入 ``facts_dropped``）：
+    category 封闭值域 / content 1-200 字符 / confidence 0-1 由本 Model
+    Class 边界强制；``evidence_episode_ids ⊆ 候选事件 id 集`` 与置信度
+    下限（``FACT_MIN_CONFIDENCE``）由编排校验（需要候选上下文与阈值）。
+
+    Attributes:
+        category: 事实类别（preference / biography / relationship /
+            context）。
+        content: 事实陈述（1-200 字符——短事实陈述是提取面的锁定上限）。
+        confidence: 置信度（0-1）。
+        evidence_episode_ids: 来源候选事件主键列表（至少一条——事实必须
+            有事件背书）。
+    """
+
+    category: PersonaFactCategory = Field(description="事实类别")
+    content: str = Field(min_length=1, max_length=200, description="事实陈述（1-200 字符）")
+    confidence: float = Field(ge=0, le=1, description="置信度（0-1）")
+    evidence_episode_ids: list[int] = Field(
+        min_length=1, description="来源候选事件主键列表（至少一条）"
+    )
 
 
 class DreamRunRecordDTO(BaseModel):

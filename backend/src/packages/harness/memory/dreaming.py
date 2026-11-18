@@ -18,18 +18,24 @@
           失败 / 未注入降级 boost=0）
         ↓ ⑤ 规则门 select_dream_candidates（零模型调用——纯函数）：
           untrusted 硬排除 → 既往已晋升跳过 → 分数门 → 分数降序截断
-        ↓ ⑥ LLM 合并（ModelRole.DREAM，purpose="dream"——人格中立 prompt）：
+        ↓ ⑥ LLM 人物事实提取（ModelRole.DREAM，purpose="dream"——人格中立
+          prompt）：严格 JSON 数组提案 → 解析（剥代码围栏 + 逐条 Model Class
+          校验）→ 证据编号 ⊆ 候选 / 置信度下限 / 单次上限复核 → 归一化
+          身份收敛（同身份现行事实只做置信度最大值 + 证据合并的元数据刷新
+          ——统计 facts_merged；新身份落 active 行——统计 facts_created；
+          丢弃条目录入 facts_dropped）
+        ↓ ⑦ LLM 合并（ModelRole.DREAM，purpose="dream"——人格中立 prompt）：
           严格 JSON 数组提案 → 解析（剥代码围栏 + 逐条 Model Class 校验）
-        ↓ ⑦ 逐条提案复核（merged_from ⊆ 候选 id——未知引用丢弃计数）→
+        ↓ ⑧ 逐条提案复核（merged_from ⊆ 候选 id——未知引用丢弃计数）→
           upsert_curated（provenance=agent——supersede 语义自动推进链）
-        ↓ ⑧ 日记（dream 角色）：当日可信事件 → 第一人称日记 →
+        ↓ ⑨ 日记（dream 角色）：当日可信事件 → 第一人称日记 →
           append_episode（kind=dream / source="dream:diary" / provenance=agent）
-        ↓ ⑨ 生命周期归档（**纯规则**，零模型调用）：既有 active 策展行按
+        ↓ ⑩ 生命周期归档（**纯规则**，零模型调用）：既有 active 策展行按
           memory.lifecycle.should_archive 判定 → archive_curated（执行点
           复核 status=active，快照后已被取代的行跳过；status=archived +
           索引移除）→ stats.archived / decisions(action=archived) 只按
           实际归档集合生成
-        ↓ ⑩ DreamRunRow 终态落库（status/error/stats/decisions）→ 返回记录 DTO
+        ↓ ⑪ DreamRunRow 终态落库（status/error/stats/decisions）→ 返回记录 DTO
 
 冻结 / 置顶语义（生命周期保护面——文档化决策）：
 
@@ -49,13 +55,23 @@ fail-closed 语义（锁定决策，逐条）：
       failed，**零 upsert**（解析先于全部晋升——结构性失败不存在部分
       晋升态）；逐条提案校验失败（字段越界 / merged_from 未知引用）→
       该条丢弃计数（stats.failed），其余提案正常晋升；
+    - **事实提取阶段 fail-closed（与合并阶段同轴）**：事实提取的输出
+      结构失败（非 JSON / 非数组 / 空输出 / 调用异常）→ 运行标记
+      failed，**零合并 / 零日记**（前序阶段已提交的产物保留——事实阶
+      段的既有事实写入同样已提交）；逐条事实提案失败（类别越界 / 正文
+      越界 / 证据编号越出候选 / 置信度低于下限 / 超单次上限）→ 逐条丢弃
+      计数（stats.facts_dropped），其余提案正常落库；
+    - **事实提取后置于规则门、前置于合并**（锁定阶段序）：事实与合并
+      消费**同一批过门候选**——事实是「对方是谁」的结构化蒸馏、合并是
+      「发生了什么」的策展蒸馏，两者互不阻断（事实阶段的丢弃只影响
+      事实表，不改变合并提案面）；
     - **日记后置于晋升**（文档化排序决策）：晋升全部提交后才生成日记
       ——日记失败标记运行 failed 但**保留已提交的晋升并在 decisions
       中如实记录**（晋升是本任务的主产物、日记是叙事附产物；倒序会让
       日记失败回滚掉已有效的记忆巩固，代价更高）；
-    - **合并中断决策补齐**：合并 / 晋升阶段异常中断时，过门但未决策
-      的候选事件补 skipped 决策（reason=合并中断）——失败运行的决策
-      面对全部可信候选同样全覆盖；
+    - **合并中断决策补齐**：事实提取 / 合并 / 晋升阶段异常中断时，过门
+      但未决策的候选事件补 skipped 决策（reason 标注中断阶段）——失败
+      运行的决策面对全部可信候选同样全覆盖；
     - **孤儿 running 行收敛**：run_dream 入口把本人格
       ``started_ms < now - stale_running_threshold_ms`` 且无终态的
       running 行批量置 failed（error=进程崩溃遗留）——进程崩溃是
@@ -97,6 +113,7 @@ from packages.harness.llm.llm_models import ChatMessageModel, ChatMessageRole
 from packages.harness.memory.dreaming_models import (
     DreamDecisionAction,
     DreamDecisionModel,
+    DreamFactProposedItemModel,
     DreamJobConfig,
     DreamProposedItemModel,
     DreamRunQueryDTO,
@@ -105,7 +122,11 @@ from packages.harness.memory.dreaming_models import (
     DreamRunStatus,
 )
 from packages.harness.memory.dreaming_orm import DreamRunRow
-from packages.harness.memory.dreaming_prompts import render_diary_prompt, render_merge_prompt
+from packages.harness.memory.dreaming_prompts import (
+    render_diary_prompt,
+    render_facts_prompt,
+    render_merge_prompt,
+)
 from packages.harness.memory.dtos import (
     CuratedRecordDTO,
     CuratedUpsertDTO,
@@ -127,16 +148,25 @@ from packages.harness.memory.retrieval_models import (
 )
 from packages.harness.memory.service import MemoryService
 from packages.harness.memory.store import MemoryStore
+from packages.harness.persona.facts import FactsService
+from packages.harness.persona.facts_models import (
+    FACT_MIN_CONFIDENCE,
+    FactCreateDTO,
+    FactEvidenceRefModel,
+    PersonaFactSource,
+)
 
 __all__ = [
     "MS_PER_DAY",
     "MS_PER_HOUR",
     "DREAM_PURPOSE",
     "DIARY_SOURCE",
+    "FACTS_PROPOSAL_CAP",
     "recency_decay",
     "dream_score",
     "select_dream_candidates",
     "parse_merge_proposals",
+    "parse_facts_proposals",
     "select_archive_candidates",
     "DreamService",
     "ARCHIVE_REASON_STRENGTH",
@@ -158,6 +188,12 @@ _STALE_RUNNING_ERROR: str = "进程崩溃遗留，由调度收敛"
 ARCHIVE_REASON_STRENGTH: str = "strength_below_threshold"
 #: 冻结目标导致的提案丢弃理由（decisions.reason 片段——文档化 deltas）。
 SKIP_REASON_FROZEN: str = "目标主题已冻结（frozen），提案丢弃"
+#: 人物事实单次提取的条数上限（提案超出部分丢弃并计入 facts_dropped）。
+FACTS_PROPOSAL_CAP: int = 10
+#: 事实提取阶段中断的决策补齐理由（过门未决策候选的 skipped 理由）。
+_FACTS_INTERRUPT_REASON: str = "事实提取中断，本次未完成该事件的决策"
+#: 合并阶段中断的决策补齐理由（与事实阶段的措辞区分——可审计）。
+_MERGE_INTERRUPT_REASON: str = "合并中断，本次未完成该事件的决策"
 
 
 class _DreamPhaseError(Exception):
@@ -415,6 +451,83 @@ def parse_merge_proposals(raw: str) -> tuple[list[DreamProposedItemModel], int]:
     return valid, dropped
 
 
+def parse_facts_proposals(raw: str) -> tuple[list[DreamFactProposedItemModel], int]:
+    """解析 LLM 人物事实输出（robust parse——围栏剥离 + 逐条 Model Class 校验）。
+
+    结构性失败（整体 fail-closed——上抛由运行标记 failed，零合并 / 零
+    日记）与 :func:`parse_merge_proposals` 同轴：
+
+        - 输出不是合法 JSON（``json.JSONDecodeError``）；
+        - 顶层不是 JSON 数组。
+
+    逐条失败（丢弃计数，不整体失败）：元素无法通过
+    :class:`DreamFactProposedItemModel` 校验（类别越界 / 正文越界 /
+    置信度越界 / 证据编号列表为空）。
+
+    Args:
+        raw: 模型原始输出文本（可含代码围栏）。
+
+    Returns:
+        ``(valid_items, dropped_count)`` 二元组。
+
+    Raises:
+        BusinessException: 结构性解析失败（``VALIDATION_ERROR``——运行
+            标记 failed 的原因面）。
+    """
+    text = _strip_code_fences(raw)
+    try:
+        payload: Any = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise BusinessException(
+            code=ErrorCode.VALIDATION_ERROR,
+            message="梦境事实提取输出不是合法 JSON",
+            details={"reason": str(exc)},
+        ) from exc
+    if not isinstance(payload, list):
+        raise BusinessException(
+            code=ErrorCode.VALIDATION_ERROR,
+            message="梦境事实提取输出必须是 JSON 数组",
+            details={"got": type(payload).__name__},
+        )
+    valid: list[DreamFactProposedItemModel] = []
+    dropped = 0
+    for element in payload:
+        try:
+            valid.append(DreamFactProposedItemModel.model_validate(element))
+        except ValidationError:
+            dropped += 1
+            logger.warning("梦境事实提案条目校验失败，已丢弃: {}", str(element)[:200])
+    return valid, dropped
+
+
+def _backfill_undecided(
+    selected: Sequence[EpisodeRecordDTO],
+    decided_ids: set[int],
+    decisions: list[DreamDecisionModel],
+    *,
+    reason: str,
+) -> None:
+    """为过门但未决策的候选补 skipped 决策（失败路径的决策面全覆盖）。
+
+    Args:
+        selected: 过门候选（分数降序）。
+        decided_ids: 已决策事件 id 集（就地更新——防重复决策）。
+        decisions: 决策列表（就地追加）。
+        reason: 补齐理由（标注中断阶段——可审计）。
+    """
+    for candidate in selected:
+        if candidate.id in decided_ids:
+            continue
+        decisions.append(
+            DreamDecisionModel(
+                episode_id=candidate.id,
+                action=DreamDecisionAction.SKIPPED,
+                reason=reason,
+            )
+        )
+        decided_ids.add(candidate.id)
+
+
 def select_archive_candidates(
     topics: Sequence[CuratedRecordDTO],
     *,
@@ -464,8 +577,9 @@ class DreamService:
     ``persona.bind_persona_context`` 绑定人格上下文**（PersonaMixin 自动
     注入 / 自动过滤；缺上下文在运行行落库前即 fail loud）。
 
-    构造注入：``memory_service`` 可替换（默认新实例——无状态共享安全）；
-    网关 / 存储 / 时钟 / 参数逐次调用注入（run_dream 关键字参数）。
+    构造注入：``memory_service`` / ``facts_service`` 可替换（默认新实例
+    ——无状态共享安全）；网关 / 存储 / 时钟 / 参数逐次调用注入
+    （run_dream 关键字参数）。
     """
 
     def __init__(
@@ -473,6 +587,7 @@ class DreamService:
         *,
         memory_service: MemoryService | None = None,
         lifecycle_config: LifecycleConfig | None = None,
+        facts_service: FactsService | None = None,
     ) -> None:
         """初始化服务。
 
@@ -482,10 +597,17 @@ class DreamService:
                 同步移除检索索引）。
             lifecycle_config: 生命周期参数（None = LifecycleConfig 默认
                 值——归档阶段的强度判定旋钮）。
+            facts_service: 人物事实服务（None = 以本服务的记忆服务构造
+                默认实例——事实提取阶段的写入面与证据校验面）。
         """
         self._memory = memory_service if memory_service is not None else MemoryService()
         self._lifecycle_config = (
             lifecycle_config if lifecycle_config is not None else LifecycleConfig()
+        )
+        self._facts = (
+            facts_service
+            if facts_service is not None
+            else FactsService(memory_service=self._memory)
         )
 
     # ------------------------------------------------------------------
@@ -664,11 +786,13 @@ class DreamService:
         stats: DreamRunStatsModel,
         decisions: list[DreamDecisionModel],
     ) -> None:
-        """执行取数 → 门控 → 合并 → 晋升 → 日记 → 生命周期归档各阶段。
+        """执行取数 → 门控 → 事实提取 → 合并 → 晋升 → 日记 → 生命周期归档各阶段。
 
-        阶段顺序锁定（gate → merge → diary → archive → finalize）：日记
-        之后执行归档（归档是**整理产物**，失败归 run_dream 终态记录；
-        归档前序阶段异常时本次跳过归档——下个周期重试）。
+        阶段顺序锁定（gate → facts → merge → diary → archive → finalize）：
+        事实提取消费与合并同一批过门候选、且先于合并（事实是画像素描、
+        合并是事件蒸馏——事实层的丢弃不改变合并提案面）；日记之后执行
+        归档（归档是**整理产物**，失败归 run_dream 终态记录；归档前序
+        阶段异常时本次跳过归档——下个周期重试）。
 
         Args:
             session: 注入的异步 Session。
@@ -698,9 +822,7 @@ class DreamService:
             )
             episodes = episodes[: cfg.max_episodes]
         trusted = [record for record in episodes if record.provenance != MemoryProvenance.UNTRUSTED]
-        already_promoted = await self._previous_promoted_ids(
-            session, run_now=run_now, cfg=cfg
-        )
+        already_promoted = await self._previous_promoted_ids(session, run_now=run_now, cfg=cfg)
         active_topics = await self._active_topics(session)
         prompt_topics = [topic for topic in active_topics if not topic.frozen]
         frozen_keys = frozenset(
@@ -725,6 +847,15 @@ class DreamService:
         decided_ids = {decision.episode_id for decision in decisions}
 
         if selected:
+            await self._extract_facts(
+                session,
+                gateway=gateway,
+                persona_scope=persona_scope,
+                selected=selected,
+                stats=stats,
+                decisions=decisions,
+                decided_ids=decided_ids,
+            )
             stats.failed += await self._merge_and_promote(
                 session,
                 gateway=gateway,
@@ -749,6 +880,170 @@ class DreamService:
             )
         await self._archive_pass(
             session, run_now=run_now, active_topics=active_topics, stats=stats, decisions=decisions
+        )
+
+    async def _extract_facts(
+        self,
+        session: AsyncSession,
+        *,
+        gateway: LlmGateway,
+        persona_scope: str,
+        selected: list[EpisodeRecordDTO],
+        stats: DreamRunStatsModel,
+        decisions: list[DreamDecisionModel],
+        decided_ids: set[int],
+    ) -> None:
+        """LLM 人物事实提取 + 逐条复核 + 落库（异常时补齐决策后上抛）。
+
+        异常中断决策补齐（与合并阶段同一语义）：提取阶段任何异常上抛前，
+        过门但未决策的候选补 skipped 决策（reason 标注事实提取中断）——
+        失败运行的决策面对全部可信候选同样全覆盖。
+
+        Args:
+            session: 注入的异步 Session。
+            gateway: LLM 网关（dream 角色）。
+            persona_scope: 人格作用域 ID。
+            selected: 过门候选（分数降序——与合并阶段同一批）。
+            stats: 运行统计（facts_created / facts_merged / facts_dropped
+                就地累加）。
+            decisions: 决策列表（中断补齐时就地追加）。
+            decided_ids: 已决策事件 id 集（就地更新——防重复决策）。
+
+        Raises:
+            _DreamPhaseError: 模型返回空内容（fail-closed——零合并 / 零日记）。
+            BusinessException: 解析结构失败 / LLM 调用异常 / 落库失败（归
+                run_dream 终态记录）。
+        """
+        try:
+            await self._extract_facts_inner(
+                session,
+                gateway=gateway,
+                persona_scope=persona_scope,
+                selected=selected,
+                stats=stats,
+            )
+        except Exception:
+            _backfill_undecided(selected, decided_ids, decisions, reason=_FACTS_INTERRUPT_REASON)
+            raise
+
+    async def _extract_facts_inner(
+        self,
+        session: AsyncSession,
+        *,
+        gateway: LlmGateway,
+        persona_scope: str,
+        selected: list[EpisodeRecordDTO],
+        stats: DreamRunStatsModel,
+    ) -> None:
+        """事实提取主体（异常上抛由 ``_extract_facts`` 补决策）。
+
+        复核矩阵（逐条应用，文档化）：字段校验失败（解析级）→ 计数
+        ``facts_dropped``；证据编号越出候选集 → 丢弃计数；置信度低于
+        ``FACT_MIN_CONFIDENCE`` → 丢弃计数；超出单次
+        ``FACTS_PROPOSAL_CAP`` 条 → 丢弃计数。通过复核的提案经
+        ``FactsService.upsert_fact`` 落库（provenance=agent /
+        source=dream）：同归一化身份现行事实走元数据刷新（计数
+        ``facts_merged``）、新身份落现行行（计数 ``facts_created``）。
+        证据摘录由系统从被引用候选事件正文**逐字**截取（≤200 字符）——
+        模型不产出摘录文本，引用编号即背书。
+
+        Args:
+            session: 注入的异步 Session。
+            gateway: LLM 网关（dream 角色）。
+            persona_scope: 人格作用域 ID（用量归属）。
+            selected: 过门候选（分数降序）。
+            stats: 运行统计（三计数就地累加）。
+
+        Raises:
+            _DreamPhaseError: 模型返回空内容。
+            BusinessException: 解析结构失败 / LLM 调用异常 / 落库失败。
+        """
+        prompt = render_facts_prompt(selected)
+        response = await gateway.chat_by_role(
+            ModelRole.DREAM,
+            [ChatMessageModel(role=ChatMessageRole.SYSTEM, content=prompt)],
+            persona_id=persona_scope,
+            purpose=DREAM_PURPOSE,
+        )
+        raw = response.content.strip()
+        if not raw:
+            raise _DreamPhaseError("梦境事实提取模型返回空内容")
+        valid_items, dropped_count = parse_facts_proposals(raw)
+        stats.facts_dropped += dropped_count
+        episodes_by_id = {record.id: record for record in selected}
+        accepted: list[tuple[DreamFactProposedItemModel, list[FactEvidenceRefModel]]] = []
+        for item in valid_items:
+            if len(accepted) >= FACTS_PROPOSAL_CAP:
+                stats.facts_dropped += 1
+                logger.info("人物事实提案超出单次上限，已丢弃: content={}", item.content[:80])
+                continue
+            unknown_ids = [
+                episode_id
+                for episode_id in item.evidence_episode_ids
+                if episode_id not in episodes_by_id
+            ]
+            if unknown_ids:
+                stats.facts_dropped += 1
+                logger.warning(
+                    "人物事实提案引用未知事件，已丢弃: content={}, unknown={}",
+                    item.content[:80],
+                    unknown_ids,
+                )
+                continue
+            if item.confidence < FACT_MIN_CONFIDENCE:
+                stats.facts_dropped += 1
+                logger.info(
+                    "人物事实提案置信度低于下限，已丢弃: content={}, confidence={:.2f}",
+                    item.content[:80],
+                    item.confidence,
+                )
+                continue
+            references = [
+                self._fact_evidence(episodes_by_id[episode_id])
+                for episode_id in dict.fromkeys(item.evidence_episode_ids)
+            ]
+            accepted.append((item, [ref for ref in references if ref is not None]))
+        for item, evidence in accepted:
+            result = await self._facts.upsert_fact(
+                session,
+                FactCreateDTO(
+                    category=item.category,
+                    content=item.content,
+                    confidence=item.confidence,
+                    evidence=evidence,
+                ),
+                provenance=MemoryProvenance.AGENT,
+                source=PersonaFactSource.DREAM,
+            )
+            if result.created:
+                stats.facts_created += 1
+            else:
+                stats.facts_merged += 1
+        logger.info(
+            "梦境人物事实提取完成: created={}, merged={}, dropped={}",
+            stats.facts_created,
+            stats.facts_merged,
+            stats.facts_dropped,
+        )
+
+    def _fact_evidence(self, record: EpisodeRecordDTO) -> FactEvidenceRefModel | None:
+        """候选事件 → 证据引用（逐字截取——无文本载荷返回 None）。
+
+        Args:
+            record: 被引用的候选事件记录。
+
+        Returns:
+            证据引用（摘录恒为被引用事件正文的逐字前缀，≤200 字符）；
+            事件无文本载荷时返回 None（该证据不落库——事实仍可落库）。
+        """
+        quote = self._facts.evidence_text(record)
+        if not quote:
+            return None
+        return FactEvidenceRefModel(
+            episode_id=record.id,
+            quote=quote,
+            ts_ms=record.ts_ms,
+            provenance=record.provenance,
         )
 
     async def _merge_and_promote(
@@ -804,17 +1099,7 @@ class DreamService:
             )
         except Exception:
             # 合并中断：过门但未决策的候选补 skipped 决策（决策面全覆盖）
-            for candidate in selected:
-                if candidate.id in decided_ids:
-                    continue
-                decisions.append(
-                    DreamDecisionModel(
-                        episode_id=candidate.id,
-                        action=DreamDecisionAction.SKIPPED,
-                        reason="合并中断，本次未完成该事件的决策",
-                    )
-                )
-                decided_ids.add(candidate.id)
+            _backfill_undecided(selected, decided_ids, decisions, reason=_MERGE_INTERRUPT_REASON)
             raise
 
     async def _merge_and_promote_inner(

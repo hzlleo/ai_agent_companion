@@ -417,6 +417,12 @@ export interface DreamRunStats {
   failed: number
   /** 策展记忆归档行数（生命周期阶段）。 */
   archived: number
+  /** 人物事实新建行数（事实提取阶段）。 */
+  facts_created: number
+  /** 人物事实元数据刷新行数（事实提取阶段——同身份置信度 / 证据合并）。 */
+  facts_merged: number
+  /** 人物事实提案丢弃计数（事实提取阶段）。 */
+  facts_dropped: number
 }
 
 /** 梦境逐事件决策记录。 */

@@ -4,9 +4,9 @@
 
     - :func:`create_app` —— FastAPI 工厂（共享异常处理器 + personas /
       memories / usage / voice / look_at / models / search / reminders /
-      directives / channels-qq / health 共十一路由 + 管理面 owner-token
-      鉴权（九管理路由统一挂接，health / qq webhook 豁免——豁免契约见
-      :func:`_include_routers`）+ CORS + lifespan）；
+      directives / facts / channels-qq / health 共十二路由 + 管理面
+      owner-token 鉴权（十管理路由统一挂接，health / qq webhook 豁免——
+      豁免契约见 :func:`_include_routers`）+ CORS + lifespan）；
     - :func:`startup_app_state` / :func:`shutdown_app_state` —— **可独立
       驱动的纯异步函数对**（不藏在 lifespan 闭包内——测试无需 ASGI
       lifespan runner 即可直调，本工程不引入 asgi-lifespan 依赖）；
@@ -96,6 +96,7 @@ import packages.harness.persona.orm as persona_orm
 import packages.harness.usage.orm as usage_orm
 from app.api.channels_qq import router as qq_channels_router
 from app.api.directives import router as directives_router
+from app.api.facts import router as facts_router
 from app.api.health import APP_VERSION
 from app.api.health import router as health_router
 from app.api.look_at import router as look_at_router
@@ -147,6 +148,7 @@ from packages.harness.memory.service import (
 from packages.harness.multimodal.look_at import LookAtService, register_look_at_tool
 from packages.harness.persona.directives import DirectivesService
 from packages.harness.persona.directives_models import DirectiveCreateDTO
+from packages.harness.persona.facts import FactsService
 from packages.harness.persona.service import PersonaService
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
 from packages.harness.reminders.job import (
@@ -396,14 +398,18 @@ async def _startup_search(
         config.web_search.tool_enabled,
     )
     if not config.web_search.tool_enabled:
-        logger.info("web_search 工具面未启用（SEARCH_TOOL_ENABLED / search.web_search.tool_enabled 关闭）")
+        logger.info(
+            "web_search 工具面未启用（SEARCH_TOOL_ENABLED / search.web_search.tool_enabled 关闭）"
+        )
         return
     chat_registry = ToolRegistry()
     register_web_search_tool(chat_registry, service)
     web_spec, _ = build_web_search_tool(service)
     app.state.search_tool_registry = chat_registry
     app.state.search_tool_specs = [web_spec]
-    logger.info("web_search 工具已注册（duty 注册表在调度器装配时追加；chat 工具循环经通道工厂消费）")
+    logger.info(
+        "web_search 工具已注册（duty 注册表在调度器装配时追加；chat 工具循环经通道工厂消费）"
+    )
 
 
 async def _startup_browser_sidecar(app: FastAPI, settings: Settings) -> None:
@@ -559,6 +565,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
         rng=rhythm_rng,
     )
     directives_service = DirectivesService()
+    facts_service = FactsService()
 
     async def _capture_directive(text: str) -> bool:
         """对话捕获长期指令（DIRECTIVE 快径副作用面——恒不抛异常）。
@@ -603,6 +610,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
                 tool_executor=tool_registry,
                 intent_shortcut=intent_shortcut,
                 directive_service=directives_service,
+                facts_reader=facts_service,
                 episode_sink=episode_sink,
             )
         browser_specs = getattr(app.state, "browser_tool_specs", None)
@@ -615,6 +623,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
                 tool_executor=browser_registry,
                 intent_shortcut=intent_shortcut,
                 directive_service=directives_service,
+                facts_reader=facts_service,
                 episode_sink=episode_sink,
             )
         return ChatService(
@@ -622,6 +631,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
             session_service=ChatSessionService(),
             intent_shortcut=intent_shortcut,
             directive_service=directives_service,
+            facts_reader=facts_service,
             episode_sink=episode_sink,
         )
 
@@ -814,7 +824,10 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
         # 沙盒 + look_at 工具后注册（仅搜索服务装配且工具面启用时；
         # 预算 / failover 在 SearchService 内闭环）。
         search_service = getattr(app.state, "search_service", None)
-        if search_service is not None and search_registry.runtime_search_config.web_search.tool_enabled:
+        if (
+            search_service is not None
+            and search_registry.runtime_search_config.web_search.tool_enabled
+        ):
             register_web_search_tool(registry, search_service)
         duty_service = DutyService(
             gateway=app.state.gateway,
@@ -911,15 +924,13 @@ async def _register_sandbox_tools(app: FastAPI, settings: Settings, registry: To
     client = build_sandbox_client(manager.get_http_client(), sandbox)
     if not client.has_token:
         logger.warning(
-            "工具沙盒 token 未配置（环境变量 {} 为空）——跳过沙盒工具注册，"
-            "duty 工具面仅内置工具",
+            "工具沙盒 token 未配置（环境变量 {} 为空）——跳过沙盒工具注册，duty 工具面仅内置工具",
             sandbox.token_env,
         )
         return
     if not await client.probe_health():
         logger.warning(
-            "工具沙盒健康探测失败（{}，超时 {}s 上限）——跳过沙盒工具注册，"
-            "duty 工具面仅内置工具",
+            "工具沙盒健康探测失败（{}，超时 {}s 上限）——跳过沙盒工具注册，duty 工具面仅内置工具",
             sandbox.base_url,
             sandbox.request_timeout_seconds,
         )
@@ -951,9 +962,7 @@ async def _register_browser_sidecar_tools(
     client = getattr(app.state, "browser_sidecar_client", None)
     if client is None:
         if settings.tools_browser_sidecar.enabled:
-            logger.info(
-                "浏览器 sidecar 客户端未就绪（启动期跳过）——duty 工具面不含浏览器工具"
-            )
+            logger.info("浏览器 sidecar 客户端未就绪（启动期跳过）——duty 工具面不含浏览器工具")
         return
     register_browser_sidecar_tools(registry, client)
 
@@ -1077,8 +1086,8 @@ def _include_routers(app: FastAPI) -> None:
     挂载契约（R2 审计放行条件——新端点不得扩张无鉴权面）：
 
         - **受保护路由集**：personas / memories / usage / voice /
-          look_at / models / search / reminders / directives 九个管理路由
-          统一挂 ``require_admin_token``
+          look_at / models / search / reminders / directives / facts 十个
+          管理路由统一挂 ``require_admin_token``
           依赖——经单一 ``APIRouter(dependencies=[...])`` 包装路由**一次
           注册**（依赖定义在 ``app/middleware/admin_auth``；token 经
           ``ServerConfig.admin_token_env`` env 间接，空 = 鉴权关闭）；
@@ -1106,6 +1115,7 @@ def _include_routers(app: FastAPI) -> None:
     admin_api.include_router(search_router)
     admin_api.include_router(reminders_router)
     admin_api.include_router(directives_router)
+    admin_api.include_router(facts_router)
     app.include_router(admin_api)
     # 豁免面（见本函数 docstring 豁免契约——不挂 require_admin_token）。
     app.include_router(qq_channels_router)

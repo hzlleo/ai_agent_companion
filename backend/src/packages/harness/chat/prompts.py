@@ -27,7 +27,9 @@
     - :data:`EMOTION_STATE_TEMPLATE`          —— 心情状态块（非中性
       情绪摘要注入——R2b 轻情绪引擎 compose 面）；
     - :data:`DIRECTIVES_BLOCK_TEMPLATE`       —— 长期指令块（USER.md 式
-      常备指令注入——R2b D7-14；截断说明见 :data:`DIRECTIVES_TRUNCATION_NOTE`）。
+      常备指令注入——R2b D7-14；截断说明见 :data:`DIRECTIVES_TRUNCATION_NOTE`）；
+    - :data:`FACTS_BLOCK_TEMPLATE`            —— 人物事实块（【关于对方】
+      结构化事实注入——高置信事实按类别标签逐行列出；无事实不注入）。
 
 渲染函数（纯函数——只做文本装配，不做条目选择 / 关键词匹配等逻辑；
 世界书筛选逻辑在 service 层）：chara card 字段 → 上述模板的最终文本。
@@ -52,6 +54,7 @@ __all__ = [
     "OUTPUT_PROTOCOL_TEMPLATE_VERSION",
     "EMOTION_STATE_TEMPLATE_VERSION",
     "DIRECTIVES_BLOCK_TEMPLATE_VERSION",
+    "FACTS_BLOCK_TEMPLATE_VERSION",
     "DIRECTIVES_MAX_ENTRIES",
     "DIRECTIVES_MAX_CHARS",
     "CHARTER_TEMPLATE",
@@ -67,7 +70,9 @@ __all__ = [
     "EMOTION_STATE_TEMPLATE",
     "DIRECTIVES_BLOCK_TEMPLATE",
     "DIRECTIVES_TRUNCATION_NOTE",
+    "FACTS_BLOCK_TEMPLATE",
     "render_directives_block",
+    "render_facts_block",
     "render_charter",
     "render_persona_system_prompt",
     "render_world_book_block",
@@ -78,7 +83,7 @@ __all__ = [
 ]
 
 #: prompt 套件总版本（任一模板变更时同步上调）。
-PROMPTS_VERSION: str = "1.2.0"
+PROMPTS_VERSION: str = "1.3.0"
 
 # ---------------------------------------------------------------------------
 # 版本常量——逐模板独立版本（byte-lock 测试按模板分别锁定摘要）
@@ -100,6 +105,8 @@ OUTPUT_PROTOCOL_TEMPLATE_VERSION: str = "1.0.0"
 EMOTION_STATE_TEMPLATE_VERSION: str = "1.0.0"
 #: 长期指令块模板版本（USER.md 式常备指令注入）。
 DIRECTIVES_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
+#: 人物事实块模板版本（【关于对方】结构化事实注入）。
+FACTS_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
 
 #: 长期指令注入上限——条数（超出部分不进系统提示；截断说明行提示存在
 #: 其余指令）。
@@ -177,6 +184,10 @@ DIRECTIVES_BLOCK_TEMPLATE: str = "【长期指令】\n{directives}"
 #: 长期指令截断说明行（条目 / 字符帽触发时追加——告知模型存在未列出的
 #: 其余常备指令，避免把截断误解为指令全集）。
 DIRECTIVES_TRUNCATION_NOTE: str = "（其余长期指令已省略）"
+
+#: 人物事实块（占位符 ``{facts}``——每条一行「- 【类别标签】正文」；
+#: 无现行事实不注入；条数 / 字符帽由读取面施加，见 persona.facts）。
+FACTS_BLOCK_TEMPLATE: str = "【关于对方】\n{facts}"
 
 # ---------------------------------------------------------------------------
 # 渲染函数（纯文本装配——无状态 / 无 I/O / 无条目选择逻辑）
@@ -296,6 +307,26 @@ def render_directives_block(directives: Sequence[str]) -> str:
     if truncated:
         lines.append(DIRECTIVES_TRUNCATION_NOTE)
     return DIRECTIVES_BLOCK_TEMPLATE.format(directives="\n".join(lines))
+
+
+def render_facts_block(facts: Sequence[str]) -> str:
+    """渲染人物事实块（【关于对方】——读取面已按置信度裁剪的注入行）。
+
+    渲染语义（锁定）：每条事实一行 ``- 【类别标签】正文``（类别标签与
+    条数 / 字符帽由读取面 :meth:`~packages.harness.persona.facts.
+    FactsService.top_facts_for_compose` 施加——本函数只做装配）；空列表
+    / 全空白条目返回空串（组装链跳过空块）。
+
+    Args:
+        facts: 注入行列表（服务层按置信度降序提供——调用方保证顺序）。
+
+    Returns:
+        人物事实块文本；无有效事实返回空串。
+    """
+    lines = [f"- {fact.strip()}" for fact in facts if fact.strip()]
+    if not lines:
+        return ""
+    return FACTS_BLOCK_TEMPLATE.format(facts="\n".join(lines))
 
 
 def render_post_history_message(card: CharaCardModel) -> str:

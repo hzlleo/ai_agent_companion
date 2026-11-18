@@ -13,7 +13,11 @@ import pytest
 
 from packages.harness.core.errors import BusinessException
 from packages.harness.memory import dreaming_prompts
-from packages.harness.memory.dreaming_prompts import render_diary_prompt, render_merge_prompt
+from packages.harness.memory.dreaming_prompts import (
+    render_diary_prompt,
+    render_facts_prompt,
+    render_merge_prompt,
+)
 from packages.harness.memory.dtos import CuratedRecordDTO, EpisodeRecordDTO
 from packages.harness.memory.models import (
     ChatTurnPayloadModel,
@@ -26,6 +30,7 @@ from packages.harness.memory.models import (
 #: 逐模板 sha256 摘要锁（UTF-8 字节）——变更 prompt 须同步本表与版本常量。
 _BYTE_LOCKS: dict[str, str] = {
     "MERGE_TEMPLATE": "59d92e5ca3caf8b19ec16eb8c0edc7d01f616b797cb454cdb48c7c571789e7ba",
+    "FACTS_TEMPLATE": "0990d05fc02a361863cf19ff8c74de857f6b7a43db9b1d9d2a9fd93116de4b03",
     "DIARY_TEMPLATE": "90015c7f108d91feeda4012bc2c5cbed1a47d8fba7a7a1707fa8f4579e66ea8a",
 }
 
@@ -33,6 +38,7 @@ _BYTE_LOCKS: dict[str, str] = {
 _VERSION_CONSTANTS = (
     "DREAMING_PROMPTS_VERSION",
     "MERGE_TEMPLATE_VERSION",
+    "FACTS_TEMPLATE_VERSION",
     "DIARY_TEMPLATE_VERSION",
 )
 
@@ -182,3 +188,29 @@ async def test_render_diary_prompt_template_override_wins() -> None:
     assert text.startswith("给 大肥鱼 的日记")
     assert "第41条用户消息" in text
     assert "【日记写作任务】" not in text
+
+
+# ---------------------------------------------------------------------------
+# 人物事实 prompt 渲染契约
+# ---------------------------------------------------------------------------
+
+
+async def test_render_facts_prompt_numbered_episodes_persona_agnostic() -> None:
+    """事实 prompt：编号事件块 + 类别 / 证据字段说明 + 无人格字段。"""
+    text = render_facts_prompt([_episode(51, ts_ms=1_760_000_000_000, importance=6)])
+    assert text.startswith("【人物事实提取任务】")
+    assert "事件 #51" in text
+    assert "第51条用户消息" in text
+    assert '"category"' in text
+    assert '"evidence_episode_ids"' in text
+    assert "最多输出 10 条" in text
+    assert "dream-prompt" not in text
+
+
+async def test_render_facts_prompt_template_override_wins() -> None:
+    """覆写语义：template_override 整体替换正典模板（自带同名占位符）。"""
+    override = "自定义事实模板\n{episodes_block}"
+    text = render_facts_prompt([_episode(61)], template_override=override)
+    assert text.startswith("自定义事实模板")
+    assert "事件 #61" in text
+    assert "【人物事实提取任务】" not in text

@@ -14,6 +14,9 @@ API 等逻辑文件禁止内联 prompt 字符串）；模板文本变更属于�
     - :data:`MERGE_TEMPLATE` —— 巩固合并模板（候选事件 + 既有主题 →
       严格 JSON 数组提案；**人格中立**——人格卡片不进入本 prompt，
       合并是记忆层面的蒸馏、与人格声线无关，文档化决策）；
+    - :data:`FACTS_TEMPLATE` —— 人物事实提取模板（候选事件 → 关于
+      主人的稳定事实提案；同样**人格中立**——提取只消费事件正文，
+      收获物的归属由编排层写入人格作用域的事实表）；
     - :data:`DIARY_TEMPLATE` —— 日记模板（当日事件 → 第一人称中文
       日记；人格声线**仅**经调用方替换 ``{persona_name}`` 渲染变量进入
       ——模板本身不携带任何人格字段）。
@@ -36,15 +39,18 @@ from packages.harness.memory.retrieval import flatten_episode_content
 __all__ = [
     "DREAMING_PROMPTS_VERSION",
     "MERGE_TEMPLATE_VERSION",
+    "FACTS_TEMPLATE_VERSION",
     "DIARY_TEMPLATE_VERSION",
     "MERGE_TEMPLATE",
+    "FACTS_TEMPLATE",
     "DIARY_TEMPLATE",
     "render_merge_prompt",
+    "render_facts_prompt",
     "render_diary_prompt",
 ]
 
 #: 梦境 prompt 套件总版本（任一模板变更时同步上调）。
-DREAMING_PROMPTS_VERSION: str = "1.0.0"
+DREAMING_PROMPTS_VERSION: str = "1.1.0"
 
 # ---------------------------------------------------------------------------
 # 版本常量——逐模板独立版本（byte-lock 测试按模板分别锁定摘要）
@@ -52,6 +58,8 @@ DREAMING_PROMPTS_VERSION: str = "1.0.0"
 
 #: 巩固合并模板版本。
 MERGE_TEMPLATE_VERSION: str = "1.0.0"
+#: 人物事实提取模板版本。
+FACTS_TEMPLATE_VERSION: str = "1.0.0"
 #: 日记模板版本。
 DIARY_TEMPLATE_VERSION: str = "1.0.0"
 
@@ -87,6 +95,34 @@ MERGE_TEMPLATE: str = (
     "2. 多条事件表达同一件事时合并为一条，merged_from 列出全部来源编号；\n"
     "3. 与既有主题相同的内容并入该主题（沿用其 topic），以便更新该记忆；\n"
     "4. 不臆造事件里没有的信息；没有值得保留的内容时输出空数组 []。"
+)
+
+#: 人物事实提取模板（人格中立；占位符 ``{episodes_block}``——编号即情景
+#: 事件主键，提案 ``evidence_episode_ids`` 直接引用该编号）。
+FACTS_TEMPLATE: str = (
+    "【人物事实提取任务】\n"
+    "你正在执行一次夜间的人物事实提取。下面给出候选事件（已按编号列出）。"
+    "请从这些事件里提取关于「对方」（用户 / 主人）的、值得长期记住的稳定事实。\n"
+    "\n"
+    "【候选事件】\n"
+    "{episodes_block}\n"
+    "\n"
+    "【输出要求】\n"
+    "严格输出一个 JSON 数组，不要输出数组以外的任何文字或代码块标记。"
+    "数组每个元素包含以下字段：\n"
+    '- "category"：事实类别，只能是 "preference"（偏好）/ "biography"（背景）/ '
+    '"relationship"（关系）/ "context"（近况）之一；\n'
+    '- "content"：事实陈述（简洁的中文陈述句，1-200 字符，以「对方」或「主人」为主语）；\n'
+    '- "confidence"：置信度，0 到 1 的小数；\n'
+    '- "evidence_episode_ids"：本条事实依据的候选事件编号列表'
+    "（数组，至少一个，必须是上面列出的编号）。\n"
+    "\n"
+    "【提取原则】\n"
+    "1. 只提取持久且具体的事实：偏好、背景经历、关系状态、近况变化；"
+    "一次性寒暄与临时情绪不提取；\n"
+    "2. 不臆造事件里没有的信息；一条事实只陈述一件事；最多输出 10 条；\n"
+    "3. 每条事实必须由所引用事件的原文直接支撑（系统会从被引用事件里逐字截取证据摘录）；\n"
+    "4. 事件编号之外的引用无效；没有值得保留的事实时输出空数组 []。"
 )
 
 #: 日记模板（占位符 ``{persona_name}`` / ``{episodes_block}``——人格声线
@@ -200,6 +236,26 @@ def render_merge_prompt(
         episodes_block=_format_merge_episodes(candidates),
         topics_block=_format_topics(active_topics),
     )
+
+
+def render_facts_prompt(
+    candidates: Sequence[EpisodeRecordDTO],
+    *,
+    template_override: str | None = None,
+) -> str:
+    """渲染人物事实提取 prompt（人格中立——输入只有候选事件，无人格字段）。
+
+    Args:
+        candidates: 过门候选事件（分数降序——门控输出；编号即事件主键，
+            提案 ``evidence_episode_ids`` 引用该编号）。
+        template_override: 覆写模板（None = 正典模板；非空时整体替换——
+            须自带 ``{episodes_block}`` 同名占位符）。
+
+    Returns:
+        事实提取 prompt 最终文本。
+    """
+    template = template_override if template_override is not None else FACTS_TEMPLATE
+    return template.format(episodes_block=_format_merge_episodes(candidates))
 
 
 def render_diary_prompt(

@@ -440,3 +440,79 @@ export interface DirectiveUpdateRequest {
   /** 指令正文（1-500 字符）。 */
   content: string
 }
+
+// ---------------------------------------------------------------------------
+// 人物事实（facts——结构化事实 / 证据链 / 更正循环）
+// ---------------------------------------------------------------------------
+
+/** 事实类别（preference 偏好 / biography 背景 / relationship 关系 / context 近况）。 */
+export type PersonaFactCategory = 'preference' | 'biography' | 'relationship' | 'context'
+
+/** 事实状态（active 现行 / superseded 被更正取代 / rejected 已驳回）。 */
+export type PersonaFactStatus = 'active' | 'superseded' | 'rejected'
+
+/** 事实来源（dream 梦境提取 / manual 手工录入 / correction 主人更正）。 */
+export type PersonaFactSource = 'dream' | 'manual' | 'correction'
+
+/** 记忆来源可信度（owner 主人 / agent 智能体；untrusted 永不入事实表）。 */
+export type FactProvenance = 'owner' | 'agent' | 'untrusted'
+
+/** 事实证据引用（情景事件回链 + 逐字摘录）。 */
+export interface FactEvidenceRef {
+  /** 情景事件主键（null = 手工事实无事件背书）。 */
+  episode_id: number | null
+  /** 逐字摘录（≤200 字符）。 */
+  quote: string
+  /** 证据事件时间（epoch 毫秒）。 */
+  ts_ms: number
+  /** 证据来源可信度（owner / agent）。 */
+  provenance: FactProvenance
+}
+
+/** 人物事实记录（管理面 / 面板读取面）。 */
+export interface FactRecord {
+  /** 事实主键（更正 / 驳回 / 删除锚点）。 */
+  id: number
+  /** 事实类别。 */
+  category: PersonaFactCategory
+  /** 事实陈述。 */
+  content: string
+  /** 置信度（0-1）。 */
+  confidence: number
+  /** 事实状态。 */
+  status: PersonaFactStatus
+  /** 来源可信度（owner / agent）。 */
+  provenance: FactProvenance
+  /** 事实来源（dream / manual / correction）。 */
+  source: PersonaFactSource
+  /** 证据引用列表。 */
+  evidence: FactEvidenceRef[]
+  /** 取代者主键（被更正版本的链链接；现行事实为 null）。 */
+  superseded_by_id: number | null
+  /** 更正链版本号（首版 1，更正递增）。 */
+  version: number
+  /** 落库时间（epoch 毫秒）。 */
+  created_at: number
+  /** 行更新时间（epoch 毫秒）。 */
+  updated_at: number
+}
+
+/** 人物事实手工录入请求（同归一化身份收敛为元数据刷新）。 */
+export interface FactCreateRequest {
+  /** 事实类别。 */
+  category: PersonaFactCategory
+  /** 事实陈述（1-1000 字符）。 */
+  content: string
+  /** 置信度（0-1，缺省 0.8）。 */
+  confidence?: number
+  /** 证据引用列表（缺省空）。 */
+  evidence?: FactEvidenceRef[]
+}
+
+/** 人物事实更正请求（supersede 链 +1）。 */
+export interface FactCorrectRequest {
+  /** 更正后的事实陈述（1-1000 字符）。 */
+  content: string
+  /** 更正后置信度（undefined = 保留原值）。 */
+  confidence?: number
+}

@@ -26,7 +26,7 @@
 | `lifecycle.py` | 记忆生命周期纯函数（LifecycleConfig + 有效强度 + 归档判定——零 I/O / 零 env） | `LifecycleConfig` / `effective_strength` / `should_archive` |
 | `episode_sink.py` | chat 回合情景落库面（EpisodeSinkFace + ChatTurnEpisodeSink——对话管道闭合） | `EpisodeSinkFace` / `ChatTurnEpisodeSink` |
 | `dreaming_models.py` | 梦境 DTO + 构造级参数（DreamJobConfig / 统计 / 决策 / 提案 / 运行记录 / 触发请求） | `DreamJobConfig` / `DreamRunRecordDTO` 等 |
-| `dreaming_prompts.py` | 梦境 prompt Unit 文件（合并 + 日记模板——版本常量 + byte-lock） | `render_merge_prompt` / `render_diary_prompt` |
+| `dreaming_prompts.py` | 梦境 prompt Unit 文件（合并 + 人物事实提取 + 日记模板——版本常量 + byte-lock） | `render_merge_prompt` / `render_facts_prompt` / `render_diary_prompt` |
 | `dreaming_orm.py` | 运行日志表 `ff_dream_runs`（独立文件——与 orm.py 分文件） | `DreamRunRow` |
 | `dreaming.py` | 梦境编排（纯函数打分 / 规则门 + DreamService 主链路 + 运行日志读面） | `DreamService` / `recency_decay` / `select_dream_candidates` |
 
@@ -343,7 +343,7 @@ chat 回合（reply / stream_reply）
   `test_chat_swipe_api.py`（变体端点 + include_variants 读侧）、
   `test_migration_chat_message_variants.py`（迁移 0010 SQLite round-trip + 唯一键语义）；
 - 检索层五件：`test_memory_retrieval_sql.py`（构建器精确字符串断言 + hybrid 执行面形态异常含多列 fail loud）/ `test_memory_seekdb_store.py`（假 aiomysql 池）/ `test_memory_sqlite_store.py`（共享引擎回退往返）/ `test_memory_indexer.py`（索引管道 + 服务联动）/ `test_memory_search_api.py`（POST /search 全模式）+ `test_pools_seekdb.py`（池生命周期）；
-- 梦境三件：`test_dreaming_prompts.py`（byte-lock + 渲染契约）/ `test_dreaming.py`（纯函数数学 + 门矩阵 + fail-closed 全链 + 孤儿 running 收敛 / 已晋升回溯窗 / 事件上限截断 / 合并中断决策补齐）/ `test_dream_api.py`（trigger + runs 端点）；
+- 梦境三件：`test_dreaming_prompts.py`（byte-lock + 渲染契约）/ `test_dreaming.py`（纯函数数学 + 门矩阵 + fail-closed 全链 + 孤儿 running 收敛 / 已晋升回溯窗 / 事件上限截断 / 合并中断决策补齐 + **人物事实阶段**（提案解析 / 落库与元数据刷新 / 逐条丢弃 / 单次上限 / 结构失败前置终止 / 人格隔离））/ `test_dream_api.py`（trigger + runs 端点）；
 - 生命周期五件：`test_memory_lifecycle.py`（衰减 / 强化 / 归档判定精确数学）/ `test_memory_dream_lifecycle.py`（归档阶段 + 冻结 / 置顶语义）/ `test_memory_curated_lifecycle.py`（pin / freeze 端点 + 排序 / 归档过滤 + 索引收口）/ `test_memory_episode_sink.py`（对话回合 → 情景层管道 + 失败吞没）/ `test_memory_reinforcement.py`（写读强化调度与落库）+ `test_migration_curated_lifecycle.py`（迁移 0012 SQLite round-trip）；
 - SeekDB 真引擎强制套件：`src/tests/integration_seekdb/`（迁移链 round-trip / 并发不变式 / 混合检索往返——缺 env 即 fail，不跳过；见 docs/test-strategy/README.md「SeekDB 真引擎强制套件」）；
 - 共享 SQLite fixture（StaticPool 单连接）+ PersonaMixin contextvars 隔离驱动；零真实网络 / 零真实配置；
@@ -539,19 +539,29 @@ DreamService.run_dream(db, gateway=…, persona_name=…, store=?, now_ms=?, cfg
     │                               promoted_lookback_ms 回溯窗内的成功运行）
     ↓ ④ 主题相关度命中集          store 可选注入——keyword 检索 top-N 并集
     ↓ ⑤ select_dream_candidates   规则门（纯函数——零模型调用）
-    ↓ ⑥ gateway.chat_by_role(ModelRole.DREAM, purpose="dream")  合并（人格中立 prompt）
+    ↓ ⑥ 人物事实提取（gate 之后、merge 之前——与合并消费同一批过门候选）：
+    │    gateway.chat_by_role(ModelRole.DREAM, purpose="dream")（人格中立 prompt）→
+    │    parse_facts_proposals（剥围栏 + 逐条 Model Class 校验）→
+    │    证据编号 ⊆ 候选 / 置信度下限 / 单次 10 条上限复核 →
+    │    FactsService.upsert_fact(provenance=agent, source=dream)（同归一化身份
+    │    现行事实 = 置信度最大值 + 证据合并的元数据刷新；新身份落现行行；
+    │    证据摘录由系统从被引用事件正文逐字截取 ≤200 字符）→
+    │    stats.facts_created / facts_merged / facts_dropped
+    ↓ ⑦ gateway.chat_by_role(ModelRole.DREAM, purpose="dream")  合并（人格中立 prompt）
     ↓    parse_merge_proposals    剥围栏 + json.loads + 逐条 Model Class 校验
-    ↓ ⑦ merged_from ⊆ 候选 id 复核 → upsert_curated(provenance=agent)
-    ↓ ⑧ 日记（dream 角色）→ append_episode(kind=dream, source="dream:diary")
-    ↓ ⑨ 生命周期归档（纯规则——零模型调用）：active 策展行经
+    ↓ ⑧ merged_from ⊆ 候选 id 复核 → upsert_curated(provenance=agent)
+    ↓ ⑨ 日记（dream 角色）→ append_episode(kind=dream, source="dream:diary")
+    ↓ ⑩ 生命周期归档（纯规则——零模型调用）：active 策展行经
     │    select_archive_candidates（memory.lifecycle.should_archive）判定 →
     │    archive_curated（执行点复核 status=active，快照后已取代的行跳过；
     │    status=archived + active_marker=NULL + 索引移除 fire-and-forget）→
     │    stats.archived + decisions(action=archived) 只按实际归档集合生成
-    ↓ ⑩ DreamRunRow 终态（status/error/stats/decisions）→ DreamRunRecordDTO
+    ↓ ⑪ DreamRunRow 终态（status/error/stats/decisions）→ DreamRunRecordDTO
 ```
 
-角色与用量：合并 + 日记共用 `ModelRole.DREAM`（`purpose="dream"`——usage 域既有枚举成员，经网关自动落账）；人格上下文由调用方先经 `bind_persona_context` 绑定（与 memory 域其余服务同契约）。
+阶段顺序锁定：**gate → facts → merge → diary → archive → finalize**——事实提取与合并消费同一批过门候选且先于合并（事实是「对方是谁」的画像蒸馏、合并是「发生了什么」的策展蒸馏；事实层的逐条丢弃不改变合并提案面）。
+
+角色与用量：事实提取 / 合并 / 日记共用 `ModelRole.DREAM`（`purpose="dream"`——usage 域既有枚举成员，经网关自动落账）；人格上下文由调用方先经 `bind_persona_context` 绑定（与 memory 域其余服务同契约）。
 
 ## 筛选公式（纯函数——精确数学）
 
@@ -606,14 +616,16 @@ dream_score(episode, now, cfg, topic_hits)
 ## LLM 契约（dreaming_prompts.py——Unit 文件）
 
 - **合并模板**（`MERGE_TEMPLATE`，byte-lock）：输入 = 编号候选事件（编号 = 事件主键；kind/source/importance/ts + 载荷文本）+ 既有 active 主题列表；输出 = 严格 JSON 数组 `[{topic, kind: memory|user_note|relationship, content, importance 1-10, merged_from: [事件编号]}]`。**人格中立**——人格卡片不进入本 prompt（合并是记忆层蒸馏，与人格声线无关）；
+- **人物事实模板**（`FACTS_TEMPLATE`，byte-lock）：输入 = 编号候选事件（与合并同格式）；输出 = 严格 JSON 数组 `[{category: preference|biography|relationship|context, content 1-200, confidence 0-1, evidence_episode_ids: [事件编号]}]`（≤10 条）。**人格中立**——提取只消费事件正文，收获物归属由编排层写入人格作用域的事实表；证据摘录不要求模型产出（系统逐字截取，杜绝转述漂移）；
 - **日记模板**（`DIARY_TEMPLATE`，byte-lock）：输入 = 当日可信事件（时间序）+ `{persona_name}` 渲染变量；输出 = 第一人称中文日记。**人格声线仅经调用方替换 persona_name 进入**（人格展示名，API 层解析目标人格后传入）——模板本身零人格字段；
-- 两模板均有独立版本常量 + sha256 byte-lock 测试（`tests/unit/test_dreaming_prompts.py`）；渲染函数纯装配、支持 `template_override` 整体覆写（与 chat 域 `system_prompt` 覆写同模式）。
+- 三模板均有独立版本常量 + sha256 byte-lock 测试（`tests/unit/test_dreaming_prompts.py`）；渲染函数纯装配、支持 `template_override` 整体覆写（与 chat 域 `system_prompt` 覆写同模式）。
 
 ## fail-closed 语义（锁定决策）
 
 - **解析失败零晋升**：LLM 输出不可解析为 JSON 数组 → 运行 failed，**零 upsert**（解析先于全部晋升——结构性失败不存在部分晋升态）；不进入日记阶段；
 - **逐条提案失败丢弃计数**：字段校验失败（kind 枚举 / importance 边界 / topic 空 / merged_from 空）或 `merged_from` 引用未知事件 → 该条丢弃 + `stats.failed` 计数，其余提案正常晋升；
-- **合并中断决策补齐**：合并 / 晋升阶段异常中断时，过门但未决策的候选事件补 skipped 决策（reason=合并中断）——失败运行的决策面对全部可信候选同样全覆盖；
+- **事实提取阶段 fail-closed**：输出结构失败（非 JSON / 非数组 / 空输出 / 调用异常）→ 运行 failed、**零合并 / 零日记**（前序已提交产物保留）；逐条事实提案失败（类别 / 正文 / 置信度越界、证据编号越出候选、置信度低于 `FACT_MIN_CONFIDENCE`、超单次上限）→ 逐条丢弃并计入 `stats.facts_dropped`，其余提案照常落库；
+- **合并 / 事实阶段中断决策补齐**：任一阶段异常中断时，过门但未决策的候选事件补 skipped 决策（reason 标注「事实提取中断」/「合并中断」）——失败运行的决策面对全部可信候选同样全覆盖；
 - **日记后置于晋升**：晋升全部提交后才生成日记——日记失败标记运行 failed 但**保留已提交晋升并在 decisions 中如实记录**（晋升是主产物、日记是叙事附产物；倒序会让日记失败回滚有效巩固，代价更高）；
 - **运行失败不抛异常**：`run_dream` 返回终态记录 DTO（`status=failed` + `error` 原因）——失败是业务结果而非请求失败；仅人格上下文缺失 / 运行行落库失败在入口 fail loud 上抛；
 - **dream 产物不排除出候选面**（文档化）：日记事件（kind=dream / provenance=agent）是普通情景事件——次夜作为候选参与合并（是否入策展由整理原则 + 分数门决定）；`untrusted` 是唯一硬排除轴。
@@ -626,7 +638,7 @@ dream_score(episode, now, cfg, topic_hits)
 | `persona_id` | String(64)，索引 | 人格 ID（PersonaMixin 自动注入 / 过滤） |
 | `status` | String(16)，索引 | running / success / failed（行创建即落 running——进程崩溃可能遗留孤儿 running 行，由 run_dream 入口按 `stale_running_threshold_ms` 收敛为 failed） |
 | `started_ms` / `finished_ms` | BigInteger | 开始（注入时钟口径）/ 结束时间（epoch 毫秒；运行中 finished 为 NULL） |
-| `stats` | JSON | DreamRunStatsModel 序列化（candidates / gated / promoted / superseded / skipped_untrusted / failed / **archived**） |
+| `stats` | JSON | DreamRunStatsModel 序列化（candidates / gated / promoted / superseded / skipped_untrusted / failed / **archived** / **facts_created / facts_merged / facts_dropped**——事实提取阶段三计数） |
 | `decisions` | JSON | 逐事件决策列表（DreamDecisionModel 序列化；episode_id / topic / kind / action: promoted\|skipped\|merged\|**archived** / reason / **curated_id**——归档决策主体是策展行，episode_id=0、curated_id=行主键、reason=strength_below_threshold） |
 | `diary_episode_id` | BIGINT，FK ff_memory_episodes.id（SET NULL） | 日记事件主键（未生成 / 失败为 NULL） |
 | `error` | Text | 失败原因（成功为 NULL） |

@@ -63,7 +63,7 @@ R2 设计审计放行条件：管理 API（含成本驱动与账号驱动能力�
 
 | 路由集 | 挂载 | 豁免理由 |
 |---|---|---|
-| personas / memories / usage / voice / look_at / models / search / reminders / directives | **受保护**（统一挂 `require_admin_token`） | 管理面全操作集（含模型注册表 / 搜索 provider 注册表与沙盒消费的成本 / 账号驱动能力；提醒 / 长期指令为人格作用域数据面） |
+| personas / memories / usage / voice / look_at / models / search / reminders / directives / facts | **受保护**（统一挂 `require_admin_token`） | 管理面全操作集（含模型注册表 / 搜索 provider 注册表与沙盒消费的成本 / 账号驱动能力；提醒 / 长期指令 / 人物事实为人格作用域数据面） |
 | `GET /api/v1/health` | **豁免** | 零依赖存活面（health.py docstring 契约：liveness 探针不触 DB / 池 / LLM，同理不得因鉴权配置拒答） |
 | `POST /api/v1/channels/qq/webhook` | **豁免** | 自鉴权面：NapCat 事件上报经自身 `webhook_token_env` Bearer 校验（见 [channels.md](channels.md)）；再叠 admin token 会要求部署机持有管理凭据——双重鉴权破坏上报链路 |
 

@@ -181,7 +181,9 @@ describe('PersonaFormPage — 编辑模式', () => {
     )
     expect(screen.getByLabelText(/展示名/)).toHaveValue('小助手')
     expect(screen.getByLabelText('称呼名')).toHaveValue('小助手')
-    expect(screen.getByText('M 层（中期：心情 / 关系评价）')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByText('M 层（中期：心情 / 关系评价）')).toBeInTheDocument(),
+    )
     expect(screen.getByText('S 层（短期：会话内即时状态）')).toBeInTheDocument()
   })
 

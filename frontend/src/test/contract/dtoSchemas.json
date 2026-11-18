@@ -144,6 +144,26 @@
         "schema_key": "DirectiveRecordDTO"
       },
       {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "FactEvidenceRef",
+        "schema_key": "FactEvidenceRefModel"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "FactCreateRequest",
+        "schema_key": "FactCreateDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "FactCorrectRequest",
+        "schema_key": "FactCorrectDTO"
+      },
+      {
+        "frontend_file": "frontend/src/types/persona.ts",
+        "frontend_type": "FactRecord",
+        "schema_key": "FactRecordDTO"
+      },
+      {
         "frontend_file": "frontend/src/types/memory.ts",
         "frontend_type": "EpisodeCreateRequest",
         "schema_key": "EpisodeCreateDTO"
@@ -2502,7 +2522,7 @@
           "type": "object"
         },
         "DreamRunStatsModel": {
-          "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。",
+          "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）；\n    - ``facts_created``：事实提取阶段新建的人物事实行数（新身份\n      事实 / 更正链首版的梦境侧产物）；\n    - ``facts_merged``：事实提取阶段收敛到既有现行事实的行数（同\n      归一化身份 → 置信度取最大值 + 证据合并的元数据刷新，不推进\n      版本）；\n    - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条\n      丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。\n    facts_created: 人物事实新建行数（事实提取阶段）。\n    facts_merged: 人物事实元数据刷新行数（事实提取阶段）。\n    facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。",
           "properties": {
             "archived": {
               "default": 0,
@@ -2516,6 +2536,27 @@
               "description": "可信候选事件数",
               "minimum": 0,
               "title": "Candidates",
+              "type": "integer"
+            },
+            "facts_created": {
+              "default": 0,
+              "description": "人物事实新建行数（事实提取阶段）",
+              "minimum": 0,
+              "title": "Facts Created",
+              "type": "integer"
+            },
+            "facts_dropped": {
+              "default": 0,
+              "description": "人物事实提案丢弃计数（事实提取阶段）",
+              "minimum": 0,
+              "title": "Facts Dropped",
+              "type": "integer"
+            },
+            "facts_merged": {
+              "default": 0,
+              "description": "人物事实元数据刷新行数（事实提取阶段）",
+              "minimum": 0,
+              "title": "Facts Merged",
               "type": "integer"
             },
             "failed": {
@@ -2664,7 +2705,7 @@
       "type": "object"
     },
     "DreamRunStatsModel": {
-      "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。",
+      "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）；\n    - ``facts_created``：事实提取阶段新建的人物事实行数（新身份\n      事实 / 更正链首版的梦境侧产物）；\n    - ``facts_merged``：事实提取阶段收敛到既有现行事实的行数（同\n      归一化身份 → 置信度取最大值 + 证据合并的元数据刷新，不推进\n      版本）；\n    - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条\n      丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。\n    facts_created: 人物事实新建行数（事实提取阶段）。\n    facts_merged: 人物事实元数据刷新行数（事实提取阶段）。\n    facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。",
       "properties": {
         "archived": {
           "default": 0,
@@ -2678,6 +2719,27 @@
           "description": "可信候选事件数",
           "minimum": 0,
           "title": "Candidates",
+          "type": "integer"
+        },
+        "facts_created": {
+          "default": 0,
+          "description": "人物事实新建行数（事实提取阶段）",
+          "minimum": 0,
+          "title": "Facts Created",
+          "type": "integer"
+        },
+        "facts_dropped": {
+          "default": 0,
+          "description": "人物事实提案丢弃计数（事实提取阶段）",
+          "minimum": 0,
+          "title": "Facts Dropped",
+          "type": "integer"
+        },
+        "facts_merged": {
+          "default": 0,
+          "description": "人物事实元数据刷新行数（事实提取阶段）",
+          "minimum": 0,
+          "title": "Facts Merged",
           "type": "integer"
         },
         "failed": {
@@ -3385,6 +3447,369 @@
         "updated_at"
       ],
       "title": "EpisodeRecordDTO",
+      "type": "object"
+    },
+    "FactCorrectDTO": {
+      "description": "事实更正入参（主人纠正面——旧版本进入 supersede 历史链）。\n\nAttributes:\n    content: 更正后的事实陈述（1-1000 字符）。\n    confidence: 更正后的置信度（None = 保留原行置信度）。",
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "更正后置信度（None = 保留）",
+          "title": "Confidence"
+        },
+        "content": {
+          "description": "更正后的事实陈述（1-1000 字符）",
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "title": "FactCorrectDTO",
+      "type": "object"
+    },
+    "FactCreateDTO": {
+      "$defs": {
+        "FactEvidenceRefModel": {
+          "description": "事实证据引用（ff_persona_facts.evidence 数组元素 / 管理面读取面）。\n\nAttributes:\n    episode_id: 情景事件主键（None = 手工事实无事件背书——主人直接\n        告知的事实）；写路径校验事件存在且属于当前人格，失败按\n        「丢弃该证据」处理（不阻断事实写入）。\n    quote: 逐字摘录（≤200 字符——梦境提取面由系统从被引用事件正文\n        逐字截取，手工面由主人填写；成为 compose 证据展开的展示面）。\n    ts_ms: 证据事件时间（epoch 毫秒；手工事实为录入时刻）。\n    provenance: 证据来源可信度（owner / agent——untrusted 永不出现在\n        本表）。",
+          "properties": {
+            "episode_id": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "情景事件主键（None = 手工事实）",
+              "title": "Episode Id"
+            },
+            "provenance": {
+              "$ref": "#/$defs/MemoryProvenance",
+              "description": "证据来源可信度（owner/agent）"
+            },
+            "quote": {
+              "description": "逐字摘录（≤200 字符）",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Quote",
+              "type": "string"
+            },
+            "ts_ms": {
+              "description": "证据事件时间（epoch 毫秒）",
+              "minimum": 0,
+              "title": "Ts Ms",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "quote",
+            "ts_ms",
+            "provenance"
+          ],
+          "title": "FactEvidenceRefModel",
+          "type": "object"
+        },
+        "MemoryProvenance": {
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "enum": [
+            "owner",
+            "agent",
+            "untrusted"
+          ],
+          "title": "MemoryProvenance",
+          "type": "string"
+        },
+        "PersonaFactCategory": {
+          "description": "事实类别值域（ff_persona_facts.category）。\n\n- ``preference``：偏好（口味 / 作息 / 说话习惯 / 喜恶）；\n- ``biography``：背景（职业 / 经历 / 家庭与社会关系事实）；\n- ``relationship``：关系（对方的称呼 / 相处模式 / 边界约定）；\n- ``context``：近况（近期目标 / 状态变化 / 当下处境）。",
+          "enum": [
+            "preference",
+            "biography",
+            "relationship",
+            "context"
+          ],
+          "title": "PersonaFactCategory",
+          "type": "string"
+        }
+      },
+      "description": "事实创建入参（管理面手工录入面）。\n\nAttributes:\n    category: 事实类别（封闭值域）。\n    content: 事实陈述（1-1000 字符——服务层做去空白归一后落库）。\n    confidence: 置信度（0-1；手工录入缺省 0.8——主人直接告知属高可信）。\n    evidence: 证据引用列表（可空——手工事实可无事件背书）。",
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/PersonaFactCategory",
+          "description": "事实类别"
+        },
+        "confidence": {
+          "default": 0.8,
+          "description": "置信度（0-1）",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "content": {
+          "description": "事实陈述（1-1000 字符）",
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "证据引用列表（可空）",
+          "items": {
+            "$ref": "#/$defs/FactEvidenceRefModel"
+          },
+          "title": "Evidence",
+          "type": "array"
+        }
+      },
+      "required": [
+        "category",
+        "content"
+      ],
+      "title": "FactCreateDTO",
+      "type": "object"
+    },
+    "FactEvidenceRefModel": {
+      "$defs": {
+        "MemoryProvenance": {
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "enum": [
+            "owner",
+            "agent",
+            "untrusted"
+          ],
+          "title": "MemoryProvenance",
+          "type": "string"
+        }
+      },
+      "description": "事实证据引用（ff_persona_facts.evidence 数组元素 / 管理面读取面）。\n\nAttributes:\n    episode_id: 情景事件主键（None = 手工事实无事件背书——主人直接\n        告知的事实）；写路径校验事件存在且属于当前人格，失败按\n        「丢弃该证据」处理（不阻断事实写入）。\n    quote: 逐字摘录（≤200 字符——梦境提取面由系统从被引用事件正文\n        逐字截取，手工面由主人填写；成为 compose 证据展开的展示面）。\n    ts_ms: 证据事件时间（epoch 毫秒；手工事实为录入时刻）。\n    provenance: 证据来源可信度（owner / agent——untrusted 永不出现在\n        本表）。",
+      "properties": {
+        "episode_id": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "情景事件主键（None = 手工事实）",
+          "title": "Episode Id"
+        },
+        "provenance": {
+          "$ref": "#/$defs/MemoryProvenance",
+          "description": "证据来源可信度（owner/agent）"
+        },
+        "quote": {
+          "description": "逐字摘录（≤200 字符）",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Quote",
+          "type": "string"
+        },
+        "ts_ms": {
+          "description": "证据事件时间（epoch 毫秒）",
+          "minimum": 0,
+          "title": "Ts Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "quote",
+        "ts_ms",
+        "provenance"
+      ],
+      "title": "FactEvidenceRefModel",
+      "type": "object"
+    },
+    "FactRecordDTO": {
+      "$defs": {
+        "FactEvidenceRefModel": {
+          "description": "事实证据引用（ff_persona_facts.evidence 数组元素 / 管理面读取面）。\n\nAttributes:\n    episode_id: 情景事件主键（None = 手工事实无事件背书——主人直接\n        告知的事实）；写路径校验事件存在且属于当前人格，失败按\n        「丢弃该证据」处理（不阻断事实写入）。\n    quote: 逐字摘录（≤200 字符——梦境提取面由系统从被引用事件正文\n        逐字截取，手工面由主人填写；成为 compose 证据展开的展示面）。\n    ts_ms: 证据事件时间（epoch 毫秒；手工事实为录入时刻）。\n    provenance: 证据来源可信度（owner / agent——untrusted 永不出现在\n        本表）。",
+          "properties": {
+            "episode_id": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "情景事件主键（None = 手工事实）",
+              "title": "Episode Id"
+            },
+            "provenance": {
+              "$ref": "#/$defs/MemoryProvenance",
+              "description": "证据来源可信度（owner/agent）"
+            },
+            "quote": {
+              "description": "逐字摘录（≤200 字符）",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Quote",
+              "type": "string"
+            },
+            "ts_ms": {
+              "description": "证据事件时间（epoch 毫秒）",
+              "minimum": 0,
+              "title": "Ts Ms",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "quote",
+            "ts_ms",
+            "provenance"
+          ],
+          "title": "FactEvidenceRefModel",
+          "type": "object"
+        },
+        "MemoryProvenance": {
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "enum": [
+            "owner",
+            "agent",
+            "untrusted"
+          ],
+          "title": "MemoryProvenance",
+          "type": "string"
+        },
+        "PersonaFactCategory": {
+          "description": "事实类别值域（ff_persona_facts.category）。\n\n- ``preference``：偏好（口味 / 作息 / 说话习惯 / 喜恶）；\n- ``biography``：背景（职业 / 经历 / 家庭与社会关系事实）；\n- ``relationship``：关系（对方的称呼 / 相处模式 / 边界约定）；\n- ``context``：近况（近期目标 / 状态变化 / 当下处境）。",
+          "enum": [
+            "preference",
+            "biography",
+            "relationship",
+            "context"
+          ],
+          "title": "PersonaFactCategory",
+          "type": "string"
+        },
+        "PersonaFactSource": {
+          "description": "事实来源值域（ff_persona_facts.source）。\n\n- ``dream``：夜间梦境提取（provenance 恒 ``agent``）；\n- ``manual``：管理面手工录入（provenance 恒 ``owner``）；\n- ``correction``：主人更正（provenance 恒 ``owner``——更正链保留既有\n  证据并追加更正说明）。",
+          "enum": [
+            "dream",
+            "manual",
+            "correction"
+          ],
+          "title": "PersonaFactSource",
+          "type": "string"
+        },
+        "PersonaFactStatus": {
+          "description": "事实状态值域（ff_persona_facts.status）。\n\n- ``active``：现行事实（唯一 active 由守卫标记 + 唯一键强制）；\n- ``superseded``：被更正版本取代（历史链可回溯——``superseded_by_id``\n  指向取代者）；\n- ``rejected``：被主人驳回（不再参与 compose 注入；守卫标记同步清空，\n  同身份事实可重新起链）。",
+          "enum": [
+            "active",
+            "superseded",
+            "rejected"
+          ],
+          "title": "PersonaFactStatus",
+          "type": "string"
+        }
+      },
+      "description": "事实记录读取 DTO（ORM 行归一——管理面 / 面板读取面）。\n\nAttributes:\n    id: 事实主键（更正 / 驳回 / 删除锚点）。\n    category: 事实类别。\n    content: 事实陈述。\n    confidence: 置信度（0-1）。\n    status: 事实状态（active / superseded / rejected）。\n    provenance: 来源可信度（owner / agent）。\n    source: 事实来源（dream / manual / correction）。\n    evidence: 证据引用列表（逐字摘录 + 事件回链）。\n    superseded_by_id: 取代者主键（被更正版本的链链接；active 为 None）。\n    version: 更正链版本号（首版 1，更正递增）。\n    created_at: 落库时间（epoch 毫秒）。\n    updated_at: 行更新时间（epoch 毫秒）。",
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/PersonaFactCategory",
+          "description": "事实类别"
+        },
+        "confidence": {
+          "description": "置信度（0-1）",
+          "title": "Confidence",
+          "type": "number"
+        },
+        "content": {
+          "description": "事实陈述",
+          "title": "Content",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "落库时间（epoch 毫秒）",
+          "title": "Created At",
+          "type": "integer"
+        },
+        "evidence": {
+          "description": "证据引用列表",
+          "items": {
+            "$ref": "#/$defs/FactEvidenceRefModel"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "id": {
+          "description": "事实主键",
+          "title": "Id",
+          "type": "integer"
+        },
+        "provenance": {
+          "$ref": "#/$defs/MemoryProvenance",
+          "description": "来源可信度（owner/agent）"
+        },
+        "source": {
+          "$ref": "#/$defs/PersonaFactSource",
+          "description": "事实来源（dream/manual/correction）"
+        },
+        "status": {
+          "$ref": "#/$defs/PersonaFactStatus",
+          "description": "事实状态"
+        },
+        "superseded_by_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "取代者主键（active 为 None）",
+          "title": "Superseded By Id"
+        },
+        "updated_at": {
+          "description": "行更新时间（epoch 毫秒）",
+          "title": "Updated At",
+          "type": "integer"
+        },
+        "version": {
+          "description": "更正链版本号（首版 1）",
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "category",
+        "content",
+        "confidence",
+        "status",
+        "provenance",
+        "source",
+        "version",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "FactRecordDTO",
       "type": "object"
     },
     "MemorySearchRequestDTO": {

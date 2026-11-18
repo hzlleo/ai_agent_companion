@@ -85,11 +85,11 @@ _MISSING_ENV_MESSAGE = (
     "未注入测试服务 env 的本地运行。"
 )
 
-#: alembic 迁移链 head 版本戳（0012——策展记忆生命周期列迁移）。
-HEAD_REVISION = "000000000012"
+#: alembic 迁移链 head 版本戳（0013——人物事实表迁移）。
+HEAD_REVISION = "000000000013"
 
-#: 升级 head 后的全量表集（alembic_version + 9 张 ff_* 域表——0011 新增
-#: ff_reminders；0012 只给 ff_curated_memory 加生命周期列，表集不变）。
+#: 升级 head 后的全量表集（alembic_version + 10 张 ff_* 域表——0011 新增
+#: ff_reminders；0013 新增 ff_persona_facts）。
 EXPECTED_HEAD_TABLES: frozenset[str] = frozenset(
     {
         "alembic_version",
@@ -98,6 +98,7 @@ EXPECTED_HEAD_TABLES: frozenset[str] = frozenset(
         "ff_curated_memory",
         "ff_dream_runs",
         "ff_memory_episodes",
+        "ff_persona_facts",
         "ff_persona_states",
         "ff_personas",
         "ff_reminders",

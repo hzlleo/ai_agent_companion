@@ -14,8 +14,9 @@
 | `dtos.py` | 创建 / 更新 / 复制 / 记录 / 卡片 / 状态 / 查询 / 批量 / 导入 / 特质库 DTO（Unit 文件） | `PersonaCreateDTO` / `PersonaUpdateDTO` / `PersonaCopyDTO` / `PersonaRecordDTO` / `PersonaCardDTO` / `PersonaStateUpsertDTO` / `PersonaStateDTO` / `PersonaQueryDTO` / `PersonaBatchDelete*` / `PersonaImportRequestDTO` / `PersonaImportResultModel` / `PersonaImportBatch*` / `TraitLibraryDTO` |
 | `service.py` | 注册 CRUD / 事务性主人格切换 / 可寻址集 / 状态层读写 / 批量删除 / 导入（幂等 + 冲突策略）+ `bind_persona_context` 运行期绑定 | `PersonaService` / `bind_persona_context` / `canonical_card_hash` |
 | `directives.py` / `directives_models.py` | 长期指令（USER.md 式常备指令）服务与 DTO——策展记忆 `user_note` + `directive:` 前缀命名空间的收窄面（R2b D7-14） | `DirectivesService` / `DirectiveCreateDTO` / `DirectiveUpdateDTO` / `DirectiveRecordDTO` / `DIRECTIVE_TOPIC_PREFIX` |
+| `facts.py` / `facts_models.py` / `facts_orm.py` | 人物事实（结构化事实 / 证据链 / 更正循环）服务、DTO 与 `ff_persona_facts` ORM（R2c） | `FactsService` / `FactCreateDTO` / `FactCorrectDTO` / `FactRecordDTO` / `FactQueryDTO` / `PersonaFactRow` / `PersonaFactCategory` |
 
-依赖方向：persona → core（dtos 分页 / errors / context）+ database（Base Mixins / get_async_db）+ voice（预设建议语音 `VoiceProfileModel`）；app 层（api/personas + middleware/error_handler）→ persona + core + database。**两张表均非 PersonaMixin**（见下）。
+依赖方向：persona → core（dtos 分页 / errors / context）+ database（Base Mixins / get_async_db）+ voice（预设建议语音 `VoiceProfileModel`）+ memory（人物事实的证据校验复用 `MemoryService.get_episode` 与检索层取段规则；梦境编排反向消费 `FactsService`——见 memory.md 夜间梦境）；app 层（api/personas + api/directives + api/facts + middleware/error_handler）→ persona + core + database。**`ff_personas` / `ff_persona_states` 两张表非 PersonaMixin**（见下）；**`ff_persona_facts` 是 PersonaMixin 人格作用域表**（画像属某个人格对主人的认知）。
 
 ## L / M / S 三层心理状态模型
 
@@ -95,7 +96,26 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | `state` | JSON | 非空 | 状态 JSON 文档（整体替换式更新；M 层可含 `emotion` 子文档——R2b 轻情绪引擎，见 [emotion.md](emotion.md)） |
 | `created_at` / `updated_at` | BIGINT | 非空 | epoch 毫秒（TimestampMixin） |
 
-迁移链：`backend/alembic/versions/000000000003_add_personas.py`（Revision 000000000003，Revises 000000000002——两表 + 索引 + 唯一约束）→ `000000000006_add_persona_voice_profile.py`（Revision 000000000006，Revises 000000000005——`ff_personas` 增 `voice_profile` JSON 可空列，纯增列、既有行落 NULL）→ `000000000008_persona_primary_marker.py`（Revision 000000000008，Revises 000000000007——多激活可寻址模型重构：增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active=1` 行回填 `'primary'`（旧单激活不变式保证至多一行），删 `is_active` 列；降级逆向重建；升级 / 降级 / 再升级均经 SQLite 冒烟验证）。
+### ff_persona_facts（人物事实——R2c，迁移 0013）
+
+| 列 | 类型 | 约束 / 索引 | 说明 |
+|---|---|---|---|
+| `id` | BIGINT | PK 自增（SQLite 渲染 INTEGER） | 主键 |
+| `persona_id` | VARCHAR(64) | 非空；索引（PersonaMixin 自动注入 / 过滤） | 所属人格 |
+| `category` | VARCHAR(16) | 非空；索引 | 类别（preference / biography / relationship / context） |
+| `content` | VARCHAR(1000) | 非空 | 事实陈述（服务层归一化后落库） |
+| `normalized_hash` | VARCHAR(64) | 非空；索引 | 正文归一化 sha256（事实身份轴） |
+| `confidence` | FLOAT | 非空 | 置信度（0-1） |
+| `status` | VARCHAR(16) | 非空；索引 | active / superseded / rejected |
+| `provenance` | VARCHAR(16) | 非空 | owner / agent（untrusted 服务层拒绝） |
+| `source` | VARCHAR(16) | 非空 | dream / manual / correction |
+| `evidence` | JSON | 非空 | 证据引用数组（`FactEvidenceRefModel` 序列化形态） |
+| `superseded_by_id` | BIGINT | 可空；FK `ff_persona_facts.id`（ON DELETE SET NULL） | 取代者（更正链） |
+| `version` | INT | 非空 | 更正链版本号（首版 1） |
+| `active_marker` | VARCHAR(16) | 可空；**唯一键 `uq_ff_persona_facts_active (persona_id, category, normalized_hash, active_marker)`**（NULL 共存——两方言唯一键均忽略 NULL） | 单 active 守卫标记 |
+| `created_at` / `updated_at` | BIGINT | 非空 | epoch 毫秒（TimestampMixin） |
+
+迁移链：`backend/alembic/versions/000000000003_add_personas.py`（Revision 000000000003，Revises 000000000002——两表 + 索引 + 唯一约束）→ `000000000006_add_persona_voice_profile.py`（Revision 000000000006，Revises 000000000005——`ff_personas` 增 `voice_profile` JSON 可空列，纯增列、既有行落 NULL）→ `000000000008_persona_primary_marker.py`（Revision 000000000008，Revises 000000000007——多激活可寻址模型重构：增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active=1` 行回填 `'primary'`（旧单激活不变式保证至多一行），删 `is_active` 列；降级逆向重建；升级 / 降级 / 再升级均经 SQLite 冒烟验证）→ `000000000013_persona_facts.py`（Revision 000000000013，Revises 000000000012——新建 `ff_persona_facts` + 单 active 唯一键 + 索引；SQLite 冒烟与 SeekDB 真引擎 round-trip 双双覆盖）。
 
 ## 值域
 
@@ -390,6 +410,66 @@ compose 读不到指令时自相矛盾）。副作用恒不阻断回复链路。
 前端消费面（`frontend/src/pages/personas/DirectivesPanel.tsx`）：人格编辑页
 「常备指令」卡片——列表 / 新建 / 编辑（supersede）/ 删除（确认）。
 
+## 人物画像（R2c——人物事实 / 证据链 / 更正循环）
+
+人物画像是人格对**主人（对方）**的结构化认知——与长期指令（对人格的行为约定）
+分界：指令约束「怎么回应」，事实描述对方「是什么样的人」。每轮对话组装的系统
+提示在长期指令块之后注入【关于对方】块（见 [chat.md](chat.md) 组装链）。
+
+**存储决策（锁定）**：**独立表** `ff_persona_facts`（PersonaMixin 人格作用域 +
+证据 JSON + supersede 语义）——事实是结构化数据（类别 / 置信度 / 证据回链 /
+更正链），策展记忆的自由文本 `topic` 面无法承载类别轴与证据链。
+
+| 项 | 取值 | 说明 |
+|---|---|---|
+| `category` | preference 偏好 / biography 背景 / relationship 关系 / context 近况 | 封闭值域（DTO 边界拒绝越界） |
+| `content` | 1-1000 字符（提取面提案 1-200） | NFKC + 空白折叠 + 裁剪后落库；`normalized_hash` = sha256（事实身份轴） |
+| `confidence` | 0-1 | 梦境提取 < 0.3 丢弃（`FACT_MIN_CONFIDENCE`）；手工缺省 0.8 |
+| `provenance` | owner / agent | **服务层强制配对**：dream → agent；manual / correction → owner；untrusted 一律拒绝 |
+| `source` | dream / manual / correction | 写入来源（面板展示） |
+| `evidence` | `[{episode_id, quote ≤200, ts_ms, provenance}]` | 手工事实可无事件背书（episode_id=None）；**摘录由系统从被引用事件正文逐字截取**（梦境面），证据追加合并语义 |
+
+supersede / 更正语义（与策展层同一已验证模式）：事实身份 =
+`(persona, category, normalized_hash)`；现行行 `active_marker='active'` 由唯一键
+强制（历史 / 驳回行 NULL，两方言唯一键忽略 NULL）。**同身份重复写入 = 元数据
+刷新**（置信度取最大值 + 证据合并，不推进版本）；**更正 = 新版本现行行**
+（`version` 旧行 + 1、来源 correction、旧行 superseded + `superseded_by_id`
+链接，旧证据保留并追加「主人纠正：…」证据）；**驳回 = rejected + 标记清空**
+（幂等；同内容可重新提取起链）；**删除 = 硬删除**（清空指向本行的链链接）。
+
+`FactsService` API（人格作用域——调用方先 `bind_persona_context`）：
+
+```python
+service = FactsService()                                            # 无状态；Session 逐调用注入
+result = await service.upsert_fact(session, FactCreateDTO(...))      # 创建 / 同身份元数据刷新（result.created 区分）
+record = await service.correct_fact(session, fact_id, FactCorrectDTO(...))  # 主人更正（supersede 链）
+record = await service.reject_fact(session, fact_id)                # 驳回（幂等）
+await service.delete_fact(session, fact_id)                         # 硬删除（管理面）
+page = await service.list_facts(session, FactQueryDTO(...))         # 游标分页（类别 / 状态 + 置信度降序）
+lines = await service.top_facts_for_compose(session)                # compose 注入行（12 条 / 1500 字符帽）
+```
+
+证据校验口径：带 `episode_id` 的证据须指向当前人格作用域内真实存在的情景事件；
+校验失败 / untrusted 证据按「丢弃该条证据 + 告警」处理，**不**阻断事实写入
+（证据是增强面）。他人格事实在读取 / 更正 / 驳回 / 删除面均 `NOT_FOUND`。
+
+### 管理 API 面（app/api/facts.py）
+
+前缀 `/api/v1/facts`；全部响应经 `ResultDTO` 封装，DB Session 经 `get_async_db`
+注入（事务边界归服务层）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/facts` | 事实列表（`category` / `status` 过滤 + `cursor` / `limit`；缺省 active；`persona_id` 可选——缺省主人格） |
+| POST | `/api/v1/facts` | 手工录入（body `{category, content, confidence?, evidence?}`；owner 来源） |
+| PUT | `/api/v1/facts/{id}` | 主人更正（body `{content, confidence?}`；supersede 链 +1） |
+| POST | `/api/v1/facts/{id}/reject` | 驳回（active → rejected；幂等） |
+| DELETE | `/api/v1/facts/{id}` | 硬删除（不可恢复） |
+
+前端消费面（`frontend/src/pages/personas/FactsPanel.tsx`）：人格编辑页「了解 TA」
+卡片——按类别分组的事实列表（置信度 / 来源徽章、证据展开器含逐字摘录与情景
+回链）、新建 / 更正 / 驳回 / 删除。
+
 ## 管理 API 面（app/api/personas.py）
 
 前缀 `/api/v1/personas`；全部响应经 `ResultDTO` 封装，分页经 `PageResponse`，DB Session 经 `get_async_db` 注入（事务边界归服务层）：
@@ -418,7 +498,7 @@ compose 读不到指令时自相矛盾）。副作用恒不阻断回复链路。
 
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_directives_service.py`（长期指令：topic 派生 / 同文收敛 / 显式 topic 覆盖 / 边界 / 命名空间收窄 / 注入帽 / 链更新 / 删除 / 人格隔离）/ `test_directives_api.py`（长期指令 HTTP 面：CRUD + 隔离 404）/ `src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元：v2 基础校验 + R2b 高级字段界校验 / include_group 归一 / recursive 总开关规格一致性 / 加性字段 JSON 往返）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_trait_library.py`（R2b-2 特质库：组件 / 预设模型规格（kebab / 分类值域 / 空组合拒绝）+ 纯函数生成（后缀拼接 / 分号拼接序 / 指令行拼接 / `<START>` 台词块 / 建议世界书并入 / 冲突软警告双向去重 / 未知组件 fail loud）+ 官方库装载（真实随包 YAML——8 预设名单序 / 全引用合法 / 发行零冲突 / 缓存命中）+ 显式目录违约形态 fail loud（缺失 / 结构 / 重复 id / 未知引用 / 发行冲突预设 / 空库））/ `test_persona_import_service.py`（R2b-2 导入服务：判定序（内容同卡三策略恒幂等）+ 名称冲突三策略矩阵（skip / rename 自动后缀链 / overwrite 保状态保标记保语音）+ 期望名 / 载荷恰一 + 批量部分成功（合法跳过成功项 / 解析失败失败项 / 计数面））/ `test_persona_import_api.py`（R2b-2 导入 HTTP 面：预设库读取 + JSON / multipart 双面矩阵（预设生成 / 期望名 + 后缀 / 同卡幂等 / 冲突三策略 / 未知预设 404 / 载荷恰一 422 / 策略非法 422 / 空体 400 / 非法 JSON 400/422）+ 批量部分成功（rename 策略表单字段）+ 处理器直调契约面）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；世界书选择算法链的运行语义测试在 chat 域 `test_chat_world_book.py`（见 chat.md）；
+- 测试位置：`src/tests/unit/test_facts_service.py`（人物事实：归一化 / 身份指纹 / 创建与元数据刷新 / provenance 配对 / 证据校验丢弃 / 更正链与证据追加 / 驳回幂等 / 删除引用清理 / 列表过滤与游标 / compose 裁剪 / 人格隔离）/ `test_facts_api.py`（人物事实 HTTP 面：CRUD + 驳回 + 过滤 / 游标 + 隔离 404）/ `test_migration_persona_facts.py`（迁移 0013 SQLite round-trip）/ `src/tests/unit/test_directives_service.py`（长期指令：topic 派生 / 同文收敛 / 显式 topic 覆盖 / 边界 / 命名空间收窄 / 注入帽 / 链更新 / 删除 / 人格隔离）/ `test_directives_api.py`（长期指令 HTTP 面：CRUD + 隔离 404）/ `src/tests/unit/test_persona_chara_card.py`（卡片规格纯单元：v2 基础校验 + R2b 高级字段界校验 / include_group 归一 / recursive 总开关规格一致性 / 加性字段 JSON 往返）/ `test_persona_service.py`（服务面：主人格事务性切换 / 并发收敛（唯一键 + 冲突重试 + gather 双切恰一主人格）/ 停用守卫 / 复制含状态 / 唯一名冲突 / 删除守卫 / 可寻址集 / 状态 upsert / 批量部分成功 / 提交失败回滚）/ `test_persona_trait_library.py`（R2b-2 特质库：组件 / 预设模型规格（kebab / 分类值域 / 空组合拒绝）+ 纯函数生成（后缀拼接 / 分号拼接序 / 指令行拼接 / `<START>` 台词块 / 建议世界书并入 / 冲突软警告双向去重 / 未知组件 fail loud）+ 官方库装载（真实随包 YAML——8 预设名单序 / 全引用合法 / 发行零冲突 / 缓存命中）+ 显式目录违约形态 fail loud（缺失 / 结构 / 重复 id / 未知引用 / 发行冲突预设 / 空库））/ `test_persona_import_service.py`（R2b-2 导入服务：判定序（内容同卡三策略恒幂等）+ 名称冲突三策略矩阵（skip / rename 自动后缀链 / overwrite 保状态保标记保语音）+ 期望名 / 载荷恰一 + 批量部分成功（合法跳过成功项 / 解析失败失败项 / 计数面））/ `test_persona_import_api.py`（R2b-2 导入 HTTP 面：预设库读取 + JSON / multipart 双面矩阵（预设生成 / 期望名 + 后缀 / 同卡幂等 / 冲突三策略 / 未知预设 404 / 载荷恰一 422 / 策略非法 422 / 空体 400 / 非法 JSON 400/422）+ 批量部分成功（rename 策略表单字段）+ 处理器直调契约面）/ `test_persona_api.py`（HTTP 面 ASGITransport + 错误映射 + 批量部分成功；处理器直调契约面）/ `test_app_error_handler.py`（异常处理器映射：状态码 / ResultDTO 形态 / headers 透传 / 400 校验形态 / 幂等注册）；世界书选择算法链的运行语义测试在 chat 域 `test_chat_world_book.py`（见 chat.md）；
 - 全部 `async def test_`；引擎经共享会话级 SQLite fixture（StaticPool 单连接 + 每测试自动清表）；HTTP 面零真实网络（ASGITransport 本地装配 app）；预设库装载测试用真实随包 YAML（仓库数据即 hermetic）；
-- 覆盖率（scoped 实测）：harness/persona **100%**、app/api **100%**、app/middleware **100%**；
+- 覆盖率（scoped 实测）：harness/persona ≥95%（含人物事实面）、app/api ≥85%、app/middleware **100%**；
 - 运行：`cd backend && pixi run tests-unit`。

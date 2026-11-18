@@ -34,18 +34,22 @@
                                                        式常备指令（见
                                                        [persona.md](persona.md)
                                                        长期指令一节）
-    ⑥ render_output_protocol()                          R2b 输出格式协议
+    ⑥ 人物事实块（facts 非空时）                        R2c「关于对方」——
+                                                       现行高置信事实（见
+                                                       [persona.md](persona.md)
+                                                       人物画像一节）
+    ⑦ render_output_protocol()                          R2b 输出格式协议
                                                        （心声 / 情绪标签指令）
-    ⑦ 世界书 after_char 条目块                          检索增强（行为补充）
+    ⑧ 世界书 after_char 条目块                          检索增强（行为补充）
 [历史回合]
-    ⑧ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合）
+    ⑨ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合）
 [system 末块]
-    ⑨ render_post_history_message(card)                历史后再注入（deep
+    ⑩ render_post_history_message(card)                历史后再注入（deep
                                                        anti-drift nudge——
                                                        卡片声明 post_history_instructions 时）
 ```
 
-各块以 `\n\n` 连接；⑨ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
+各块以 `\n\n` 连接；⑩ 位于**最后一条历史回合之后**（紧邻生成位——防长对话人格漂移）。
 
 长期指令块（⑤）的渲染语义（`render_directives_block`）：每条指令一行
 `- 正文`；最多 20 条且总字符 ≤ 2000（含列表符号）——超帽追加
@@ -53,10 +57,17 @@
 （`DIRECTIVES_BLOCK_TEMPLATE`）与截断说明行（`DIRECTIVES_TRUNCATION_NOTE`）
 同属 prompt Unit 文件 byte-lock 面（版本常量 `DIRECTIVES_BLOCK_TEMPLATE_VERSION`）。
 
-注：`compose_messages(state, rng=None, emotion_summary=None, directives=None)`
-仍是纯函数——M 态读取 / 衰减与常备指令读取均在 `ChatService` 侧（仅持久化
-会话已落库且对应服务已接线时激活），纯内存形态 / 无持久化测试面零附加 I/O。
-长期指令读取失败不阻断回复（日志 + 空块——增强面语义）。
+人物事实块（⑥）的渲染语义（`render_facts_block`）：每条事实一行
+`- 【类别标签】正文`；注入行由 `FactsService.top_facts_for_compose` 提供并按
+置信度降序裁剪（12 条 / 1500 字符帽——含类别标签与行符号），无现行事实时整块
+跳过。块文本模板（`FACTS_BLOCK_TEMPLATE`）属 prompt Unit 文件 byte-lock 面
+（版本常量 `FACTS_BLOCK_TEMPLATE_VERSION`）。
+
+注：`compose_messages(state, rng=None, emotion_summary=None, directives=None,
+facts=None)` 仍是纯函数——M 态读取 / 衰减、常备指令与人物事实读取均在
+`ChatService` 侧（仅持久化会话已落库且对应服务已接线时激活），纯内存形态 /
+无持久化测试面零附加 I/O。长期指令 / 人物事实读取失败均不阻断回复（日志 +
+空块——增强面语义；事实读取面协议见 `FactsReaderFace`）。
 
 ### 意图快径（含 DIRECTIVE 常备指令捕获——R2b D7-14）
 
@@ -275,8 +286,8 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 
 ## prompt 版本与 byte-lock
 
-prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本——R2b 输出协议 /
-心情块加入后为 1.1.0）+ 逐模板 `*_TEMPLATE_VERSION`（含新增
+prompts.py 模块级版本常量：`PROMPTS_VERSION`（套件总版本——人物事实块加入后
+为 1.3.0）+ 逐模板 `*_TEMPLATE_VERSION`（含新增
 `OUTPUT_PROTOCOL_TEMPLATE_VERSION` / `EMOTION_STATE_TEMPLATE_VERSION`）。模板文本变更 = 行为变更，须同步：① 上调版本常量；② 更新 `tests/unit/test_chat_prompts.py` 的 sha256 摘要锁（`_BYTE_LOCKS`）——测试红即「知情确认」关卡。
 
 ## 控制台 CLI（pixi run chat）

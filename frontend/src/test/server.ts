@@ -14,6 +14,7 @@ import { API_BASE_URL, API_PREFIX } from '@/api/client'
 import type { ResultDTO } from '@/types/common'
 import type {
   DirectiveRecord,
+  FactRecord,
   PersonaRecord,
   PersonaState,
   TraitComponent,
@@ -635,6 +636,9 @@ export function mockDreamRun(overrides: Partial<DreamRunRecord> = {}): DreamRunR
       skipped_untrusted: 1,
       failed: 0,
       archived: 0,
+      facts_created: 1,
+      facts_merged: 1,
+      facts_dropped: 0,
     },
     decisions: [
       { episode_id: 1, topic: 'favorite-food', kind: 'memory', action: 'promoted', reason: '分数达标，晋升为新主题' },
@@ -1436,6 +1440,122 @@ export const directiveHandlers = [
   }),
 ]
 
+// ---------------------------------------------------------------------------
+// facts 域（人物事实——结构化事实 / 证据链 / 更正循环）
+// ---------------------------------------------------------------------------
+
+/** 测试用人物事实记录（wire 形态——含证据链）。 */
+export function mockFact(overrides: Partial<FactRecord> = {}): FactRecord {
+  return {
+    id: 1,
+    category: 'preference',
+    content: '主人喜欢无糖乌龙茶',
+    confidence: 0.9,
+    status: 'active',
+    provenance: 'agent',
+    source: 'dream',
+    evidence: [
+      {
+        episode_id: 12,
+        quote: '用户：我喜欢喝无糖乌龙茶',
+        ts_ms: 1731000000000,
+        provenance: 'owner',
+      },
+    ],
+    superseded_by_id: null,
+    version: 1,
+    created_at: 1731000000000,
+    updated_at: 1731000000000,
+    ...overrides,
+  }
+}
+
+/** facts 域默认 handlers（成功形态 + 404 面）。 */
+export const factHandlers = [
+  // 列表：分页包裹的两条现行事实（不同类别）。
+  http.get(`${BACKEND_ORIGIN}/facts`, () => {
+    return HttpResponse.json(
+      okResult({
+        items: [
+          mockFact(),
+          mockFact({
+            id: 2,
+            category: 'biography',
+            content: '主人在杭州工作',
+            confidence: 0.7,
+            source: 'manual',
+            provenance: 'owner',
+            evidence: [],
+          }),
+        ],
+        total: -1,
+        page: 1,
+        page_size: 200,
+        next_cursor: null,
+        has_more: false,
+      }),
+    )
+  }),
+  // 创建：回显新记录（owner 手工来源）。
+  http.post(`${BACKEND_ORIGIN}/facts`, async ({ request }) => {
+    const body = (await request.json()) as {
+      category: FactRecord['category']
+      content: string
+      confidence?: number
+    }
+    return HttpResponse.json(
+      okResult(
+        mockFact({
+          id: 9,
+          category: body.category,
+          content: body.content,
+          confidence: body.confidence ?? 0.8,
+          source: 'manual',
+          provenance: 'owner',
+          evidence: [],
+        }),
+        '人物事实已保存',
+      ),
+    )
+  }),
+  // 更正：id=404 → 404；其余 → version+1 + correction 来源。
+  http.put(`${BACKEND_ORIGIN}/facts/:factId`, async ({ request, params }) => {
+    const id = Number(params.factId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('人物事实不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    const body = (await request.json()) as { content: string; confidence?: number }
+    return HttpResponse.json(
+      okResult(
+        mockFact({
+          id: id + 100,
+          content: body.content,
+          confidence: body.confidence ?? 0.9,
+          source: 'correction',
+          version: 2,
+        }),
+        '人物事实已更正',
+      ),
+    )
+  }),
+  // 驳回：id=404 → 404；其余 → rejected。
+  http.post(`${BACKEND_ORIGIN}/facts/:factId/reject`, ({ params }) => {
+    const id = Number(params.factId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('人物事实不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    return HttpResponse.json(okResult(mockFact({ id, status: 'rejected' }), '人物事实已驳回'))
+  }),
+  // 删除：id=404 → 404；其余成功。
+  http.delete(`${BACKEND_ORIGIN}/facts/:factId`, ({ params }) => {
+    const id = Number(params.factId)
+    if (id === 404) {
+      return HttpResponse.json(errorResult('人物事实不存在', 'NOT_FOUND'), { status: 404 })
+    }
+    return HttpResponse.json(okResult(null, '人物事实已删除'))
+  }),
+]
+
 /** 共享 msw 服务器（setup.ts 管理生命周期）。 */
 export const server = setupServer(
   ...personaHandlers,
@@ -1444,4 +1564,5 @@ export const server = setupServer(
   ...modelHandlers,
   ...reminderHandlers,
   ...directiveHandlers,
+  ...factHandlers,
 )
