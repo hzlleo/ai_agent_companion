@@ -182,6 +182,20 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
       ``intimacy_ceiling`` 形参供未来接线），边界文档化于
       ``persona.relationship_models`` 模块文档。
 
+亲密通道路由输入（R2b+ 乙分轨——可选独立模型端点，默认关闭）：
+
+    - 本服务**只声明路由输入**：把本轮关系摘要的 ``intimacy_level`` 原样
+      传给网关的 ``chat_by_role`` / ``stream_by_role``（``intimacy_level``
+      关键字）；开关 / 配置齐全性 / 阈值 / 端点与凭据选择全部在 llm 域
+      完成（见 ``llm.intimate_router`` 与 docs/backend/llm.md「亲密通道」
+      一节）；
+    - 一致性：``reply`` 的单次调用、工具循环的每一步与收尾调用、合规
+      强化重试、``stream_reply`` 的全部网关调用携带同一输入——同一回合
+      不会被换到另一条通道；
+    - 摘要缺失（读取面未接线 / 未落库）传 ``None``、读取降级传空摘要的
+      等级 0——两种情况都低于缺省阈值，自然回退默认通道；亲密通道调用
+      失败按网关既有错误语义上抛，本服务不做静默换道。
+
 相关技能注入（R2c——构造注入 ``skills_reader`` 后）：
 
     - compose 链在关系进展块之后、输出格式协议之前注入【相关技能】块
@@ -1146,12 +1160,16 @@ class ChatService:
         # 本服务消费后落回（快径路径不组装、不推进——时钟只度量真实
         # 组装回合）。
         state.world_book_state = result.world_book_state
+        # 亲密通道路由输入：只声明本轮关系摘要的等级；端点选择与阈值裁决
+        # 在 llm 网关完成（摘要缺失 / 降级为空摘要 → None / 0 → 默认通道）。
+        intimacy_level = relationship.intimacy_level if relationship is not None else None
         if self._tools_binding is not None:
             raw_content = await self._tool_loop(
                 result.messages,
                 state,
                 self._tools_binding,
                 sender_provenance=sender_provenance,
+                intimacy_level=intimacy_level,
             )
         else:
             response: ChatResponseModel = await self._gateway.chat_by_role(
@@ -1159,10 +1177,11 @@ class ChatService:
                 result.messages,
                 persona_id=str(state.persona_id),
                 purpose=CHAT_PURPOSE,
+                intimacy_level=intimacy_level,
             )
             raw_content = response.content
         raw_content = await self._apply_compliance_retry(
-            result.messages, raw_content, state
+            result.messages, raw_content, state, intimacy_level=intimacy_level
         )
         parsed = parse_assistant_output(raw_content)
         content = parsed.visible_text
@@ -1238,6 +1257,7 @@ class ChatService:
         )
         # 功能式回合状态回存（与 reply 同构——冷却时钟只度量真实组装回合）。
         state.world_book_state = result.world_book_state
+        intimacy_level = relationship.intimacy_level if relationship is not None else None
         stripper = StreamTagStripper()
         parts: list[str] = []
         async for chunk in self._gateway.stream_by_role(
@@ -1245,6 +1265,7 @@ class ChatService:
             result.messages,
             persona_id=str(state.persona_id),
             purpose=CHAT_PURPOSE,
+            intimacy_level=intimacy_level,
         ):
             if not chunk.content:
                 continue
@@ -1345,6 +1366,8 @@ class ChatService:
         messages: Sequence[ChatMessageModel],
         raw_content: str,
         state: ChatSessionStateModel,
+        *,
+        intimacy_level: int | None = None,
     ) -> str:
         """人格输出合规守卫：命中助手腔时做一次强化重试。
 
@@ -1365,6 +1388,9 @@ class ChatService:
             raw_content: 网关返回的原始回复文本（含可能的协议标签）。
             state: 会话状态（卡片人格名进提醒块——与角色契约同名；人格
                 ID 进日志与请求参数）。
+            intimacy_level: 本轮关系摘要的亲密等级（0-3；None = 摘要不可用）
+                ——重试请求沿用同一路由输入，避免重试回合被换到另一条
+                通道。
 
         Returns:
             最终采用的原始回复文本（未命中 / 守卫关闭 / 重试禁用时为入参
@@ -1400,6 +1426,7 @@ class ChatService:
             ),
             persona_id=str(state.persona_id),
             purpose=CHAT_PURPOSE,
+            intimacy_level=intimacy_level,
         )
         return response.content
 
@@ -1410,6 +1437,7 @@ class ChatService:
         binding: tuple[list[ToolDefinitionModel], ToolExecutorFace],
         *,
         sender_provenance: MemoryProvenance = MemoryProvenance.OWNER,
+        intimacy_level: int | None = None,
     ) -> str:
         """有界工具循环（返回最终回复文本；机械镜像 duty_service._tool_loop）。
 
@@ -1432,6 +1460,9 @@ class ChatService:
             binding: 工具面绑定（定义列表 + 执行面——reply 分派传入）。
             sender_provenance: 本轮发送者来源分级（缺省 owner——私聊 /
                 本地入口；群聊 peer 会剔除自编辑工具）。
+            intimacy_level: 本轮关系摘要的亲密等级（0-3；None = 摘要不可用
+                ——逐次网关调用原样透传，通道选择在 llm 网关完成；工具循环
+                的每一步与收尾调用保持同一路由输入）。
 
         Returns:
             最终回复文本（空串 = 模型未产出——调用方归
@@ -1456,6 +1487,7 @@ class ChatService:
                     tools=active_definitions or None,
                     persona_id=persona_id,
                     purpose=CHAT_PURPOSE,
+                    intimacy_level=intimacy_level,
                 )
                 if not response.tool_calls:
                     return response.content.strip()
@@ -1488,6 +1520,7 @@ class ChatService:
                 loop_messages,
                 persona_id=persona_id,
                 purpose=CHAT_PURPOSE,
+                intimacy_level=intimacy_level,
             )
             return final_response.content.strip()
         finally:

@@ -16,6 +16,8 @@ from generate_examples_helpers import (
 )
 from pydantic_settings import BaseSettings
 
+from packages.harness.chat.compliance_models import ComplianceGuardSettings
+from packages.harness.chat.injection_models import InjectionGuardSettings
 from packages.harness.config.models import (
     AsrSettings,
     DatabaseConfig,
@@ -36,9 +38,8 @@ from packages.harness.config.models import (
     WebSearchSettings,
 )
 from packages.harness.emotion.emotion_models import EmotionSettings
-from packages.harness.chat.compliance_models import ComplianceGuardSettings
-from packages.harness.chat.injection_models import InjectionGuardSettings
 from packages.harness.intent.intent_models import IntentSettings
+from packages.harness.llm.intimate_models import IntimateChannelConfig
 from packages.harness.rhythm.rhythm_models import RhythmSettings
 
 # .env.example 分节标题: (section_title, config_classes)
@@ -48,6 +49,7 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("LOG — 日志配置（三 sink：console + 文本 + JSON）", [LogConfig]),
     ("POOLS — 共享池配置（线程池 / HTTP 池 / LLM 信号量 / 熔断）", [PoolsConfig]),
     ("LLM — 默认端点 env 面（模型注册表经 config.yaml 配置）", [LlmEndpointConfig]),
+    ("LLM.INTIMATE — 亲密回复独立通道（默认关闭；base_url / api_key / model 三项齐全且开关开启才生效）", [IntimateChannelConfig]),
     ("SEEKDB — 检索存储配置（enabled=False 走 SQLite 回退；密码经 SEEKDB_PASSWORD 间接）", [SeekDBSettings]),
     ("CHANNELS.TELEGRAM — Telegram 通道配置（机器人令牌经 TELEGRAM_BOT_TOKEN 间接）", [TelegramSettings]),
     ("CHANNELS.QQ — QQ 通道配置（NapCat OneBot v11；令牌经 QQ_ACCESS_TOKEN / QQ_WEBHOOK_TOKEN 间接）", [QqChannelSettings]),

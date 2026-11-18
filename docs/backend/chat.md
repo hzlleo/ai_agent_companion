@@ -231,6 +231,15 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 
 网关调用参数恒定：`role=chat`、`purpose="chat"`、`persona_id=str(persona_id)` 显式直传（与 `bind_persona_context` 上下文语义等价；选直传为可测性）。
 
+**亲密通道路由输入（可选独立端点，默认关闭）**：`reply` / `stream_reply` 把本轮
+关系摘要的 `intimacy_level`（0-3）作为 `intimacy_level` 关键字传给网关；开关、
+配置齐全性、阈值与端点 / 模型 / 凭据选择全部在 llm 网关完成（键表、路由矩阵与
+失败语义见 [llm.md](llm.md)「亲密通道」一节）。一致性锁定：`reply` 的单次调用、
+工具循环每一步与收尾调用、合规强化重试、`stream_reply` 的全部网关调用携带同一
+输入——同一回合不会被换到另一条通道。关系摘要未接线（纯内存 / CLI 形态）传
+`None`，读取失败降级为空摘要（stranger / 0）——两者都回退默认通道；亲密通道
+调用失败沿用既有网关错误语义上抛，本域不做静默换道。
+
 **工具循环（可选工具面——R2a-4）与自编辑写入闸（R2c）**：构造注入
 `tools` + `tool_executor` 后，`reply` 走有界工具循环（机械镜像 duty 域：
 gateway `chat_by_role(..., tools=specs)` → assistant 工具调用轮回放 →

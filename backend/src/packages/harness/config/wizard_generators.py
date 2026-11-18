@@ -16,9 +16,11 @@
 全部消费方生效。
 
 步骤定义（``_STEP_DEFINITIONS``）覆盖 .env.example 的全部分节前缀
-（SERVER / DATABASE / LOG / POOLS / LLM / SEEKDB / TELEGRAM / QQ /
-DUTY / DREAM_SCHEDULE / SCHEDULER / TOOLS_SANDBOX / VOICE_TTS /
-VOICE_ASR / ENV），与模板分节顺序一致。
+（SERVER / DATABASE / LOG / POOLS / LLM_INTIMATE / LLM / SEEKDB /
+TELEGRAM / QQ / DUTY / DREAM_SCHEDULE / SCHEDULER / TOOLS_SANDBOX /
+VOICE_TTS / VOICE_ASR / ENV），与模板分节顺序一致。前缀存在包含关系时
+（``LLM_INTIMATE_`` ⊂ ``LLM_``）按定义顺序首次命中归属，模板键不会在
+两个步骤里重复出现。
 """
 
 from __future__ import annotations
@@ -49,6 +51,9 @@ _STEP_DEFINITIONS: list[tuple[str, list[str]]] = [
     ("数据库配置", ["DATABASE_"]),
     ("日志配置", ["LOG_"]),
     ("连接池配置", ["POOLS_"]),
+    # 亲密通道步骤必须先于「LLM 端点配置」：LLM_INTIMATE_* 同时命中
+    # LLM_ 前缀，先归入更具体的步骤（build_setup_schema 按首次命中归属）。
+    ("亲密回复通道配置", ["LLM_INTIMATE_"]),
     ("LLM 端点配置", ["LLM_"]),
     ("SeekDB 检索配置", ["SEEKDB_"]),
     ("Telegram 通道配置", ["TELEGRAM_"]),
@@ -88,10 +93,14 @@ def build_setup_schema() -> SetupSchema:
     fields = parse_env_template(wizard_paths.ENV_EXAMPLE)
 
     steps: list[SetupStep] = []
+    claimed: set[str] = set()
     for step_name, prefixes in _STEP_DEFINITIONS:
         step_fields: list[SetupField] = []
         for f in fields:
+            if f.key in claimed:
+                continue
             if any(f.key.startswith(prefix) for prefix in prefixes):
+                claimed.add(f.key)
                 step_fields.append(
                     SetupField(
                         key=f.key,

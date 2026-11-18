@@ -87,7 +87,7 @@
 | R2b 人格表达 | ①世界书高级（depth/recursive/groups/probability/cooldown）②性格组件库（33组件×8原型预设+导入API+冲突UI，DTO 68组）③内心独白协议+轻情绪引擎（8维/M层）④swipes 变体（迁移0010）⑤提醒（ff_reminders 迁移0011+扫描作业）+常备指令 | ✅ 代码完成，**PR #11 OPEN（未合并）**，分支 `feat/r2b-persona-expression` 最新 `c65b930` |
 | R2c 记忆关系 | c1 管线闭环+生命周期（迁移0012/索引真接线/归档/审计二审整改）✅`99317c6`；c2 人物画像事实链（迁移0013/facts 域/梦境提取阶段/纠错闭环）✅`0880cc1`；c2b provenance 分级紧急修（PEER 枚举/群聊 peer 落档/梦境双排除/skipped_peer 统计/证据面纵深防御）✅ 已实现并全量验收；c3 SKILL层+历史挖矿（迁移 0014 `ff_persona_skills` / `SkillsService` / 梦境 skills 提取阶段 / compose 相关技能块 / API+面板+文档）✅ 代码完成、全门禁绿；c4 自编辑核心记忆+溯源闸（迁移 0015 `ff_core_memory_blocks` / `ff_core_memory_revisions` / `CoreMemoryService` / `edit_core_memory` 工具 + 发送者来源分级结构性工具闸 / compose【自我认知】块 / API+面板+文档）✅ 代码完成、全门禁绿（含活 SeekDB 0015 round-trip）；c5 终验PR —— **待做** | 🔄 进行中 |
 | R2-defense | 丙+丁：D1 结构隔离 + 宪章五条 + nonce 定界、D2 注入检测 + 角色内反击（毒舌 / 温柔 / 傲娇）、D3 peer 记忆免疫与来源标注、D4 38 条红队回归集 | ✅ 代码完成、全门禁绿（2026-11；`INJECTION_*` 示例模板生成待主 Agent 补齐） |
-| R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | 🔄 甲套件 core（角色契约 compose 常驻块 + 助手腔检测 + 1 次强化重试）+ 组件库A/成熟度分层（126 组件 × 十二类目 × 3 条示例台词；33 suggestive / 15 explicit；11 预设 × intimacy_level 1-3 × 四态场景脚本（10 个 SFW 预设 + 1 个 explicit 亲密包）；生成期覆盖过滤 + 导入端点 override）+ 关系连续性A（关系进展摘要：关系类事实派生 / 衰减得分 / 阶段阶梯 / compose 恒注入块）✅ 代码完成、全门禁绿；余：示例台词 few-shot / 乙分轨 |
+| R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | 🔄 甲套件 core（角色契约 compose 常驻块 + 助手腔检测 + 1 次强化重试）+ 组件库A/成熟度分层（126 组件 × 十二类目 × 3 条示例台词；33 suggestive / 15 explicit；11 预设 × intimacy_level 1-3 × 四态场景脚本（10 个 SFW 预设 + 1 个 explicit 亲密包）；生成期覆盖过滤 + 导入端点 override）+ 关系连续性A（关系进展摘要：关系类事实派生 / 衰减得分 / 阶段阶梯 / compose 恒注入块）+ 乙分轨（`LLM_INTIMATE_*` 独立端点通道：默认关闭 / 路由裁决纯函数 / 公共池复用 / 失败不静默换道）✅ 代码完成、全门禁绿；余：示例台词 few-shot |
 | R2d 心流社交 | 心流门控/群聊多人格/声纹/表情包库+VLM标注 | ⏳ |
 | R2e 通道扩展 | 企微智能机器人（长连接）/GUI 微信容器化（PoC 门）/抖音 web（同底座）/表情包收发/Canvas | ⏳ |
 | R2f 实时语音 | 独立全双工会话（VAD+流式ASR+句级TTS+打断），允许溢出 R3 | ⏳ |
@@ -130,7 +130,7 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2258 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 2339 passed）
 cd backend && pixi run coverage-gates       # 23 组 ≥80% enforce
 cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 6 用例（迁移链/并发唯一键/行锁/混合检索）
@@ -177,6 +177,17 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 5. docs：persona.md 组件 schema（含 `sample_speech` 迁移说明）/ 成熟度映射表 / 场景脚本语义 / 计数；README / 本台账；DTO fixture 79 组双侧重生成。
 **验证**：后端 2258 passed / 23 组覆盖率（harness/persona 94.9%）/ mypy 153 文件零问题 / ruff / 门禁链全绿（注释门 + noqa 冻结 + 沙盒漂移 36 + sync 棘轮 0）/ DTO fixture 79 组；前端 559 passed / coverage（96.23% statements）/ lint / build。
 **剩余**：示例台词 few-shot 注入（chat 提示面）/ 乙分轨 roles:intimate 端点 / 关系连续性 A。
+
+### 已完成切片：R2b+ 乙分轨（亲密回复独立模型通道 roles:intimate）
+**已完成**：
+1. `harness/llm/intimate_models.py`：`IntimateChannelConfig`（`LLM_INTIMATE_` env 面：enabled / base_url / api_key / model / temperature / min_intimacy_level；默认关闭、必填项判定与缺项清单）+ `IntimateRouteReason` / `IntimateRouteDecisionModel`（裁决契约，模型与逻辑分文件、禁裸 dict）。
+2. `harness/llm/intimate_router.py`：确定性纯函数——`evaluate_intimate_route`（开关 → 配置齐全 → 摘要可用 → 阈值，先命中者结论）/ `build_intimate_entry`（条目键 `llm-intimate-channel`）/ `build_intimate_request_params`（通道温度只补调用方未设置的字段）/ `log_incomplete_intimate_config`（半配置单次告警文案）。
+3. `harness/llm/gateway.py`：`chat_by_role` / `stream_by_role` 新增 `intimacy_level` 输入并按裁决切换端点；命中路径复用公共 HTTP 池 + 条目池（专属信号量 / 熔断器 / 用量条目名），wire 凭据直接取通道配置不回落全局密钥；半配置 warning 单次闩；调用失败按既有 `LLM_*` 映射上抛，不静默换道。
+4. `harness/chat/service.py`：`reply` / `stream_reply` / 工具循环（含收尾调用）/ 合规强化重试一致传递本轮关系摘要等级；摘要未接线传 None、读取失败降级空摘要传 0——两者均回退默认通道。
+5. 配置面：`scripts/generate_examples_env.py` 新增 LLM.INTIMATE 分节并再生成 `backend/.env.example`；`wizard_generators.py` 新增「亲密回复通道配置」步骤（前缀重合按定义顺序首次命中归属，模板键不在两步重复）。
+6. 测试：`test_llm_intimate_channel.py`（配置面 / 九格路由矩阵 / 阈值覆盖 / 越界拒绝 / 未启用请求字节一致 / 双端点命中与消息工具面不变 / 温度优先级 / 流式命中 / 半配置单次 warning / 失败不换道）+ `test_chat_intimate_channel.py`（reply / stream / 工具循环 / 合规重试一致性、读取失败降级、未接线与纯内存 None）。
+7. docs：llm.md「亲密通道」整节（键表 / 启用与半配置策略 / 路由矩阵 / 链路 / 请求示例 / 失败语义 / 默认关闭）、chat.md 路由输入说明、backend README 行、本台账。
+**验证**：后端 2339 passed / 23 组覆盖率（harness/llm 98.5%）/ mypy 157 文件零问题 / ruff / 门禁链全绿（注释门 + noqa 冻结 + 沙盒漂移 36 + sync 棘轮 0）；示例模板再生成 byte-stable（改动仅 LLM.INTIMATE 分节）；既有测试仅两处假网关补 `**kwargs`（红队 / chat_service 的调用面契约同步）。
 
 ### 已完成切片：R2b+ 甲套件 core（人格输出契约 + 合规守卫）
 **已完成**：
