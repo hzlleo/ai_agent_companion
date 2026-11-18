@@ -35,6 +35,7 @@ const STATS_ITEMS: { key: keyof DreamRunRecord['stats']; label: string }[] = [
   { key: 'promoted', label: '晋升（新起链）' },
   { key: 'superseded', label: '并入（推进既有链）' },
   { key: 'skipped_untrusted', label: 'untrusted 硬排除' },
+  { key: 'skipped_peer', label: 'peer 硬排除' },
   { key: 'failed', label: '提案丢弃' },
 ]
 

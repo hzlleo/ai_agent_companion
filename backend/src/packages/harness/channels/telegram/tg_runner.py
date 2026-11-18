@@ -235,6 +235,7 @@ def map_tg_message_to_inbound(message: TgMessageModel) -> InboundMessageModel | 
         text=text,
         ts_ms=message.date * 1000,
         attachments=extract_tg_attachments(message),
+        is_group_chat=message.chat.type in {"group", "supergroup", "channel"},
     )
 
 

@@ -201,6 +201,12 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 **心声 / 情绪不落 meta、不推进 M 态**（流式通道是操作员可见面——诚实边界，
 不引入逐块语义解析复杂度）。落库正文 = 已放行（客户端实际可见）文本。
 
+## 来源分级参数
+
+``reply`` / ``stream_reply`` 接受 ``sender_provenance``（缺省 owner——
+私聊语义；群聊通道传 peer）：user 回合的情景落档按该分级，assistant 回合
+恒为 agent。群聊同侪的发言因此不进入策展记忆晋升面与人物事实证据面。
+
 ## 消息变体（swipes——R2b D7-5）
 
 单回合多候选重生成 + 选定提升（实现：`harness/chat/swipe.py` 的 `SwipeService`，

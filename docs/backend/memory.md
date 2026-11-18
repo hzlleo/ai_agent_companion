@@ -582,7 +582,7 @@ dream_score(episode, now, cfg, topic_hits)
 
 | 序 | 规则 | 结果 |
 |---|---|---|
-| 1 | `provenance == untrusted` | **硬排除**：只计数 `skipped_untrusted`——不产生决策、永不进入任何梦境 prompt（合并 + 日记），也永不晋升（`upsert_curated` 对 untrusted 的拒绝构成双保险） |
+| 1 | `provenance == untrusted` | **硬排除**：只计数 `skipped_untrusted / skipped_peer`——不产生决策、永不进入任何梦境 prompt（合并 + 日记），也永不晋升（`upsert_curated` 对 untrusted 的拒绝构成双保险） |
 | 2 | `episode_id ∈ 既往成功运行晋升集` | skipped 决策（理由「既往梦境运行已晋升」）——既往集 = 回溯窗（`promoted_lookback_ms`）内 success 运行 decisions 中 promoted/merged 的 episode_id 并集 |
 | 3 | `dream_score < cfg.min_score` | skipped 决策（理由含分数值） |
 | 4 | 过门事件按分数降序（同分按 id 升序）截断至 `cfg.max_candidates` | 溢出 skipped 决策（理由「超出单次候选上限」） |
@@ -723,7 +723,7 @@ GET  /api/v1/memories/dream/runs/{id}   query: persona_id?
 ## 测试与门禁（梦境面增量）
 
 - `tests/unit/test_dreaming_prompts.py`——byte-lock + 渲染契约（人格中立 / persona_name 替换 / 覆写语义 / 空块占位）；
-- `tests/unit/test_dreaming.py`——纯函数精确数学（半衰期边界 0.5 / 单调 / 加成）/ 规则门矩阵（untrusted 硬排除含 prompt 缺席 / 分数门 / 上限 / 既往晋升）/ run_dream 全链（happy path 晋升 + supersede 链 / fail-closed 零晋升 / 提案丢弃 / 日记失败保留晋升 / 存储命中与降级 / 生命周期行态 / 读面 + 隔离）；
+- `tests/unit/test_dreaming.py`——纯函数精确数学（半衰期边界 0.5 / 单调 / 加成）/ 规则门矩阵（untrusted / peer 硬排除含 prompt 缺席 / 分数门 / 上限 / 既往晋升）/ run_dream 全链（happy path 晋升 + supersede 链 / fail-closed 零晋升 / 提案丢弃 / 日记失败保留晋升 / 存储命中与降级 / 生命周期行态 / 读面 + 隔离）；
 - `tests/unit/test_dream_api.py`——ASGITransport 触发 + 运行日志分页 / 详情 / 人格解析 / 处理器直调契约面；
 - `tests/unit/test_memory_dream_lifecycle.py`——归档候选纯函数 / 归档阶段（stats + decisions + 状态迁移）/ 冻结主题 prompt 排除与提案丢弃 / 置顶冻结豁免 / 空窗口归档；
 - 门禁：`harness/memory` ≥80%、`app/api` ≥80%（`pixi run coverage-gates`）。

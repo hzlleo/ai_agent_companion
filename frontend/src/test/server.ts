@@ -634,6 +634,7 @@ export function mockDreamRun(overrides: Partial<DreamRunRecord> = {}): DreamRunR
       promoted: 1,
       superseded: 1,
       skipped_untrusted: 1,
+      skipped_peer: 0,
       failed: 0,
       archived: 0,
       facts_created: 1,

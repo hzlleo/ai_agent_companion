@@ -196,6 +196,7 @@ from packages.harness.llm.llm_models import (
     ToolDefinitionModel,
 )
 from packages.harness.memory.episode_sink import EpisodeSinkFace
+from packages.harness.memory.models import MemoryProvenance
 from packages.harness.memory.service import ChatSessionService
 from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
@@ -697,7 +698,13 @@ class ChatService:
     # 对话循环
     # ------------------------------------------------------------------
 
-    async def reply(self, state: ChatSessionStateModel, user_text: str) -> str:
+    async def reply(
+        self,
+        state: ChatSessionStateModel,
+        user_text: str,
+        *,
+        sender_provenance: MemoryProvenance = MemoryProvenance.OWNER,
+    ) -> str:
         """单轮回复（非流式）：追加用户回合 → 组装 → 网关 chat_by_role。
 
         意图快径分派（R2a-6——``intent_shortcut`` 绑定时）：``reply``
@@ -722,6 +729,8 @@ class ChatService:
         Args:
             state: 会话状态。
             user_text: 用户输入（空白拒绝）。
+            sender_provenance: 发送者来源分级（私聊 owner / 群聊 peer——
+                情景落档按真实层级；缺省 owner 保持既有语义）。
 
         Returns:
             **可见正文**（已追加为 assistant 回合；持久化绑定且已落库时
@@ -744,11 +753,15 @@ class ChatService:
                     match.confidence,
                 )
                 return await self._reply_via_shortcut(
-                    state, user_text, match.response_text, self._intent_shortcut
+                    state,
+                    user_text,
+                    match.response_text,
+                    self._intent_shortcut,
+                    sender_provenance=sender_provenance,
                 )
         user_turn = self._append_user_turn(state, user_text)
         await self._persist_turn(state, user_turn)
-        await self._record_episode(state, user_turn)
+        await self._record_episode(state, user_turn, user_provenance=sender_provenance)
         emotion_summary = await self._current_emotion_summary(state)
         directives = await self._current_directives(state)
         facts = await self._current_facts(state)
@@ -784,7 +797,11 @@ class ChatService:
         return content
 
     async def stream_reply(
-        self, state: ChatSessionStateModel, user_text: str
+        self,
+        state: ChatSessionStateModel,
+        user_text: str,
+        *,
+        sender_provenance: MemoryProvenance = MemoryProvenance.OWNER,
     ) -> AsyncIterator[str]:
         """单轮流式回复：追加用户回合 → 组装 → 网关 stream_by_role。
 
@@ -812,7 +829,7 @@ class ChatService:
         """
         user_turn = self._append_user_turn(state, user_text)
         await self._persist_turn(state, user_turn)
-        await self._record_episode(state, user_turn)
+        await self._record_episode(state, user_turn, user_provenance=sender_provenance)
         emotion_summary = await self._current_emotion_summary(state)
         directives = await self._current_directives(state)
         facts = await self._current_facts(state)
@@ -953,6 +970,8 @@ class ChatService:
         user_text: str,
         canned_text: str,
         shortcut: IntentShortcutFace,
+        *,
+        sender_provenance: MemoryProvenance = MemoryProvenance.OWNER,
     ) -> str:
         """快径回复落回合（用户回合 → 拟真延迟 → 罐头助手回合；零网关）。
 
@@ -978,7 +997,7 @@ class ChatService:
         """
         user_turn = self._append_user_turn(state, user_text)
         await self._persist_turn(state, user_turn)
-        await self._record_episode(state, user_turn)
+        await self._record_episode(state, user_turn, user_provenance=sender_provenance)
         await shortcut.realism_delay()
         assistant_turn = state.append_turn(ChatMessageRole.ASSISTANT, canned_text)
         await self._persist_turn(state, assistant_turn)
@@ -1038,7 +1057,12 @@ class ChatService:
                 meta=meta,
             )
 
-    async def _record_episode(self, state: ChatSessionStateModel, turn: ChatTurnModel) -> None:
+    async def _record_episode(
+        self,
+        state: ChatSessionStateModel,
+        turn: ChatTurnModel,
+        user_provenance: MemoryProvenance = MemoryProvenance.OWNER,
+    ) -> None:
         """把已落库回合并入情景层（sink 未接线 / 会话未落库时 no-op）。
 
         时序：**消息行提交之后**调用（回合持久化是情景镜像的前提）；
@@ -1059,6 +1083,7 @@ class ChatService:
                 turn.role.value,
                 turn.content,
                 turn.ts_ms,
+                user_provenance=user_provenance,
             )
         except Exception:  # best-effort: 记忆管道面不进回复失败路径（显式兜底）
             logger.opt(exception=True).warning(

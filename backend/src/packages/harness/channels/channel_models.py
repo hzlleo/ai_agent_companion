@@ -188,6 +188,8 @@ class InboundMessageModel(BaseModel):
         attachments: 消息附件（v2——缺省空列表 = v1 纯文本形态；由平台
             runner / webhook 提取，供未来消费者（R2d 贴纸 / 语音）消费，
             当前回复循环纯文本）。
+        is_group_chat: 群聊标记（provenance 分级依据——群聊消息按
+            ``peer`` 落档、私聊按 ``owner``；缺省 False 保持 v1 形态）。
         synthetic: 是否机器生成事件（v2——True = heartflow / mood 等
             事件上浮面而非人类消息；缺省 False = 人类消息）。
         silent: 是否无通知上下文（v2——平台上报「该消息在免通知语境
@@ -207,6 +209,7 @@ class InboundMessageModel(BaseModel):
         default=False, description="是否机器生成事件（True = 事件上浮面非人类消息）"
     )
     silent: bool = Field(default=False, description="是否无通知上下文（平台上报标记位）")
+    is_group_chat: bool = Field(default=False, description="群聊标记（provenance 分级依据：群聊按 peer 落档）")
 
 
 class OutboundMessageModel(BaseModel):

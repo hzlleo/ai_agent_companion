@@ -70,6 +70,8 @@ class EpisodeSinkFace(Protocol):
         role: str,
         content: str,
         ts_ms: int,
+        *,
+        user_provenance: MemoryProvenance = MemoryProvenance.OWNER,
     ) -> None:
         """记录单条 chat 回合为情景事件（kind=chat）。
 
@@ -79,6 +81,8 @@ class EpisodeSinkFace(Protocol):
             role: 回合角色（user / assistant——决定 provenance）。
             content: 回合可见正文（情景载荷对应侧文本）。
             ts_ms: 回合时间（epoch 毫秒——与消息行同源）。
+            user_provenance: user 回合的来源分级（私聊 owner / 群聊
+                peer——群聊同侪的发言不晋升策展层与事实证据面）。
         """
         ...
 
@@ -118,6 +122,8 @@ class ChatTurnEpisodeSink:
         role: str,
         content: str,
         ts_ms: int,
+        *,
+        user_provenance: MemoryProvenance = MemoryProvenance.OWNER,
     ) -> None:
         """记录单条 chat 回合为情景事件（恒不抛异常）。
 
@@ -130,6 +136,7 @@ class ChatTurnEpisodeSink:
             role: 回合角色（user / assistant）。
             content: 回合可见正文。
             ts_ms: 回合时间（epoch 毫秒）。
+            user_provenance: user 回合的来源分级（私聊 owner / 群聊 peer）。
         """
         if not content:
             return
@@ -137,7 +144,7 @@ class ChatTurnEpisodeSink:
             kind=EpisodeKind.CHAT,
             source=CHAT_TURN_SOURCE,
             content=self._turn_payload(role, content, session_id),
-            provenance=self._provenance_for_role(role),
+            provenance=self._provenance_for_role(role, user_provenance),
             ts_ms=ts_ms,
         )
         if self._should_fire_and_forget():
@@ -168,17 +175,19 @@ class ChatTurnEpisodeSink:
         )
 
     @staticmethod
-    def _provenance_for_role(role: str) -> MemoryProvenance:
-        """按角色判定来源可信度（user=owner；其余=agent——文档化决策）。
+    def _provenance_for_role(role: str, user_provenance: MemoryProvenance) -> MemoryProvenance:
+        """按角色判定来源可信度（user=透传的发送者分级；其余=agent）。
 
         Args:
             role: 回合角色。
+            user_provenance: user 回合的来源分级（owner 私聊 / peer 群聊）。
 
         Returns:
-            来源可信度（owner / agent——untrusted 永不出现于 chat 回合）。
+            来源可信度（user 回合 = 透传值；assistant 回合 = agent；
+            untrusted 永不出现于 chat 回合）。
         """
         if role == ChatMessageRole.USER.value:
-            return MemoryProvenance.OWNER
+            return user_provenance
         return MemoryProvenance.AGENT
 
     def _should_fire_and_forget(self) -> bool:

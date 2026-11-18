@@ -1979,10 +1979,11 @@
           "type": "string"
         },
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -2125,10 +2126,11 @@
           "type": "string"
         },
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -2522,7 +2524,7 @@
           "type": "object"
         },
         "DreamRunStatsModel": {
-          "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）；\n    - ``facts_created``：事实提取阶段新建的人物事实行数（新身份\n      事实 / 更正链首版的梦境侧产物）；\n    - ``facts_merged``：事实提取阶段收敛到既有现行事实的行数（同\n      归一化身份 → 置信度取最大值 + 证据合并的元数据刷新，不推进\n      版本）；\n    - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条\n      丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。\n    facts_created: 人物事实新建行数（事实提取阶段）。\n    facts_merged: 人物事实元数据刷新行数（事实提取阶段）。\n    facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。",
+          "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``skipped_peer``：窗口内被硬排除的 peer 事件数（群聊同侪 /\n      其他智能体的发言——不晋升策展层、不作事实证据）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）；\n    - ``facts_created``：事实提取阶段新建的人物事实行数（新身份\n      事实 / 更正链首版的梦境侧产物）；\n    - ``facts_merged``：事实提取阶段收敛到既有现行事实的行数（同\n      归一化身份 → 置信度取最大值 + 证据合并的元数据刷新，不推进\n      版本）；\n    - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条\n      丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    skipped_peer: peer 硬排除计数（群聊同侪 / 其他智能体的发言）。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。\n    facts_created: 人物事实新建行数（事实提取阶段）。\n    facts_merged: 人物事实元数据刷新行数（事实提取阶段）。\n    facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。",
           "properties": {
             "archived": {
               "default": 0,
@@ -2578,6 +2580,13 @@
               "description": "晋升事件数（新起链）",
               "minimum": 0,
               "title": "Promoted",
+              "type": "integer"
+            },
+            "skipped_peer": {
+              "default": 0,
+              "description": "peer 硬排除计数（群聊同侪 / 其他智能体）",
+              "minimum": 0,
+              "title": "Skipped Peer",
               "type": "integer"
             },
             "skipped_untrusted": {
@@ -2705,7 +2714,7 @@
       "type": "object"
     },
     "DreamRunStatsModel": {
-      "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）；\n    - ``facts_created``：事实提取阶段新建的人物事实行数（新身份\n      事实 / 更正链首版的梦境侧产物）；\n    - ``facts_merged``：事实提取阶段收敛到既有现行事实的行数（同\n      归一化身份 → 置信度取最大值 + 证据合并的元数据刷新，不推进\n      版本）；\n    - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条\n      丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。\n    facts_created: 人物事实新建行数（事实提取阶段）。\n    facts_merged: 人物事实元数据刷新行数（事实提取阶段）。\n    facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。",
+      "description": "梦境运行统计（ff_dream_runs.stats JSON 的类型化形态）。\n\n计数口径（文档化——与决策动作对齐）：\n\n    - ``candidates``：窗口内**可信**（非 untrusted）事件数（untrusted\n      在打分前即被硬排除——只计入 skipped_untrusted）；\n    - ``gated``：通过规则门进入 LLM 合并的事件数（分数达标 + 未被\n      既往晋升排除 + 上限截断后）；\n    - ``promoted``：决策动作 = promoted 的事件数（晋升进新起链主题）；\n    - ``superseded``：决策动作 = merged 的事件数（并入既有 active\n      主题链）；\n    - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数\n      （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；\n    - ``skipped_peer``：窗口内被硬排除的 peer 事件数（群聊同侪 /\n      其他智能体的发言——不晋升策展层、不作事实证据）；\n    - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用\n      未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；\n    - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物\n      ——有效强度低于阈值 / 非置顶 / 非冻结 / 现行 active 的\n      记忆；冻结目标导致的提案丢弃**不**计入本项，见 decisions\n      的 ``frozen`` 理由）；\n    - ``facts_created``：事实提取阶段新建的人物事实行数（新身份\n      事实 / 更正链首版的梦境侧产物）；\n    - ``facts_merged``：事实提取阶段收敛到既有现行事实的行数（同\n      归一化身份 → 置信度取最大值 + 证据合并的元数据刷新，不推进\n      版本）；\n    - ``facts_dropped``：事实提案丢弃计数（字段校验失败 / 证据编号\n      越出候选集 / 置信度低于提取下限 / 超出单次 10 条上限——逐条\n      丢弃计数，不整体失败）。\n\nAttributes:\n    candidates: 可信候选事件数。\n    gated: 过门事件数。\n    promoted: 晋升事件数（新起链）。\n    superseded: 并入事件数（推进既有链）。\n    skipped_untrusted: untrusted 硬排除计数。\n    skipped_peer: peer 硬排除计数（群聊同侪 / 其他智能体的发言）。\n    failed: 提案丢弃计数。\n    archived: 策展记忆归档行数（生命周期阶段）。\n    facts_created: 人物事实新建行数（事实提取阶段）。\n    facts_merged: 人物事实元数据刷新行数（事实提取阶段）。\n    facts_dropped: 人物事实提案丢弃计数（事实提取阶段）。",
       "properties": {
         "archived": {
           "default": 0,
@@ -2761,6 +2770,13 @@
           "description": "晋升事件数（新起链）",
           "minimum": 0,
           "title": "Promoted",
+          "type": "integer"
+        },
+        "skipped_peer": {
+          "default": 0,
+          "description": "peer 硬排除计数（群聊同侪 / 其他智能体）",
+          "minimum": 0,
+          "title": "Skipped Peer",
           "type": "integer"
         },
         "skipped_untrusted": {
@@ -3013,10 +3029,11 @@
           "type": "object"
         },
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -3149,10 +3166,11 @@
           "type": "string"
         },
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -3329,10 +3347,11 @@
           "type": "object"
         },
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -3527,10 +3546,11 @@
           "type": "object"
         },
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -3588,10 +3608,11 @@
     "FactEvidenceRefModel": {
       "$defs": {
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -3686,10 +3707,11 @@
           "type": "object"
         },
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -3815,10 +3837,11 @@
     "MemorySearchRequestDTO": {
       "$defs": {
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",
@@ -3938,10 +3961,11 @@
     "MemorySearchResultDTO": {
       "$defs": {
         "MemoryProvenance": {
-          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
+          "description": "记忆来源可信度值域（全记忆层统一 taxonomy）。\n\n- ``owner``：主人说的（最高可信）；\n- ``agent``：智能体推断的（可信）；\n- ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——\n  永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；\n- ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层\n  强制拒绝，检索 / 晋升链路依赖此不变式）。",
           "enum": [
             "owner",
             "agent",
+            "peer",
             "untrusted"
           ],
           "title": "MemoryProvenance",

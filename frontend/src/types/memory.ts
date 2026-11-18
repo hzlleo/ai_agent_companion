@@ -413,6 +413,7 @@ export interface DreamRunStats {
   superseded: number
   /** untrusted 硬排除计数。 */
   skipped_untrusted: number
+  skipped_peer: number
   /** LLM 提案丢弃计数（逐条丢弃，不整体失败）。 */
   failed: number
   /** 策展记忆归档行数（生命周期阶段）。 */

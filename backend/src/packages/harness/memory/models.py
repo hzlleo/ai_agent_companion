@@ -80,12 +80,15 @@ class MemoryProvenance(StrEnum):
 
     - ``owner``：主人说的（最高可信）；
     - ``agent``：智能体推断的（可信）；
+    - ``peer``：群聊同侪 / 其他智能体的发言（可信度低于 owner——
+      永不入策展层与人物事实的证据面，梦境门与事实证据面双重排除）；
     - ``untrusted``：平台内容 / 外部不可信输入（永不入策展层——服务层
       强制拒绝，检索 / 晋升链路依赖此不变式）。
     """
 
     OWNER = "owner"
     AGENT = "agent"
+    PEER = "peer"
     UNTRUSTED = "untrusted"
 
 

@@ -345,6 +345,9 @@ def select_dream_candidates(
         if record.provenance == MemoryProvenance.UNTRUSTED:
             stats.skipped_untrusted += 1
             continue
+        if record.provenance == MemoryProvenance.PEER:
+            stats.skipped_peer += 1
+            continue
         trusted.append(record)
     stats.candidates = len(trusted)
     pending: list[tuple[float, EpisodeRecordDTO]] = []
@@ -821,7 +824,12 @@ class DreamService:
                 cfg.max_episodes,
             )
             episodes = episodes[: cfg.max_episodes]
-        trusted = [record for record in episodes if record.provenance != MemoryProvenance.UNTRUSTED]
+        trusted = [
+            record
+            for record in episodes
+            if record.provenance
+            not in (MemoryProvenance.UNTRUSTED, MemoryProvenance.PEER)
+        ]
         already_promoted = await self._previous_promoted_ids(session, run_now=run_now, cfg=cfg)
         active_topics = await self._active_topics(session)
         prompt_topics = [topic for topic in active_topics if not topic.frozen]
@@ -842,6 +850,7 @@ class DreamService:
         )
         stats.candidates = gate_stats.candidates
         stats.skipped_untrusted = gate_stats.skipped_untrusted
+        stats.skipped_peer = gate_stats.skipped_peer
         stats.gated = gate_stats.gated
         decisions.extend(gate_decisions)
         decided_ids = {decision.episode_id for decision in decisions}
@@ -1027,15 +1036,22 @@ class DreamService:
         )
 
     def _fact_evidence(self, record: EpisodeRecordDTO) -> FactEvidenceRefModel | None:
-        """候选事件 → 证据引用（逐字截取——无文本载荷返回 None）。
+        """候选事件 → 证据引用（逐字截取——无文本载荷 / 非可信来源返回 None）。
+
+        来源防御：peer / untrusted 事件**永不**作为事实证据（规则门已
+        硬排除二者，此处为纵深防御——若未来候选面放宽，证据面仍不被
+        同侪断言污染）。
 
         Args:
             record: 被引用的候选事件记录。
 
         Returns:
             证据引用（摘录恒为被引用事件正文的逐字前缀，≤200 字符）；
-            事件无文本载荷时返回 None（该证据不落库——事实仍可落库）。
+            事件无文本载荷或来源为 peer/untrusted 时返回 None（该证据
+            不落库——事实仍可落库）。
         """
+        if record.provenance in (MemoryProvenance.PEER, MemoryProvenance.UNTRUSTED):
+            return None
         quote = self._facts.evidence_text(record)
         if not quote:
             return None

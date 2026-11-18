@@ -110,6 +110,8 @@ class RaisingEpisodeSink:
         role: str,
         content: str,
         ts_ms: int,
+        *,
+        user_provenance: Any = None,
     ) -> None:
         """记录调用后抛异常（违反协议——防御面验证）。"""
         self.calls.append((persona_id, session_id, role, content, ts_ms))
@@ -130,9 +132,11 @@ class RecordingEpisodeSink:
         role: str,
         content: str,
         ts_ms: int,
+        *,
+        user_provenance: Any = None,
     ) -> None:
-        """记录调用（不落库——接线面断言）。"""
-        self.calls.append((persona_id, session_id, role, content, ts_ms))
+        """记录调用（不落库——接线面断言；含来源分级透传面）。"""
+        self.calls.append((persona_id, session_id, role, content, ts_ms, user_provenance))
 
 
 async def _count_episodes(session: AsyncSession) -> int:
@@ -338,3 +342,35 @@ async def test_sink_with_real_background_manager_register_path(
     assert len(manager.tasks) == 1
     await asyncio.gather(*list(manager.tasks))
     assert await _count_episodes(db_session) == 1
+
+
+async def test_group_chat_turn_recorded_as_peer_provenance(sink_env: Any) -> None:
+    """群聊入站经 reply 的 sender_provenance 透传：user 回合按 peer 落档、assistant 仍 agent。"""
+    session_factory, memory_service, persona, db_session = sink_env
+    sink = ChatTurnEpisodeSink(
+        session_factory=session_factory, memory_service=memory_service
+    )
+    service = ChatService(
+        gateway=FakeGateway(),
+        session_service=ChatSessionService(),
+        episode_sink=sink,
+    )
+    async with bind_persona_context(persona.id):
+        state = await service.create_session(persona=persona, db_session=db_session)
+        await service.reply(state, "别的鱼你好", sender_provenance=MemoryProvenance.PEER)
+    db_session = session_factory()
+    rows = list(
+        (
+            await db_session.execute(
+                select(MemoryEpisodeRow)
+                .where(MemoryEpisodeRow.persona_id == str(persona.id))
+                .order_by(MemoryEpisodeRow.id.desc())
+                .limit(2),
+                execution_options={"skip_persona_filter": True},
+            )
+        ).scalars().all()
+    )[::-1]
+    assert [row.provenance for row in rows] == [
+        MemoryProvenance.PEER,
+        MemoryProvenance.AGENT,
+    ]

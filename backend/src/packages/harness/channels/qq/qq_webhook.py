@@ -308,6 +308,7 @@ async def process_webhook_event(payload: dict[str, Any], router: ChannelRouter) 
                 text=text,
                 ts_ms=ts_ms,
                 attachments=attachments,
+                is_group_chat=chat_id.startswith("group:"),
             )
         )
     except Exception:

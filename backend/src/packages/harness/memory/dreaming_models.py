@@ -162,6 +162,8 @@ class DreamRunStatsModel(BaseModel):
           主题链）；
         - ``skipped_untrusted``：窗口内被硬排除的 untrusted 事件数
           （永不晋升、永不进入任何梦境 prompt——provenance 硬门）；
+        - ``skipped_peer``：窗口内被硬排除的 peer 事件数（群聊同侪 /
+          其他智能体的发言——不晋升策展层、不作事实证据）；
         - ``failed``：LLM 提案中被校验丢弃的条目数（merged_from 引用
           未知事件 / 字段校验失败——逐条丢弃计数，不整体失败）；
         - ``archived``：本次巩固归档的策展记忆行数（生命周期阶段产物
@@ -183,6 +185,7 @@ class DreamRunStatsModel(BaseModel):
         promoted: 晋升事件数（新起链）。
         superseded: 并入事件数（推进既有链）。
         skipped_untrusted: untrusted 硬排除计数。
+        skipped_peer: peer 硬排除计数（群聊同侪 / 其他智能体的发言）。
         failed: 提案丢弃计数。
         archived: 策展记忆归档行数（生命周期阶段）。
         facts_created: 人物事实新建行数（事实提取阶段）。
@@ -195,6 +198,7 @@ class DreamRunStatsModel(BaseModel):
     promoted: int = Field(default=0, ge=0, description="晋升事件数（新起链）")
     superseded: int = Field(default=0, ge=0, description="并入事件数（推进既有链）")
     skipped_untrusted: int = Field(default=0, ge=0, description="untrusted 硬排除计数")
+    skipped_peer: int = Field(default=0, ge=0, description="peer 硬排除计数（群聊同侪 / 其他智能体）")
     failed: int = Field(default=0, ge=0, description="提案丢弃计数")
     archived: int = Field(default=0, ge=0, description="策展记忆归档行数（生命周期阶段）")
     facts_created: int = Field(default=0, ge=0, description="人物事实新建行数（事实提取阶段）")

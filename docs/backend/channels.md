@@ -85,6 +85,16 @@ TELEGRAM_ENABLED=false 且 QQ_ENABLED=false（缺省）：no-op——零通道�
 
 runner 循环层另有兜底：getUpdates 失败按指数退避重试（见下）——两层隔离保证长轮询任务不死亡（`asyncio.CancelledError` 原样上抛——停机 cancel 路径不被吞）。
 
+## 来源分级（提示词攻击防御面）
+
+入站消息按会话形态标记来源分级：**私聊 = owner（主人）**、**群聊 = peer
+（同侪 / 其他智能体的发言）**——路由器据 ``InboundMessageModel.is_group_chat``
+（Telegram 按 chat.type、QQ 按 ``group:`` 会话键判定）透传给聊天服务的
+``sender_provenance`` 参数，情景落档按真实层级（user 回合 = 透传值、
+assistant 回合恒为 agent）。**peer 事件永不晋升策展记忆、永不作为人物
+事实证据**（梦境规则门与事实证据面双重排除）——群聊里其他鱼的断言无法
+污染长期记忆与画像。
+
 ## 协议 v2（附件 / 静默 / 合成事件——additive，v1 形态缺省保持）
 
 v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语音附件、贴纸 / Canvas 媒体与合成 ID 等后续 R2d/R2e 特性）：`InboundMessageModel` / `OutboundMessageModel` / `ChannelDeliveryResultModel` 各增 v2 字段（全部带缺省值——**缺省即 v1 纯文本形态**，既有消费者零改动；本 chunk 内全部内部消费者已迁移到 v2 模型面）。新增 `ChannelMessageAttachment`（附件模型）与 `AttachmentDeliveryResult`（逐附件投递结果）。

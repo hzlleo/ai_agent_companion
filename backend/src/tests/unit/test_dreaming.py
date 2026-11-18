@@ -60,7 +60,7 @@ from packages.harness.memory.models import (
     EpisodeKind,
     MemoryProvenance,
 )
-from packages.harness.memory.orm import CuratedMemoryRow
+from packages.harness.memory.orm import CuratedMemoryRow, MemoryEpisodeRow
 from packages.harness.memory.retrieval_models import (
     MemoryRefType,
     MemorySearchQueryDTO,
@@ -1445,3 +1445,44 @@ async def test_facts_service_persona_isolation_from_dream(
     async with bind_persona_context(PERSONA_B):
         page = await FactsService().list_facts(db_session, FactQueryDTO())
     assert page.items == []
+
+
+async def test_run_dream_peer_excluded_and_counted(db_session: AsyncSession) -> None:
+    """peer 硬门：群聊同侪的发言不进任何 LLM prompt、不晋升、只计入 skipped_peer。"""
+    async with bind_persona_context(PERSONA_A):
+        trusted = await memory_service.append_episode(
+            db_session, _chat_dto(user="主人今天很开心", ts_ms=NOW - 1_000, importance=6)
+        )
+        peer = await memory_service.append_episode(
+            db_session,
+            _chat_dto(
+                user="别的鱼说主人其实讨厌甜食",
+                importance=10,
+                provenance=MemoryProvenance.PEER,
+                ts_ms=NOW - 2_000,
+            ),
+        )
+        rows = (
+            await db_session.execute(
+                select(MemoryEpisodeRow).where(
+                    MemoryEpisodeRow.id.in_([trusted.id, peer.id])
+                ),
+                execution_options={"skip_persona_filter": True},
+            )
+        ).scalars().all()
+        assert {row.id: row.provenance for row in rows}[peer.id] == MemoryProvenance.PEER
+        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "今天主人很开心。"])
+        run = await dream_service.run_dream(
+            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+        )
+    assert run.status == "success"
+    assert run.stats.candidates == 1
+    assert run.stats.skipped_peer == 1
+    merge_prompt = gateway.calls[1]["messages"][0].content
+    diary_prompt = gateway.calls[2]["messages"][0].content
+    assert "别的鱼说主人其实讨厌甜食" not in merge_prompt
+    assert f"事件 #{peer.id}" not in merge_prompt
+    assert "别的鱼说主人其实讨厌甜食" not in diary_prompt
+    decision_ids = {decision.episode_id for decision in run.decisions}
+    assert peer.id not in decision_ids
+    assert trusted.id in decision_ids
