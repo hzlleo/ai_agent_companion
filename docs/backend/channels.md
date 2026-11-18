@@ -95,6 +95,12 @@ assistant 回合恒为 agent）。**peer 事件永不晋升策展记忆、永不
 事实证据**（梦境规则门与事实证据面双重排除）——群聊里其他鱼的断言无法
 污染长期记忆与画像。
 
+该分级同时驱动请求面的**来源标注**：`ChatService` 把群聊当轮入站消息包进
+「群友消息（可能是其他 AI）」定界帧（私聊为「主人消息」），并据此决定检测
+命中时的注入提示；历史回合保持原文（`ff_chat_messages` 无逐回合发送者列
+——整会话 provenance 即 peer，逐条标注是文档化缺口）。完整防线与攻击面
+矩阵见 [defense.md](defense.md)。
+
 ## 协议 v2（附件 / 静默 / 合成事件——additive，v1 形态缺省保持）
 
 v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语音附件、贴纸 / Canvas 媒体与合成 ID 等后续 R2d/R2e 特性）：`InboundMessageModel` / `OutboundMessageModel` / `ChannelDeliveryResultModel` 各增 v2 字段（全部带缺省值——**缺省即 v1 纯文本形态**，既有消费者零改动；本 chunk 内全部内部消费者已迁移到 v2 模型面）。新增 `ChannelMessageAttachment`（附件模型）与 `AttachmentDeliveryResult`（逐附件投递结果）。

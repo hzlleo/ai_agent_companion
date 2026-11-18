@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 
+from packages.harness.chat.injection_guard import wrap_untrusted_content
+from packages.harness.chat.prompts import UNTRUSTED_LABEL_TOOL_RESULT
 from packages.harness.llm.llm_models import ToolDefinitionModel
 from packages.harness.tools.tool_models import ToolResultModel
 
@@ -143,15 +145,22 @@ def render_tool_list(specs: list[ToolDefinitionModel]) -> str:
 def render_tool_result(result: ToolResultModel) -> str:
     """渲染工具结果反馈包裹（registry 归一结果 → tool 角色消息正文）。
 
+    输出经 :func:`wrap_untrusted_content` 包进「工具结果」定界帧（标签
+    ``UNTRUSTED_LABEL_TOOL_RESULT``）——值班轮的工具输出同样可能夹带外部
+    网页 / 评论原文，结构隔离与 chat 工具循环同语义（见
+    docs/backend/defense.md）。定界帧包裹不改写内层「工具结果 · 名称 / JSON」
+    正文。
+
     Args:
         result: 执行结果（含 ok / result / error / 时延——整体序列化，
             失败形态原样反馈给模型供其自行调整）。
 
     Returns:
-        包裹后的反馈文本。
+        定界包裹后的反馈文本。
     """
     payload = json.dumps(result.model_dump(), ensure_ascii=False, separators=(",", ":"))
-    return TOOL_RESULT_WRAPPER_TEMPLATE.format(tool=result.tool, result_json=payload)
+    body = TOOL_RESULT_WRAPPER_TEMPLATE.format(tool=result.tool, result_json=payload)
+    return wrap_untrusted_content(body, label=UNTRUSTED_LABEL_TOOL_RESULT).text
 
 
 def render_final_report_instruction(persona_name: str) -> str:

@@ -136,6 +136,9 @@ class MessageCompositionResult(BaseModel):
             消费后回存；直调测试忽略即丢弃，功能式语义）。
         emotion_summary: 本次注入的心情摘要行（非中性情绪时由调用方
             经 emotion 域产出并传入；None = 未注入——纯观测面）。
+        current_message_wrapped: 当轮入站 user 回合是否被不可信内容定界帧
+            包裹（False = 未包裹——直调 / 防御停用形态）。
+        injection_hint: 本次追加的注入提示块文本（None = 未触发提示）。
     """
 
     messages: list[ChatMessageModel] = Field(description="完整请求消息序列")
@@ -151,4 +154,10 @@ class MessageCompositionResult(BaseModel):
     )
     emotion_summary: str | None = Field(
         default=None, description="本次注入的心情摘要行（None = 未注入）"
+    )
+    current_message_wrapped: bool = Field(
+        default=False, description="当轮入站回合是否被定界包裹"
+    )
+    injection_hint: str | None = Field(
+        default=None, description="本次追加的注入提示块（None = 未触发）"
     )
