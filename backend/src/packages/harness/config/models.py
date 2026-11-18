@@ -21,8 +21,8 @@
       LLM 信号量 / 熔断阈值）
     - ``LlmEndpointConfig``  —— LLM 默认端点 env 面（env_prefix=``LLM_``）
     - ``ChannelsSettings``   —— 通道域分节（``Settings.channels``；telegram
-      子模型 env_prefix=``TELEGRAM_``；qq 子模型 env_prefix=
-      ``QQ_``）
+      子模型 env_prefix=``TELEGRAM_``；qq 子模型 env_prefix=``QQ_``；
+      wecom 子模型 env_prefix=``WECOM_``——企业微信智能机器人长连接）
     - ``DutySettings``       —— 值班轮分节（``Settings.duty``；env_prefix=
       ``DUTY_``——duty 域）
     - ``DreamScheduleSettings`` —— 梦境调度分节（``Settings.dream_schedule``；
@@ -71,7 +71,9 @@ from packages.harness.chat.persona_rotation_models import GroupPersonaSettings
 from packages.harness.config.model_entry import LlmModelEntry, ModelRole
 from packages.harness.core.logging_models import LoggingConfig
 from packages.harness.intent.intent_models import IntentSettings
+from packages.harness.multimodal.sticker_models import StickerSettings
 from packages.harness.rhythm.rhythm_models import RhythmSettings
+from packages.harness.voice.voiceprint_models import VoiceprintSettings
 
 __all__ = [
     "ServerConfig",
@@ -91,6 +93,8 @@ __all__ = [
     "TtsSettings",
     "AsrSettings",
     "VoiceSettings",
+    "VoiceprintSettings",
+    "StickerSettings",
     "WebSearchSettings",
     "Settings",
     "settings",
@@ -777,23 +781,129 @@ class QqChannelSettings(BaseSettings):
     )
 
 
+class WecomChannelSettings(BaseSettings):
+    """企业微信「智能机器人」长连接通道配置（env_prefix=``WECOM_``——channels 域）。
+
+    锁定决策：``enabled=False``（默认）——零配置开发可用、测试 hermetic；
+    ``enabled=True`` 时 app lifespan 装配长连接 runner（WebSocket 后台任务，
+    见 docs/backend/channels.md「企业微信智能机器人长连接」）。
+
+    凭据最小集与协议约束（官方文档《智能机器人长连接》）：长连接模式的订阅
+    鉴权只需 **BotID + Secret**，素材上传与消息收发都在同一连接内完成——因此
+    ``corp_id`` / ``agent_id`` / access_token 三件套**不引入**（经典自建应用的
+    凭据面在长连接模式无消费点，配置树上出现即为死配置）。
+
+    Secret 经环境变量间接（与 telegram ``bot_token_env`` / QQ
+    ``access_token_env`` 同模式——**密钥永不落 yaml / 配置树**）：本配置只持有
+    变量名 ``secret_env``，实际密钥由长连接客户端在构造期从该变量读取；
+    ``enabled=True`` 且变量缺失 / 为空时装配期拒绝该通道（``CHANNEL_TOKEN_MISSING``）。
+
+    Attributes:
+        enabled: 是否启用企微长连接通道（False = 零连接 / 零后台任务）。
+        bot_id: 智能机器人 BotID（管理后台创建机器人后「获取凭证」取得；
+            enabled=True 时必填）。
+        secret_env: 长连接专用密钥的环境变量名（实际密钥从该变量读取；与
+            回调模式的 Token / EncodingAESKey 不是同一凭据）。
+        ws_endpoint: 长连接 WebSocket 端点（官方为
+            ``wss://openws.work.weixin.qq.com``——可指向代理）。
+        request_timeout_seconds: 单条命令的应答超时秒数。
+        heartbeat_interval_seconds: 应用层心跳间隔秒数（官方建议 30）。
+        heartbeat_timeout_seconds: 心跳应答超时秒数（超时即判定连接失效并重连）。
+        open_timeout_seconds: WebSocket 握手超时秒数。
+        backoff_base_seconds: 重连退避基数秒（指数退避起点）。
+        backoff_max_seconds: 重连退避封顶秒数（不得小于基数）。
+        backoff_jitter_ratio: 退避抖动幅度比例（0-1；0 = 无抖动）。
+        reply_window_seconds: 消息回调的回复有效期秒数（官方文档：24 小时内
+            可回复该会话——超期出站降级为主动推送）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用企业微信智能机器人长连接通道")
+    bot_id: str = Field(
+        default="", description="智能机器人 BotID（enabled=true 时必填）"
+    )
+    secret_env: str = Field(
+        default="WECOM_SECRET", min_length=1, description="长连接专用密钥的环境变量名"
+    )
+    ws_endpoint: str = Field(
+        default="wss://openws.work.weixin.qq.com",
+        min_length=1,
+        description="长连接 WebSocket 端点",
+    )
+    request_timeout_seconds: float = Field(
+        default=15.0, gt=0, description="单条命令应答超时（秒）"
+    )
+    heartbeat_interval_seconds: float = Field(
+        default=30.0, gt=0, description="应用层心跳间隔（秒——官方建议 30）"
+    )
+    heartbeat_timeout_seconds: float = Field(
+        default=10.0, gt=0, description="心跳应答超时（秒——超时判定连接失效）"
+    )
+    open_timeout_seconds: float = Field(default=10.0, gt=0, description="WebSocket 握手超时（秒）")
+    backoff_base_seconds: float = Field(default=1.0, gt=0, description="重连退避基数秒")
+    backoff_max_seconds: float = Field(default=60.0, gt=0, description="重连退避封顶秒数")
+    backoff_jitter_ratio: float = Field(
+        default=0.3, ge=0, le=1, description="重连退避抖动幅度比例（0-1）"
+    )
+    reply_window_seconds: float = Field(
+        default=86400.0, gt=0, description="消息回调回复有效期（秒——官方 24 小时）"
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="WECOM_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @model_validator(mode="after")
+    def _verify_channel_bounds(self) -> WecomChannelSettings:
+        """校验通道配置不变式（退避边界 / 启用时必填 BotID / 心跳预算）。
+
+        Returns:
+            校验通过的实例。
+
+        Raises:
+            ValueError: ``backoff_max_seconds < backoff_base_seconds``（封顶必须
+                不小于基数）；``enabled=True`` 且 ``bot_id`` 为空（无身份无法
+                订阅）；``heartbeat_timeout_seconds >= heartbeat_interval_seconds``
+                （应答超时覆盖整个间隔会让心跳永远判定失败）。
+        """
+        if self.backoff_max_seconds < self.backoff_base_seconds:
+            raise ValueError(
+                f"backoff_max_seconds({self.backoff_max_seconds}) 不得小于 "
+                f"backoff_base_seconds({self.backoff_base_seconds})"
+            )
+        if self.enabled and not self.bot_id.strip():
+            raise ValueError("WECOM_ENABLED=true 时 WECOM_BOT_ID 必填（智能机器人 BotID）")
+        if self.heartbeat_timeout_seconds >= self.heartbeat_interval_seconds:
+            raise ValueError(
+                f"heartbeat_timeout_seconds({self.heartbeat_timeout_seconds}) 必须小于 "
+                f"heartbeat_interval_seconds({self.heartbeat_interval_seconds})"
+            )
+        return self
+
+
 class ChannelsSettings(BaseModel):
     """通道域配置分节（``Settings.channels``——多平台通道聚合容器）。
 
-    当前含 telegram 与 qq（NapCat /
-    OneBot v11）两个子模型；多通道扩展（B站等）在此追加同级子模型（各自独立
+    当前含 telegram、qq（NapCat / OneBot v11）与企业微信智能机器人长连接
+    三个子模型；多通道扩展（B站等）在此追加同级子模型（各自独立
     env_prefix 的 ``BaseSettings``——本工程约定：env 面子配置为
     BaseSettings，聚合容器为普通 BaseModel）。
 
     Attributes:
         telegram: Telegram 通道配置（默认关闭）。
         qq: QQ 通道配置（默认关闭——NapCat OneBot v11）。
+        wecom: 企业微信智能机器人长连接配置（默认关闭）。
     """
 
     telegram: TelegramSettings = Field(
         default_factory=TelegramSettings, description="Telegram 通道配置"
     )
     qq: QqChannelSettings = Field(default_factory=QqChannelSettings, description="QQ 通道配置")
+    wecom: WecomChannelSettings = Field(
+        default_factory=WecomChannelSettings, description="企业微信智能机器人长连接配置"
+    )
 
 
 class TtsSettings(BaseSettings):
@@ -996,6 +1106,10 @@ class Settings(BaseSettings):
             不可达时回落到既有工具集）。
         voice: 语音域配置（TTS / ASR 默认关闭；外部本地
             模型服务经 HTTP 契约消费，部署接线属部署侧事务）。
+        voiceprint: 声纹配置（默认关闭——VOICEPRINT_ env 面；物理定义在
+            :class:`packages.harness.voice.voiceprint_models.VoiceprintSettings`）。
+        sticker: 表情包库配置（默认关闭——STICKER_ env 面；物理定义在
+            :class:`packages.harness.multimodal.sticker_models.StickerSettings`）。
         search: 联网搜索运营配置（开关 / 工具面 / 预算 / 冷却——
             SEARCH_ env 面；provider 注册表经 config.yaml ``search``
             段承载，见 :class:`SearchConfig`）。
@@ -1028,6 +1142,8 @@ class Settings(BaseSettings):
     tools_sandbox: ToolsSandboxSettings = ToolsSandboxSettings()
     tools_browser_sidecar: ToolsBrowserSidecarSettings = ToolsBrowserSidecarSettings()
     voice: VoiceSettings = VoiceSettings()
+    voiceprint: VoiceprintSettings = VoiceprintSettings()
+    sticker: StickerSettings = StickerSettings()
     search: WebSearchSettings = WebSearchSettings()
     rhythm: RhythmSettings = RhythmSettings()
     flow: FlowGateSettings = FlowGateSettings()

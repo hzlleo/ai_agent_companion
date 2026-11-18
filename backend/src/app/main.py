@@ -3,9 +3,10 @@
 装配契约：
 
     - :func:`create_app` —— FastAPI 工厂（共享异常处理器 + personas /
-      memories / usage / voice / look_at / models / search / reminders /
-      directives / facts / skills / channels-qq / health 共十三路由 + 管理面
-      owner-token 鉴权（十一管理路由统一挂接，health / qq webhook 豁免——
+      memories / usage / voice / voiceprints / look_at / stickers / models /
+      search / reminders / directives / facts / skills / channels-qq /
+      health 共十六路由 + 管理面 owner-token 鉴权（十四管理路由统一挂接，
+      health / qq webhook 豁免——
       豁免契约见 :func:`_include_routers`）+ CORS + lifespan）；
     - :func:`startup_app_state` / :func:`shutdown_app_state` —— **可独立
       驱动的纯异步函数对**（不藏在 lifespan 闭包内——测试无需 ASGI
@@ -29,11 +30,15 @@
                                                  ChatService 工厂消费工具面；
                                                  缺省 no-op）
         ↓ _startup_channels(app, settings)  通道层（TELEGRAM_ENABLED 时
-                                                 装配 runner 后台任务；token
+                                                 装配 runner 后台任务；表情包启用时
+                                                 接线附件 v2 收发桥；token
                                                  缺失 fail fast；QQ_ENABLED
                                                  时注册适配器 + 启动校验
-                                                 warn-and-continue；任一通道
-                                                 启用时先装配 rhythm / intent
+                                                 warn-and-continue；WECOM_ENABLED
+                                                 时装配企微智能机器人长连接
+                                                 runner（配置 / 凭据面失败仅
+                                                 跳过该通道）；任一通道启用时
+                                                 先装配 rhythm / intent
                                                  会话性组件——单一随机源，
                                                  INTENT_ENABLED 关闭时快径
                                                  面 None；缺省 no-op）
@@ -50,8 +55,9 @@
 
     _shutdown_scheduler(app)                  调度器优雅停机（先于通道——
                                               duty 出站消费通道路由器）
-        ↓ _shutdown_channels(app)             通道 runner 优雅停机（先于池——
-                                              runner 消费共享 HTTP client）
+        ↓ _shutdown_channels(app)             通道 runner 优雅停机（telegram /
+                                              企微长连接——先于池，runner 消费
+                                              共享 HTTP client）
         ↓ background_task_manager.shutdown()  全局后台任务 drain（先于池——
                                               fire-and-forget 索引等在途
                                               任务消费 SeekDB 池 / 共享
@@ -82,18 +88,22 @@ memory 域经 memories 路由导入链注册。
 from __future__ import annotations
 
 import asyncio
+import base64
 import random
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
+import httpx
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
+import packages.harness.multimodal.sticker_orm as sticker_orm
 import packages.harness.persona.orm as persona_orm
 import packages.harness.usage.orm as usage_orm
+import packages.harness.voice.voiceprint_orm as voiceprint_orm
 from app.api.channels_qq import router as qq_channels_router
 from app.api.core_memory import router as core_memory_router
 from app.api.directives import router as directives_router
@@ -107,19 +117,27 @@ from app.api.personas import router as personas_router
 from app.api.reminders import router as reminders_router
 from app.api.search import router as search_router
 from app.api.skills import router as skills_router
+from app.api.stickers import router as stickers_router
 from app.api.usage import router as usage_router
 from app.api.voice import router as voice_router
+from app.api.voiceprints import router as voiceprints_router
 from app.middleware.admin_auth import (
     log_admin_auth_startup_notice,
     require_admin_token,
 )
 from app.middleware.error_handler import register_exception_handlers
-from packages.harness.channels.channel_models import ChannelType
+from packages.harness.channels.channel_models import (
+    ChannelAttachmentKind,
+    ChannelMessageAttachment,
+    ChannelType,
+)
 from packages.harness.channels.channel_service import ChannelRouter
 from packages.harness.channels.qq.qq_adapter import NapCatQQAdapter
 from packages.harness.channels.qq.qq_client import NapCatOneBotClient
 from packages.harness.channels.telegram.tg_client import TelegramClient
 from packages.harness.channels.telegram.tg_runner import TelegramChannelRunner
+from packages.harness.channels.wecom.wecom_client import WeComLongConnectionClient
+from packages.harness.channels.wecom.wecom_runner import WeComChannelRunner
 from packages.harness.chat.service import ChatService
 from packages.harness.config import search_registry
 from packages.harness.config.loader import load_all_config, setup_logging_from_settings
@@ -148,6 +166,7 @@ from packages.harness.memory.service import (
     MemoryService,
 )
 from packages.harness.multimodal.look_at import LookAtService, register_look_at_tool
+from packages.harness.multimodal.sticker_service import StickerService
 from packages.harness.persona.core_memory import (
     CoreMemoryService,
     core_memory_session_id_var,
@@ -196,10 +215,10 @@ from packages.harness.tools.sandbox_models import (
 from packages.harness.usage.service import UsageService
 
 # ORM 模型注册（导入副作用——见模块 docstring「ORM 注册」一节）。
-_ORM_REGISTRY = (persona_orm, usage_orm)
+_ORM_REGISTRY = (persona_orm, usage_orm, sticker_orm, voiceprint_orm)
 
 #: CORS 显式放行方法面（管理面全操作集）。
-_CORS_ALLOW_METHODS: list[str] = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+_CORS_ALLOW_METHODS: list[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 #: CORS 显式放行请求头面（JSON API 最小集 + 鉴权）。
 _CORS_ALLOW_HEADERS: list[str] = ["Accept", "Authorization", "Content-Type"]
 #: 通道 runner 优雅停机等待秒数（在途长轮询最多一个窗口——超时 cancel 兜底）。
@@ -505,7 +524,7 @@ async def _startup_browser_sidecar(app: FastAPI, settings: Settings) -> None:
 
 
 async def _startup_channels(app: FastAPI, settings: Settings) -> None:
-    """装配通道层（``TELEGRAM_ENABLED`` 长轮询 runner + ``QQ_ENABLED`` 适配器）。
+    """装配通道层（Telegram 长轮询 runner / QQ 适配器 / 企微长连接 runner）。
 
     装配链（单一 ChannelRouter 服务全部通道——会话按 ``channel:chat_id``
     维度天然隔离）：任一通道启用时先装配 rhythm / intent 会话性组件
@@ -556,13 +575,19 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     """
     app.state.channels_runner = None
     app.state.channels_task = None
+    app.state.channels_wecom_runner = None
+    app.state.channels_wecom_task = None
     app.state.channels_router = None
     app.state.rhythm_service = None
     app.state.intent_shortcut = None
+    app.state.sticker_service = None
     telegram = settings.channels.telegram
     qq = settings.channels.qq
-    if not telegram.enabled and not qq.enabled:
-        logger.info("通道层未启用（TELEGRAM_ENABLED / QQ_ENABLED 均关闭）——跳过装配")
+    wecom = settings.channels.wecom
+    if not telegram.enabled and not qq.enabled and not wecom.enabled:
+        logger.info(
+            "通道层未启用（TELEGRAM_ENABLED / QQ_ENABLED / WECOM_ENABLED 均关闭）——跳过装配"
+        )
         return
     manager = get_pool_manager()
     if manager is None or not manager.started:
@@ -681,6 +706,66 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
             )
             return None
 
+    sticker_service: StickerService | None = None
+    if settings.sticker.enabled:
+        sticker_service = StickerService(settings=settings.sticker, gateway=gateway)
+        logger.info(
+            "表情包库通道桥已装配（入站收录 sticker 附件；回表情={}）",
+            settings.sticker.channel_reply_enabled,
+        )
+    app.state.sticker_service = sticker_service
+
+    async def _ingest_inbound_stickers(
+        attachments: list[ChannelMessageAttachment],
+    ) -> None:
+        """通道入站表情收录（仅 base64 载荷；人格上下文由路由器绑定）。
+
+        v2 入站附件可能是 base64（QQ 段内联）或平台文件引用
+        （``tg-file://`` / ``url``）——后者需要二次下载，本桥按「只收录
+        已持有字节」的边界跳过（文档化于 channels.md）。单张失败仅告警
+        ——通道消息回复不受影响。
+        """
+        if sticker_service is None:
+            return
+        async with session_scope() as db_session:
+            for attachment in attachments:
+                if not attachment.base64:
+                    continue
+                try:
+                    payload = base64.b64decode(
+                        "".join(attachment.base64.split()), validate=True
+                    )
+                except ValueError:
+                    logger.opt(exception=True).warning(
+                        "通道入站表情 base64 解码失败（跳过该附件）"
+                    )
+                    continue
+                source_note = (
+                    f"通道入站表情：{attachment.caption}"
+                    if attachment.caption
+                    else "通道入站表情（平台消息附件）"
+                )
+                await sticker_service.ingest_bytes(
+                    db_session,
+                    payload,
+                    attachment.media_type or "image/png",
+                    source_note=source_note,
+                )
+
+    async def _pick_reply_sticker() -> ChannelMessageAttachment | None:
+        """取当前人格最新表情作为随文本附发的出站附件（无可发素材为 None）。"""
+        if sticker_service is None:
+            return None
+        async with session_scope() as db_session:
+            binary = await sticker_service.pick_channel_reply(db_session)
+        if binary is None:
+            return None
+        return ChannelMessageAttachment(
+            kind=ChannelAttachmentKind.STICKER,
+            media_type=binary.record.content_type,
+            base64=base64.b64encode(binary.content).decode("ascii"),
+        )
+
     router = ChannelRouter(
         chat_service_factory=_chat_service_factory,
         session_factory=session_scope,
@@ -690,6 +775,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
         scheduler_provider=lambda: getattr(app.state, "scheduler", None),
         persona_service=persona_service,
         relationship_lookup=_relationship_lookup,
+        sticker_ingest_hook=_ingest_inbound_stickers if sticker_service else None,
+        sticker_reply_hook=_pick_reply_sticker if sticker_service else None,
     )
     if telegram.enabled:
         client = TelegramClient(
@@ -729,6 +816,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
             "QQ 通道适配器已注册（webhook 入站 + NapCat HTTP API 出站）: base_url={}",
             qq.http_api_base_url,
         )
+    if wecom.enabled:
+        await _startup_wecom_channel(app, settings, router, manager.get_http_client())
     app.state.channels_router = router
 
 
@@ -758,6 +847,71 @@ async def _validate_qq_startup(client: NapCatOneBotClient) -> None:
     )
 
 
+async def _startup_wecom_channel(
+    app: FastAPI,
+    settings: Settings,
+    router: ChannelRouter,
+    http_client: httpx.AsyncClient,
+) -> None:
+    """装配企业微信智能机器人长连接通道（配置 / 凭据面失败即跳过该通道）。
+
+    装配链：`WeComLongConnectionClient`（BotID + Secret 环境变量间接解析；
+    构造期缺失即 ``CHANNEL_TOKEN_MISSING``）→ `WeComChannelRunner`（入站队列 +
+    msgid 去重 + 回复上下文登记 + 出站文本 / 附件投递）→
+    ``router.register_adapter(WECOM, runner)`` → ``create_task(runner.run())`` +
+    ``background_task_manager`` 托管。
+
+    **失败语义（与 telegram 的差异，锁定决策）**：telegram token 缺失 fail loud
+    （app 拒绝启动）；企微装配期失败（BotID / 密钥缺失等配置面错误）记 ERROR
+    并**跳过该通道**——长连接是新增通道，其配置瑕疵不应连带杀掉已在工作的
+    telegram / QQ 通道。运行期故障（断开 / 订阅被拒 / 命令失败）由 runner 的
+    退避重连与逐消息错误隔离消化，同样不波及其余通道。
+
+    Args:
+        app: 待装配的 FastAPI 应用（``channels_wecom_runner`` /
+            ``channels_wecom_task`` 槽位上挂）。
+        settings: 生效 Settings（读取 ``settings.channels.wecom`` 分节）。
+        router: 通道路由器（注册企微适配器发送面）。
+        http_client: 共享 HTTP 客户端（出站附件 ``url`` 源下载——不私建连接）。
+    """
+    wecom = settings.channels.wecom
+    try:
+        client = WeComLongConnectionClient(
+            bot_id=wecom.bot_id,
+            secret_env=wecom.secret_env,
+            endpoint=wecom.ws_endpoint,
+            request_timeout_seconds=wecom.request_timeout_seconds,
+            heartbeat_interval_seconds=wecom.heartbeat_interval_seconds,
+            heartbeat_timeout_seconds=wecom.heartbeat_timeout_seconds,
+            open_timeout_seconds=wecom.open_timeout_seconds,
+            backoff_base_seconds=wecom.backoff_base_seconds,
+            backoff_max_seconds=wecom.backoff_max_seconds,
+            backoff_jitter_ratio=wecom.backoff_jitter_ratio,
+        )
+    except BusinessException as exc:
+        logger.error(
+            "企微长连接通道未装配（配置 / 凭据面失败——其余通道继续工作）: {}", exc.message
+        )
+        return
+    runner = WeComChannelRunner(
+        client=client,
+        router=router,
+        reply_window_seconds=wecom.reply_window_seconds,
+        http_client=http_client,
+    )
+    router.register_adapter(ChannelType.WECOM, runner)
+    task = asyncio.create_task(runner.run(), name="wecom-channel-runner")
+    background_task_manager.register(task)
+    task.add_done_callback(_log_channel_task_termination)
+    app.state.channels_wecom_runner = runner
+    app.state.channels_wecom_task = task
+    logger.info(
+        "企微长连接通道 runner 已启动（managed background task）: endpoint={}, bot_id={}",
+        wecom.ws_endpoint,
+        wecom.bot_id,
+    )
+
+
 async def _shutdown_channels(app: FastAPI) -> None:
     """停机通道层（先于公共池——通道组件消费共享 HTTP client；幂等）。
 
@@ -770,17 +924,39 @@ async def _shutdown_channels(app: FastAPI) -> None:
 
     Args:
         app: 待收尾的 FastAPI 应用（``channels_router`` / ``channels_runner``
-            / ``channels_task`` / ``rhythm_service`` / ``intent_shortcut``
+            / ``channels_task`` / ``channels_wecom_runner`` /
+            ``channels_wecom_task`` / ``rhythm_service`` / ``intent_shortcut``
             槽位复位 None）。
     """
     runner: TelegramChannelRunner | None = getattr(app.state, "channels_runner", None)
     task: asyncio.Task[None] | None = getattr(app.state, "channels_task", None)
+    wecom_runner: WeComChannelRunner | None = getattr(
+        app.state, "channels_wecom_runner", None
+    )
+    wecom_task: asyncio.Task[None] | None = getattr(app.state, "channels_wecom_task", None)
     app.state.channels_runner = None
     app.state.channels_task = None
+    app.state.channels_wecom_runner = None
+    app.state.channels_wecom_task = None
     app.state.channels_router = None
     # rhythm / intent 槽位复位（服务无自有资源——随机源随实例丢弃）。
     app.state.rhythm_service = None
     app.state.intent_shortcut = None
+    app.state.sticker_service = None
+    await _stop_managed_channel_task(runner, task, label="Telegram 通道")
+    await _stop_managed_channel_task(wecom_runner, wecom_task, label="企微长连接通道")
+
+
+async def _stop_managed_channel_task(
+    runner: Any, task: asyncio.Task[None] | None, *, label: str
+) -> None:
+    """停机单个通道的托管后台任务（优雅请求 → bounded 等待 → cancel 兜底）。
+
+    Args:
+        runner: 通道 runner（提供 ``request_stop``；None = 无 runner 可请求）。
+        task: 该通道的后台任务（None / 已完成 = 无需等待）。
+        label: 日志面通道名。
+    """
     if task is None or task.done():
         return
     if runner is not None:
@@ -789,24 +965,25 @@ async def _shutdown_channels(app: FastAPI) -> None:
         await asyncio.wait_for(task, timeout=_CHANNELS_STOP_TIMEOUT_SECONDS)
     except TimeoutError:
         # wait_for 超时路径已 cancel 任务并等待取消收尾——此处仅记录
-        logger.warning("Telegram 通道停机等待超时——已强制取消长轮询任务")
+        logger.warning("{} 停机等待超时——已强制取消后台任务", label)
     except Exception as exc:
-        logger.warning("Telegram 通道任务以异常收尾: {}", exc)
-    logger.info("Telegram 通道 runner 已停机")
+        logger.warning("{} 任务以异常收尾: {}", label, exc)
+    logger.info("{} runner 已停机", label)
 
 
 def _log_channel_task_termination(task: asyncio.Task[None]) -> None:
     """通道后台任务终态日志（异常终止 / 取消均落日志——不留哑任务）。
 
     Args:
-        task: 已完成（或已取消）的后台任务。
+        task: 已完成（或已取消）的后台任务（任务名标识通道——``telegram-channel-runner``
+            / ``wecom-channel-runner``）。
     """
     if task.cancelled():
-        logger.info("Telegram 通道任务已被取消（停机兜底路径）")
+        logger.info("{} 已被取消（停机兜底路径）", task.get_name())
         return
     exc = task.exception()
     if exc is not None:
-        logger.error("Telegram 通道任务异常终止: {}", exc)
+        logger.error("{} 异常终止: {}", task.get_name(), exc)
 
 
 async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
@@ -1144,8 +1321,9 @@ def _include_routers(app: FastAPI) -> None:
     挂载契约（R2 审计放行条件——新端点不得扩张无鉴权面）：
 
         - **受保护路由集**：personas / memories / usage / voice /
-          look_at / models / search / reminders / directives / facts /
-          skills / core-memory 十二个管理路由统一挂 ``require_admin_token``
+          voiceprints / look_at / stickers / models / search / reminders /
+          directives / facts / skills / core-memory 十四个管理路由统一挂
+          ``require_admin_token``
           依赖——经单一 ``APIRouter(dependencies=[...])`` 包装路由**一次
           注册**（依赖定义在 ``app/middleware/admin_auth``；token 经
           ``ServerConfig.admin_token_env`` env 间接，空 = 鉴权关闭）；
@@ -1168,7 +1346,9 @@ def _include_routers(app: FastAPI) -> None:
     admin_api.include_router(memories_router)
     admin_api.include_router(usage_router)
     admin_api.include_router(voice_router)
+    admin_api.include_router(voiceprints_router)
     admin_api.include_router(look_at_router)
+    admin_api.include_router(stickers_router)
     admin_api.include_router(models_router)
     admin_api.include_router(search_router)
     admin_api.include_router(reminders_router)

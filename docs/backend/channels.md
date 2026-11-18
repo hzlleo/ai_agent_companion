@@ -1,6 +1,6 @@
 # channels — 平台通道层（Telegram 首个适配器；QQ / NapCat OneBot v11）
 
-`backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram——手写 Bot API 客户端 + 长轮询 runner；QQ——NapCat OneBot v11 客户端 + webhook 推送入站）。通道抽象保持类型可扩展（`ChannelType` StrEnum——B站等后续通道在此追加成员与同级子模型）。消息协议已升级 **v2**（附件 / 静默 / 合成事件——见「协议 v2」一节；v1 纯文本形态缺省保持，additive 向后兼容）。
+`backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram——手写 Bot API 客户端 + 长轮询 runner；QQ——NapCat OneBot v11 客户端 + webhook 推送入站；企业微信——智能机器人长连接 WebSocket 客户端 + 回调 runner）。通道抽象保持类型可扩展（`ChannelType` StrEnum——B站等后续通道在此追加成员与同级子模型）。消息协议已升级 **v2**（附件 / 静默 / 合成事件——见「协议 v2」一节；v1 纯文本形态缺省保持，additive 向后兼容）。
 
 ## 模块一览
 
@@ -15,6 +15,9 @@
 | `qq/qq_client.py` | 手写 NapCat OneBot v11 HTTP API 客户端（共享 httpx client 注入；单一动作对象包裹；v2 段数组发送） | `NapCatOneBotClient` |
 | `qq/qq_adapter.py` | QQ 适配器发送面（chat_id grammar 解析 → NapCat 动作 → 投递映射；无 runner；v2 附件段数组出站） | `NapCatQQAdapter` |
 | `qq/qq_webhook.py` | webhook 事件处理器（容错解析 / 大类过滤 / message_id 去重 / 消息展平 / v2 附件提取；恒不抛） | `process_webhook_event` / `flatten_message_text` / `extract_message_attachments` / `QqMessageDedupWindow` / `reset_qq_webhook_state` |
+| `wecom/wecom_models.py` | 智能机器人长连接 wire 模型（Unit 文件）：订阅 / 心跳 / 回调 / 应答 / 回复 / 推送 / 素材上传命令 + 入站映射 + markdown 分段 | `WeComCallbackFrameModel` / `WeComCommandModel` / `map_wecom_callback_to_inbound` / `parse_wecom_chat_id` / `split_wecom_markdown_text` |
+| `wecom/wecom_client.py` | 长连接客户端（订阅 / req_id 应答关联 / 应用层心跳 / 指数退避重连 + 抖动 / 单连接不变式 / 被踢下线 / 优雅停机 / 素材分片上传） | `WeComLongConnectionClient` / `WeComConnectionState` / `WeComConnectionProtocol` |
+| `wecom/wecom_runner.py` | 企微 runner（回调去重 / 回复上下文 / 有界入站队列 + worker / 出站文本分段与附件投递 / 逐附件失败承载） | `WeComChannelRunner` / `WeComMessageDedupWindow` |
 
 依赖方向：channels → chat（ChatService）+ persona（bind_persona_context）+ config（Settings.channels）+ core（errors / time_utils）；HTTP 出站一律经 pools 共享 `httpx.AsyncClient`（硬规则：无私建连接）。锁定设计决策：**不引入 aiogram / python-telegram-bot / 任何 OneBot SDK**——按平台协议手写（与 llm 域「不引入 openai SDK」同约定）。
 
@@ -60,7 +63,12 @@ QQ_ENABLED=true 时（同一 ChannelRouter——任一通道启用即构造）�
     → NapCatQQAdapter → router.register_adapter(QQ, adapter)
     → get_login_info 启动校验（warn-and-continue——见「QQ 通道」一节）
     （无 runner / task——推送式入站零长驻任务）
-TELEGRAM_ENABLED=false 且 QQ_ENABLED=false（缺省）：no-op——零通道对象构造
+WECOM_ENABLED=true 时（同一 ChannelRouter）：
+    WeComLongConnectionClient（BotID + 密钥环境变量间接——缺失即跳过该通道）
+    → WeComChannelRunner → router.register_adapter(WECOM, runner)
+    → asyncio.create_task(runner.run()) + background_task_manager.register
+    （app.state.channels_wecom_runner / channels_wecom_task 槽位）
+TELEGRAM_ENABLED / QQ_ENABLED / WECOM_ENABLED 全为 false（缺省）：no-op——零通道对象构造
 ```
 
 停机 LIFO（`shutdown_app_state` 六步）：`_shutdown_channels`（先于公共池——runner 消费共享 HTTP client）→ 后台任务 drain（`background_task_manager.shutdown`——fire-and-forget 在途任务先于池关闭排空）→ `pool_manager.stop()` → `close_database()` → `shutdown_shared_thread_pool()`。通道停机链：`request_stop()`（优雅——轮询态在途长轮询最多再等一个窗口；退避态的退避睡眠最长 `backoff_max_seconds`（默认 60s）不可被 request_stop 中断）→ bounded 等待（5s）→ 超时 `cancel` 兜底（cancel 语义覆盖两种形态——优雅等待不保证收口，5s 上限后强制终止；offset 已逐批持久化，重启安全）。
@@ -282,13 +290,13 @@ v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语�
 
 ### 每适配器映射表（出站附件 kind → 平台发送面）
 
-| kind | Telegram | QQ（OneBot v11） |
-|---|---|---|
-| `image` | `sendPhoto`（photo） | `image` 段 |
-| `audio`（media_type 含 ogg/opus） | `sendVoice`（voice） | `record` 段 |
-| `audio`（其余 / 无线索） | `sendAudio`（audio） | `record` 段 |
-| `file` | `sendDocument`（document） | **不支持**（OneBot v11 无文件消息段——`ok=False` 逐附件结果承载，文本与其余附件照常投递） |
-| `sticker` | `sendSticker`（sticker；**无 caption 参数——caption 丢弃**） | `image` 段（QQ 无独立贴纸段——贴纸即图片形态） |
+| kind | Telegram | QQ（OneBot v11） | 企业微信（长连接） |
+|---|---|---|---|
+| `image` | `sendPhoto`（photo） | `image` 段 | 上传 `type=image` → `aibot_send_msg`（`msgtype=image`） |
+| `audio`（media_type 含 ogg/opus） | `sendVoice`（voice） | `record` 段 | 上传 `type=voice` → `msgtype=voice`（平台限 amr ≤2MB） |
+| `audio`（其余 / 无线索） | `sendAudio`（audio） | `record` 段 | 同上（格式不符按逐附件失败承载） |
+| `file` | `sendDocument`（document） | **不支持**（OneBot v11 无文件消息段——`ok=False` 逐附件结果承载，文本与其余附件照常投递） | 上传 `type=file` → `msgtype=file`（≤20MB） |
+| `sticker` | `sendSticker`（sticker；**无 caption 参数——caption 丢弃**） | `image` 段（QQ 无独立贴纸段——贴纸即图片形态） | 上传 `type=image` → `msgtype=image`（企微无贴纸消息类型） |
 
 出站媒体源形态：`url` → Telegram JSON 引用 / QQ 段 `file` 直传；`base64` → Telegram multipart 上传（httpx `files=`）/ QQ 段 `file="base64://<载荷>"` 包装；`path` → **仅接受 `tg-file://` 伪方案**（file_id 重发——适配器剥前缀透传），其余 path 形态 `VALIDATION_ERROR` 逐附件结果承载。QQ 侧 caption 无段级承载概念——丢弃（出站文本即伴随文本）。
 
@@ -310,7 +318,29 @@ NapCat 段数组消息的 image / record 段提取为附件（引用形态优先
 
 ### 消费者边界（诚实边界）
 
-v2 只交付 **wire**（模型 + 适配器 + 测试）：入站附件由 `InboundMessageModel` 承载供**未来消费者**（R2d 贴纸 / 语音、R2e heartflow-silent / 合成事件）读取——当前 `ChatService.reply` 回复循环仍为纯文本（回合内容不落附件、`ff_chat_messages` 零 schema 变更——附件不持久化）；`ChannelRouter.handle_inbound` 零改动（附件随入站模型透传，路由器不消耗）；duty 属主投递维持纯文本（无附件）；出站附件的构造方（TTS 语音 bytes → base64、贴纸引用等）属 R2d/R2e 交付面。
+v2 只交付 **wire**（模型 + 适配器 + 测试）。**表情包收发桥**已接入（`STICKER_ENABLED=true` 时装配——见下节）；语音 / 合成事件消费者仍待后续切片。当前 `ChatService.reply` 回复循环仍为纯文本（回合内容不落附件、`ff_chat_messages` 零 schema 变更——附件不持久化）；duty 属主投递维持纯文本（无附件）。
+
+### 表情包收发桥（`STICKER_ENABLED`——默认关闭）
+
+`ChannelRouter` 的可选钩子 `sticker_ingest_hook` / `sticker_reply_hook`（缺省 None = 既有语义零变化）在 app 装配时由 `StickerService` 接线：
+
+```
+入站（handle_inbound）
+    ↓ 门控判定前：入站 attachments 含 kind=sticker？→ 以应答人格上下文
+      调用收录桥（闭包开短事务 → StickerService.ingest_bytes）
+    ↓ 仅 base64 已持有字节可收录；tg-file:// / url 引用跳过（二次下载
+      属后续交付面）
+    ↓ 收录失败仅告警——回复链路不受影响
+
+出站（_send_single_reply）
+    ↓ 本轮入站带 sticker 且 STICKER_CHANNEL_REPLY_ENABLED=true？
+       ├─ 是 → 取当前人格最新可读素材 → ChannelMessageAttachment(kind=sticker,
+       │        media_type=记录 MIME, base64=文件字节) 随文本投递
+       └─ 否 → 出站零附件（v1 形态）
+    ↓ 取表情 / 平台附件投递失败：文本照常投递（逐附件结果由适配器聚合）
+```
+
+延迟 / 合并批次只承接文本，不携带入站附件；收录已在门控前完成，回表情仅即时回复路径生效（文档化边界）。群聊多人格模式下每位应答人格使用自己的素材库（人格隔离轴与文本会话一致）。
 
 
 ## offset 持久化（重启不重消费）
@@ -491,6 +521,335 @@ settings = build_isolated_settings(
 
 > 注：`backend/.env.example` 键面以 `.env.example`（`pixi run gen-examples` 生成）为真源，本表为语义说明（`QQ_*` / 双 token 本值变量）。
 
+## 企业微信智能机器人长连接（WECOM）
+
+### 协议依据与装配形态
+
+协议来源：企业微信开发者中心《智能机器人长连接》
+（`https://developer.work.weixin.qq.com/document/path/101463`）与《接收消息》
+（`https://developer.work.weixin.qq.com/document/path/100719`）。长连接（WebSocket）
+模式面向**无固定公网 IP / 高实时性**部署：开发者服务器主动连到
+`wss://openws.work.weixin.qq.com`，订阅鉴权后由平台经同一连接下发消息回调，
+回复与主动推送也走该连接，**不需要回调 URL、不需要消息加解密**。
+
+凭据面（与经典自建应用的区别）：长连接的订阅鉴权只要 **BotID + Secret**
+（管理后台「智能机器人 → API 模式 → 长连接」页的「获取凭证」），Secret 是长连接
+专用密钥，与回调模式的 Token / EncodingAESKey 不是同一凭据；素材上传同样在长连接
+命令面完成，不走向 `/cgi-bin/gettoken` 的 HTTP 面——因此本工程 `WECOM_` env 面
+**不引入** `corp_id` / `agent_id` / access_token 三项（无消费点，出现即死配置）。
+
+| 模块 | 职责 | 关键导出 |
+|---|---|---|
+| `wecom/wecom_models.py` | wire Model Classes（Unit 文件）：订阅 / 心跳 / 回调 / 应答 / 回复 / 主动推送 / 素材上传命令；入站映射（会话键 / 文本归一 / 附件 / 合成来源标记）；markdown 字节分段；chat_id grammar 解析 | `WeComCallbackFrameModel` / `WeComAckModel` / `WeComCommandModel` / `map_wecom_callback_to_inbound` / `parse_wecom_chat_id` / `split_wecom_markdown_text` / `build_*_command` |
+| `wecom/wecom_client.py` | 长连接客户端：订阅 / 请求应答关联（req_id）/ 应用层心跳 / 指数退避重连 + 抖动 / 单连接不变式 / 被踢下线处理 / 优雅停机 / 素材分片上传；连接传输面经 `connector` 注入（生产 = websockets，测试 = 进程内 fake） | `WeComLongConnectionClient` / `WeComConnectionState` / `WeComConnectionProtocol` / `open_websocket_connection` |
+| `wecom/wecom_runner.py` | runner：回调去重与回复上下文登记 / 有界入站队列 + 固定 worker / 出站文本分段与附件上传投递 / 逐附件失败承载 / 生命周期收尾 | `WeComChannelRunner` / `WeComMessageDedupWindow` |
+
+依赖方向：wecom → channels（通道中立模型 / `ChannelRouter`）+ core（errors /
+time_utils / thread_pool）；WebSocket 传输用 `websockets`（由声明的
+`uvicorn[standard]` 运行依赖提供，未新增第三方依赖）；附件 `url` 源下载经
+pools 共享 `httpx.AsyncClient`（硬规则：无私建连接）；禁止自建线程池（worker 是
+原生 async 任务）。
+
+装配（`app/main.py` 的 `_startup_wecom_channel`）：
+
+```
+WECOM_ENABLED=true
+    ↓ WeComLongConnectionClient（BotID + 密钥环境变量名 → 构造期解析密钥；
+      缺失即 CHANNEL_TOKEN_MISSING）
+    ↓ WeComChannelRunner（入站队列 + 去重 + 回复上下文 + 出站投递）
+    ↓ router.register_adapter(ChannelType.WECOM, runner)
+    ↓ asyncio.create_task(runner.run()) + background_task_manager.register
+    （app.state.channels_wecom_runner / channels_wecom_task 槽位）
+WECOM_ENABLED=false（缺省）：no-op——零连接 / 零后台任务
+```
+
+失败语义（与 telegram 的差异，锁定）：telegram token 缺失 fail loud（app 拒绝
+启动）；企微装配期的配置 / 凭据失败记 ERROR 后**跳过该通道**——长连接是并行的
+新增通道，其配置瑕疵不连带杀掉已在工作的 telegram / QQ。运行期故障（握手失败 /
+断连 / 订阅被拒 / 命令失败）由客户端退避重连与 runner 逐消息 / 逐附件隔离消化，
+同样不波及其余通道。
+
+### 入站链路（回调 → 路由）
+
+```
+企业微信（长连接 aibot_msg_callback）
+    ↓ 客户端收帧循环（应答按 req_id 归位；回调帧交处理器）
+WeComChannelRunner._handle_callback
+    ① 事件帧分流（aibot_event_callback 不产出人类回合：enter_chat /
+       template_card_event / feedback_event 仅记日志；disconnected_event 由
+       客户端状态机消费并停止重连）
+    ② msgid 去重（官方指定排重键；进程内有界 FIFO 窗口 1024，超容淘汰最旧）
+    ③ 回复上下文登记（req_id + 到达时刻——出站 aibot_respond_msg 的寻址原料）
+    ④ map_wecom_callback_to_inbound（会话键 / 文本归一 / 附件 / 群聊标记 /
+       compat_info → synthetic）
+    ⑤ 有界入站队列（容量 64；满则丢弃并记 ERROR——平台重投由 msgid 去重兜底）
+    ⑥ 固定 worker（默认 2）→ ChannelRouter.handle_inbound
+       （per-chat 锁 / 心流门控 / 群聊多人格 / 人格绑定 / ChatService.reply /
+        兜底回发——与 telegram、QQ 完全同一套路由语义）
+```
+
+收帧循环与回复执行**解耦**（回调入队后立即返回）：一次 LLM 回复耗时数秒，若在
+收帧循环内同步等待，心跳应答与后续回调都会被阻塞，连接会被平台判定失活。
+
+入站字段（官方文档子集——`extra="ignore"` 容忍平台加字段）：
+
+| wire 字段 | 类型 | 说明 | 本工程消费 |
+|---|---|---|---|
+| `cmd` | string | `aibot_msg_callback` / `aibot_event_callback` | 分流（仅消息回调进路由） |
+| `headers.req_id` | string | 回调请求标识 | 回复上下文的寻址键（`aibot_respond_msg` 必须透传） |
+| `body.msgid` | string | 回调唯一标志（官方：用于事件排重） | 去重键 + 入站 `message_id` |
+| `body.chattype` | string | `single` / `group` | 会话键前缀与 `is_group_chat` |
+| `body.chatid` | string | 群聊会话 ID（仅群聊） | 群聊会话键 `group:<chatid>` |
+| `body.from.userid` | string | 发送者 userid（超管创建时为明文，否则为加密 userid） | 单聊会话键 `single:<userid>` + 入站 `sender_id` |
+| `body.msgtype` | string | `text` / `image` / `mixed` / `voice` / `file` / `video` / `event` | 文本归一与附件提取分派 |
+| `body.text.content` | string | 文本内容 | 入站文本 |
+| `body.voice.content` | string | 平台已转写的语音文本 | 入站文本（无附件——音频字节不在回调面） |
+| `body.mixed.msg_item[]` | array | 图文混排子项（`text` / `image`） | 逐项拼接为文本 + 图片附件 |
+| `body.image.url` / `body.file.url` / `body.video.url` | string | 资源下载地址（5 分钟有效，**密文**） | 附件 `url` 源 |
+| `body.*.aeskey` | string | 逐链接解密密钥（AES-256-CBC，IV 取前 16 字节） | 保留在 wire 模型（消费者解密面） |
+| `body.quote` | object | 用户引用的原消息（`msgtype` + 对应结构体） | 不消费（历史轮次已承载上下文） |
+| `body.compat_info.source` | string | 非普通用户消息来源（`ai_assistant` / `channel`） | `synthetic=True`（机器来源面） |
+
+入站归一表：
+
+| 输入形态 | 归一文本 | 附件 |
+|---|---|---|
+| 文本 | `text.content` 原文 | 无 |
+| 语音 | `voice.content`（平台转写） | 无 |
+| 图文混排 | 文本项原文 + 图片项占位符 `[图片]` 逐项拼接 | 各图片项 → `image`（`url` 源） |
+| 图片 | `[图片]` | `image`（`url` 源） |
+| 文件 | `[文件]` | `file`（`url` 源） |
+| 视频 | `[视频]` | `file` + `media_type=video/mp4` |
+
+不可路由（返回 None 并跳过，不投递路由器）：缺 `msgid`、未知 `chattype`、群聊缺
+`chatid`、单聊缺发送者、未知 `msgtype`、归一文本为空。
+
+入站回调 JSON 示例（群聊文本，字段名与官方文档一致）：
+
+```json
+{
+  "cmd": "aibot_msg_callback",
+  "headers": {"req_id": "cb-req-7f3a"},
+  "body": {
+    "msgid": "CAIQ16HMjQYY/NGagIOAgAMgq4KM0AI=",
+    "aibotid": "bot-1a2b3c",
+    "chatid": "chat-8899",
+    "chattype": "group",
+    "from": {"userid": "zhangsan"},
+    "response_url": "https://qyapi.weixin.qq.com/cgi-bin/aibot/response?...",
+    "msgtype": "text",
+    "text": {"content": "@小鱼 今天好累"},
+    "compat_info": {"source": "ai_assistant"}
+  }
+}
+```
+
+映射结果（通道中立模型）：
+
+```json
+{
+  "channel": "wecom",
+  "chat_id": "group:chat-8899",
+  "message_id": "CAIQ16HMjQYY/NGagIOAgAMgq4KM0AI=",
+  "sender_id": "zhangsan",
+  "text": "@小鱼 今天好累",
+  "ts_ms": 1731000000000,
+  "attachments": [],
+  "synthetic": true,
+  "silent": false,
+  "is_group_chat": true
+}
+```
+
+`silent` 在企微无免通知投递语义——入站恒 False，出站字段被适配器优雅忽略
+（与 QQ 同约定）。媒体资源的 `aeskey` 属 wire 层：通道中立附件只承载 `url`，
+需要字节的消费者（如贴纸库）按 wire 模型取 `aeskey` 解密，本层不下载不落盘。
+
+### 出站链路（文本 / 附件）
+
+```
+OutboundMessageModel
+    ① chat_id grammar 解析（single:<userid> → chat_type=1 / group:<chatid> → 2）
+    ② 文本分段（markdown content ≤20480 字节 UTF-8；换行边界优先、硬切兜底）
+    ③ 首段：回复上下文新鲜 → aibot_respond_msg（msgtype=markdown，透传回调
+       req_id）；上下文缺失 / 超过回复窗口 → aibot_send_msg
+       续段：恒 aibot_send_msg（同一 req_id 多条回复的语义官方未文档化）
+    ④ 附件：解析字节（base64 直接 / url 经共享 HTTP 池下载 / path 本地读）
+       → aibot_upload_media_init / _chunk / _finish 取 media_id
+       → aibot_send_msg（image / voice / file）
+    ⑤ ChannelDeliveryResultModel（message_ids 恒空——平台应答只有
+       errcode / errmsg；attachment_results 逐附件结局）
+```
+
+回复与推送的寻址差异（官方文档）：`aibot_respond_msg` 必须回填触发该会话的
+消息回调 `req_id`，且在收到回调后 24 小时内有效；`aibot_send_msg` 以
+`chatid` + `chat_type` 寻址，要求用户先在会话里给机器人发过消息（回复场景天然
+满足）。通道中立出站模型不携带 `req_id`，因此回复上下文由 runner 按会话登记并
+用 `WECOM_REPLY_WINDOW_SECONDS` 判定时效——过期即降级主动推送，避免把陈旧
+`req_id` 发给平台。
+
+出站命令 JSON 示例：
+
+```json
+{"cmd": "aibot_respond_msg", "headers": {"req_id": "cb-req-7f3a"},
+ "body": {"msgtype": "markdown", "markdown": {"content": "辛苦了，先喝口水"}}}
+```
+
+```json
+{"cmd": "aibot_send_msg", "headers": {"req_id": "req-9b1c"},
+ "body": {"chatid": "8899", "chat_type": 2, "msgtype": "markdown",
+          "markdown": {"content": "**提醒**：今晚十点开会"}}}
+```
+
+```json
+{"cmd": "aibot_send_msg", "headers": {"req_id": "req-9b1d"},
+ "body": {"chatid": "zhangsan", "chat_type": 1, "msgtype": "image",
+          "image": {"media_id": "1G6nrLmr5EC3MMb_-zK1dDdzmd0p7cNliYu9V5w7o8K0"}}}
+```
+
+素材上传（官方文档「上传临时素材」）：初始化拿 `upload_id` → 逐片上传（单片明文
+≤512KB、≤100 片、分片可乱序且幂等）→ 完成返回 `media_id`（素材 3 天有效，
+上传会话 30 分钟有效）。
+
+```json
+{"cmd": "aibot_upload_media_init", "headers": {"req_id": "req-up1"},
+ "body": {"type": "image", "filename": "image.png", "total_size": 9,
+          "total_chunks": 1, "md5": "5d41402abc4b2a76b9719d911017c592"}}
+```
+
+```json
+{"cmd": "aibot_upload_media_chunk", "headers": {"req_id": "req-up2"},
+ "body": {"upload_id": "up-123", "chunk_index": 0, "base64_data": "aGVsbG8="}}
+```
+
+```json
+{"cmd": "aibot_upload_media_finish", "headers": {"req_id": "req-up3"},
+ "body": {"upload_id": "up-123"}}
+```
+
+```json
+{"headers": {"req_id": "req-up3"}, "errcode": 0, "errmsg": "ok",
+ "body": {"type": "image", "media_id": "1G6nrLmr5EC3MMb_-zK1dDdzmd0p7cNliYu9V5w7o8K0",
+          "created_at": "1380000000"}}
+```
+
+附件映射表（v2 kind → 上传素材类型 / 推送消息类型）：
+
+| kind | 上传素材 `type` | 推送 `msgtype` | 平台限制 |
+|---|---|---|---|
+| `image` | `image` | `image` | ≤10MB；png / jpg / jpeg / gif |
+| `sticker` | `image` | `image` | 企微无独立贴纸消息类型——贴纸即图片 |
+| `audio` | `voice` | `voice` | ≤2MB；amr |
+| `file` | `file` | `file` | ≤20MB |
+| （视频载荷以 `file` 类承载） | `file` | `file` | 附件投递不产出 `video` 消息 |
+
+出站边界（文档化）：`reply_to_message_id` 不透传（企微消息体无引用字段——引用是
+入站侧 `quote` 结构）；`caption` 丢弃（image / file 消息无说明字段，出站文本即
+伴随文本）；`message_ids` 恒空（应答不含消息 ID）；单附件失败不上抛
+（`AttachmentDeliveryResult.ok=False` + 原因，文本与其余附件照常投递），文本段
+失败按 v1 语义上抛由路由器兜底。平台频率限制（单会话 30 条/分钟、1000 条/小时）
+由平台侧强制；超限表现为命令应答非零 errcode，走同一错误映射。
+
+### 连接生命周期（订阅 / 心跳 / 重连 / 停机）
+
+```
+IDLE → CONNECTING（wss 握手）→ 订阅（aibot_subscribe：BotID + Secret）
+    ├─ 订阅被拒（errcode != 0）→ CHANNEL_TOKEN_MISSING（fail fast：凭据 /
+    │   机器人身份错误重试无意义，任务带清晰错误终止）
+    └─ READY（心跳任务 + 收帧接管）
+          ├─ 心跳应答超时 / 收帧异常 / 握手失败 → BACKOFF（指数退避 + 抖动）→ 重连
+          ├─ disconnected_event（新连接踢掉本连接）→ KICKED（停止重连）
+          └─ request_stop → 关闭连接 → STOPPED（run 正常返回）
+```
+
+| 语义 | 实现 |
+|---|---|
+| 单连接不重复 | `run()` 以在途任务句柄幂等——重复调用直接返回；官方约束「每个机器人同一时间只能保持一个有效长连接」，多实例并行会互相踢 |
+| 心跳 | 应用层 `{"cmd": "ping"}` 按 `WECOM_HEARTBEAT_INTERVAL_SECONDS`（默认 30s，官方建议值）发送；单次应答超时 `WECOM_HEARTBEAT_TIMEOUT_SECONDS`（默认 10s）即关闭连接交 supervisor 重连——半死连接不会继续吞消息 |
+| 重连 | `WECOM_BACKOFF_BASE_SECONDS × 2^(n-1)` 指数增长、`WECOM_BACKOFF_MAX_SECONDS` 封顶、叠加 `WECOM_BACKOFF_JITTER_RATIO` 比例抖动（默认 0.3）；成功订阅即复位计数。退避等待可被停机请求即时打断 |
+| 被踢下线 | 收到 `disconnected_event` 记 WARNING、置 KICKED 并停止重连（继续重连会与新连接反复互踢——官方建议主备切换而非多活） |
+| 优雅停机 | `request_stop()` 置位 → 收帧循环与退避等待立即收口 → 关闭 WebSocket → worker 收尾；app 停机路径 bounded 等待 5s，超时 `cancel` 兜底 |
+| 观测 | 连接建立 / 订阅成功 / 就绪 / 断开退避 / 被踢 / 停机均落日志（含 endpoint、BotID、连续失败次数、退避秒数）；`state` / `reconnect_attempt` 暴露状态机读数 |
+
+命令应答关联：每条出站命令生成独立 `req_id` 并在在途表登记，应答按 `req_id`
+归位；超时、平台拒绝、连接中断都会拒绝在途请求（`CHANNEL_API_ERROR`），不悬挂。
+
+### 错误码映射（企微面——复用 channels 域既有码表）
+
+| 失败类别 | 错误码 | HTTP | 可重试 |
+|---|---|---|---|
+| 密钥环境变量缺失 / 空白（构造期） | `CHANNEL_TOKEN_MISSING` | 500 | 否（跳过该通道） |
+| 订阅被拒（errcode != 0） | `CHANNEL_TOKEN_MISSING` | 500 | 否（凭据 / 身份面） |
+| 应答超时 / 平台非零 errcode / 连接未就绪 / 收帧断连 | `CHANNEL_API_ERROR` | 503 | 断开类由 supervisor 退避重连；命令类逐消息隔离 |
+| chat_id grammar 非法 / 文本为空 / 附件过小或超类型上限 | `VALIDATION_ERROR` | 422 | 否（调用方 / 载荷面） |
+| 单附件失败（下载失败 / 上传被拒 / 格式不符） | 不抛出 | — | 逐附件结果 `ok=False` 承载 |
+
+### Settings（企微分节）
+
+env 面（`env_prefix=WECOM_`；嵌套覆写 `CHANNELS__WECOM__*` 亦可用）：
+
+| 字段 | env 变量 | 默认 | 说明 |
+|---|---|---|---|
+| `enabled` | `WECOM_ENABLED` | `false` | 是否装配长连接 runner（false = 零连接 / 零后台任务） |
+| `bot_id` | `WECOM_BOT_ID` | 空 | 智能机器人 BotID（enabled=true 时必填——校验拒绝空值） |
+| `secret_env` | `WECOM_SECRET_ENV` | `WECOM_SECRET` | 长连接专用密钥的环境变量名（**间接**——密钥本值永不落配置树） |
+| `ws_endpoint` | `WECOM_WS_ENDPOINT` | `wss://openws.work.weixin.qq.com` | 长连接端点（可指向代理） |
+| `request_timeout_seconds` | `WECOM_REQUEST_TIMEOUT_SECONDS` | `15` | 单条命令应答超时秒数 |
+| `heartbeat_interval_seconds` | `WECOM_HEARTBEAT_INTERVAL_SECONDS` | `30` | 应用层心跳间隔秒数（官方建议 30） |
+| `heartbeat_timeout_seconds` | `WECOM_HEARTBEAT_TIMEOUT_SECONDS` | `10` | 心跳应答超时秒数（必须小于间隔） |
+| `open_timeout_seconds` | `WECOM_OPEN_TIMEOUT_SECONDS` | `10` | WebSocket 握手超时秒数 |
+| `backoff_base_seconds` | `WECOM_BACKOFF_BASE_SECONDS` | `1.0` | 重连退避基数秒 |
+| `backoff_max_seconds` | `WECOM_BACKOFF_MAX_SECONDS` | `60.0` | 退避封顶秒数（校验 ≥ 基数） |
+| `backoff_jitter_ratio` | `WECOM_BACKOFF_JITTER_RATIO` | `0.3` | 退避抖动比例（0-1，0 = 无抖动） |
+| `reply_window_seconds` | `WECOM_REPLY_WINDOW_SECONDS` | `86400` | 消息回调回复有效期（官方 24 小时——超期降级主动推送） |
+
+```bash
+# .env 形态（分节 env 前缀）
+WECOM_ENABLED=true
+WECOM_BOT_ID=bot-1a2b3c
+WECOM_SECRET=your-long-connection-secret     # secret_env 指向的本值（永不落 yaml）
+WECOM_HEARTBEAT_INTERVAL_SECONDS=30
+WECOM_BACKOFF_JITTER_RATIO=0.3
+WECOM_REPLY_WINDOW_SECONDS=86400
+```
+
+```yaml
+# config.yaml 不承载通道配置（env 面专属——与 telegram / QQ 同约定）；
+# 嵌套覆写形态（进程环境变量，优先级高于 .env）：
+#   CHANNELS__WECOM__ENABLED=true
+#   CHANNELS__WECOM__BOT_ID=bot-1a2b3c
+```
+
+隔离构造（测试 / 工具）：
+
+```python
+from packages.harness.config.models import ChannelsSettings, WecomChannelSettings
+from packages.harness.config.settings import build_isolated_settings
+
+settings = build_isolated_settings(
+    channels=ChannelsSettings(
+        wecom=WecomChannelSettings(enabled=True, bot_id="bot-isolated")
+    )
+)
+```
+
+> 注：`backend/.env.example` 键面以 `.env.example`（`pixi run gen-examples` 生成）
+> 为真源，本表为语义说明（`WECOM_*` 与密钥本值变量 `WECOM_SECRET`）。
+
+### 部署要点（企业微信侧）
+
+1. **开启 API 模式（长连接）**：企业微信管理后台 →「智能机器人」→ 选中机器人 →
+   API 模式 → 选择「长连接」；API 模式只能二选一，切到「设置接收消息回调地址」
+   会让现有长连接失效（反之亦然）；
+2. **取凭证**：同页「获取凭证」取 BotID 与 Secret——Secret 是长连接专用密钥，
+   不要与回调模式的 Token / EncodingAESKey 混用；
+3. **本工程配置**：`WECOM_ENABLED=true`、`WECOM_BOT_ID=<BotID>`、
+   `WECOM_SECRET=<Secret>`（或改 `WECOM_SECRET_ENV` 指向别的变量名）；
+4. **网络面**：只需出站可达 `wss://openws.work.weixin.qq.com`——无需公网 IP、
+   无需反向代理、无需回调 URL 与加解密配置；
+5. **单实例约束**：同一机器人只跑一个进程的长连接（多实例会互踢，被踢实例按
+   KICKED 停止重连并打 WARNING——高可用用主备切换而不是多活）。
+
 ## Settings（`Settings.channels`）——telegram 分节
 
 env 面（`env_prefix=TELEGRAM_`；嵌套覆写 `CHANNELS__TELEGRAM__*` 亦可用）：
@@ -556,5 +915,11 @@ settings = build_isolated_settings(
 | `tests/unit/test_channels_qq_api.py` | ASGITransport：恒 200 确认形状 / 鉴权矩阵（401 / 关闭）/ 体校验 400 / 路由器未装配确认丢弃 |
 | `tests/unit/test_app_channels_lifespan.py` | telegram enabled / disabled 装配 / 停机 LIFO 顺序 / token 缺失 fail fast / 任务终态收割 / cancel 兜底 |
 | `tests/unit/test_app_qq_channels_lifespan.py` | QQ enabled / disabled 装配 / warn-and-continue / 双通道共用路由器 / 共享池注入 / 装配顺序契约 |
+| `tests/unit/test_wecom_models.py` | 会话键 grammar / 入站映射矩阵（文本 / 语音 / 混排 / 图片 / 文件 / 视频 / 合成来源）/ 不可路由形态 / 附件提取与占位符 / 出站命令 wire 形状（含素材上传三步）/ markdown 字节分段（换行优先 + UTF-8 硬切） |
+| `tests/unit/test_wecom_client.py` | fake 连接 + 记录式伪时钟：构造校验 / 订阅（形状 + 被拒 fail fast + 单连接）/ 心跳（间隔 + 超时关闭）/ 退避（指数 + 抖动区间 + 复位）/ 被踢下线 / 命令面（超时 / 拒绝 / 未就绪 / 断连拒结）/ 素材上传（单片 / 多片 / 限制 / 缺字段）/ 帧容错 / 处理器隔离 / 优雅停机 |
+| `tests/unit/test_wecom_runner.py` | fake 客户端 + fake 路由器：入站路由形状 / 去重与窗口淘汰 / 事件帧不路由 / 队列过载丢弃 / 路由器异常隔离 / 回复上下文（登记 / 过期 / 缺失）/ 文本分段投递 / 附件三源上传与推送 / 逐附件失败承载 / 停机传导 |
+| `tests/unit/test_wecom_settings.py` | WECOM_ env 面对齐 / 默认值 / 不变式（BotID 必填 / 退避边界 / 心跳预算 / 抖动值域）/ 隔离构造 / 嵌套覆写 |
+| `tests/unit/test_app_wecom_channels_lifespan.py` | 企微 enabled / disabled 装配 / 凭据失败仅跳过该通道 / 双通道共用路由器 / 共享 HTTP 池注入 / 停机传导 |
+| `tests/wecom_fakes.py` | 共享 fake 基建：wire 级连接替身（自动应答 / 错误注入 / 断连注入）/ 连接工厂（失败窗口）/ 逐次放行伪休眠 / fake 客户端 / fake 路由器 |
 
 零真实网络（MockTransport / fake）；零真实配置（隔离 Settings + conftest 硬覆盖；测试 token 为专用假值）；全部 `async def test_*`。

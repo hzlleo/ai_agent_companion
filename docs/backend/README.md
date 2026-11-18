@@ -21,13 +21,13 @@
 | reminders（持久化提醒：`ff_reminders` 表（迁移 0011）+ CRUD / 批量取消部分成功 + 到期扫描（FOR UPDATE SKIP LOCKED）+ 属主通道投递作业（60s 间隔）+ 投递失败计数与上限） | [reminders.md](reminders.md) | 已交付（P10=B——跨重启存活；无通道时保持 pending 的补投语义；零新增 env 键） |
 | tools / sandbox（工具沙盒：docker/tool-sandbox-agent 独立隔离运行时 + wire 契约双树镜像 + 后端沙盒客户端 / registry 代理注册 + http_fetch 示例工具 + compose 加固部署） | [tools-sandbox.md](tools-sandbox.md) | 已交付（沙盒为可选运行时——enabled=false 默认，平台工具按 http_fetch 范式接入） |
 | tools / browser（浏览器 sidecar：docker/browser-sidecar 独立隔离运行时（playwright chromium）+ wire 契约双树镜像（REST 同构沙盒）+ 后端 sidecar 客户端 / registry 代理注册（read_text 不可信标注 + screenshot look_at 配对提示）+ 导航策略链（协议→私网拒绝→DNS→允许清单→路由拦截）+ compose 加固部署） | [tools-browser.md](tools-browser.md) | 已交付（sidecar 为可选运行时——enabled=false 默认，JS 渲染回退面；duty / chat 双注册，warn-and-continue 降级） |
-| voice（语音域：CosyVoice3 TTS 客户端 + Qwen3-ASR OpenAI 兼容转写客户端 + VoiceService 编排 / 用量埋点 + persona 语音绑定 + voice 管理 API + CLI --voice） | [voice.md](voice.md) | 已交付（外部本地模型服务经 HTTP 契约消费——enabled=false 默认，compose 接线由部署侧另行承接；B站通道规划中） |
-| multimodal（多模态 look_at 域：llm 内容分块（OpenAI 兼容 vision 消息）+ LookAtService 编排（config 回退链消费）/ purpose="look_at" 用量埋点 + look_at 工具注册（duty 工具循环——app 装配在 _startup_scheduler duty 分支注册）+ look_at 管理 API（multipart 上传）） | [multimodal.md](multimodal.md) | 已交付（视觉模型 = llm 注册表 multimodal 条目——生产形态本地 llama-server + Qwen3-VL GGUF 子模型；B站通道规划中） |
+| voice（语音域：CosyVoice3 TTS 客户端 + Qwen3-ASR OpenAI 兼容转写客户端 + VoiceService 编排 / 用量埋点 + persona 语音绑定 + voice 管理 API + CLI --voice；R2d：声纹档案（`VOICEPRINT_` env 面——PIPL 告知 / 同意记录 / 批量注册 / 余弦校验 / 撤回删除 / 保存期清理，迁移 0016）） | [voice.md](voice.md) | 已交付（外部本地模型服务经 HTTP 契约消费——enabled=false 默认，compose 接线由部署侧另行承接；声纹默认关闭，未配置说话人向量端点时整功能关闭；B站通道规划中） |
+| multimodal（多模态域：llm 内容分块（OpenAI 兼容 vision 消息）+ LookAtService 编排（config 回退链消费）/ purpose="look_at" 用量埋点 + look_at 工具注册 + look_at 管理 API；R2d：表情包库（`STICKER_` env 面——哈希去重 / 来源与授权备注 / VLM 标注状态机 / 通道附件 v2 收发桥 / 管理 API + 前端面板，迁移 0016）） | [multimodal.md](multimodal.md) | 已交付（视觉模型 = llm 注册表 multimodal 条目——生产形态本地 llama-server + Qwen3-VL GGUF 子模型；表情包默认关闭，关闭时通道语义零变化；B站通道规划中） |
 | search（联网搜索域：Bocha / Zhipu Web Search 双 provider 客户端（failover + 降级冷却）+ SearchService 预算门禁（per-day / per-persona 按调用行计数）+ purpose="search" 用量埋点 + web_search 工具（duty / chat 工具循环共用——app 装配在 _startup_search 注册）+ chat 工具循环（ChatService 可选工具面）+ 搜索注册表管理 API（/api/v1/search）） | [search.md](search.md) | 已交付（R2a-4：config.yaml `search` 段注册表——ConfigSectionAdmin 基座第二个消费者；SEARCH_* env 面运营开关 / 预算 / 冷却） |
 | rhythm（拟人节律层：睡眠窗口判定（跨午夜 / naive 本地墙钟）+ 拟人回复延迟采样（bounded log-uniform + 快答尾）+ 打字模拟（base + 每字符速度封顶）+ 生效值解析（人格覆写 + 温度缩放）+ RhythmService 门面（心流门控 / GUI 消费面）） | [rhythm.md](rhythm.md) | 已交付（纯函数核心 + RHYTHM_ env 面；与意图快径共享单一随机源；`FLOW_ENABLED=true` 时门结果进入心流判定） |
 | intent（意图快径：TIME_QUERY / GREETING / IDENTITY / HELP / DIRECTIVE 五类高频问法本地模式表匹配 → 罐头回复完全绕过主 LLM + ChatService.reply 前钩（通道专属注入——duty / CLI 零变化）+ 拟真延迟 800-1500ms + 快径回合照常落库（记忆 / 梦境可见）） | [intent.md](intent.md) | 已交付（R2a-6：INTENT_ env 面**默认开启**（纯本地零成本）；未命中无损兜底走 LLM） |
 | 工具层与辅助模型客户端（工具注册表 / docker 沙盒 / docker 浏览器 sidecar / 语音 / 多模态） | 聚合说明（无独立文档）：工具注册表见 [duty.md](duty.md)，docker 沙盒见 [tools-sandbox.md](tools-sandbox.md)，docker 浏览器 sidecar 见 [tools-browser.md](tools-browser.md)，语音见 [voice.md](voice.md)，多模态见 [multimodal.md](multimodal.md) | 已交付（分域建档） |
-| channels（平台通道：通道中立路由器 + Telegram 适配器 / 长轮询 runner / offset 持久化 / 4096 分段 + QQ 适配器 / NapCat OneBot v11 webhook 推送入站 / 消息展平 / message_id 去重 + 心流门控接线（延迟 / 合并批次经中央调度器）+ 群聊多人格应答（逐人格会话归属）） | [channels.md](channels.md) | 已交付（Telegram；duty 报告出站经既有路由器消费；QQ / NapCat——推送式入站无 runner，warn-and-continue 启动校验；心流门控 / 群聊多人格默认关闭，单聊语义零变化；B站通道 / safety 审批红线规划中） |
+| channels（平台通道：通道中立路由器 + Telegram 适配器 / 长轮询 runner / offset 持久化 / 4096 分段 + QQ 适配器 / NapCat OneBot v11 webhook 推送入站 / 消息展平 / message_id 去重 + 企业微信智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 素材分片上传 / markdown 分段）+ 心流门控接线（延迟 / 合并批次经中央调度器）+ 群聊多人格应答（逐人格会话归属）） | [channels.md](channels.md) | 已交付（Telegram；QQ / NapCat——推送式入站无 runner，warn-and-continue 启动校验；企微长连接——`WECOM_ENABLED` 默认关闭，装配期凭据失败仅跳过该通道；duty 报告出站经既有路由器消费；心流门控 / 群聊多人格默认关闭，单聊语义零变化；B站通道 / safety 审批红线规划中） |
 
 ## 认证（管理面 owner-token 鉴权）
 
@@ -65,7 +65,7 @@ R2 设计审计放行条件：管理 API（含成本驱动与账号驱动能力�
 
 | 路由集 | 挂载 | 豁免理由 |
 |---|---|---|
-| personas / memories / usage / voice / look_at / models / search / reminders / directives / facts / skills / core-memory | **受保护**（统一挂 `require_admin_token`） | 管理面全操作集（含模型注册表 / 搜索 provider 注册表与沙盒消费的成本 / 账号驱动能力；提醒 / 长期指令 / 人物事实 / 程序性技能 / 核心记忆为人格作用域数据面） |
+| personas / memories / usage / voice / voiceprints / look_at / stickers / models / search / reminders / directives / facts / skills / core-memory | **受保护**（统一挂 `require_admin_token`） | 管理面全操作集（含模型注册表 / 搜索 provider 注册表与沙盒消费的成本 / 账号驱动能力；声纹 / 表情包 / 提醒 / 长期指令 / 人物事实 / 程序性技能 / 核心记忆为人格作用域数据面） |
 | `GET /api/v1/health` | **豁免** | 零依赖存活面（health.py docstring 契约：liveness 探针不触 DB / 池 / LLM，同理不得因鉴权配置拒答） |
 | `POST /api/v1/channels/qq/webhook` | **豁免** | 自鉴权面：NapCat 事件上报经自身 `webhook_token_env` Bearer 校验（见 [channels.md](channels.md)）；再叠 admin token 会要求部署机持有管理凭据——双重鉴权破坏上报链路 |
 

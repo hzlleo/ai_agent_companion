@@ -37,6 +37,12 @@ import type {
 import type { UsageAggregate, UsageRecord, UsageSummary } from '@/types/usage'
 import type { ModelEntryMasked, RegistryState, RoleBinding } from '@/types/model-registry'
 import type { ReminderRecord } from '@/types/reminders'
+import type {
+  StickerAnnotationResult,
+  StickerBatchDeleteResult,
+  StickerBatchUploadResult,
+  StickerRecord,
+} from '@/types/stickers'
 
 /** 后端 URL 前缀（handlers 统一经此拼接，与 api client 同源）。 */
 export const BACKEND_ORIGIN = `${API_BASE_URL}${API_PREFIX}`
@@ -1867,6 +1873,94 @@ export const coreMemoryHandlers = [
   }),
 ]
 
+/** 测试用表情包记录（wire 形态）。 */
+export function mockSticker(overrides: Partial<StickerRecord> = {}): StickerRecord {
+  return {
+    id: 1,
+    sha256: 'a'.repeat(64),
+    content_type: 'image/png',
+    size_bytes: 12,
+    tags: ['开心'],
+    description: '笑着挥手',
+    source_note: '自绘素材',
+    annotation_status: 'pending',
+    annotation_error: null,
+    annotation_model_entry: null,
+    annotated_at_ms: null,
+    created_at: 1731000000000,
+    updated_at: 1731000000000,
+    data_base64: 'aGVsbG8=',
+    ...overrides,
+  }
+}
+
+/** sticker 域默认 handlers（成功形态；状态机与错误面由测试覆写）。 */
+export const stickerHandlers = [
+  http.get(`${BACKEND_ORIGIN}/stickers`, () => {
+    return HttpResponse.json(okResult([mockSticker()]))
+  }),
+  http.post(`${BACKEND_ORIGIN}/stickers`, async ({ request }) => {
+    const body = (await request.json()) as {
+      items: Array<{ image_base64: string; content_type: string; source_note: string; tags: string[]; description: string }>
+    }
+    const result: StickerBatchUploadResult = {
+      created: body.items.map((item, index) =>
+        mockSticker({
+          id: index + 1,
+          sha256: String(index + 1).repeat(64),
+          content_type: item.content_type,
+          source_note: item.source_note,
+          tags: item.tags,
+          description: item.description,
+          data_base64: item.image_base64,
+        }),
+      ),
+      rejected: [],
+    }
+    return HttpResponse.json(okResult(result, '表情包上传完成'))
+  }),
+  http.patch(`${BACKEND_ORIGIN}/stickers/:stickerId`, async ({ request, params }) => {
+    const body = (await request.json()) as {
+      tags: string[] | null
+      description: string | null
+      source_note: string | null
+    }
+    return HttpResponse.json(
+      okResult(
+        mockSticker({
+          id: Number(params.stickerId),
+          tags: body.tags ?? ['开心'],
+          description: body.description ?? '笑着挥手',
+          source_note: body.source_note ?? '自绘素材',
+        }),
+        '表情包已更新',
+      ),
+    )
+  }),
+  http.delete(`${BACKEND_ORIGIN}/stickers/:stickerId`, ({ params }) => {
+    const result: StickerBatchDeleteResult = {
+      deleted_ids: [Number(params.stickerId)],
+      missing_ids: [],
+    }
+    return HttpResponse.json(okResult(result, '表情包已删除'))
+  }),
+  http.post(`${BACKEND_ORIGIN}/stickers/:stickerId/annotate`, ({ params }) => {
+    const result: StickerAnnotationResult = {
+      ok: true,
+      record: mockSticker({
+        id: Number(params.stickerId),
+        annotation_status: 'done',
+        annotation_model_entry: 'local-vision',
+        annotated_at_ms: 1731000001000,
+        description: '笑着挥手',
+        tags: ['开心', '挥手'],
+      }),
+      message: '标注完成',
+    }
+    return HttpResponse.json(okResult(result, result.message))
+  }),
+]
+
 /** 共享 msw 服务器（setup.ts 管理生命周期）。 */
 export const server = setupServer(
   ...personaHandlers,
@@ -1878,4 +1972,5 @@ export const server = setupServer(
   ...factHandlers,
   ...skillHandlers,
   ...coreMemoryHandlers,
+  ...stickerHandlers,
 )

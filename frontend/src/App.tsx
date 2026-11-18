@@ -10,6 +10,7 @@ import PersonaPresetGallery from '@/pages/personas/PersonaPresetGallery'
 import MemoriesPage from '@/pages/memories/MemoriesPage'
 import UsagePage from '@/pages/usage/UsagePage'
 import ModelsPage from '@/pages/models/ModelsPage'
+import StickersPage from '@/pages/stickers/StickersPage'
 
 /**
  * 应用路由（本工程约定）：
@@ -18,6 +19,7 @@ import ModelsPage from '@/pages/models/ModelsPage'
  * - /memories 记忆管理（五页签：情景 / 策展 / 会话 / 检索 / 梦境）；
  * - /usage 用量观测（总览 / 聚合 / 记录）；
  * - /models 模型注册表（条目 / 角色绑定）；
+ * - /stickers 表情包库（上传 / 标签 / 删除 / VLM 标注）；
  * - 全部页面挂 AppShell（侧边栏导航）之下，ToastProvider 包裹根。
  */
 const routes: RouteObject[] = [
@@ -39,6 +41,7 @@ const routes: RouteObject[] = [
           { path: 'memories', element: <MemoriesPage /> },
           { path: 'usage', element: <UsagePage /> },
           { path: 'models', element: <ModelsPage /> },
+          { path: 'stickers', element: <StickersPage /> },
           { path: '*', element: <Navigate to="/personas" replace /> },
         ],
       },
