@@ -4,10 +4,11 @@
 
     - :func:`create_app` —— FastAPI 工厂（共享异常处理器 + personas /
       memories / usage / voice / voiceprints / look_at / stickers / models /
-      search / reminders / directives / facts / skills / channels-qq /
-      health 共十六路由 + 管理面 owner-token 鉴权（十四管理路由统一挂接，
-      health / qq webhook 豁免——
-      豁免契约见 :func:`_include_routers`）+ CORS + lifespan）；
+      search / reminders / directives / facts / skills / core-memory /
+      canvas 管理路由 + channels-qq / health 豁免路由 + 实时语音 WS 路由
+      + 管理面 owner-token 鉴权（管理路由统一挂接；health / qq webhook /
+      realtime WS 豁免——后两者自鉴权，豁免契约见
+      :func:`_include_routers`）+ CORS + lifespan）；
     - :func:`startup_app_state` / :func:`shutdown_app_state` —— **可独立
       驱动的纯异步函数对**（不藏在 lifespan 闭包内——测试无需 ASGI
       lifespan runner 即可直调，本工程不引入 asgi-lifespan 依赖）；
@@ -116,6 +117,7 @@ from app.api.look_at import router as look_at_router
 from app.api.memories import router as memories_router
 from app.api.models import router as models_router
 from app.api.personas import router as personas_router
+from app.api.realtime_voice import router as realtime_voice_router
 from app.api.reminders import router as reminders_router
 from app.api.search import router as search_router
 from app.api.skills import router as skills_router
@@ -1427,7 +1429,11 @@ def _include_routers(app: FastAPI) -> None:
           2. ``channels qq webhook``——自鉴权面（NapCat 事件上报经自身
              ``webhook_token_env`` Bearer 校验，见 channels_qq 模块；
              再叠 admin token 会要求 NapCat 侧持有管理凭据——双重鉴权
-             破坏上报链路且管理面 token 会暴露给部署机配置）。
+             破坏上报链路且管理面 token 会暴露给部署机配置）；
+          3. ``realtime voice ws``——自鉴权面（浏览器 WebSocket 无法设置
+             自定义头，token 经查询参数传递并经 ``verify_admin_token``
+             恒时比较；WS 路由无法复用 HTTP 形态的 ``require_admin_token``
+             依赖——见 app/api/realtime_voice 模块 docstring）。
 
     Args:
         app: 待挂路由的 FastAPI 应用。
@@ -1452,3 +1458,4 @@ def _include_routers(app: FastAPI) -> None:
     # 豁免面（见本函数 docstring 豁免契约——不挂 require_admin_token）。
     app.include_router(qq_channels_router)
     app.include_router(health_router)
+    app.include_router(realtime_voice_router)

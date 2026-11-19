@@ -18,7 +18,7 @@
 步骤定义（``_STEP_DEFINITIONS``）覆盖 .env.example 的全部分节前缀
 （SERVER / DATABASE / LOG / POOLS / LLM_INTIMATE / LLM / SEEKDB /
 TELEGRAM / QQ / WECOM / DOUYIN / DUTY / DREAM_SCHEDULE / SCHEDULER / TOOLS_SANDBOX /
-VOICE_TTS / VOICE_ASR / VOICEPRINT / STICKER / ENV），与模板分节顺序一致。前缀存在包含关系时
+VOICE_TTS / VOICE_ASR / REALTIME_VOICE / VOICEPRINT / STICKER / ENV），与模板分节顺序一致。前缀存在包含关系时
 （``LLM_INTIMATE_`` ⊂ ``LLM_``）按定义顺序首次命中归属，模板键不会在
 两个步骤里重复出现；``FLOW_`` / ``GROUP_PERSONA_`` 为独立前缀，各自
 对应心流门控与群聊多人格配置步骤。
@@ -68,6 +68,7 @@ _STEP_DEFINITIONS: list[tuple[str, list[str]]] = [
     ("浏览器 sidecar 配置", ["TOOLS_BROWSER_SIDECAR_"]),
     ("语音合成配置", ["VOICE_TTS_"]),
     ("语音识别配置", ["VOICE_ASR_"]),
+    ("实时语音会话配置", ["REALTIME_VOICE_"]),
     ("声纹档案配置", ["VOICEPRINT_"]),
     ("表情包库配置", ["STICKER_"]),
     ("联网搜索配置", ["SEARCH_"]),

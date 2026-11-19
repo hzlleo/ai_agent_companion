@@ -31,6 +31,7 @@ from packages.harness.config.models import (
 )
 from packages.harness.intent.intent_models import IntentSettings
 from packages.harness.rhythm.rhythm_models import RhythmSettings
+from packages.harness.voice.realtime_models import RealtimeVoiceSettings
 
 __all__ = ["build_isolated_settings"]
 
@@ -50,6 +51,7 @@ def build_isolated_settings(
     tools_sandbox: ToolsSandboxSettings | None = None,
     tools_browser_sidecar: ToolsBrowserSidecarSettings | None = None,
     voice: VoiceSettings | None = None,
+    realtime_voice: RealtimeVoiceSettings | None = None,
     search: WebSearchSettings | None = None,
     rhythm: RhythmSettings | None = None,
     intent: IntentSettings | None = None,
@@ -79,6 +81,8 @@ def build_isolated_settings(
             关闭形态；sidecar lifespan 测试注入 enabled=True 形态）。
         voice: 语音域配置（None = 代码默认——TTS / ASR 关闭形态；
             voice 测试注入 enabled=True 形态）。
+        realtime_voice: 实时语音会话配置（None = 代码默认——关闭形态；
+            realtime 测试注入 enabled=True 形态）。
         search: 联网搜索运营配置（None = 代码默认——关闭形态；
             search lifespan 测试注入 enabled=True 形态）。
         rhythm: 拟人节律配置（None = 代码默认——关闭形态；rhythm /
@@ -105,6 +109,7 @@ def build_isolated_settings(
             tools_browser_sidecar if tools_browser_sidecar is not None else ToolsBrowserSidecarSettings()
         ),
         voice=voice if voice is not None else VoiceSettings(),
+        realtime_voice=realtime_voice if realtime_voice is not None else RealtimeVoiceSettings(),
         search=search if search is not None else WebSearchSettings(),
         rhythm=rhythm if rhythm is not None else RhythmSettings(),
         intent=intent if intent is not None else IntentSettings(),
