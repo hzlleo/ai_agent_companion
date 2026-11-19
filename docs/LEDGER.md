@@ -311,6 +311,29 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **溢出项与未做项**（诚实标注）：真实 ASR / TTS 供应商连通性与首字/首音延迟留部署侧一次性验证（步骤见 docs/backend/realtime-voice.md）；AEC / 回声消除未做；移动端采集与后台挂起优化未做；既有 ASR/TTS 端点无真流式通道（partial 为节流中途批量转写、句级音频整句解码后播放）；实时语音轮次不注入工具面；流式路径沿用合规守卫「不重试」边界。
 
+### 已完成切片：快模型偷懒 / 违规加固（Tier-1 五项 + Tier-2 三项）
+
+**已完成**：
+
+1. 红探针门 `scripts/red_probe.py` + `backend/red_manifest.toml`：临时副本整树复制 + AST 源码体替换（函数体换抛错桩，覆盖 `from x import y` 已绑定引用；conftest 补丁对已绑定名无效），只跑登记的 node id，要求 ≥1 红；`--gate` 要求 `backend/src/{packages,app}` 新源文件被 probe 覆盖或在 grandfathered 基线。首版基线 190 文件 + 3 条真实 probe（flow_gate / persona_rotation / compliance_guard）。
+2. `scripts/verify_slice.py` + backend `verify-slice` 任务：按序执行 tests-all / coverage-gates / lint / typecheck / gates，每步校验退出码与输出尾部摘要（摘要缺失即失败）；全量日志与 `docs/evidence/<slice>-<sha8>.json`（文件级 sha256 + 聚合哈希，不依赖 git）；`--with-seekdb` / `--with-frontend` 可选。
+3. 文档真相：`generate_examples_env.py` 增加 `--sync-docs` / `--check-docs`（`docs/backend/config.md` 的 `generated:env-sections` 标记块由 `_ENV_SECTIONS` 生成）；新增 `scripts/todo_freeze_check.py`（docs 未完成标记只降不升）；backend `docs-truth` 串两者。
+4. `scripts/assertion_freeze.py` + `.assertion_baseline.json`：unit 测试逐文件 assert / pytest.raises 计数与断言 AST 摘要；计数下降即红，摘要变化只报告。
+5. `scripts/surface_check.py` + `.surface_allowlist.json`：AST 扫 app/api 路由 response_model 与处理函数注解，解析到 harness 侧 wire 模型后对照导出登记表；未登记且无 reason 的新面即红；同时用既有生成器复核 `.env.example` 键面。存量 40 个未导出面（声纹 / 搜索 / 语音 / 健康 / 查询参数枚举等）如实登记 reason，枚举值域单独注明导出器不覆盖。
+6. `scripts/prose_pin_check.py`：断言字符串字面量命中 harness 实现源的疑似 prose pin Top-N + 纯结构断言占比；报告模式恒 exit 0，作为 gates 链尾步骤（其完成标记是 `verify_slice` 的 gates 尾摘要）。
+7. `docs/TASKBOOK_TEMPLATE.md`（文件白名单 / 机器化 DoD / 六路接线矩阵 / 既有测试改动申报 / 反模式黑名单）与 `docs/ACCEPTANCE_SOP.md`（三步固定动作 / 证伪型审查者提示词 / 复审模板三节）。
+8. `chat/service.py` 两处工具循环 docstring 措辞订正：模块文档与 `_tool_loop` 方法文档改为「骨架与 duty 同源」并写明返回形态分叉（本域 `ToolLoopResultModel` 含尾部轮次；duty 仅返回报告文本），不再宣称机械镜像。
+
+**验证**（主 Agent 终验，全部经 pixi；命令与退出码）：
+
+- `cd backend && pixi run verify-slice -- --slice r2-hardening` → 0：tests-all **2808 passed**；coverage-gates **24 组 ≥80%**；lint `All checks passed!`；typecheck `Success: no issues found in 191 source files`；gates 尾标记命中。证据包 `docs/evidence/r2-hardening-ab346493.json`（sha8=`ab346493`）。
+- `cd backend && pixi run red-probe --all` → 0：3/3 `RED`（flow_gate / persona_rotation / compliance_guard 删实现后对应用例失败）。
+- `cd backend && pixi run red-probe-gate` → 0：源文件 190 / 冻结基线 190 / probe 3。
+- 根 `pixi run gates` → 0：注释门 violations=0；同步测试棘轮 +0；noqa 冻结 0 / 0 / 0 / 7 / 0（scripts 存量 7 未新增）；沙盒漂移 38 项一致；红探针门；文档真相；断言棘轮 8012 asserts / 593 raises / 190 文件；导出面（102 引用 / 62 已登记 / 40 豁免）与 env 键面（686 行）；prose-pin 疑似 483 个 / 纯结构断言 7.7%。
+- 可选步骤验证：`cd backend && pixi run verify-slice -- --with-seekdb --only tests-seekdb` → 0（活 SeekDB 6 passed）；`--with-frontend --only frontend-test,frontend-coverage,frontend-lint,frontend-build` → 0（666 passed / statements 95.98% / lint / build），两条可选链路均已按摘要校验跑通。
+- 基线文件：`backend/red_manifest.toml` 190；`scripts/.assertion_baseline.json` 190 文件 / 8012 / 593；`scripts/.todo_baseline.json` 总数 7；`scripts/.surface_allowlist.json` 40 条。全部只降不升，更新入口分别为 `--prune` / `--update` / `--update`。
+- 存量问题处理：40 个未导出面（22 个 DTO / 结果模型 + 18 个 StrEnum 值域）按类别登记允许清单并写明 reason（声纹 PIPL 面、搜索管理面、语音 / 健康 / QQ webhook 等前端未建契约；`EpisodeBatchDelete*` 已由前端别名消费；枚举值域不进 BaseModel schema 导出器），未扩散修改前端契约；prose-pin 报告保留协议字段名类命中（启发式口径透明，不阻断）。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。

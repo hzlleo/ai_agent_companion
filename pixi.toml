@@ -17,7 +17,7 @@
 #   pixi run typecheck        # 后端 mypy
 #   pixi run coverage-gates   # 后端按模块覆盖率门禁（≥80%）
 #   pixi run coverage-frontend # 前端覆盖率门禁（perFile ≥80%）
-#   pixi run gates            # 工程门禁集（注释/同步测试棘轮/noqa 冻结/沙盒契约漂移）
+#   pixi run gates            # 工程门禁集（注释/同步测试棘轮/noqa 冻结/沙盒漂移/红探针/文档真相/断言棘轮/导出面/prose-pin 报告）
 #
 # 子项目命令（在子项目目录执行）：
 #   cd backend && pixi run tests-all     # 后端全量测试
@@ -54,8 +54,10 @@ typecheck = { cmd = "cd backend && pixi run typecheck", description = "后端 my
 # 按模块覆盖率门禁：harness 子包包级 + app 层分组 ≥80%（enforce 模式）
 coverage-gates = { cmd = "cd backend && pixi run coverage-gates", description = "按模块覆盖率门禁（≥80% enforce）" }
 # 工程门禁集：中文注释门（backend + 沙盒树）+ 同步测试棘轮（双树）+ noqa/type:ignore
-# 冻结（双树）+ 沙盒契约漂移门（脚本在根 scripts/，经 backend pixi 环境的 python 执行）
-gates = { cmd = "cd backend && pixi run comment-gates && pixi run sync-test-ratchet && pixi run noqa-freeze && pixi run sandbox-drift", description = "工程门禁集（注释门 / 同步测试棘轮 / noqa 冻结 / 沙盒契约漂移）" }
+# 冻结（双树）+ 沙盒契约漂移门 + 本切片新增的五道门（红探针 / 文档真相 /
+# 断言棘轮 / 导出面 / prose-pin 报告，脚本在根 scripts/，经 backend pixi 环境执行）。
+# prose-pin 必须保持在链尾：scripts/verify_slice.py 以它的完成标记作为 gates 步骤的尾摘要。
+gates = { cmd = "cd backend && pixi run comment-gates && pixi run sync-test-ratchet && pixi run noqa-freeze && pixi run sandbox-drift && pixi run red-probe-gate && pixi run docs-truth && pixi run assertion-freeze && pixi run surface-check && pixi run prose-pin", description = "工程门禁集（注释门 / 同步测试棘轮 / noqa 冻结 / 沙盒契约漂移 / 红探针 / 文档真相 / 断言棘轮 / 导出面 / prose-pin 报告）" }
 # ── 前端委托任务（frontend 独立 pixi 工程） ──────────────────────────────────
 # 前端全量测试（vitest run，msw 全模拟零真实网络）
 test-frontend = { cmd = "cd frontend && pixi run test", description = "前端全量测试（vitest）" }

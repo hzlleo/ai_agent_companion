@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "note": "docs 未完成标记基线——只降不升；再生成: python scripts/todo_freeze_check.py --update",
+  "total": 7,
+  "files": {
+    "docs/LEDGER.md": 1,
+    "docs/README.md": 4,
+    "docs/TASKBOOK_TEMPLATE.md": 1,
+    "docs/backend/emotion.md": 1
+  }
+}

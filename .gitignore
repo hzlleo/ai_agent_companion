@@ -61,3 +61,7 @@ frontend/test-results/
 **/.live-test/
 artifacts/
 **/tests-logs.log
+
+# === 验收证据（docs/evidence/ 的 JSON 与全量日志必须入库；覆盖上方 logs 忽略规则） ===
+!docs/evidence/logs/
+!docs/evidence/logs/*.log
