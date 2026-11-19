@@ -312,6 +312,29 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **溢出项与未做项**（诚实标注）：真实 ASR / TTS 供应商连通性与首字/首音延迟留部署侧一次性验证（步骤见 docs/backend/realtime-voice.md）；AEC / 回声消除未做；移动端采集与后台挂起优化未做；既有 ASR/TTS 端点无真流式通道（partial 为节流中途批量转写、句级音频整句解码后播放）；实时语音轮次不注入工具面；流式路径沿用合规守卫「不重试」边界。
 
+### R2f 复审 P2×4 闭环（音频块上限 / 转写任务化 / 关闭 wire 顺序 / end 排空抢占）
+
+**已完成**（逐条对应 Oracle 复审意见）：
+
+1. **音频块上限**：`realtime_models.py` 新增单一来源常量 `REALTIME_AUDIO_CHUNK_MAX_BYTES`（64 KiB）、`REALTIME_AUDIO_CHUNK_MAX_BASE64_CHARS`（编码长度上限）与 `AUDIO_CHUNK_TOO_LARGE_ERROR_TYPE`；`audio_chunk.data` 增加 `max_length` 且字段校验器断言解码后字节数 ≤ 64 KiB（自定义错误类型可被上行分派识别）；`realtime_session.py` 在上行校验失败分支区分「超限」——下行可恢复 `error(VALIDATION_ERROR)`、计入 `audio_chunks_rejected`、关闭指标日志新增 `rejected=`，超限块不入队且会话继续。保留校验器 + 入队解码的二次解码：把解码结果缓存在模型内会引入 wire 不可见状态且需新访问面，而单块 ≤64 KiB 的一次额外解码代价可忽略。文档同步单块上限 / 超限拒绝计数 / 错误码行 / 测试面。
+2. **转写任务化**：`_handle_segment` 只推进相位与指标并 `_spawn(_transcribe_segment(...))`（同时登记进统一 `_tasks` 与域内 `_transcribe_tasks`），任务内完成 transcribe → final_transcript → ASR_DONE → `_request_generation`；音频工人移除内联 await，转写窗口内 VAD / 起说 / 打断判定持续工作。多段转写可并行，生成请求按**转写完成序**进入既有待生成通道（仍单轮次串行；不按 segment 序号重排——重排需为 final 下行与错误映射引入跨任务缓冲状态，完成序可由 `segment_id` 对齐，故取完成序并在代码与文档写明）。并发转写可能在播报中完成，状态机补 `speaking + asr_done → speaking`（转写完成，等待当前轮播完后生成），避免落入非法迁移告警。文档链路图 / 并发表 / 状态表 / 边界节同步。既有 `test_audio_backpressure_drops_oldest_chunks` 的造压手段随本变更同步（原靠 ASR 门闩阻塞音频工人；现用下行发送门闩把工人停在切段状态迁移；断言不变）。
+3. **关闭 wire 顺序**：`_request_close` 改为「`_close_reason` 先行占位（幂等守卫 + 首个原因生效）→ `_advance(...)` 使 state(closed) 真实下行 → `_closing` 置位 → close_event」；异常路径改经 `_request_close(INTERNAL_ERROR)`，internal_error 路径同样下发 state(closed)。五条关闭路径（client_end / idle_timeout / max_duration / internal_error / session_rejected）wire 序均为（可选 error）→ state(closed) → closed；transport_closed 对端不可达，仅尽力下行 closed（文档已写明该例外）。
+4. **end 排空抢占**：`_handle_end` 拆出 `_drain_before_close`（在途转写等待与轮次等待均与 `_close_event` 竞争，FIRST_COMPLETED）+ `_wait_drain_progress`；关闭事件先到 → 取消在途生成 / TTS（提取 `_cancel_inflight_turn` 复用打断的取消面，关闭路径同时清空待生成文本）→ 退出排空 → 主循环收尾；正常路径保持「冲刷 → 排空 → client_end」。文档并发表「优雅关闭」行同步。
+
+**反向实证**（`git show HEAD:backend/src/packages/harness/voice/{realtime_models,realtime_session}.py` 临时回退后运行新增用例，随后恢复）：
+- 旧模型对 65537 字节块直接接受且无上限常量：反向探针输出 `OLD accepts 65537 bytes: 65537` / `OLD has ceiling attr: False`；
+- 旧 session 运行 6 条新增 session 用例：`5 failed, 1 passed`——超限计数断言 `0 == 1` 红、转写挂起时 VAD 打断 `TimeoutError` 红、client_end / idle_timeout 的末条 state 为 `listening`（非 `closed`）红、end 排空抢占 `TimeoutError` 红；「关闭取消挂起转写」通过（旧实现转写内联在音频任务内亦被收尾取消，属保留型守卫）。
+
+**验证**（主 Agent 终验，命令与退出码）：
+
+- `cd backend && pixi run tests-all` → 0：**2845 passed**（新增 7 条用例：模型上限边界 1 / 超限后会话继续 1 / 转写挂起时 VAD 打断 1 / 关闭取消挂起转写 1 / 关闭顺序 2 / end 排空抢占 1；另状态机迁移矩阵新增 `speaking + asr_done` 合法边 1 条）；
+- `cd backend && pixi run coverage-gates` → 0：**2845 passed**；24 组 ≥80（harness/voice 95.2%）；
+- `cd backend && pixi run lint` → 0（`All checks passed!`）；`pixi run typecheck` → 0（`Success: no issues found in 191 source files`）；
+- 根 `pixi run gates` → 0：注释门 violations=0（hints=30 为既有报告面）、同步测试棘轮 +0、noqa/type:ignore 冻结全基线、沙盒漂移 38 项一致、红探针 190/190、docs-truth 一致、断言棘轮 asserts=8173 / raises=602 无下降、surface-check 102/62/40 通过、prose-pin 报告；
+- `cd backend && pixi run gen-examples` → 0，`git status` 无示例模板变化（幂等）；
+- 本批未改前端，前端门禁未重跑（前端 666 基线不受影响）。
+
+
 ### 已完成切片：快模型偷懒 / 违规加固（Tier-1 五项 + Tier-2 三项）
 
 **已完成**：

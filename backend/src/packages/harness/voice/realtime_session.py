@@ -3,13 +3,19 @@
 链路顺序（单一真相，文档化于 docs/backend/realtime-voice.md）::
 
     上行音频帧 → 背压队列（批量出队 / 溢出丢最旧）→ VAD 切段
-        ↓ 语段就绪（或强制切段）
+        ↓ 语段就绪（或强制切段）→ 派生转写任务（音频工人只投递）
     VoiceService.transcribe（真实取材：Qwen3-ASR 批量端点——无流式通道）
         ↓ final_transcript（中途 partial 由节流的中途批量转写产生）
     ChatService.stream_reply（人格组装 / 注入防御 / 关系摘要——流式增量）
         ↓ 句切（标点 / 长度上限）
     VoiceService.synthesize（CosyVoice 逐句合成——无流式音频通道）
         ↓ WAV 字节按块 base64 下行（audio_chunk）
+
+转写与 VAD 并发：切段后转写以独立任务执行（登记进统一任务集合），音频
+工人只做切段投递——转写窗口内 VAD 照常收帧、起说与打断判定不受影响。
+多段转写可并行；生成请求仍进入既有待生成通道串行消费（单会话同一时刻
+仅一个活跃轮次），多段几乎同时完成时按**转写完成序**进入该通道，客户端
+可据 ``segment_id`` 对齐 final_transcript 与对应轮次。
 
 打断（barge-in）：VAD 检测到新语音或客户端手动 barge_in 时，取消在途
 生成任务与逐句 TTS 任务、清空未合成句队列、丢弃未闭合句缓冲，下行
@@ -19,19 +25,24 @@ interrupted + state(listening)。取消语义安全边界（文档化决策）�
       半截助手回合**不进入会话历史**（与既有流式语义一致）；
     - 逐句 TTS 只对**已闭合句**入队——被打断的未闭合句从不合成，因此
       不会出现「半句音频」；
-    - 所有派生任务经统一任务集合登记并在打断 / 关闭时 cancel + gather，
+    - 在途转写任务不随打断取消（已说完的语段仍应产出 final_transcript
+      与回复）；所有派生任务经统一任务集合登记并在关闭时 cancel + gather，
       会话关闭后任务集合为空（无泄漏）。
 
 资源与并发：
 
     - **单连接单会话**：``start`` 只接受一次，重复即 error（可恢复）；
+    - **音频块上限**：单块 base64 解码后不得超过 64 KiB，超限块在解析期
+      拒绝（可恢复 error + ``audio_chunks_rejected`` 计数），会话继续；
     - **背压**：音频入队上限取 ``REALTIME_VOICE_AUDIO_QUEUE_MAX_CHUNKS``，
       溢出策略为**丢最旧块并计数**（实时音频宁丢旧帧不阻塞收帧循环；
       丢弃数落关闭指标日志）；
     - **超时**：空闲（无任何上行消息）与最大时长由看门狗按注入时钟判定
       ——时钟与休眠面均可注入（伪时钟测试零真实等待）；
-    - **优雅关闭**：``end`` 先冲刷 VAD 尾段，等待在途轮次播报完成，再下行
-      closed 并关闭传输；服务端主动关闭（超时 / 错误）同样先下行 closed。
+    - **优雅关闭**：``end`` 先冲刷 VAD 尾段，排空在途转写与轮次播报后
+      下行 closed；排空期间服务端超时 / 内部关闭先到时立即取消在途生成
+      与 TTS 并收尾（关闭原因取先到者）；服务端主动关闭（超时 / 错误 /
+      拒绝）与客户端 end 均在 closed 前下行 state(closed)。
 
 测试面：传输 / 聊天 / 语音服务全部注入——内存双工 + 脚本 fake + 伪时钟
 即可覆盖全部状态迁移，零真实网络、零真实等待。
@@ -57,6 +68,8 @@ from packages.harness.core.time_utils import now_ms
 from packages.harness.persona.dtos import PersonaRecordDTO
 from packages.harness.voice.realtime_audio import iter_byte_chunks, pcm16_to_wav
 from packages.harness.voice.realtime_models import (
+    AUDIO_CHUNK_TOO_LARGE_ERROR_TYPE,
+    REALTIME_AUDIO_CHUNK_MAX_BYTES,
     REALTIME_INBOUND_ADAPTER,
     REALTIME_PROTOCOL_VERSION,
     RealtimeAssistantTextMessageModel,
@@ -109,6 +122,13 @@ __all__ = [
 #: 看门狗轮询间隔秒数（伪时钟测试可注入自定义休眠面——本值只影响生产
 #: 环境超时判定的粒度，不进入 env 面）。
 _DEFAULT_WATCHDOG_TICK_SECONDS: float = 0.25
+
+#: 视为「音频块超过单块上限」的校验错误类型集合：解码字节上限由字段校验器
+#: 以自定义类型抛出，base64 字符长度上限由 pydantic 以 ``string_too_long``
+#: 抛出——两者都只作用于 audio_chunk.data 字段，据此区分超限与其它协议错误。
+_AUDIO_CHUNK_OVERSIZE_ERROR_TYPES: frozenset[str] = frozenset(
+    {AUDIO_CHUNK_TOO_LARGE_ERROR_TYPE, "string_too_long"}
+)
 
 #: 会话内单帧时间戳推进函数类型（伪时钟测试注入）。
 type ClockFace = Callable[[], int]
@@ -230,6 +250,7 @@ class RealtimeVoiceSession:
         self._tts_task: asyncio.Task[None] | None = None
         self._partial_task: asyncio.Task[None] | None = None
         self._audio_task: asyncio.Task[None] | None = None
+        self._transcribe_tasks: set[asyncio.Task[None]] = set()
         self._last_partial_voiced_ms = 0
 
     # ------------------------------------------------------------------
@@ -282,13 +303,13 @@ class RealtimeVoiceSession:
             logger.opt(exception=True).error(
                 "实时语音会话异常终止: session_id={}", self._session_id
             )
-            if self._close_reason is None:
-                self._close_reason = RealtimeCloseReason.INTERNAL_ERROR
             await self._send_error(
                 code=str(ErrorCode.INTERNAL_ERROR),
                 message="实时语音会话内部错误，会话已关闭",
                 recoverable=False,
             )
+            if not self._closing:
+                await self._request_close(RealtimeCloseReason.INTERNAL_ERROR)
         finally:
             await self._finalize(
                 self._close_reason or RealtimeCloseReason.TRANSPORT_CLOSED
@@ -339,6 +360,18 @@ class RealtimeVoiceSession:
                 self._session_id,
                 exc.error_count(),
             )
+            if self._is_oversized_audio_chunk(exc):
+                self._metrics.audio_chunks_rejected += 1
+                await self._send_error(
+                    code=str(ErrorCode.VALIDATION_ERROR),
+                    message=(
+                        "音频块超过单块上限（"
+                        f"{REALTIME_AUDIO_CHUNK_MAX_BYTES // 1024} KiB），"
+                        "该块已丢弃（会话保留）"
+                    ),
+                    recoverable=True,
+                )
+                return
             await self._send_error(
                 code=str(ErrorCode.VALIDATION_ERROR),
                 message="上行消息格式非法（type / 字段 / base64 载荷校验失败）",
@@ -346,6 +379,21 @@ class RealtimeVoiceSession:
             )
             return
         await self._dispatch(message)
+
+    def _is_oversized_audio_chunk(self, exc: ValidationError) -> bool:
+        """判定校验失败是否来自上行音频块超过单块上限。
+
+        Args:
+            exc: 上行载荷校验失败。
+
+        Returns:
+            True 表示 audio_chunk.data 因字节长度或 base64 长度上限被拒绝。
+        """
+        return any(
+            error["type"] in _AUDIO_CHUNK_OVERSIZE_ERROR_TYPES
+            and "audio_chunk" in error["loc"]
+            for error in exc.errors()
+        )
 
     async def _dispatch(self, message: RealtimeInboundMessageModel) -> None:
         """按消息类型分派（未 start 前的音频 / 控制消息一律拒绝）。
@@ -556,7 +604,7 @@ class RealtimeVoiceSession:
         await self._handle_segment(event, forced=event.kind is VadEventKind.SEGMENT_FORCED)
 
     async def _handle_segment(self, event: VadEventModel, *, forced: bool) -> None:
-        """语段转写 → 最终转写下行 → 发起回复生成。
+        """切段投递：推进相位与指标，派生转写任务（音频工人不做内联等待）。
 
         Args:
             event: 切段事件（携带 PCM16 与时长）。
@@ -576,6 +624,25 @@ class RealtimeVoiceSession:
         if not pcm:
             await self._advance(RealtimeStateEvent.TURN_DONE)
             return
+        task = self._spawn(
+            self._transcribe_segment(segment_id, pcm, event.duration_ms or 0)
+        )
+        self._transcribe_tasks.add(task)
+        task.add_done_callback(self._transcribe_tasks.discard)
+
+    async def _transcribe_segment(
+        self, segment_id: str, pcm: bytes, duration_ms: int
+    ) -> None:
+        """转写单个语段并推进后续链路（独立任务——不阻塞音频工人与 VAD）。
+
+        多段转写可并行；转写完成的文本按完成序进入生成请求通道（单会话
+        同一时刻只有一个活跃轮次，其余排队并依次消费）。
+
+        Args:
+            segment_id: 语段标识（下行 final_transcript 使用）。
+            pcm: 语段 PCM16 字节。
+            duration_ms: 语段有效语音时长（毫秒）。
+        """
         wav = pcm16_to_wav(pcm, self._settings.sample_rate_hz, self._settings.channels)
         try:
             result = await self._voice.transcribe(
@@ -621,7 +688,7 @@ class RealtimeVoiceSession:
                 ts_ms=self._clock(),
                 segment_id=segment_id,
                 text=text,
-                duration_ms=event.duration_ms or 0,
+                duration_ms=duration_ms,
                 language=result.language,
             )
         )
@@ -939,6 +1006,45 @@ class RealtimeVoiceSession:
         self._interruption_seq += 1
         interruption_id = f"intr-{self._interruption_seq}"
         interrupted_turn = self._current_turn_id
+        generation_task = self._generation_task
+        tts_task = self._tts_task
+        await self._cancel_partial()
+        dropped_sentences = await self._cancel_inflight_turn(drop_pending=False)
+        self._metrics.interruptions += 1
+        await self._send(
+            RealtimeInterruptedMessageModel(
+                ts_ms=self._clock(),
+                interruption_id=interruption_id,
+                turn_id=interrupted_turn,
+                reason=reason,
+            )
+        )
+        await self._advance(RealtimeStateEvent.BARGE_IN, detail="打断后回到聆听")
+        logger.warning(
+            "实时语音打断: session_id={}, reason={}, turn_id={}, dropped_sentences={}, "
+            "generation_cancelled={}, tts_cancelled={}",
+            self._session_id,
+            reason.value,
+            interrupted_turn,
+            dropped_sentences,
+            generation_task is not None,
+            tts_task is not None,
+        )
+
+    # ------------------------------------------------------------------
+    # 结束 / 看门狗 / 关闭
+    # ------------------------------------------------------------------
+
+    async def _cancel_inflight_turn(self, *, drop_pending: bool) -> int:
+        """取消在途生成与逐句 TTS、清空未合成句队列（打断与关闭抢占共用）。
+
+        Args:
+            drop_pending: 是否丢弃排队中的用户文本（关闭路径 True——不会再有
+                后续轮次消费；打断路径 False——后续语段仍按序生成）。
+
+        Returns:
+            被丢弃的未合成句数（诊断日志用）。
+        """
         dropped_sentences = 0
         while True:
             try:
@@ -955,48 +1061,73 @@ class RealtimeVoiceSession:
         self._generation_task = None
         tts_task = self._tts_task
         self._tts_task = None
-        await self._cancel_partial()
+        if drop_pending:
+            self._pending_user_texts.clear()
         await self._cancel_task(generation_task)
         await self._cancel_task(tts_task)
-        self._metrics.interruptions += 1
-        await self._send(
-            RealtimeInterruptedMessageModel(
-                ts_ms=self._clock(),
-                interruption_id=interruption_id,
-                turn_id=interrupted_turn,
-                reason=reason,
-            )
-        )
-        await self._advance(RealtimeStateEvent.BARGE_IN, detail="打断后回到聆听")
         self._turn_idle_event.set()
-        logger.warning(
-            "实时语音打断: session_id={}, reason={}, turn_id={}, dropped_sentences={}, "
-            "generation_cancelled={}, tts_cancelled={}",
-            self._session_id,
-            reason.value,
-            interrupted_turn,
-            dropped_sentences,
-            generation_task is not None,
-            tts_task is not None,
-        )
-
-    # ------------------------------------------------------------------
-    # 结束 / 看门狗 / 关闭
-    # ------------------------------------------------------------------
+        return dropped_sentences
 
     async def _handle_end(self) -> None:
-        """客户端 end：冲刷尾段 → 等待在途轮次播完 → 关闭会话。"""
+        """客户端 end：停止收帧 → 冲刷尾段 → 排空在途转写与轮次 → 关闭。
+
+        排空阶段与关闭事件竞争：服务端超时 / 内部关闭先到时立即取消在途
+        生成与 TTS 并退出排空，最终收尾由主循环统一执行。
+        """
         if self._audio_task is not None:
             await self._cancel_task(self._audio_task)
             self._audio_task = None
         now = self._clock()
         for event in self._vad.flush(now).events:
             await self._handle_vad_event(event, now)
-        while (
-            self._current_turn_id is not None or self._pending_user_texts
-        ) and not self._closed:
-            await self._turn_idle_event.wait()
-        await self._request_close(RealtimeCloseReason.CLIENT_END)
+        await self._drain_before_close()
+        if not self._closing:
+            await self._request_close(RealtimeCloseReason.CLIENT_END)
+
+    async def _drain_before_close(self) -> None:
+        """排空在途转写与轮次播报；关闭事件先到则取消在途工作并返回。"""
+        while True:
+            if self._close_event.is_set():
+                await self._cancel_inflight_turn(drop_pending=True)
+                return
+            pending_transcriptions = [
+                task for task in self._transcribe_tasks if not task.done()
+            ]
+            if pending_transcriptions:
+                await self._wait_drain_progress(pending_transcriptions)
+                continue
+            if self._current_turn_id is None and not self._pending_user_texts:
+                return
+            turn_idle_wait: asyncio.Task[bool] = asyncio.create_task(
+                self._turn_idle_event.wait()
+            )
+            close_wait: asyncio.Task[bool] = asyncio.create_task(
+                self._close_event.wait()
+            )
+            done, pending = await asyncio.wait(
+                {turn_idle_wait, close_wait}, return_when=asyncio.FIRST_COMPLETED
+            )
+            for waiter in pending:
+                waiter.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            if close_wait in done and close_wait.result():
+                await self._cancel_inflight_turn(drop_pending=True)
+                return
+
+    async def _wait_drain_progress(self, tasks: list[asyncio.Task[None]]) -> None:
+        """等待任一在途转写结束或关闭事件先到（排空循环的唤醒点）。
+
+        Args:
+            tasks: 在途转写任务快照。
+        """
+        close_wait: asyncio.Task[bool] = asyncio.create_task(self._close_event.wait())
+        done, _ = await asyncio.wait(
+            {*tasks, close_wait}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if close_wait not in done:
+            close_wait.cancel()
+            await asyncio.gather(close_wait, return_exceptions=True)
 
     async def _watchdog(self) -> None:
         """看门狗：空闲超时 / 最大时长判定（注入时钟与休眠面）。"""
@@ -1015,14 +1146,19 @@ class RealtimeVoiceSession:
     ) -> None:
         """请求关闭（幂等；首个原因生效，随后唤醒主循环收尾）。
 
+        相位迁移先于 ``_closing`` 置位：``_send`` 在 ``_closing`` 置位后默认
+        抑制下行，先迁移才能把 state(closed) 真实下发（关闭路径的 wire 顺序
+        为（可选 error）→ state(closed) → closed）。幂等性由 ``_close_reason``
+        先行占位保证。
+
         Args:
             reason: 关闭原因。
             detail: 附加说明（诊断用）。
         """
-        if self._closing:
+        if self._close_reason is not None:
             return
-        self._closing = True
         self._close_reason = reason
+        self._close_detail = detail
         if reason in (
             RealtimeCloseReason.CLIENT_END,
             RealtimeCloseReason.IDLE_TIMEOUT,
@@ -1039,7 +1175,9 @@ class RealtimeVoiceSession:
             )
         else:
             await self._advance(RealtimeStateEvent.INTERNAL_ERROR)
-        self._close_detail = detail
+        if self._closing:
+            return
+        self._closing = True
         self._close_event.set()
 
     async def _send_closed(self, reason: RealtimeCloseReason, detail: str | None) -> None:
@@ -1078,19 +1216,21 @@ class RealtimeVoiceSession:
         if stale:
             await asyncio.gather(*stale, return_exceptions=True)
         self._tasks.clear()
+        self._transcribe_tasks.clear()
         with contextlib.suppress(Exception):
             await self._transport.close(1000, reason.value)
         self._metrics.closed_reason = reason
         snapshot = self._metrics.model_copy()
         logger.info(
             "实时语音会话已关闭: session_id={}, reason={}, audio_chunks={}, dropped={}, "
-            "segments={}, partials={}, finals={}, generations={}, tts_sentences={}, "
-            "audio_chunks_sent={}, interruptions={}, asr_failures={}, tts_failures={}, "
-            "generation_failures={}, duration_ms={}",
+            "rejected={}, segments={}, partials={}, finals={}, generations={}, "
+            "tts_sentences={}, audio_chunks_sent={}, interruptions={}, asr_failures={}, "
+            "tts_failures={}, generation_failures={}, duration_ms={}",
             self._session_id,
             reason.value,
             snapshot.audio_chunks_received,
             snapshot.audio_chunks_dropped,
+            snapshot.audio_chunks_rejected,
             snapshot.segments_ready,
             snapshot.partial_transcripts,
             snapshot.final_transcripts,

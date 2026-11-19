@@ -225,6 +225,12 @@ _RULES: tuple[RealtimeStateRuleModel, ...] = (
     ),
     RealtimeStateRuleModel(
         from_phase=RealtimeSessionPhase.SPEAKING,
+        event=RealtimeStateEvent.ASR_DONE,
+        to_phase=RealtimeSessionPhase.SPEAKING,
+        detail="转写完成，等待当前轮播完后生成",
+    ),
+    RealtimeStateRuleModel(
+        from_phase=RealtimeSessionPhase.SPEAKING,
         event=RealtimeStateEvent.AUDIO_PLAYING,
         to_phase=RealtimeSessionPhase.SPEAKING,
         detail="后续音频分片下发",

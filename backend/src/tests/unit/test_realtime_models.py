@@ -13,9 +13,13 @@ import pytest
 from pydantic import ValidationError
 
 from packages.harness.voice.realtime_models import (
+    AUDIO_CHUNK_TOO_LARGE_ERROR_TYPE,
+    REALTIME_AUDIO_CHUNK_MAX_BASE64_CHARS,
+    REALTIME_AUDIO_CHUNK_MAX_BYTES,
     REALTIME_INBOUND_ADAPTER,
     REALTIME_OUTBOUND_ADAPTER,
     RealtimeAssistantTextMessageModel,
+    RealtimeAudioInputChunkMessageModel,
     RealtimeBargeInAckMessageModel,
     RealtimeBargeInMessageModel,
     RealtimeBargeInReason,
@@ -208,6 +212,45 @@ async def test_decode_audio_base64_round_trip_and_guard() -> None:
     assert decode_audio_base64(encoded) == frame
     with pytest.raises(ValueError):
         decode_audio_base64("not-base64###")
+
+
+async def test_audio_chunk_payload_ceiling_boundaries() -> None:
+    """单块上限：恰好 64KiB 通过；超一字节 / 超编码长度 / 同长度越界均拒绝。"""
+    limit = REALTIME_AUDIO_CHUNK_MAX_BYTES
+    exact = base64.b64encode(b"\x00" * limit).decode("ascii")
+    parsed = REALTIME_INBOUND_ADAPTER.validate_python(
+        {"type": "audio_chunk", "ts_ms": 0, "seq": 0, "data": exact}
+    )
+    assert isinstance(parsed, RealtimeAudioInputChunkMessageModel)
+
+    over_by_one = base64.b64encode(b"\x00" * (limit + 1)).decode("ascii")
+    with pytest.raises(ValidationError) as byte_exc:
+        REALTIME_INBOUND_ADAPTER.validate_python(
+            {"type": "audio_chunk", "ts_ms": 0, "seq": 0, "data": over_by_one}
+        )
+    assert AUDIO_CHUNK_TOO_LARGE_ERROR_TYPE in {
+        error["type"] for error in byte_exc.value.errors()
+    }
+
+    # 编码长度恰好等于上限但解码后多两字节（无填充）——只有解码字节数校验能拦住。
+    same_chars_over_bytes = base64.b64encode(b"\x00" * (limit + 2)).decode("ascii")
+    assert len(same_chars_over_bytes) <= REALTIME_AUDIO_CHUNK_MAX_BASE64_CHARS
+    with pytest.raises(ValidationError) as padded_exc:
+        REALTIME_INBOUND_ADAPTER.validate_python(
+            {"type": "audio_chunk", "ts_ms": 0, "seq": 0, "data": same_chars_over_bytes}
+        )
+    assert AUDIO_CHUNK_TOO_LARGE_ERROR_TYPE in {
+        error["type"] for error in padded_exc.value.errors()
+    }
+
+    # 超过 base64 字符长度上限（解码 65539 字节）——字段级前置拒绝，不做解码。
+    over_chars = base64.b64encode(b"\x00" * (limit + 3)).decode("ascii")
+    assert len(over_chars) > REALTIME_AUDIO_CHUNK_MAX_BASE64_CHARS
+    with pytest.raises(ValidationError) as char_exc:
+        REALTIME_INBOUND_ADAPTER.validate_python(
+            {"type": "audio_chunk", "ts_ms": 0, "seq": 0, "data": over_chars}
+        )
+    assert "string_too_long" in {error["type"] for error in char_exc.value.errors()}
 
 
 async def test_session_metrics_defaults_and_closed_reason() -> None:
