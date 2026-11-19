@@ -50,6 +50,7 @@ from typing import cast
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from packages.harness.chat.injection_models import InjectionGuardSettings
 from packages.harness.chat.swipe import SwipeService
 from packages.harness.config.models import Settings
 from packages.harness.config.models import settings as global_settings
@@ -754,6 +755,7 @@ async def regenerate_message_variants(
         gateway=gateway,
         session_service=chat_session_service,
         facts_reader=FactsService(),
+        injection_settings=InjectionGuardSettings(),
     )
     async with bind_persona_context(record.id):
         await chat_session_service.ensure_session(db, session_id)

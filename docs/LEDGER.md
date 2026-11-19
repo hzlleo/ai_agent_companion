@@ -216,6 +216,8 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 **办结**：`INJECTION_*` 四键已由主 Agent 纳入 `.env.example` / Setup Wizard 生成器（已验证两处各 4 键）；R2b+ 的 compliance_guard 联动已落地（见上节）。
 **Oracle 深审修复批次（P1/P2 全闭环）**：swipe 重生成末位 user 回合复用 compose 包裹开关 + 检测提示（缺省「消息」标签 / 默认台词风格）；检测前归一副本（NFKC + 零宽剔除 + 空白折叠，留证取自副本）并新增 5 条英文规则（规则表 24 → 29 条）；compose 对最近 10 条历史 user 回合定界包裹（标签「历史消息」，assistant / 更早回合原文）；红队集 38 → 47 条（含混淆形与防误报阴性）、prose pin 改结构断言、补工具循环×注入共存与合规重试不变量用例；defense.md 失效部署待办删除并同步矩阵 / 边界，chat.md 同步 compose 链与 swipe 说明。
 
+**Oracle 复审修复批次（第二轮 P1/P2 闭环）**：复审未通过项逐条闭环——(1) 检测前归一由固定零宽字符表改为剔除全部 Unicode `Cf` 类别 + 变体选择符 U+FE00–FE0F（`Mn` 组合附加符保留），红队补软连字符 / word joiner 阳性与「归一后与无混淆基线同分」防回归断言；(2) `tag_mimicry` 的 `<…>` 规则锚点由句首放宽到 8 字符内短前缀（闭合回引 / 权重不变），补短前缀阳性与长前缀阴性，defense.md 边界表述同步；(3) `as an AI` 权重 2.0 → 1.5（与中文身份断言同权），补 4 条良性英文阴性（`as an AI` / `you are now` / `act as` / `pretend to be`），规则表总数不变（29 条）；(4) `SwipeService` 构造注入 `InjectionGuardSettings`（`app/api/memories.py` 装配点显式注入），变体路径的包裹 / 检测 / 提示 / 阈值 / 风格随 `INJECTION_` 配置生效，补停用 / 提示关闭 / 阈值抬高 3 例，chat.md / defense.md kill-switch 表述改为 reply/stream 与 swipe 变体均按配置生效；(5) 红队测试注释订正（assistant 历史原文 / user 历史包裹）。红队 47 → 55 条（29 阳性 / 26 阴性）。**验证**：`pixi run tests-all` → 0（2808 passed）；`pixi run coverage-gates` → 0（24 组全 ≥80，harness/chat 96.3%）；`pixi run lint` → 0；`pixi run typecheck` → 0（191 文件）；根 `pixi run gates` → 0（注释门 / 棘轮 +0 / noqa 冻结 / 漂移 38 项一致）；`backend pixi run gen-examples` → 0（三件套再生成无 diff，幂等）。
+
 ### 已完成切片：R2d-1 心流门控 + 群聊多人格（未提交工作区）
 **已完成**：
 1. `chat/flow_models.py` / `chat/flow_gate.py`：门控 Model Classes（`FLOW_` env 面：连发窗口 / 合并静默与上限 / 回复最小间隔 / 积压阶梯与封顶 / 排程丢失宽限）与全纯函数判定——裁决 `reply | defer | merge | skip`、理由枚举、`now_ms` 由调用方注入；判定矩阵锁定（机器事件不回复、睡眠窗口延迟、连发合并、密度节流、积压延迟、亲近 / 亲密关系优先、节律拟人延迟），连发合并保留最近条目并报告丢弃条数。

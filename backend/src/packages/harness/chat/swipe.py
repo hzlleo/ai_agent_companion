@@ -13,10 +13,11 @@
       **不装载工具面**（单轮候选生成——工具循环属 reply 的回合语义）；
       关系摘要经既有事实读取面与 ``build_relationship_summary`` 派生，
       读取面未接线时不注入关系块且路由输入为 None、读取失败降级空摘要；
-      末位 user 回合沿用组装链的注入防御开关（定界包裹 + 检测提示；无
-      来源分级信息时标签取 ``UNTRUSTED_LABEL_DEFAULT``，台词取缺省风格
-      ——本服务不持有 ``INJECTION_`` 配置，检测阈值与风格用模块缺省，见
-      docs/backend/defense.md）；
+      末位 user 回合沿用组装链的注入防御语义（定界包裹 + 检测提示）：本
+      服务经构造注入 ``InjectionGuardSettings``（与 ``ChatService`` 同形
+      态），``INJECTION_`` 配置的启用 / 阈值 / 风格 / 提示开关对变体路径
+      同样生效；无来源分级信息时标签取 ``UNTRUSTED_LABEL_DEFAULT``，见
+      docs/backend/defense.md；
     - **协议面**：每个候选独立经 ``parse_assistant_output`` 解析——可见
       正文落变体行 content，心声 / 情绪增量落 meta（附 ``variant_index``）；
       变体情绪增量**不推进共享 M 态**（swipes 是探索面——只有选定变体经
@@ -43,7 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.harness.chat.chat_models import ChatSessionStateModel
 from packages.harness.chat.injection_guard import build_injection_hint, detect_injection
-from packages.harness.chat.injection_models import CounterStyle
+from packages.harness.chat.injection_models import InjectionGuardSettings
 from packages.harness.chat.output_protocol import parse_assistant_output
 from packages.harness.chat.prompts import UNTRUSTED_LABEL_DEFAULT
 from packages.harness.chat.service import (
@@ -89,6 +90,7 @@ class SwipeService:
         emotion_service: EmotionService | None = None,
         facts_reader: FactsReaderFace | None = None,
         relationship_thresholds: RelationshipThresholdsModel | None = None,
+        injection_settings: InjectionGuardSettings | None = None,
     ) -> None:
         """初始化服务。
 
@@ -101,6 +103,9 @@ class SwipeService:
             facts_reader: 人物事实读取面（None = 未接线——不注入关系进展
                 块、亲密通道路由输入为 None，与既有降级语义一致）。
             relationship_thresholds: 关系进展阈值表（None = 锁定缺省表）。
+            injection_settings: 注入防御配置（None = 现场构造默认实例——
+                读 ``INJECTION_`` env；与 ``ChatService`` 同形态，变体路径
+                的包裹 / 检测 / 提示完全按该配置生效）。
         """
         self._gateway = gateway
         self._session_service = session_service
@@ -112,6 +117,9 @@ class SwipeService:
             relationship_thresholds
             if relationship_thresholds is not None
             else DEFAULT_RELATIONSHIP_THRESHOLDS
+        )
+        self._injection_settings = (
+            injection_settings if injection_settings is not None else InjectionGuardSettings()
         )
 
     # ------------------------------------------------------------------
@@ -207,19 +215,31 @@ class SwipeService:
                     now_ms=now_ms, thresholds=self._relationship_thresholds
                 )
         intimacy_level = relationship.intimacy_level if relationship is not None else None
+        injection = self._injection_settings
         last_turn = state.turns[-1] if state.turns else None
         injection_hint: str | None = None
-        if last_turn is not None and last_turn.role == ChatMessageRole.USER:
-            signal = detect_injection(last_turn.content)
+        if (
+            injection.enabled
+            and last_turn is not None
+            and last_turn.role == ChatMessageRole.USER
+        ):
+            signal = detect_injection(last_turn.content, threshold=injection.threshold)
             if signal.suspected:
-                injection_hint = build_injection_hint(
-                    CounterStyle.SASSY, last_turn.content
+                logger.debug(
+                    "变体重生成注入信号命中: persona_id={}, score={:.2f}, kinds={}",
+                    persona.id,
+                    signal.score,
+                    [reason.kind.value for reason in signal.reasons],
                 )
+                if injection.anti_injection_hint:
+                    injection_hint = build_injection_hint(
+                        injection.counter_style, last_turn.content
+                    )
         composition = compose_messages(
             state,
             emotion_summary=emotion_summary,
             relationship=relationship,
-            wrap_current_message=True,
+            wrap_current_message=injection.enabled,
             current_message_label=UNTRUSTED_LABEL_DEFAULT,
             injection_hint=injection_hint,
         )
