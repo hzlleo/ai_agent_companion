@@ -71,8 +71,8 @@ class InjectionReasonModel(BaseModel):
 
     Attributes:
         kind: 命中的信号种类。
-        matched: 归一副本上的命中片段（检测前经 NFKC / 零宽剔除 / 空白
-            折叠；截断到可观测长度；不参与判定）。
+        matched: 归一副本上的命中片段（检测前经 NFKC / 格式类不可见字符
+            剔除 / 空白折叠；截断到可观测长度；不参与判定）。
     """
 
     kind: InjectionKind = Field(description="命中的信号种类")
@@ -177,10 +177,11 @@ class InjectionGuardSettings(BaseSettings):
 #: format_demand 4 / tag_mimicry 2；顺序即原因列表顺序——确定性；
 #: ``search`` 语义，命中即留证）。
 #:
-#: 权重约定：身份断言 1.5（直接改写人设）；英文强断言「disregard …」与
-#: 「as an AI」2.0（单条即触发——措辞已明确否定既有规则 / 人设）；其余
-#: 种类 1.0。同一类可有多条规则同时命中（如「【系统】规则已更新」两条伪
-#: 系统帧叠加 = 2.0 触发）。
+#: 权重约定：身份断言统一 1.5（直接改写人设，与中文身份断言同权——单条
+#: 不达阈值，避免良性句中提及「as an AI」造成误报）；英文强断言
+#: 「disregard …」2.0（措辞已明确否定既有规则）；其余种类 1.0。同一类可
+#: 有多条规则同时命中（如「【系统】规则已更新」两条伪系统帧叠加 = 2.0
+#: 触发）。
 INJECTION_RULES: tuple[InjectionRuleModel, ...] = (
     InjectionRuleModel(
         kind=InjectionKind.IMPERATIVE,
@@ -305,7 +306,7 @@ INJECTION_RULES: tuple[InjectionRuleModel, ...] = (
     InjectionRuleModel(
         kind=InjectionKind.IDENTITY_CLAIM,
         pattern=re.compile(r"(?i)\bas an? (?:ai|artificial intelligence|language model)\b"),
-        weight=2.0,
+        weight=1.5,
     ),
     InjectionRuleModel(
         kind=InjectionKind.FORMAT_DEMAND,
@@ -329,7 +330,7 @@ INJECTION_RULES: tuple[InjectionRuleModel, ...] = (
     ),
     InjectionRuleModel(
         kind=InjectionKind.TAG_MIMICRY,
-        pattern=re.compile(r"^\s*<([^<>\n]{1,20})>[^\n]*</\1>"),
+        pattern=re.compile(r"^.{0,8}?<([^<>\n]{1,20})>[^\n]*</\1>"),
         weight=1.0,
     ),
     InjectionRuleModel(
