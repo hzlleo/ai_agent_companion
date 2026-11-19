@@ -209,8 +209,8 @@ def map_douyin_snapshot_to_inbound(
     → 文本与图片皆空；同批次内重复标识保留首次出现。随后按时间序取末尾
     ``max_messages`` 条（DOM 时间序，最新消息优先保留）。
 
-    系统消息保留为 ``synthetic=True`` 入站（心流门控据此不回复），不计入
-    人类回合。
+    系统消息保留为 ``synthetic=True`` 入站（路由器据此恒跳过回复，与
+    ``FLOW_ENABLED`` 无关），不计入人类回合。
 
     Args:
         snapshot: 页面采集快照。
