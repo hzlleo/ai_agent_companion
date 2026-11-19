@@ -937,7 +937,7 @@ DOUYIN_ENABLED=false（缺省）：no-op——零轮询任务 / 零页面操作
     ↓ map_douyin_snapshot_to_inbound：
       ① 自身回声剔除（is_self）
       ② 无标识 / 已处理标识 / 批内重复剔除
-      ③ 系统消息归一 synthetic=True（心流门控据此不回复）
+      ③ 系统消息归一 synthetic=True（路由器恒跳过回复，与 FLOW_ENABLED 无关）
       ④ 图片 URL → 通道附件（kind=image；data: 内联图剔除）
       ⑤ 纯图片消息归一占位文本 [图片]
       ⑥ 上限截断（保留时间序末尾——最新优先）
