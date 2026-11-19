@@ -102,11 +102,15 @@ FLOW_ENABLED=true
     ↓ 关系摘要（关系类现行事实派生——仅门控启用时读取）
     ↓ evaluate_flow_gate → verdict / delay_ms / reason
     ├─ reply  → 继续会话路由与即时投递
-    ├─ skip   → 返回空投递结果（机器事件不落回复）
+    ├─ skip   → 返回空投递结果（判定层纯函数契约保留；路由器已在
+    │            门控前恒跳过合成事件——见「协议 v2」合成语义）
     └─ defer / merge
           ↓ scheduler_provider() → Scheduler.schedule_once(job, delay_ms)
           ↓ 返回空投递结果（本消息已被排程接管）
 ```
+
+合成事件（`synthetic=True`）在进入本节链路之前已由路由器恒跳过，与
+`FLOW_ENABLED` 的取值无关——本节只承接人类消息。
 
 延迟批次执行（`_run_flow_batch`）在**同一 per-chat 锁**内运行：睡眠窗口
 未结束或合并静默窗口未满时按剩余时长重排；否则按
@@ -266,7 +270,7 @@ v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语�
 }
 ```
 
-`synthetic=True` = 机器生成事件上浮（heartflow / mood——R2e 消费面），非人类消息；入站 `silent` 为平台上报的无通知上下文标记位（预留）。
+`synthetic=True` = 机器生成事件上浮（heartflow / mood / 平台系统消息），非人类消息：**路由器恒跳过，与 `FLOW_ENABLED` 无关**——不建会话、不回调心流判定、不回复，跳过计数只进 debug 日志（`synthetic_skip_count` 为观测面）。入站 `silent` 为平台上报的无通知上下文标记位（预留）。
 
 **OutboundMessageModel v2 字段**（`attachments: list = []` / `silent: bool = False`）：
 
@@ -330,7 +334,7 @@ NapCat 段数组消息的 image / record 段提取为附件（引用形态优先
 
 ### 消费者边界（诚实边界）
 
-v2 只交付 **wire**（模型 + 适配器 + 测试）。**表情包收发桥**已接入（`STICKER_ENABLED=true` 时装配——见下节）；语音 / 合成事件消费者仍待后续切片。当前 `ChatService.reply` 回复循环仍为纯文本（回合内容不落附件、`ff_chat_messages` 零 schema 变更——附件不持久化）；duty 属主投递维持纯文本（无附件）。
+v2 只交付 **wire**（模型 + 适配器 + 测试）。**表情包收发桥**已接入（`STICKER_ENABLED=true` 时装配——见下节）；合成事件已由路由器恒跳过（语义见「协议 v2」模型表一节）；语音消费者仍待后续切片。当前 `ChatService.reply` 回复循环仍为纯文本（回合内容不落附件、`ff_chat_messages` 零 schema 变更——附件不持久化）；duty 属主投递维持纯文本（无附件）。
 
 ### 表情包收发桥（`STICKER_ENABLED`——默认关闭）
 
@@ -352,7 +356,9 @@ v2 只交付 **wire**（模型 + 适配器 + 测试）。**表情包收发桥**�
     ↓ 取表情 / 平台附件投递失败：文本照常投递（逐附件结果由适配器聚合）
 ```
 
-延迟 / 合并批次只承接文本，不携带入站附件；收录已在门控前完成，回表情仅即时回复路径生效（文档化边界）。群聊多人格模式下每位应答人格使用自己的素材库（人格隔离轴与文本会话一致）。
+延迟 / 合并批次只承接文本，不携带入站附件；收录已在门控前完成（合成事件除外——路由器在收录前已恒跳过），回表情仅即时回复路径生效（文档化边界）。
+
+群聊多人格模式的素材归属（锁定）：**应答侧**各人格仍使用各自素材库（人格隔离轴与文本会话一致）；**入站收录**只进主人格（第一位候选）的素材库——多人格应答下表情归属本身歧义，取首位候选是确定性选择（不按发言者 / 应答者猜归属）。
 
 
 ## offset 持久化（重启不重消费）
@@ -385,12 +391,27 @@ v2 只交付 **wire**（模型 + 适配器 + 测试）。**表情包收发桥**�
 | `reply_to_message_id` | 只挂首段（续文逐段引用会渲染成多条引用噪声） |
 | 空文本 / 非数字引用 ID | `VALIDATION_ERROR`（调用方 bug 面——不进重试） |
 
+## 出站 429 限流（`retry_after` 单次重试）
+
+出站发送（`sendMessage` 与媒体发送共链路）遇 HTTP 429 时：
+
+| 条件 | 行为 |
+|---|---|
+| 响应 JSON 含 `parameters.retry_after`（数字秒） | 延迟夹取到 **1..30 秒**（平台建议值过小 / 过大均夹取），经注入休眠面延迟后**单次**重试同一请求 |
+| 重试仍非 200（含再次 429） | 抛既有 `CHANNEL_API_ERROR`（错误码表不新增成员；不发第三次） |
+| 429 但缺 `parameters.retry_after` / 非数字 / 体非 JSON | 不重试，直接按既有错误映射上抛 |
+| 延迟实现 | 构造期注入的 `sleep`（生产 `asyncio.sleep`；测试注入记录式伪休眠——零真实等待） |
+
+重试只覆盖出站 POST 链路（`getUpdates` / `getMe` 不参与）；本规则与 runner
+层的失败退避相互独立（客户端单次重试后再失败才进入 runner 退避）。
+
 ## 错误码映射（channels 域段——core ErrorCode 注册表既有成员）
 
 | 失败类别 | 错误码 | HTTP | 可重试 |
 |---|---|---|---|
 | token 环境变量缺失 / 为空（构造期） | `CHANNEL_TOKEN_MISSING` | 500 | 否（fail fast） |
 | HTTP 401 / 403 或 ok=False + error_code 401/403（token 无效） | `CHANNEL_TOKEN_MISSING` | 500 | 否 |
+| HTTP 429 + `parameters.retry_after`（出站——重试仍失败时才上抛） | `CHANNEL_API_ERROR` | 503 | 客户端单次重试（1..30s 夹取） |
 | 其余 HTTP 非 200 / ok=False / 传输异常 / JSON 非法 | `CHANNEL_API_ERROR` | 503 | runner 退避 |
 | 路由器收到未注册适配器通道的入站消息 | `CHANNEL_DISABLED`（**仅预留不 raise**——运行时为静默空结果，见「错误隔离」表；409 映射未接线） | （预留） | 否（装配面） |
 
@@ -1176,17 +1197,17 @@ settings = build_isolated_settings(
 | `tests/unit/test_channels_models.py` | 值域（telegram + qq）/ 校验 / 默认值 / 身份键；v2：附件恰一源矩阵 / kind 值域 / 容量指引常量 / 入站出站投递 v2 字段缺省与可设 / 逐附件结果形态 |
 | `tests/unit/test_channels_settings.py` | telegram env 面对齐 / 默认值 / 边界校验 / 隔离构造 / 嵌套覆写 |
 | `tests/unit/test_qq_settings.py` | QQ env 面对齐 / 默认值 / 边界校验 / 隔离构造 / `CHANNELS__QQ__*` 嵌套覆写 |
-| `tests/unit/test_tg_client.py` | MockTransport：请求形状（timeout / offset / 超时裕量）/ 4096 分段 / 错误映射表 / token fail fast；v2：silent → disable_notification / 媒体 JSON 引用与 multipart 上传形状 / 空媒体面校验 / 媒体错误映射 |
+| `tests/unit/test_tg_client.py` | MockTransport：请求形状（timeout / offset / 超时裕量）/ 4096 分段 / 错误映射表 / token fail fast；v2：silent → disable_notification / 媒体 JSON 引用与 multipart 上传形状 / 空媒体面校验 / 媒体错误映射；出站 429 retry_after 解析 / 延迟夹取 / 单次重试 / 重试失败上抛 / 缺参数不重试（伪休眠零等待） |
 | `tests/unit/test_qq_client.py` | MockTransport：动作包裹形状 / Bearer 头有无 / 超时注入 / status=async 成功 / 错误映射表 / 空文本拒绝；v2：段数组动作包裹形状 / 空段列表拒绝 |
 | `tests/unit/test_tg_runner.py` | fake client + fake router + 注入休眠：offset 往返 / 去重 / 退避 / 优雅停机 / 启动校验 / 发送面；v2：媒体消息 caption 兜底 + 伪方案附件提取 / 纯媒体跳过 / silent 透传 / 附件 kind 分流（base64 上传 / url JSON / file_id 重发 / sticker caption 丢弃）/ 部分失败聚合 / 文本失败上抛（v1 语义） |
 | `tests/unit/test_qq_adapter.py` | fake 客户端：chat_id grammar 双形态 / 投递映射（ok / 无 message_id）/ grammar 校验 / 失败上抛；v2：段数组发射（文本先 + 媒体后）/ base64 包装 / sticker→image 映射 / file 类逐附件失败承载 / silent no-op / 段发送失败上抛 |
 | `tests/unit/test_qq_webhook.py` | fake 路由器：私聊 / 群聊路由形状 / 展平双形态 + 占位符表 / 去重 + FIFO 淘汰 / 忽略矩阵 / 隔离铁律；v2：image / record 段附件提取（url / base64:// 剥前缀 / file:// path 源）/ 无引用跳过 / CQ 字符串形态提取不生效（边界） |
-| `tests/unit/test_channel_router.py` | fake ChatService：会话复用 / 持久化调用形状 / 人格绑定 / 错误隔离矩阵 / per-chat 并发串行化；v2：入站附件 + synthetic 透传（回复循环纯文本——零路由器改动证明） |
+| `tests/unit/test_channel_router.py` | fake ChatService：会话复用 / 持久化调用形状 / 人格绑定 / 错误隔离矩阵 / per-chat 并发串行化；v2：入站附件透传（回复循环纯文本）/ synthetic 恒跳过（不建会话、不回复、不投递） |
 | `tests/unit/test_channels_qq_api.py` | ASGITransport：恒 200 确认形状 / 鉴权矩阵（401 / 关闭）/ 体校验 400 / 路由器未装配确认丢弃 |
 | `tests/unit/test_app_channels_lifespan.py` | telegram enabled / disabled 装配 / 停机 LIFO 顺序 / token 缺失 fail fast / 任务终态收割 / cancel 兜底 |
 | `tests/unit/test_app_qq_channels_lifespan.py` | QQ enabled / disabled 装配 / warn-and-continue / 双通道共用路由器 / 共享池注入 / 装配顺序契约 |
 | `tests/unit/test_wecom_models.py` | 会话键 grammar / 入站映射矩阵（文本 / 语音 / 混排 / 图片 / 文件 / 视频 / 合成来源）/ 不可路由形态 / 附件提取与占位符 / 出站命令 wire 形状（含素材上传三步）/ markdown 字节分段（换行优先 + UTF-8 硬切） |
-| `tests/unit/test_wecom_client.py` | fake 连接 + 记录式伪时钟：构造校验 / 订阅（形状 + 被拒 fail fast + 单连接）/ 心跳（间隔 + 超时关闭）/ 退避（指数 + 抖动区间 + 复位）/ 被踢下线 / 命令面（超时 / 拒绝 / 未就绪 / 断连拒结）/ 素材上传（单片 / 多片 / 限制 / 缺字段）/ 帧容错 / 处理器隔离 / 优雅停机 |
+| `tests/unit/test_wecom_client.py` | fake 连接 + 记录式伪时钟：构造校验 / 订阅（形状 + 被拒 fail fast + 单连接）/ 心跳（间隔 + 超时关闭）/ 退避（指数 + 抖动区间 + 复位）/ 被踢下线（事件门控等待——零轮询 / 零墙钟窗口）/ 命令面（超时 / 拒绝 / 未就绪 / 断连拒结）/ 素材上传（单片 / 多片 / 限制 / 缺字段）/ 帧容错 / 处理器隔离 / 优雅停机 |
 | `tests/unit/test_wecom_runner.py` | fake 客户端 + fake 路由器：入站路由形状 / 去重与窗口淘汰 / 事件帧不路由 / 队列过载丢弃 / 路由器异常隔离 / 回复上下文（登记 / 过期 / 缺失）/ 文本分段投递 / 附件三源上传与推送 / 逐附件失败承载 / 停机传导 |
 | `tests/unit/test_wecom_settings.py` | WECOM_ env 面对齐 / 默认值 / 不变式（BotID 必填 / 退避边界 / 心跳预算 / 抖动值域）/ 隔离构造 / 嵌套覆写 |
 | `tests/unit/test_app_wecom_channels_lifespan.py` | 企微 enabled / disabled 装配 / 凭据失败仅跳过该通道 / 双通道共用路由器 / 共享 HTTP 池注入 / 停机传导 |

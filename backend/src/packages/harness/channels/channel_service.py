@@ -4,23 +4,33 @@
 
     InboundMessageModel
         ↓ ① 适配器寻址（未注册通道 = CHANNEL_DISABLED，仅记录）
-        ↓ ② per-chat 串行化锁获取（asyncio.Lock——同聊天消息全程串行，
+        ↓ ② 合成事件前置拦截（``synthetic=True`` 恒不回复——与
+              ``FLOW_ENABLED`` 无关；不建会话、不回调心流，仅记 debug 计数）
+        ↓ ③ per-chat 串行化锁获取（asyncio.Lock——同聊天消息全程串行，
               含会话懒建 / 门控 / 回复 / 兜底回发；不同聊天互不阻塞）
-        ↓ ③ 心流门控判定（FLOW_ENABLED——立即回复 / 延迟 / 合并 / 不回复；
+        ↓ ④ 心流门控判定（FLOW_ENABLED——立即回复 / 延迟 / 合并 / 不回复；
               延迟与合并批次经中央调度器一次性作业排程，不新建定时器）
-        ↓ ④ 每聊天会话懒建（会话身份键 ``channel:chat_id``——复用直至
+        ↓ ⑤ 每聊天会话懒建（会话身份键 ``channel:chat_id``——复用直至
               进程重启；持久化装配时经注入的 session factory 落库）
-        ↓ ⑤ 群聊多人格选择（GROUP_PERSONA_ENABLED——应答者轮转 / 冷却 /
+        ↓ ⑥ 群聊多人格选择（GROUP_PERSONA_ENABLED——应答者轮转 / 冷却 /
               重复抑制；每个应答人格使用自己的持久化会话）
-        ↓ ⑥ 人格绑定（bind_persona_context——PersonaMixin 作用域）
-        ↓ ⑦ ChatService.reply（组装 → 网关 → 用量记账自动发生）
-        ↓ ⑧ 适配器发送（OutboundMessageModel → 平台 wire）
+        ↓ ⑦ 人格绑定（bind_persona_context——PersonaMixin 作用域）
+        ↓ ⑧ ChatService.reply（组装 → 网关 → 用量记账自动发生）
+        ↓ ⑨ 适配器发送（OutboundMessageModel → 平台 wire）
+
+合成事件（``synthetic=True``，默认协议值 False）：**路由器恒跳过**——
+机器生成事件（heartflow / mood / 平台系统消息）不生成回复、不建会话、
+不进入心流节拍状态；该语义与 ``FLOW_ENABLED`` 无关（门控关闭的部署同样
+不回复）。拦截点位于适配器寻址之后、per-chat 锁之前，跳过计数经 debug
+日志面观测（``synthetic_skip_count``）。
 
 心流门控（``FLOW_ENABLED``，默认关闭）：入站先经判定层折算「现在该不该
 开口」——睡眠窗口延迟至醒来、连发合并为一次回复、未读积压阶梯延迟、
-关系亲近 / 亲密者跳过节流优先应答、机器生成事件不回复。门控关闭时本层
-直接走既有单人格回复路径（零排程 / 零合并 / 零关系查询）；判定矩阵与
-配置见 :mod:`packages.harness.chat.flow_gate` / ``flow_models``。
+关系亲近 / 亲密者跳过节流优先应答。门控关闭时本层直接走既有单人格回复
+路径（零排程 / 零合并 / 零关系查询）；判定矩阵与配置见
+:mod:`packages.harness.chat.flow_gate` / ``flow_models``。合成事件不进
+门控（路由器已前置跳过）；判定层的 ``SKIP / SYNTHETIC_EVENT`` 结论保留
+为纯函数契约与纵深防御。
 延迟与合并批次通过注入的调度器门面 ``schedule_once`` 排程（中央调度器
 统一计时）；调度器不可用时立即回复（fail-safe，记 warning）。
 
@@ -312,6 +322,7 @@ class ChannelRouter:
         self._flow_states: dict[str, FlowChatStateModel] = {}
         self._group_states: dict[str, GroupResponderStateModel] = {}
         self._chat_group_flags: dict[str, bool] = {}
+        self._synthetic_skip_count = 0
         self._flow_job_seq = 0
         self._scheduler_missing_warned = False
 
@@ -354,6 +365,11 @@ class ChannelRouter:
         """持有心流节拍状态的会话数（观测面）。"""
         return len(self._flow_states)
 
+    @property
+    def synthetic_skip_count(self) -> int:
+        """累计跳过的合成事件条数（观测面——恒不回复语义的计数面）。"""
+        return self._synthetic_skip_count
+
     @staticmethod
     def session_key(context: ChannelContextModel) -> str:
         """会话身份键（``channel:chat_id``——每聊天一个 ChatService 会话）。
@@ -386,6 +402,10 @@ class ChannelRouter:
         排程），仅 ``REPLY`` 走即时回复。调度器不可用时延迟裁决降级为
         立即回复（fail-safe）。
 
+        合成事件：``message.synthetic=True`` 在门控与锁之前恒跳过——返回
+        空投递结果，不建会话、不写心流节拍状态、不调用心流判定（与
+        ``FLOW_ENABLED`` 无关）；跳过计数累加并记 debug 日志。
+
         群聊多人格：启用时按选择结论逐人格应答并逐条投递（每人格自己的
         持久化会话）；选择为空 / 未启用时回退主人格单人格路径。
 
@@ -393,9 +413,9 @@ class ChannelRouter:
             message: 入站消息（通道中立形态）。
 
         Returns:
-            投递结果（兜底路径亦返回其投递结果；无适配器 / 兜底亦失败 /
-            延迟或合并排程时返回空 message_ids 结果——**本方法恒不抛
-            异常**）。
+            投递结果（兜底路径亦返回其投递结果；无适配器 / 合成事件 /
+            兜底亦失败 / 延迟或合并排程时返回空 message_ids 结果——
+            **本方法恒不抛异常**）。
         """
         context = ChannelContextModel(channel=message.channel, chat_id=message.chat_id)
         adapter = self._adapters.get(message.channel)
@@ -404,6 +424,19 @@ class ChannelRouter:
                 "通道未注册适配器（CHANNEL_DISABLED）: channel={}, chat_id={}",
                 message.channel.value,
                 message.chat_id,
+            )
+            return ChannelDeliveryResultModel(
+                channel=message.channel, chat_id=message.chat_id, message_ids=[]
+            )
+        if message.synthetic:
+            self._synthetic_skip_count += 1
+            logger.debug(
+                "合成事件恒不回复（与 FLOW_ENABLED 无关，路由器前置跳过）: "
+                "channel={}, chat_id={}, message_id={}, skipped_total={}",
+                message.channel.value,
+                message.chat_id,
+                message.message_id,
+                self._synthetic_skip_count,
             )
             return ChannelDeliveryResultModel(
                 channel=message.channel, chat_id=message.chat_id, message_ids=[]
@@ -417,6 +450,9 @@ class ChannelRouter:
                     primary_state = await self._get_or_create_session(context)
                     gate_persona_id = primary_state.persona_id
                 else:
+                    # 群聊多人格：入站表情只收录进主人格（第一位候选，选择序
+                    # 稳定原料）的素材库——多应答者下表情归属本身歧义，取首位
+                    # 候选是确定性归属；应答侧各人格仍各用自己库的素材。
                     gate_persona_id = group_pool[0].id
                 has_sticker = any(
                     attachment.kind is ChannelAttachmentKind.STICKER
@@ -486,6 +522,9 @@ class ChannelRouter:
     ) -> ChannelDeliveryResultModel | None:
         """记录入站并执行门控判定（返回非 None 表示本消息已由门控接管）。
 
+        合成事件不会到达本方法（路由器在门控前恒跳过 ``synthetic=True``）；
+        判定层的 ``SKIP / SYNTHETIC_EVENT`` 结论保留为纯函数契约。
+
         Args:
             context: 通道会话上下文。
             adapter: 通道适配器（延迟批次投递面）。
@@ -514,8 +553,7 @@ class ChannelRouter:
                 now,
             )
             state = clear_pending(state)
-        if not message.synthetic:
-            state = record_inbound(state, message.text, now)
+        state = record_inbound(state, message.text, now)
         self._flow_states[key] = state
         rhythm = await self._rhythm_snapshot(now)
         relationship = await self._relationship_summary(persona_id, now)

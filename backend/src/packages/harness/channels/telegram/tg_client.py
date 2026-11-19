@@ -27,6 +27,19 @@
     4. ``reply_to_message_id`` 只挂首段（后续段是续文——逐段引用会
        在客户端渲染成多条引用噪声）。
 
+出站 429 限流规则（单次重试）：
+
+    - 响应 HTTP 429 且 JSON 体含 ``parameters.retry_after``（秒）时，
+      按该值延迟后**单次**重试同一请求；延迟夹取到 1..30 秒区间
+      （平台建议值可能远大于本通道可接受等待，夹取防一条消息阻塞
+      出站链路过久）；
+    - 重试仍非 200（或重试响应仍为限流）→ 抛既有 ``CHANNEL_API_ERROR``
+      （错误码映射表不新增成员）；
+    - 429 但缺 ``parameters.retry_after``（非法 / 非数字）→ 不重试，
+      直接按既有错误映射上抛；
+    - 延迟经注入的 ``sleep``（生产为 ``asyncio.sleep``；测试注入记录式
+      伪休眠断言延迟值与重试次数）。
+
 v2 媒体发送约定（附件不流式——通道面契约，见 channel_models）：
 
     - 方法 / 参数名由调用方（runner 适配层）按附件 kind 解析（image →
@@ -49,6 +62,8 @@ v2 媒体发送约定（附件不流式——通道面契约，见 channel_model
     token 环境变量缺失 / 为空      CHANNEL_TOKEN_MISSING      否（构造期）
     HTTP 401 / 403（token 无效）   CHANNEL_TOKEN_MISSING      否
     其余 HTTP 非 200               CHANNEL_API_ERROR          由 runner 退避
+    HTTP 429 + retry_after（出站） CHANNEL_API_ERROR          客户端单次重试
+                                                            （夹取 1..30s）
     ok=False 响应（error_code     CHANNEL_API_ERROR          由 runner 退避
     401/403 → TOKEN_MISSING）
     httpx 传输异常（连接 / 超时）  CHANNEL_API_ERROR          由 runner 退避
@@ -60,7 +75,9 @@ v2 媒体发送约定（附件不流式——通道面契约，见 channel_model
 
 from __future__ import annotations
 
+import asyncio
 import os
+from collections.abc import Awaitable, Callable
 from typing import Any, Final, TypeVar
 
 import httpx
@@ -91,8 +108,17 @@ TG_MESSAGE_MAX_CHARS: Final[int] = 4096
 #: 端在轮询窗口末尾返回时被客户端误判超时）。
 _POLL_TIMEOUT_MARGIN_SECONDS: Final[float] = 5.0
 
+#: 出站 429 重试延迟下界秒数（平台建议值过小 / 为零时夹取到该值）。
+_RETRY_AFTER_MIN_SECONDS: Final[float] = 1.0
+
+#: 出站 429 重试延迟上界秒数（平台建议值过大时夹取——单条消息不长期阻塞）。
+_RETRY_AFTER_MAX_SECONDS: Final[float] = 30.0
+
 #: 错误 details 携带的响应体片段截断长度。
 _BODY_SNIPPET_LIMIT: Final[int] = 300
+
+#: 休眠函数签名（出站 429 重试延迟——生产 ``asyncio.sleep``，测试注入伪实现）。
+SleepFn = Callable[[float], Awaitable[None]]
 
 
 def split_tg_message_text(text: str, *, max_chars: int = TG_MESSAGE_MAX_CHARS) -> list[str]:
@@ -152,6 +178,7 @@ class TelegramClient:
         bot_token_env: str = "TELEGRAM_BOT_TOKEN",
         api_base: str = "https://api.telegram.org",
         poll_timeout_seconds: int = 25,
+        sleep: SleepFn = asyncio.sleep,
     ) -> None:
         """初始化客户端（token 解析 fail fast）。
 
@@ -161,6 +188,8 @@ class TelegramClient:
             api_base: Bot API 基础 URL（尾斜杠容错）。
             poll_timeout_seconds: getUpdates 长轮询超时秒数（请求超时 =
                 该值 + 传输裕量）。
+            sleep: 休眠函数（出站 429 单次重试延迟；缺省 ``asyncio.sleep``，
+                测试注入记录式伪休眠断言延迟值与重试次数）。
 
         Raises:
             BusinessException: token 环境变量缺失 / 为空
@@ -180,6 +209,7 @@ class TelegramClient:
         self._token = token
         self._api_base = api_base.rstrip("/")
         self._poll_timeout_seconds = poll_timeout_seconds
+        self._sleep = sleep
 
     # ------------------------------------------------------------------
     # 方法面
@@ -468,6 +498,10 @@ class TelegramClient:
         共用（传输异常 / 状态检查 / 响应包裹校验 / result 提取同链路；
         仅请求体形态不同）。
 
+        429 限流：响应含 ``parameters.retry_after`` 时按夹取后的延迟
+        （1..30 秒）单次重试——重试仍失败按既有错误映射上抛；无该字段
+        不重试。
+
         Args:
             api_method: Bot API 方法名。
             json_body: JSON 请求体（与 form_data / form_files 互斥——
@@ -484,8 +518,56 @@ class TelegramClient:
                 （``CHANNEL_API_ERROR``）；ok=True 但 result 缺失
                 （``CHANNEL_API_ERROR``）。
         """
+        response = await self._post_once(
+            api_method,
+            json_body=json_body,
+            form_data=form_data,
+            form_files=form_files,
+        )
+        retry_after = self._retry_after_seconds(response)
+        if retry_after is not None:
+            logger.warning(
+                "Telegram 出站被限流（HTTP 429），{:.1f} 秒后单次重试: method={}",
+                retry_after,
+                api_method,
+            )
+            await self._sleep(retry_after)
+            response = await self._post_once(
+                api_method,
+                json_body=json_body,
+                form_data=form_data,
+                form_files=form_files,
+            )
+        wrapper = self._validate_wrapper(TgResponseModel[TgSendMessageResult], response, api_method)
+        result = wrapper.result
+        if result is None:
+            raise self._api_error(api_method, response, reason="ok=True 但 result 缺失")
+        return result
+
+    async def _post_once(
+        self,
+        api_method: str,
+        *,
+        json_body: dict[str, Any] | None,
+        form_data: dict[str, str] | None,
+        form_files: dict[str, tuple[str, bytes, str]] | None,
+    ) -> httpx.Response:
+        """执行一次出站 POST（传输异常统一映射 ``CHANNEL_API_ERROR``）。
+
+        Args:
+            api_method: Bot API 方法名。
+            json_body: JSON 请求体（None = 非 JSON 形态）。
+            form_data: multipart 表单字段（None = 非表单形态）。
+            form_files: multipart 文件字段（None = 非表单形态）。
+
+        Returns:
+            HTTP 响应（状态检查由调用侧承担——重试判定需要原始状态码）。
+
+        Raises:
+            BusinessException: httpx 传输异常（``CHANNEL_API_ERROR``）。
+        """
         try:
-            response = await self._http.post(
+            return await self._http.post(
                 self._method_url(api_method),
                 json=json_body,
                 data=form_data,
@@ -493,11 +575,33 @@ class TelegramClient:
             )
         except httpx.HTTPError as exc:
             raise self._transport_error(api_method, exc) from exc
-        wrapper = self._validate_wrapper(TgResponseModel[TgSendMessageResult], response, api_method)
-        result = wrapper.result
-        if result is None:
-            raise self._api_error(api_method, response, reason="ok=True 但 result 缺失")
-        return result
+
+    @staticmethod
+    def _retry_after_seconds(response: httpx.Response) -> float | None:
+        """解析 429 响应的 ``parameters.retry_after`` 并夹取重试延迟。
+
+        Args:
+            response: 出站请求的 HTTP 响应。
+
+        Returns:
+            夹取到 1..30 秒的延迟秒数；非 429 / 体非 JSON / 无该参数 /
+            参数非数字时返回 None（调用方不重试）。
+        """
+        if response.status_code != 429:
+            return None
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        parameters = payload.get("parameters")
+        if not isinstance(parameters, dict):
+            return None
+        value = parameters.get("retry_after")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return min(max(float(value), _RETRY_AFTER_MIN_SECONDS), _RETRY_AFTER_MAX_SECONDS)
 
     @staticmethod
     def _transport_error(method: str, exc: httpx.HTTPError) -> BusinessException:

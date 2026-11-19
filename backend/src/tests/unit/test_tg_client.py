@@ -10,7 +10,9 @@
     - getMe 快乐路径与失败映射；
     - 错误映射表：401/403 → CHANNEL_TOKEN_MISSING；非 200 / ok=False /
       传输异常 / JSON 非法 → CHANNEL_API_ERROR；空文本 / 非数字引用 ID
-      → VALIDATION_ERROR。
+      → VALIDATION_ERROR；
+    - 出站 429 限流：retry_after 解析 / 延迟夹取 / 单次重试 / 重试失败
+      上抛 / 缺参数不重试（注入记录式伪休眠——零真实等待）。
 """
 
 from __future__ import annotations
@@ -31,6 +33,22 @@ from packages.harness.core.errors import BusinessException, ErrorCode
 
 #: conftest 硬覆盖的测试专用 token 变量（bot_token_env 缺省指向形态）。
 _TEST_TOKEN_ENV = "TELEGRAM_TEST_BOT_TOKEN"
+
+
+class RecordingSleeper:
+    """记录式伪休眠（记录请求延迟后立即返回——零真实等待）。"""
+
+    def __init__(self) -> None:
+        """初始化。"""
+        self.delays: list[float] = []
+
+    async def __call__(self, seconds: float) -> None:
+        """记录延迟秒数（不真实等待）。
+
+        Args:
+            seconds: 请求的延迟秒数。
+        """
+        self.delays.append(seconds)
 
 
 def _ok(result: Any) -> httpx.Response:
@@ -67,12 +85,18 @@ def _update(update_id: int, *, text: str | None = "你好", chat_id: int = 10086
     return {"update_id": update_id, "message": message}
 
 
-def _client(handler: Any, *, poll_timeout_seconds: int = 25) -> TelegramClient:
+def _client(
+    handler: Any,
+    *,
+    poll_timeout_seconds: int = 25,
+    sleep: RecordingSleeper | None = None,
+) -> TelegramClient:
     """构造测试客户端（MockTransport + 测试 token env）。
 
     Args:
         handler: MockTransport 处理器。
         poll_timeout_seconds: 长轮询超时（缺省 25）。
+        sleep: 伪休眠（None = 新建记录式实例——零真实等待）。
 
     Returns:
         TelegramClient 实例。
@@ -82,6 +106,7 @@ def _client(handler: Any, *, poll_timeout_seconds: int = 25) -> TelegramClient:
         http,
         bot_token_env=_TEST_TOKEN_ENV,
         poll_timeout_seconds=poll_timeout_seconds,
+        sleep=sleep if sleep is not None else RecordingSleeper(),
     )
 
 
@@ -538,3 +563,130 @@ class TestMediaSendV2:
         assert exc_info.value.code == ErrorCode.CHANNEL_API_ERROR
         assert exc_info.value.details is not None
         assert exc_info.value.details["method"] == "sendPhoto"
+
+
+class TestOutboundRateLimit:
+    """出站 429 限流：retry_after 解析 / 夹取 / 单次重试 / 失败上抛。"""
+
+    @staticmethod
+    def _429(retry_after: Any) -> httpx.Response:
+        """构造 429 响应（可缺省 / 非法 retry_after）。
+
+        Args:
+            retry_after: parameters.retry_after 值（None = 不携带 parameters）。
+
+        Returns:
+            429 JSON 响应。
+        """
+        payload: dict[str, Any] = {
+            "ok": False,
+            "error_code": 429,
+            "description": "Too Many Requests",
+        }
+        if retry_after is not None:
+            payload["parameters"] = {"retry_after": retry_after}
+        return httpx.Response(429, json=payload)
+
+    async def test_retry_after_triggers_single_retry_with_delay(self) -> None:
+        """429 + retry_after=7：伪休眠记录 7s，重试一次后返回成功结果。"""
+        calls: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            if len(calls) == 1:
+                return self._429(7)
+            return _ok({"message_id": 900, "chat": {"id": 1, "type": "private"}})
+
+        sleeper = RecordingSleeper()
+        client = _client(handler, sleep=sleeper)
+        results = await client.send_message(chat_id=1, text="hi")
+        assert sleeper.delays == [7.0]
+        assert len(calls) == 2
+        assert results[0].message_id == 900
+
+    async def test_retry_after_clamped_to_upper_bound(self) -> None:
+        """retry_after=120：延迟夹取到 30s 上界（单条消息不长期阻塞）。"""
+        calls: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            if len(calls) == 1:
+                return self._429(120)
+            return _ok({"message_id": 1, "chat": {"id": 1, "type": "private"}})
+
+        sleeper = RecordingSleeper()
+        client = _client(handler, sleep=sleeper)
+        await client.send_message(chat_id=1, text="hi")
+        assert sleeper.delays == [30.0]
+
+    async def test_retry_after_clamped_to_lower_bound(self) -> None:
+        """retry_after=0.2：延迟夹取到 1s 下界。"""
+        calls: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            if len(calls) == 1:
+                return self._429(0.2)
+            return _ok({"message_id": 1, "chat": {"id": 1, "type": "private"}})
+
+        sleeper = RecordingSleeper()
+        client = _client(handler, sleep=sleeper)
+        await client.send_message(chat_id=1, text="hi")
+        assert sleeper.delays == [1.0]
+
+    async def test_retry_still_limited_raises_api_error_after_one_retry(self) -> None:
+        """重试仍 429：只重试一次即抛 CHANNEL_API_ERROR（不发第三次）。"""
+        calls: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            return self._429(5)
+
+        sleeper = RecordingSleeper()
+        client = _client(handler, sleep=sleeper)
+        with pytest.raises(BusinessException) as exc_info:
+            await client.send_message(chat_id=1, text="hi")
+        assert exc_info.value.code == ErrorCode.CHANNEL_API_ERROR
+        assert exc_info.value.details is not None
+        assert exc_info.value.details["method"] == "sendMessage"
+        assert exc_info.value.details["status_code"] == 429
+        assert sleeper.delays == [5.0]
+        assert len(calls) == 2
+
+    async def test_429_without_retry_after_does_not_retry(self) -> None:
+        """429 缺 parameters.retry_after：不重试，直接按既有映射上抛。"""
+        calls: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            return self._429(None)
+
+        sleeper = RecordingSleeper()
+        client = _client(handler, sleep=sleeper)
+        with pytest.raises(BusinessException) as exc_info:
+            await client.send_message(chat_id=1, text="hi")
+        assert exc_info.value.code == ErrorCode.CHANNEL_API_ERROR
+        assert sleeper.delays == []
+        assert len(calls) == 1
+
+    async def test_media_send_shares_retry_path(self) -> None:
+        """媒体出站共用 429 重试链路（sendPhoto 亦单次重试后成功）。"""
+        calls: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            if len(calls) == 1:
+                return self._429(3)
+            return _ok({"message_id": 901, "chat": {"id": 1, "type": "private"}})
+
+        sleeper = RecordingSleeper()
+        client = _client(handler, sleep=sleeper)
+        result = await client.send_media_ref(
+            chat_id=1,
+            api_method="sendPhoto",
+            media_field="photo",
+            media_ref="https://example.com/cat.jpg",
+        )
+        assert sleeper.delays == [3.0]
+        assert len(calls) == 2
+        assert result.message_id == 901

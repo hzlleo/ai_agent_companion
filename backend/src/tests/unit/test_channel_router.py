@@ -494,9 +494,9 @@ class TestPerChatSerialization:
 
 class TestV2PassThrough:
     async def test_inbound_attachments_pass_through_unmodified(self) -> None:
-        """v2 附件透传：入站消息（附件 + synthetic 标记）经路由器全程不被
-        消耗 / 剥离（回复循环纯文本——附件供未来消费者（R2d/R2e）从
-        InboundMessageModel 读取；零路由器改动证明面）。"""
+        """v2 附件透传：入站消息经路由器全程不被消耗 / 剥离（回复循环
+        纯文本——附件供未来消费者（R2d/R2e）从 InboundMessageModel 读取；
+        零路由器改动证明面）。合成事件另由「恒跳过」契约覆盖（见下一类）。"""
         service = FakeChatService()
         adapter = FakeAdapter()
         router = _router(service)
@@ -511,17 +511,45 @@ class TestV2PassThrough:
             sender_id="7",
             text="看看这张",
             attachments=[attachment],
-            synthetic=True,
+            synthetic=False,
         )
 
         result = await router.handle_inbound(inbound)
 
         assert service.reply_calls[0]["text"] == "看看这张"
         assert inbound.attachments == [attachment]
-        assert inbound.synthetic is True
+        assert inbound.synthetic is False
         assert adapter.sent[0].text == "echo:看看这张"
         assert adapter.sent[0].attachments == []
         assert result.attachment_results == []
+
+
+class TestSyntheticEvents:
+    """合成事件恒跳过：与门控装配无关（路由器前置拦截的行为契约）。"""
+
+    async def test_synthetic_inbound_is_skipped_without_reply(self) -> None:
+        """synthetic=True：空投递结果，不建会话 / 不回复 / 不投递。"""
+        service = FakeChatService()
+        adapter = FakeAdapter()
+        router = _router(service)
+        router.register_adapter(ChannelType.TELEGRAM, adapter)
+        inbound = InboundMessageModel(
+            channel=ChannelType.TELEGRAM,
+            chat_id="10086",
+            message_id="42",
+            sender_id="7",
+            text="心跳",
+            synthetic=True,
+        )
+
+        result = await router.handle_inbound(inbound)
+
+        assert result.message_ids == []
+        assert service.create_calls == []
+        assert service.reply_calls == []
+        assert adapter.sent == []
+        assert router.session_count == 0
+        assert router.synthetic_skip_count == 1
 
 
 class TestSenderProvenance:

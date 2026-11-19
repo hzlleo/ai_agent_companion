@@ -205,13 +205,18 @@ class TestSubscribeAndLifecycle:
         assert client.stop_requested is True
 
     async def test_kicked_event_stops_reconnect(self) -> None:
-        """disconnected_event → KICKED 且不再重连（避免与新连接互相踢）。"""
+        """disconnected_event → KICKED 且不再重连（事件门控等待——无轮询 /
+        无固定墙钟窗口：连接产出 / 订阅完成 / 连接关闭三处均以显式事件
+        同步，最终 await run 任务收尾）。"""
         connector = FakeWeComConnector()
         client = _client(connector=connector)
         task = asyncio.create_task(client.run())
-        await _wait_until(lambda: client.state is WeComConnectionState.READY)
-        connector.connections[0].push(make_event_frame("disconnected_event"))
-        await asyncio.wait_for(task, timeout=2.0)
+        await asyncio.wait_for(connector.connected_event.wait(), timeout=5.0)
+        connection = connector.connections[0]
+        await asyncio.wait_for(connection.subscribed_event.wait(), timeout=5.0)
+        connection.push(make_event_frame("disconnected_event"))
+        await asyncio.wait_for(connection.closed_event.wait(), timeout=5.0)
+        await task
         assert client.state is WeComConnectionState.KICKED
         assert connector.attempts == 1
 
