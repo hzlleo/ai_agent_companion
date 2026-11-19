@@ -15,8 +15,11 @@
       树文件级 sha256 与聚合哈希、逐步状态。
 
 ``sha8`` 由源码树内容哈希计算（文件级 sha256 → 排序聚合），不依赖 git；
-CI / 审查者可用 ``--hash-only`` 复算同一标识。脚本只读源码，不改任何
-仓库状态（coverage.json / 前端 coverage 目录属工具产物，不在哈希根内）。
+构建产物目录（``.egg-info`` / 缓存 / 依赖）不参与哈希——editable 安装会在
+源码树里生成 ``*.egg-info`` 且其内容随安装环境漂移，剔除后同一份源码在
+任何机器上复算得到同一标识（与 ``red_probe.py`` 复制副本时的忽略口径
+一致）。CI / 审查者可用 ``--hash-only`` 复算同一标识。脚本只读源码，不改
+任何仓库状态（coverage.json / 前端 coverage 目录属工具产物，不在哈希根内）。
 
 用法::
 
@@ -75,6 +78,9 @@ _HASH_ROOTS: tuple[str, ...] = (
 _SKIP_PARTS = frozenset(
     {"__pycache__", ".pixi", "node_modules", ".mypy_cache", ".pytest_cache", "coverage"}
 )
+
+#: 哈希时跳过的目录名前缀（``*.egg-info`` 由 editable 安装生成，内容随环境漂移）。
+_SKIP_DIR_SUFFIXES = (".egg-info",)
 
 #: 哈希时跳过的文件名模式。
 _SKIP_SUFFIXES = (".pyc", ".pyo")
@@ -232,6 +238,8 @@ def _iter_hash_files() -> list[Path]:
                 continue
             rel_parts = candidate.relative_to(REPO_ROOT).parts
             if any(part in _SKIP_PARTS for part in rel_parts):
+                continue
+            if any(part.endswith(_SKIP_DIR_SUFFIXES) for part in rel_parts):
                 continue
             if candidate.suffix in _SKIP_SUFFIXES:
                 continue

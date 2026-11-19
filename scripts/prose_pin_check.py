@@ -7,8 +7,12 @@ prose pin（文案钉死）指测试断言的是实现源码里的某个字符�
 
     - 收集每个测试文件 ``assert`` 子树里的字符串字面量（长度 ≥ 8，过滤纯
       标点）；
-    - 若同一字面量出现在 ``packages/harness/**`` 的实现源码中，记为疑似
-      prose pin（同一字面量出现在多处测试时按次数聚合，输出 Top-N）；
+    - 若同一字面量出现在 ``packages/harness/**`` 的实现源码中，按形态分桶：
+      ``field_or_code``（标识符 / 字典键 / UPPER_SNAKE / 带连字符模型 ID——
+      本质是协议字段名，改它等于改契约，不算文案钉死）、``prose``（含空白
+      多词或句读标点的自然语言）、``other``（其余）；
+    - **「疑似 prose pin」只统计 prose 桶**，Top-N 也 prose 桶优先——把字段名
+      混进总数会让清单虚高、真正的文案断言被淹没；
     - 统计「纯结构断言」占比：一个测试函数内的断言只由 ``status_code``
       属性、``in`` / 比较、``len(...)`` 组成，视为结构断言（这类断言不随
       文案漂移，是 prose pin 的反面）。
@@ -28,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,7 +49,16 @@ IMPLEMENTATION_ROOT = REPO_ROOT / "backend" / "src" / "packages" / "harness"
 #: 参与比对的最小字面量长度（低于此长度的短串命中噪声过大）。
 _MIN_LITERAL_CHARS = 8
 
-#: 结构性断言允许的节点类型（其余节点一律视为结构外）。
+#: 代码 / 协议字段形态：不含空白与 CJK 的单个 token（标识符、UPPER_SNAKE、
+#: 字典键、带连字符模型 ID、MIME / 路径 / SQL 占位等）。单 token 不承载
+#: 自然语言，改它属于改契约而非改文案。
+_CODE_TOKEN_RE = re.compile(r"^[^\s\u4e00-\u9fff]+$")
+
+#: 句读标点：出现即视为自然语言句子（中文句读 + 英文句读 + 引号包裹的书名）。
+_PROSE_PUNCT = frozenset("，。！？；：、,.!?;:…—「」《》")
+
+#: 分桶名（报告与 Top-N 排序用）。
+_BUCKETS = ("prose", "other", "field_or_code")
 _STRUCTURAL_NODES = (
     ast.Assert,
     ast.Compare,
@@ -169,27 +183,62 @@ def _collect_file(
                 stats.literals.setdefault(literal, []).append(location)
 
 
+def _classify_literal(literal: str) -> str:
+    """把命中文案分为 field_or_code / prose / other 三桶。
+
+    Args:
+        literal: 命中实现源码的测试字面量（已 strip）。
+
+    Returns:
+        桶名。``field_or_code`` 指标识符 / 字典键 / UPPER_SNAKE / 带连字符
+        模型 ID 等代码形态；``prose`` 指含空白多词或句读标点的自然语言；
+        ``other`` 指其余（例如无标点的单段中文）。
+    """
+    if _CODE_TOKEN_RE.fullmatch(literal):
+        return "field_or_code"
+    if any(ch.isspace() for ch in literal) or any(ch in _PROSE_PUNCT for ch in literal):
+        return "prose"
+    return "other"
+
+
 def _report(stats: ProsePinStats, top: int) -> None:
-    """打印 Top-N 疑似 prose pin 与结构断言占比。"""
+    """打印分桶计数、prose 桶优先的 Top-N 与结构断言占比。
+
+    Args:
+        stats: 扫描汇总。
+        top: Top-N 条数。
+    """
     ranked = sorted(
         stats.literals.items(), key=lambda item: (-len(item[1]), item[0])
     )
+    buckets: dict[str, list[tuple[str, list[str]]]] = {name: [] for name in _BUCKETS}
+    for literal, locations in ranked:
+        buckets[_classify_literal(literal)].append((literal, locations))
     ratio = (
         stats.structural_tests / stats.tests_with_asserts * 100
         if stats.tests_with_asserts
         else 0.0
     )
+    counts = ", ".join(f"{name}={len(buckets[name])}" for name in _BUCKETS)
     print(
         f"[prose_pin_check] 测试文件 {stats.scanned_files} 份；含断言用例 "
-        f"{stats.tests_with_asserts} 个；疑似 prose pin 字面量 {len(ranked)} 个"
+        f"{stats.tests_with_asserts} 个；命中实现源字面量 {len(ranked)} 个"
+    )
+    print(
+        f"[prose_pin_check] 疑似 prose pin（prose 桶）{len(buckets['prose'])} 个；"
+        f"分桶 {counts}"
     )
     print(
         f"[prose_pin_check] 纯结构断言用例 {stats.structural_tests} 个"
         f"（占比 {ratio:.1f}%——越高越不依赖文案）"
     )
-    for literal, locations in ranked[:top]:
-        sample = locations[0]
-        print(f"  - x{len(locations)} {literal!r} @ {sample}")
+    ordered = [
+        (name, literal, locations)
+        for name in _BUCKETS
+        for literal, locations in buckets[name]
+    ]
+    for name, literal, locations in ordered[:top]:
+        print(f"  - [{name}] x{len(locations)} {literal!r} @ {locations[0]}")
 
 
 def main(argv: list[str] | None = None) -> int:

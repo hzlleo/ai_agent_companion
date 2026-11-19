@@ -7,9 +7,15 @@
     1. 把 ``backend/src`` 整树复制到一次性临时目录；
     2. 在副本里用 AST 定位 ``<module>:<attr>`` 的模块级定义，并把它替换
        成抛 ``AssertionError`` 的桩（函数 / 方法替换函数体；类替换全部
-       方法体；模块级常量改为惰性抛错的占位赋值）；
-    3. 以副本为 rootdir（``pyproject.toml`` 一并复制）只跑 manifest 登记
-       的测试 node id，要求至少一条**失败**。
+       方法体；模块级常量替换为惰性占位对象——导入期不抛，属性访问 /
+       调用 / 运算时抛，避免把「用例断言失败」误记成「模块导入失败」）；
+    3. 以副本为 rootdir（``pyproject.toml`` 一并复制）只跑登记的测试 node id，
+       要求至少一条**失败**。
+
+临时副本里的 pytest 若输出 ``errors>0`` 且 ``failed==0``，说明变红来自
+导入 / 收集期异常（collection error）而不是用例断言——脚本仍按红判定，
+但额外打印「疑似导入期假红」警示：这类红只证明模块依赖该符号，不证明
+目标用例约束了它，复核时须看该符号是否在导入期即被消费。
 
 为什么用临时副本做源码替换，而不是 conftest 打补丁：目标模块通常已被
 其它模块 ``from x import y`` 提前绑定，运行期改写模块属性只影响之后发起
@@ -25,8 +31,13 @@ probe 的符号与测试 node id 真实存在（防登记空探针）。
 用法::
 
     cd backend && pixi run red-probe --symbol packages.harness.chat.flow_gate:evaluate_flow_gate
+    cd backend && pixi run red-probe --symbol <module:attr> --tests <tests/unit/test_x.py::test_y>[,...]
     cd backend && pixi run red-probe --all
     cd backend && pixi run red-probe --gate
+
+``--tests`` 与 ``--symbol`` 连用时构造**一次性探针**：不读也不写清单，
+直接替换符号并跑给定 node id（新实现试探、复核者抽查均适用）；省略
+``--tests`` 时回退到清单查找（原语义）。
 
 Exit:
     0 = 探针成立 / 门禁通过；1 = 探针未变红或存在未覆盖新文件；
@@ -261,6 +272,51 @@ def _replace_function_body(
     ]
 
 
+def _lazy_value_source(message: str) -> str:
+    """返回常量探针的惰性占位源码（导入期不抛，使用时抛 AssertionError）。
+
+    Args:
+        message: AssertionError 文案。
+
+    Returns:
+        模块级插入的源码块（占位消息常量 + 占位类定义）。占位对象在属性
+        访问 / 调用 / 迭代 / 比较 / 运算时抛错，但 ``repr`` 不抛（供 pytest
+        断言内省使用），从而把「用例真的读到该常量」与「模块导入期就崩」
+        区分开。
+    """
+    return (
+        f"_RED_PROBE_MESSAGE = {message!r}\n"
+        "\n"
+        "\n"
+        "class _RedProbeLazyValue:\n"
+        '    """红探针常量占位：属性访问 / 调用 / 运算时抛 AssertionError。"""\n'
+        "\n"
+        "    __slots__ = ()\n"
+        "\n"
+        "    def _boom(*args: object, **kwargs: object) -> object:\n"
+        "        raise AssertionError(_RED_PROBE_MESSAGE)\n"
+        "\n"
+        "    __getattr__ = _boom\n"
+        "    __getitem__ = _boom\n"
+        "    __call__ = _boom\n"
+        "    __iter__ = _boom\n"
+        "    __len__ = _boom\n"
+        "    __contains__ = _boom\n"
+        "    __bool__ = _boom\n"
+        "    __eq__ = _boom\n"
+        "    __ne__ = _boom\n"
+        "    __lt__ = _boom\n"
+        "    __le__ = _boom\n"
+        "    __gt__ = _boom\n"
+        "    __ge__ = _boom\n"
+        "    __add__ = _boom\n"
+        "    __radd__ = _boom\n"
+        "\n"
+        "    def __repr__(self) -> str:\n"
+        '        return "<red-probe stub>"\n'
+    )
+
+
 def _stub_source(text: str, attr: str, message: str) -> str:
     """把模块级符号替换为抛出桩，返回替换后的源码文本。
 
@@ -308,16 +364,16 @@ def _stub_source(text: str, attr: str, message: str) -> str:
             f"{indent}    raise AssertionError({message!r})",
         )
         return "\n".join(lines) + "\n"
-    # 模块级赋值：改写成惰性抛错的占位调用（导入期即触发，失败面同 raise）。
-    helper = (
-        "def _red_probe_boom() -> None:\n"
-        f"    raise AssertionError({message!r})\n\n\n"
-    )
+    # 模块级赋值：替换成惰性占位对象（导入期不抛，首次使用时才抛）。
     value_start = node.lineno - 1
     value_end = node.end_lineno
     indent = _line_indent(lines, node.lineno)
-    lines[value_start:value_end] = [f"{indent}{attr} = _red_probe_boom()"]
-    return helper + "\n".join(lines) + "\n"
+    lines[value_start:value_end] = [
+        *_lazy_value_source(message).splitlines(),
+        "",
+        f"{indent}{attr} = _RedProbeLazyValue()",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def _check_test_ref(ref: str) -> str | None:
@@ -518,6 +574,32 @@ def _run_gate(manifest: RedManifest) -> int:
     return 0
 
 
+def _report_outcome(probe: ProbeSpec, outcome: ProbeOutcome) -> bool:
+    """打印单条探针判定并返回其是否成立（变红）。
+
+    Args:
+        probe: 探针登记（含一次性探针）。
+        outcome: 执行结果。
+
+    Returns:
+        True = RED（至少一条失败 / 报错）；False = GREEN（探针失效）。
+    """
+    verdict = "RED" if outcome.went_red else "GREEN（探针失效）"
+    print(
+        f"[red_probe] {probe.name} [{probe.symbol}] -> {verdict} "
+        f"(exit={outcome.exit_code}, failed={outcome.failed}, "
+        f"errors={outcome.errors}, passed={outcome.passed})"
+    )
+    if outcome.errors > 0 and outcome.failed == 0:
+        print(
+            f"[red_probe]   警示 {probe.symbol}: 疑似导入期假红（collection error 主导）"
+            "——变红来自导入 / 收集期异常而非用例断言失败；"
+            "复核该符号是否只在导入期被消费，若是请补直接断言它的用例",
+            file=sys.stderr,
+        )
+    return outcome.went_red
+
+
 def _run_symbol(manifest: RedManifest, symbol: str) -> int:
     """执行指定符号对应的全部探针。
 
@@ -534,15 +616,40 @@ def _run_symbol(manifest: RedManifest, symbol: str) -> int:
         return 2
     failed_any = False
     for probe in matched:
-        outcome = _run_probe(probe)
-        verdict = "RED" if outcome.went_red else "GREEN（探针失效）"
-        print(
-            f"[red_probe] {probe.name} [{probe.symbol}] -> {verdict} "
-            f"(exit={outcome.exit_code}, failed={outcome.failed}, "
-            f"errors={outcome.errors}, passed={outcome.passed})"
-        )
-        failed_any = failed_any or not outcome.went_red
+        red = _report_outcome(probe, _run_probe(probe))
+        failed_any = failed_any or not red
     return 1 if failed_any else 0
+
+
+def _run_adhoc(symbol: str, tests: str) -> int:
+    """执行一次性探针（不读也不写清单）。
+
+    Args:
+        symbol: ``module:attr`` 形态的符号。
+        tests: 逗号分隔的测试 node id（相对 ``backend/src``）。
+
+    Returns:
+        进程退出码：0 变红 / 1 未变红 / 2 配置错误。
+    """
+    module, sep, attr = symbol.partition(":")
+    if not sep or not module or not attr:
+        print(f"[red_probe] 符号格式应为 module:attr: {symbol}", file=sys.stderr)
+        return 2
+    refs = tuple(item.strip() for item in tests.split(",") if item.strip())
+    if not refs:
+        print("[red_probe] --tests 为空（需要 tests/...::test_x[, ...]）", file=sys.stderr)
+        return 2
+    probe = ProbeSpec(name=f"adhoc:{attr}", module=module, attr=attr, tests=refs)
+    problems = _validate_probe(probe)
+    if problems:
+        print("[red_probe] 一次性探针配置错误:", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 2
+    print(
+        f"[red_probe] 一次性探针（不写清单）: {symbol} -> {len(refs)} 个 node id",
+    )
+    return 0 if _report_outcome(probe, _run_probe(probe)) else 1
 
 
 def _run_all(manifest: RedManifest) -> int:
@@ -556,14 +663,8 @@ def _run_all(manifest: RedManifest) -> int:
     """
     broken = False
     for probe in manifest.probes:
-        outcome = _run_probe(probe)
-        verdict = "RED" if outcome.went_red else "GREEN（探针失效）"
-        print(
-            f"[red_probe] {probe.name} [{probe.symbol}] -> {verdict} "
-            f"(exit={outcome.exit_code}, failed={outcome.failed}, "
-            f"errors={outcome.errors}, passed={outcome.passed})"
-        )
-        broken = broken or not outcome.went_red
+        red = _report_outcome(probe, _run_probe(probe))
+        broken = broken or not red
     return 1 if broken else 0
 
 
@@ -585,12 +686,19 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--symbol", help="执行指定 module:attr 对应的探针")
     mode.add_argument("--all", action="store_true", help="执行清单内全部探针")
     parser.add_argument(
+        "--tests",
+        default="",
+        help="一次性探针的测试 node id（逗号分隔；仅与 --symbol 连用，不写清单）",
+    )
+    parser.add_argument(
         "--prune",
         action="store_true",
         help="门禁模式附带打印可精简的基线条目清单",
     )
     args = parser.parse_args(argv)
 
+    if args.symbol and args.tests:
+        return _run_adhoc(args.symbol, args.tests)
     manifest = _load_manifest(MANIFEST_PATH)
     if args.symbol:
         return _run_symbol(manifest, args.symbol)

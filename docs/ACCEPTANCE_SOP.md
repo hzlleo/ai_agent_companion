@@ -11,7 +11,9 @@
 1. 打开 `docs/evidence/<slice>-<sha8>.json`；缺失即停止复核，退回执行者。
 2. 复算源码树标识：`cd backend && pixi run verify-slice -- --hash-only`，
    与证据包 `sha8` / `source_tree.aggregate_sha256` 对照——不一致说明证据
-   对应的是另一份源码。
+   对应的是另一份源码。哈希口径剔除 `.egg-info` / 缓存 / 依赖目录（与红
+   探针副本的忽略口径一致），所以把源码拷到干净副本（不含 `*.egg-info`）
+   复算应得同一 sha8；自己装过 editable 包也不会改变标识。
 3. 检查 `result=pass`、`failed_steps=[]`，且每个步骤 `summary_matched=true`
    （退出码 0 但摘要缺失在 `verify_slice` 里已判失败；手工复核同样口径）。
 4. 抽查 `docs/evidence/logs/` 中 tests-all / gates 两份日志的尾部摘要与
@@ -24,6 +26,16 @@
 2. 执行 `cd backend && pixi run red-probe --symbol <module:attr>`，必须至少
    一条用例失败并打印 `RED`；出现 `GREEN（探针失效）` 即退回——测试没有
    真正约束该符号。
+   清单外的符号（或只想指定用例）用一次性探针，不写清单：
+
+   ```bash
+   cd backend && pixi run red-probe --symbol <module:attr> \
+       --tests tests/unit/test_<域>.py::test_<用例>
+   ```
+
+   输出若出现 `errors>0 且 failed==0`，脚本会打印「疑似导入期假红
+   （collection error 主导）」——变红来自导入 / 收集期异常而不是用例断言
+   失败，须确认该符号是否只在导入期被消费，是则补直接断言它的用例。
 3. 新增实现若不在冻结基线且无 probe 覆盖，`pixi run red-probe --gate` 必须
    已经红过；复核者确认执行者补的是真 probe（符号与 node id 都存在）。
 
@@ -71,11 +83,12 @@
 
 | 符号 | 命令 | 结果（RED/GREEN） | 失败用例数 | 结论 |
 |---|---|---|---|---|
-| `<module:attr>` | `pixi run red-probe --symbol <module:attr>` | `<RED/GREEN>` | `<n>` | `<PASS/FAIL>` |
+| `<module:attr>` | `pixi run red-probe --symbol <module:attr>`（清单外符号追加 `--tests <nodeid>`） | `<RED/GREEN>` | `<n>` | `<PASS/FAIL>` |
 | `<module:attr>` | 同上 | | | |
 
 判定：GREEN 即测试未约束该符号；manifest 覆盖门（`--gate`）红过但未补
-真 probe 同判 FAIL。
+真 probe 同判 FAIL。仅 `errors>0` 而无 `failed` 的红会带「疑似导入期假红」
+警示，属「模块依赖该符号」而非「用例断言它」，按需补断言。
 
 ### 3.2 跨模块语义断裂（六路逐路）
 
@@ -98,7 +111,7 @@
 | 文件白名单 | diff 文件清单 vs 任务书第 2 节 | `<PASS/FAIL>` |
 | 既有测试改动 | 任务书第 5 节 + `assertion_freeze` 输出 | |
 | 断言计数 | 基线 vs 当前（只降不升） | |
-| prose pin | `pixi run prose-pin` Top-N 与本次新增断言对照 | |
+| prose pin | `pixi run prose-pin` 的 prose 桶 Top-N（`field_or_code` 桶是协议字段名，不计入疑似；`other` 单列） | |
 | 截断 / 空跑 | `verify_slice` JSON 的 `summary_matched` 全 true | |
 | 文档真值 | `docs-truth` / `surface-check` 结果 | |
 

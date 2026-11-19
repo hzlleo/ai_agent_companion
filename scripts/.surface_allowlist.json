@@ -1,6 +1,7 @@
 {
   "version": 1,
-  "note": "HTTP wire 模型导出豁免清单——每项必须写明不导出前端契约的理由（scripts/surface_check.py 消费）；陈旧条目在门禁输出中报告并应删除。",
+  "max_entries": 40,
+  "note": "HTTP wire 模型导出豁免清单——每项必须写明不导出前端契约的理由（scripts/surface_check.py 消费）；陈旧条目在门禁输出中报告并应删除。max_entries 是规模棘轮：新增豁免须 --update 同步抬高并随 diff 受审。",
   "entries": [
     {
       "surface": "AsrResultModel",

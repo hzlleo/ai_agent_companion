@@ -125,15 +125,18 @@ sandbox-drift = { cmd = "python ../scripts/check_sandbox_dtos_drift.py", descrip
 # backend 生产面基线零——严禁任何 noqa / type:ignore 抑制注释。
 noqa-freeze = { cmd = "python ../scripts/noqa_freeze_check.py", description = "noqa / type:ignore 增量冻结门禁（backend 基线 0，只减不增）" }
 # 红探针（符号级「删实现必须变红」证据）——带参形态：追加 --symbol /
-# --all；门禁形态由 red-probe-gate 承担（根 gates 链调用）。
-red-probe = { cmd = "python ../scripts/red_probe.py", description = "红探针（--symbol module:attr / --all；清单 backend/red_manifest.toml）" }
+# --all；清单外符号可加 --tests <nodeid> 构造一次性探针（不写清单）；
+# errors>0 且 failed==0 会打印「疑似导入期假红」警示。门禁形态由
+# red-probe-gate 承担（根 gates 链调用）。
+red-probe = { cmd = "python ../scripts/red_probe.py", description = "红探针（--symbol module:attr [--tests nodeid] / --all；清单 backend/red_manifest.toml）" }
 red-probe-gate = { cmd = "python ../scripts/red_probe.py --gate", description = "红探针门禁（backend/src 新源文件必须被 probe 覆盖或在冻结基线）" }
 # 文档真相门：env 分节表与配置模型一致 + docs 未完成标记只降不升。
 docs-truth = { cmd = "python ../scripts/generate_examples_env.py --check-docs && python ../scripts/todo_freeze_check.py --enforce", description = "文档真相门（env 分节表漂移 + TODO 类标记回升）" }
 # 断言侵蚀棘轮：既有单测 assert / pytest.raises 计数只降不升。
 assertion-freeze = { cmd = "python ../scripts/assertion_freeze.py --enforce", description = "单元测试断言侵蚀棘轮（计数下降即红）" }
-# 导出面完整性门：app/api wire 模型必须登记导出或允许清单留 reason。
-surface-check = { cmd = "python ../scripts/surface_check.py --enforce", description = "HTTP wire 模型导出面完整性门（含 .env.example 键面复核）" }
+# 导出面完整性门：app/api wire 模型必须登记导出或允许清单留 reason；
+# 允许清单带 max_entries 规模棘轮（超限即红，--update 同步抬高）。
+surface-check = { cmd = "python ../scripts/surface_check.py --enforce", description = "HTTP wire 模型导出面完整性门（含豁免规模棘轮与 .env.example 键面复核）" }
 # prose-pin 启发式报告（恒 exit 0；门禁链尾标记由此输出）。
 prose-pin = { cmd = "python ../scripts/prose_pin_check.py", description = "prose-pin 启发式报告（Top-N + 结构断言占比；不阻断）" }
 # 切片验收证据包：全链逐步校验 + docs/evidence 落盘。

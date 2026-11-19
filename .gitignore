@@ -63,5 +63,7 @@ artifacts/
 **/tests-logs.log
 
 # === 验收证据（docs/evidence/ 的 JSON 与全量日志必须入库；覆盖上方 logs 忽略规则） ===
+# 仅 canonical slice 证据入库；--only 调试 / 手工探针产生的临时证据不必提交
+# （口径见 docs/evidence/README.md）。
 !docs/evidence/logs/
 !docs/evidence/logs/*.log
