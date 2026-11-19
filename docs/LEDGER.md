@@ -500,6 +500,13 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **剩余**：无。
 
+### 里程碑：R2 全部批次交付并逐批通过 Oracle 深审
+
+- 批次清单与结论：注入防御、logprobs 置信度、亲密补强（R2b+ 四切片）、R2c 记忆与关系（含修复）、R2d 心流/群聊/声纹/表情包（含修复）、R2e 企微/抖音/Canvas（含修复）、R2f 实时语音（含修复）、加固门禁（Tier-1+Tier-2，含复审残留）、补审 R2a 通道底座与记忆域（含残留）——全部经 Oracle 明确判定无问题（PASS），修复循环见各自小节的命令与证据。
+- 合并状态：PR#18 至 PR#31 已全部合并入 main（当前 `a4bf3e1`），工作区 clean；每批验收证据在 `docs/evidence/`（按 sha8 对应）。
+- 未决事项：**全约束审计 A（实现/架构）、B（测试/纪律）、C（文档/注释/提示词/配置）尚未执行**——原计划在 R2 收尾后立即进行，因运维维护子 Agent 所依赖的 LLM 服务顺延至次日；审计 A 的已发起任务若被中断需重跑。R3 在所有审计与终局交叉复核 ALL CLEAN 之前不启动。
+- 恢复指引：次日从干净 main 起分支执行审计 A→修正→复审循环→B→C→终局复核；审计提示词口径见本会话记录（覆盖 19 条硬约束），修复分支命名沿用 `feat/<范围>-review-fixes`。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
