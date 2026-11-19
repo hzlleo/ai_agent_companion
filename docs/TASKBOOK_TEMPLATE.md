@@ -37,7 +37,7 @@
 | 命令 | 期望 | 证据落点 |
 |---|---|---|
 | `cd backend && pixi run verify-slice -- --slice <slice>` | exit 0；`result=pass`；每步 `summary_matched=true` | `docs/evidence/<slice>-<sha8>.json` + `docs/evidence/logs/` |
-| `cd backend && pixi run red-probe --symbol <module:attr>` | exit 0 且输出 `RED`（至少 1 条用例失败） | 终端输出抄入任务书第 7 节 |
+| `cd backend && pixi run red-probe --symbol <module:attr>` | exit 0 且输出 `RED`（至少 1 条用例失败；清单外新符号追加 `--tests <nodeid>` 走一次性探针，不写清单） | 终端输出抄入任务书第 7 节 |
 | `pixi run gates` | exit 0；尾部 `[prose_pin_check] 报告完成` | `verify-slice` 的 `gates` 步骤日志 |
 | `cd backend && pixi run tests-all` | exit 0；`== N passed` | 同上 |
 | `cd backend && pixi run coverage-gates` | exit 0；24 组 ≥80% | 同上 |
@@ -73,7 +73,9 @@
 | `<path>` | `<test_name>` | `<类型>` | `<契约变更依据>` | `<n> → <m>` |
 
 删除用例或断言计数下降时，`scripts/assertion_freeze.py --update` 必须与
-测试改动同批评审，不得静默下调基线。
+测试改动同批评审，不得静默下调基线。**整文件删除同样判红**（基线内路径
+消失即计入下降，消息为「基线内测试文件缺失」），合法整删必须同批
+`--update` 重建基线。
 
 ## 6. 反模式黑名单
 
@@ -85,11 +87,14 @@
 | 范围外改动 | 顺手重构 / 全局格式化 / 修无关 typo | 白名单内最小 diff；无关问题记录后在评审说明，不夹带 |
 | 批量注释改写 | 正则 / tokenize 批量替换注释措辞 | 逐处读齐上下文（docstring + 描述的实现 + 引用符号）再写；脚本只用于定位（LEDGER 15.2–15.4） |
 | 空跑验收 | 命令 exit 0 但没有真实执行摘要 | 摘要缺失即失败；用 `verify-slice` 的证据 JSON 复核 |
-| 假探针 | manifest 登记但不实际跑 / 符号不存在的 probe | `red-probe --gate` 校验符号与 node id 真实存在；`--symbol` 必须见 `RED` |
+| 假探针 | manifest 登记但不实际跑 / 符号不存在的 probe | `red-probe --gate` 校验符号与 node id 真实存在；`--symbol` 必须见 `RED`；`errors>0 且 failed==0` 属导入期假红，须补直接断言该符号的用例 |
 
 ## 7. 交付与复核
 
-- 证据包：`docs/evidence/<slice>-<sha8>.json`（sha8 由源码树哈希计算，不用 git）；
+- 证据包：`docs/evidence/<slice>-<sha8>.json`（sha8 由源码树哈希计算，不用 git；
+  哈希剔除 `.egg-info` / 缓存 / 依赖目录，干净副本应复算出同一标识）；
+- 证据入库：只有 canonical 切片证据入库；`--only` 调试或手工探针产生的
+  临时证据不必提交；
 - 红探针输出：`pixi run red-probe --all` 的逐条 `RED` 行；
 - 既有测试改动清单：第 5 节表格 + `assertion_freeze` 报告；
 - 复核流程：按 [ACCEPTANCE_SOP.md](ACCEPTANCE_SOP.md) 三步固定动作执行。

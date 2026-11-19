@@ -16,17 +16,22 @@ API 的请求 / 响应模型却忘记登记导出，前端契约测试不会红�
 每个被引用的模型类名必须满足其一：已登记在导出清单、命中允许清单
 `scripts/.surface_allowlist.json`（每项必须写 reason，逐条说明为何不导出
 ——例如仅通道内部消费、或声纹 DTO 尚未建立前端契约）。未登记的**新增
-面**即红；允许清单里已不存在的陈旧条目只报告（清理时删除）。同时用
-既有的 `.env.example` 生成器复核 env 键面（不另造轮子）。
+面**即红；允许清单里已不存在的陈旧条目只报告（清理时删除）。
+
+允许清单带规模棘轮 `max_entries`：gate 模式条目数超过它即红——新增豁免
+必须先 `--update` 抬高上限，让豁免增长随 diff 受审，杜绝「顺手多加一条」
+静默扩大未导出面；`--update` 重建清单时把 `max_entries` 写成当前条目数。
+同时用既有的 `.env.example` 生成器复核 env 键面（不另造轮子）。
 
 用法::
 
     python scripts/surface_check.py            # 报告
-    python scripts/surface_check.py --enforce  # 门禁（未登记新面 exit 1）
+    python scripts/surface_check.py --enforce  # 门禁（未登记新面 / 超上限 exit 1）
+    python scripts/surface_check.py --update   # 重建清单（max_entries=当前条目数）
 
 Exit:
-    0 = 全部登记 / 豁免（报告模式恒 0）；1 = 未登记新面或 env 键面漂移；
-    2 = 允许清单损坏。
+    0 = 全部登记 / 豁免且在规模上限内（报告模式恒 0）；1 = 未登记新面 /
+    超 max_entries / env 键面漂移；2 = 允许清单损坏。
 """
 
 from __future__ import annotations
@@ -51,6 +56,13 @@ ALLOWLIST_PATH = Path(__file__).resolve().parent / ".surface_allowlist.json"
 
 #: 允许清单 schema 版本。
 _ALLOWLIST_VERSION = 1
+
+#: 允许清单固定说明（--update 重建时原样写回）。
+_ALLOWLIST_NOTE = (
+    "HTTP wire 模型导出豁免清单——每项必须写明不导出前端契约的理由"
+    "（scripts/surface_check.py 消费）；陈旧条目在门禁输出中报告并应删除。"
+    "max_entries 是规模棘轮：新增豁免须 --update 同步抬高并随 diff 受审。"
+)
 
 #: scripts 目录（导入导出器 / 示例生成器用）。
 _SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -158,14 +170,14 @@ def _collect_surface_names() -> dict[str, list[str]]:
     return dict(sorted(surfaces.items()))
 
 
-def _load_allowlist() -> dict[str, str]:
-    """读取允许清单（surface → reason）。
+def _load_allowlist() -> tuple[dict[str, str], int]:
+    """读取允许清单（surface → reason）与规模上限。
 
     Returns:
-        ``{面名: reason}``。
+        ``({面名: reason}, max_entries)``。
 
     Raises:
-        SystemExit: 清单损坏 / 条目缺 reason（退出码 2）。
+        SystemExit: 清单损坏 / 条目缺 reason / 缺 max_entries（退出码 2）。
     """
     if not ALLOWLIST_PATH.is_file():
         print(
@@ -184,6 +196,13 @@ def _load_allowlist() -> dict[str, str]:
             file=sys.stderr,
         )
         raise SystemExit(2)
+    max_entries = payload.get("max_entries")
+    if not isinstance(max_entries, int) or isinstance(max_entries, bool):
+        print(
+            "[surface_check] 允许清单缺 max_entries 整数（先跑 --update 重建）",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     entries: dict[str, str] = {}
     for raw in payload.get("entries", []):
         surface = str(raw.get("surface", "")).strip()
@@ -195,7 +214,32 @@ def _load_allowlist() -> dict[str, str]:
             print(f"[surface_check] 允许清单条目缺 reason: {surface}", file=sys.stderr)
             raise SystemExit(2)
         entries[surface] = reason
-    return entries
+    return entries, max_entries
+
+
+def _write_allowlist(entries: dict[str, str]) -> None:
+    """重建允许清单，并把规模上限写成当前条目数。
+
+    Args:
+        entries: 现有的 ``{面名: reason}``（reason 原样保留，需人工删除的
+            陈旧条目仍按报告模式提示，不在重建时静默丢弃）。
+    """
+    payload = {
+        "version": _ALLOWLIST_VERSION,
+        "max_entries": len(entries),
+        "note": _ALLOWLIST_NOTE,
+        "entries": [
+            {"surface": surface, "reason": entries[surface]}
+            for surface in sorted(entries)
+        ],
+    }
+    ALLOWLIST_PATH.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(
+        f"[surface_check] 允许清单已重建 {ALLOWLIST_PATH}"
+        f"（entries={len(entries)}, max_entries={len(entries)}）"
+    )
 
 
 def _registered_surfaces() -> set[str]:
@@ -246,8 +290,19 @@ def _report(
     surfaces: dict[str, list[str]],
     registered: set[str],
     allowed: dict[str, str],
+    max_entries: int,
 ) -> tuple[list[str], list[str]]:
-    """打印面清单对照并返回（未登记明细, 陈旧豁免明细）。"""
+    """打印面清单对照并返回（未登记明细, 陈旧豁免明细）。
+
+    Args:
+        surfaces: app/api 引用的模型面。
+        registered: 已登记导出的模型名。
+        allowed: 允许清单条目。
+        max_entries: 允许清单规模上限（棘轮值）。
+
+    Returns:
+        ``(unregistered, stale)``。
+    """
     unregistered: list[str] = []
     for name, locations in surfaces.items():
         if name in registered:
@@ -260,6 +315,7 @@ def _report(
         f"[surface_check] app/api 引用模型 {len(surfaces)} 个；已登记 "
         f"{len(set(surfaces) & registered)} 个；允许豁免 "
         f"{len(set(surfaces) & set(allowed))} 个"
+        f"（清单 {len(allowed)} 条 / max_entries={max_entries}）"
     )
     if stale:
         print(f"[surface_check] 允许清单陈旧条目 {len(stale)} 个（报告不阻断）:")
@@ -283,25 +339,40 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(description="HTTP wire 模型导出面完整性门")
     parser.add_argument("--enforce", action="store_true", help="门禁模式（未登记新面即红）")
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help="重建允许清单（max_entries=当前条目数；人工审阅后提交）",
+    )
     args = parser.parse_args(argv)
 
     surfaces = _collect_surface_names()
     registered = _registered_surfaces()
-    allowed = _load_allowlist()
-    unregistered, _ = _report(surfaces, registered, allowed)
+    allowed, max_entries = _load_allowlist()
+    if args.update:
+        _write_allowlist(allowed)
+        return 0
+    unregistered, _ = _report(surfaces, registered, allowed, max_entries)
     env_status = _check_env_surface()
     if not args.enforce:
         return env_status
-    if unregistered:
+    over_cap = len(allowed) > max_entries
+    if over_cap:
+        print(
+            f"[surface_check] 允许清单条目 {len(allowed)} > max_entries {max_entries}"
+            "（新增豁免须 --update 同步抬高上限并随 diff 受审）",
+            file=sys.stderr,
+        )
+    if unregistered or over_cap:
         print(
             "[surface_check] 结果 FAIL：新增 wire 模型须登记导出（export_dto_schemas.py）"
-            "或在允许清单写明 reason",
+            "或在允许清单写明 reason（豁免增长受 max_entries 约束）",
             file=sys.stderr,
         )
         return 1
     if env_status != 0:
         return env_status
-    print("[surface_check] 门禁通过（导出面与 env 键面完整）")
+    print("[surface_check] 门禁通过（导出面、豁免规模与 env 键面完整）")
     return 0
 
 

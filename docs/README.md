@@ -21,13 +21,13 @@ Python 标准库，经 backend pixi 环境的 python 执行；基线与允许清
 
 | 入口 | 作用 | 命令 |
 |---|---|---|
-| `scripts/red_probe.py` + `backend/red_manifest.toml` | 红探针：临时副本 AST 源码体替换后跑登记的 node id，要求至少一红；门禁模式要求新源文件被 probe 覆盖或在冻结基线 | `cd backend && pixi run red-probe --symbol <module:attr>` / `pixi run red-probe-gate` |
-| `scripts/verify_slice.py` | 切片验收证据包：tests-all / coverage-gates / lint / typecheck / gates 逐步校验退出码与尾部摘要，日志与 JSON 落 `docs/evidence/`；支持 `--with-seekdb` / `--with-frontend` | `cd backend && pixi run verify-slice -- --slice <slice>` |
+| `scripts/red_probe.py` + `backend/red_manifest.toml` | 红探针：临时副本 AST 源码体替换后跑登记的 node id，要求至少一红；门禁模式要求新源文件被 probe 覆盖或在冻结基线；清单外符号可用 `--tests` 走一次性探针（不写清单，`errors>0 且 failed==0` 会标注「疑似导入期假红」） | `cd backend && pixi run red-probe --symbol <module:attr>`（追加 `--tests <nodeid>`）/ `pixi run red-probe-gate` |
+| `scripts/verify_slice.py` | 切片验收证据包：tests-all / coverage-gates / lint / typecheck / gates 逐步校验退出码与尾部摘要，日志与 JSON 落 `docs/evidence/`；哈希剔除 `.egg-info` / 缓存 / 依赖目录，干净副本可复算同一 sha8 | `cd backend && pixi run verify-slice -- --slice <slice>` |
 | `scripts/generate_examples_env.py` | `.env.example` 生成 + `docs/backend/config.md` env 分节表同步 / 漂移校验 | `--sync-docs` / `--check-docs`（经 `pixi run docs-truth`） |
 | `scripts/todo_freeze_check.py` | docs 未完成标记（TODO / 待办 / 待定 / 暂未）只降不升棘轮 | `cd backend && pixi run docs-truth` |
 | `scripts/assertion_freeze.py` | 既有单测 assert / pytest.raises 计数只降不升（AST 摘要变化报告） | `cd backend && pixi run assertion-freeze` |
-| `scripts/surface_check.py` + `scripts/.surface_allowlist.json` | app/api wire 模型导出面完整性（未登记须允许清单留 reason）+ `.env.example` 键面复核 | `cd backend && pixi run surface-check` |
-| `scripts/prose_pin_check.py` | prose-pin 启发式报告（断言文案出现在实现源）+ 纯结构断言占比，不阻断 | `cd backend && pixi run prose-pin` |
+| `scripts/surface_check.py` + `scripts/.surface_allowlist.json` | app/api wire 模型导出面完整性（未登记须允许清单留 reason）+ `.env.example` 键面复核；允许清单受 `max_entries` 规模棘轮约束（超限即红，新增豁免须 `--update` 同步抬高） | `cd backend && pixi run surface-check` / `pixi run python ../scripts/surface_check.py --update` |
+| `scripts/prose_pin_check.py` | prose-pin 启发式报告：命中文案分 field_or_code / prose / other 三桶，「疑似 prose pin」只计 prose 桶、Top-N prose 优先，另报纯结构断言占比，不阻断 | `cd backend && pixi run prose-pin` |
 | `scripts/count_sync_tests.py` | 同步测试只降不升棘轮 | `cd backend && pixi run sync-test-ratchet` |
 | `scripts/noqa_freeze_check.py` | noqa / type:ignore 增量冻结 | `cd backend && pixi run noqa-freeze` |
 | `scripts/check_sandbox_dtos_drift.py` | 沙盒 / 浏览器 sidecar wire 契约文本镜像漂移 | `cd backend && pixi run sandbox-drift` |

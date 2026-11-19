@@ -224,4 +224,4 @@ src/tests/unit/test_migration_voiceprint_sticker.py: 3 warnings
     util.warn_deprecated(
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-================= 2808 passed, 27 warnings in 65.14s (0:01:05) =================
+====================== 2808 passed, 27 warnings in 56.59s ======================

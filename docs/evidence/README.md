@@ -1,0 +1,20 @@
+# 验收证据目录（入库口径）
+
+本目录只登记**可复现的 canonical 切片证据**：
+
+- `docs/evidence/<slice>-<sha8>.json`：由 `cd backend && pixi run verify-slice -- --slice <slice>`
+  生成，含逐步退出码 / 摘要匹配 / 解析计数与源码树文件级 sha256；
+- `docs/evidence/logs/<slice>-<sha8>-<step>.log`：对应步骤全量输出。
+
+`sha8` 是源码树聚合哈希前 8 位。哈希口径剔除 `.egg-info` / 缓存 / 依赖目录
+（与红探针副本的忽略口径一致），所以把源码拷到不含 `*.egg-info` 的干净副本
+用 `--hash-only` 复算应得到同一标识；复核者据此判断证据是否对应当前源码。
+
+历史证据（源码树已继续演进时）保留在目录中，但**只有 sha8 与当前
+`--hash-only` 一致的那份对应当前源码**；验收以它为准。
+
+## 哪些证据不必入库
+
+`verify-slice --only <step>` 调试跑、手工红探针、临时排查产生的 JSON / 日志
+不必提交：它们只覆盖子集，不代表切片验收结论，且会与 canonical 证据混淆。
+需要留痕时用完整 canonical 命令重跑并覆盖同名产物。

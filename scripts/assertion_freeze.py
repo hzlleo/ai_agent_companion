@@ -10,18 +10,21 @@
       参数的规范化 dump 的 sha256）。
 
 gate 模式下**计数下降即红**（新增用例请在评审后 ``--update`` 抬高基线）；
-AST 摘要变化只报告（等量重写合法，但需要审查者看见）。基线只覆盖扫描
-时刻存在的既有文件：新文件不在基线内属正常增量，报告列出，更新基线时
-并入。
+**基线内文件整删同样判红**——否则整文件删除等于把该文件的全部断言清零却
+不留计数下降痕迹；合法整删必须评审后 ``--update`` 重建基线（与计数下降
+同口径）。AST 摘要变化只报告（等量重写合法，但需要审查者看见）。基线只
+覆盖扫描时刻存在的既有文件：新文件不在基线内属正常增量，报告列出，更新
+基线时并入。
 
 用法::
 
-    python scripts/assertion_freeze.py --enforce   # 门禁（计数下降 exit 1）
-    python scripts/assertion_freeze.py             # 报告
+    python scripts/assertion_freeze.py --enforce   # 门禁（计数下降 / 整删 exit 1）
+    python scripts/assertion_freeze.py             # 报告（对照基线但不阻断）
     python scripts/assertion_freeze.py --update    # 重建基线（人工审阅后提交）
 
 Exit:
-    0 = 不降 / 报告 / 更新成功；1 = 存在计数下降；2 = 基线缺失或损坏。
+    0 = 不降 / 报告 / 更新成功；1 = 存在计数下降或基线内文件缺失；
+    2 = 基线缺失或损坏。
 """
 
 from __future__ import annotations
@@ -188,7 +191,15 @@ def _write_baseline(stats: dict[str, AssertionStats]) -> None:
 def _report(
     stats: dict[str, AssertionStats], baseline: dict[str, AssertionStats] | None
 ) -> tuple[list[str], list[str]]:
-    """打印逐文件对照并返回（计数下降明细, 摘要变化明细）。"""
+    """打印逐文件对照并返回（计数下降 / 整删明细, 摘要变化明细）。
+
+    Args:
+        stats: 当前扫描统计。
+        baseline: 基线统计（None 表示无对照，仅打印总量）。
+
+    Returns:
+        ``(drops, digest_changes)``——drops 含计数下降与基线内文件缺失。
+    """
     total_asserts = sum(item.asserts for item in stats.values())
     total_raises = sum(item.raises for item in stats.values())
     print(
@@ -216,9 +227,14 @@ def _report(
         for path in new_files[:10]:
             print(f"  - {path}")
     if removed:
-        print(f"[assertion_freeze] 基线内已删除文件 {len(removed)} 份（--update 清理）:")
+        print(
+            f"[assertion_freeze] 基线内已删除文件 {len(removed)} 份"
+            "（整删须评审后 --update 重建基线）:"
+        )
         for path in removed[:10]:
             print(f"  - {path}")
+        for path in removed:
+            drops.append(f"{path}: 基线内测试文件缺失（整删须 --update 重建基线）")
     if digest_changes:
         print(f"[assertion_freeze] AST 摘要变化 {len(digest_changes)} 份（报告不拦截）:")
         for path in digest_changes[:15]:
@@ -250,19 +266,19 @@ def main(argv: list[str] | None = None) -> int:
         _write_baseline(stats)
         _report(stats, None)
         return 0
-    baseline = _load_baseline() if args.enforce else None
+    baseline = _load_baseline() if args.enforce or BASELINE_PATH.is_file() else None
     drops, _ = _report(stats, baseline)
     if args.enforce and drops:
-        print("[assertion_freeze] 断言计数下降（只允许增加）:", file=sys.stderr)
+        print("[assertion_freeze] 断言侵蚀（计数下降或基线内测试文件缺失）:", file=sys.stderr)
         for item in drops:
             print(f"  - {item}", file=sys.stderr)
         print(
-            "  修复：补回被删断言；确属等量重写 / 用例删除时评审后 --update",
+            "  修复：补回被删断言 / 恢复被删文件；确属等量重写或整删时评审后 --update 重建基线",
             file=sys.stderr,
         )
         return 1
     if args.enforce:
-        print("[assertion_freeze] 棘轮通过（无计数下降）")
+        print("[assertion_freeze] 棘轮通过（无计数下降、无基线内文件缺失）")
     return 0
 
 

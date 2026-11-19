@@ -153,35 +153,36 @@ ok   frontend-eslint-disable: 0 ≤ 基线 0
  WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
 ✨ Pixi task (docs-truth in default): python ../scripts/generate_examples_env.py --check-docs && python ../scripts/todo_freeze_check.py --enforce: (文档真相门（env 分节表漂移 + TODO 类标记回升）)
 [generate_examples_env] env 分节表与配置模型一致
-[todo_freeze_check] 文档 30 份；命中文件 4 份；总数 7
+[todo_freeze_check] 文档 31 份；命中文件 4 份；总数 7
 [todo_freeze_check] 基线总数 7
 [todo_freeze_check] 棘轮通过（无回升）
  WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
 ✨ Pixi task (assertion-freeze in default): python ../scripts/assertion_freeze.py --enforce: (单元测试断言侵蚀棘轮（计数下降即红）)
 [assertion_freeze] 文件 190 份；asserts=8012；raises=593
-[assertion_freeze] 棘轮通过（无计数下降）
+[assertion_freeze] 棘轮通过（无计数下降、无基线内文件缺失）
  WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
-✨ Pixi task (surface-check in default): python ../scripts/surface_check.py --enforce: (HTTP wire 模型导出面完整性门（含 .env.example 键面复核）)
-[surface_check] app/api 引用模型 102 个；已登记 62 个；允许豁免 40 个
+✨ Pixi task (surface-check in default): python ../scripts/surface_check.py --enforce: (HTTP wire 模型导出面完整性门（含豁免规模棘轮与 .env.example 键面复核）)
+[surface_check] app/api 引用模型 102 个；已登记 62 个；允许豁免 40 个（清单 40 条 / max_entries=40）
 [surface_check] env 键面一致（686 行）
-[surface_check] 门禁通过（导出面与 env 键面完整）
+[surface_check] 门禁通过（导出面、豁免规模与 env 键面完整）
  WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
 ✨ Pixi task (prose-pin in default): python ../scripts/prose_pin_check.py: (prose-pin 启发式报告（Top-N + 结构断言占比；不阻断）)
-[prose_pin_check] 测试文件 194 份；含断言用例 2503 个；疑似 prose pin 字面量 483 个
+[prose_pin_check] 测试文件 194 份；含断言用例 2503 个；命中实现源字面量 483 个
+[prose_pin_check] 疑似 prose pin（prose 桶）38 个；分桶 prose=38, other=21, field_or_code=424
 [prose_pin_check] 纯结构断言用例 193 个（占比 7.7%——越高越不依赖文案）
-  - x51 'persona_id' @ backend/src/tests/integration/test_core_wiring.py:107
-  - x42 'VALIDATION_ERROR' @ backend/src/tests/unit/test_app_error_handler.py:128
-  - x30 'NOT_FOUND' @ backend/src/tests/unit/test_app_error_handler.py:82
-  - x28 'main-chat' @ backend/src/tests/unit/test_config_model_entry.py:43
-  - x24 'messages' @ backend/src/tests/unit/test_chat_cli.py:172
-  - x20 'properties' @ backend/src/tests/unit/test_llm_tool_calling.py:145
-  - x17 'CONFLICT' @ backend/src/tests/unit/test_app_error_handler.py:91
-  - x17 'bocha-main' @ backend/src/tests/unit/test_search_api.py:146
-  - x16 'zhipu-fallback' @ backend/src/tests/unit/test_search_api.py:147
-  - x15 'local-embed' @ backend/src/tests/unit/test_llm_embeddings.py:302
-  - x13 'LLM_CALL_FAILED' @ backend/src/tests/unit/test_chat_service.py:416
-  - x13 'created_at' @ backend/src/tests/integration_seekdb/test_migration_chain.py:91
-  - x13 'updated_at' @ backend/src/tests/integration_seekdb/test_migration_chain.py:92
-  - x12 'personality' @ backend/src/tests/unit/test_persona_api.py:211
-  - x11 'function' @ backend/src/tests/unit/test_core_logging.py:415
+  - [prose] x7 '不是合法 JSON' @ backend/src/tests/unit/test_dream_api.py:233
+  - [prose] x5 'prompt 模板' @ backend/src/tests/unit/test_chat_prompts.py:133
+  - [prose] x4 '必须是 JSON 数组' @ backend/src/tests/unit/test_dreaming.py:393
+  - [prose] x2 'LLM 传输失败' @ backend/src/tests/unit/test_llm_client.py:486
+  - [prose] x2 'ON DELETE CASCADE' @ backend/src/tests/unit/test_migration_chat_message_variants.py:76
+  - [prose] x2 "SELECT DBMS_HYBRID_SEARCH.SEARCH('ff_memory_index', %s)" @ backend/src/tests/unit/test_memory_retrieval_sql.py:271
+  - [prose] x2 'token 未配置' @ backend/src/tests/unit/test_tools_browser_sidecar_client.py:93
+  - [prose] x2 'wire 契约破坏' @ backend/src/tests/unit/test_tools_browser_sidecar_client.py:194
+  - [prose] x2 '当前情绪：愉悦↑' @ backend/src/tests/unit/test_chat_emotion.py:196
+  - [prose] x2 '我这边出了点问题，稍后再试' @ backend/src/tests/unit/test_channel_router_flow.py:407
+  - [prose] x1 '(%s, %s, %s, %s, %s, %s, %s, %s)' @ backend/src/tests/unit/test_memory_retrieval_sql.py:117
+  - [prose] x1 'Authorization: Bearer ***' @ backend/src/tests/unit/test_core_logging.py:196
+  - [prose] x1 'Bad request' @ backend/src/tests/unit/test_tg_client.py:192
+  - [prose] x1 'Bearer ***' @ backend/src/tests/unit/test_core_logging.py:235
+  - [prose] x1 'DELETE FROM ff_memory_index' @ backend/src/tests/unit/test_memory_seekdb_store.py:239
 [prose_pin_check] 报告完成（不阻断；exit 0）
