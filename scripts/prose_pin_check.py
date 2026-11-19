@@ -54,11 +54,8 @@ _MIN_LITERAL_CHARS = 8
 #: 自然语言，改它属于改契约而非改文案。
 _CODE_TOKEN_RE = re.compile(r"^[^\s\u4e00-\u9fff]+$")
 
-#: 句读标点：出现即视为自然语言句子（中文句读 + 英文句读 + 引号包裹的书名）。
-_PROSE_PUNCT = frozenset("，。！？；：、,.!?;:…—「」《》【】（）")
-
 #: 分桶名（报告与 Top-N 排序用）。
-_BUCKETS = ("prose", "other", "field_or_code")
+_BUCKETS = ("prose", "field_or_code")
 _STRUCTURAL_NODES = (
     ast.Assert,
     ast.Compare,
@@ -184,23 +181,22 @@ def _collect_file(
 
 
 def _classify_literal(literal: str) -> str:
-    """把命中文案分为 field_or_code / prose / other 三桶。
+    """把命中文案分为 field_or_code / prose 两桶。
+
+    ``_CODE_TOKEN_RE`` 的补集（含空白或 CJK）与 prose 桶完全等价，因此
+    不存在第三桶：不相交的判定语句对会留下不可达分支。
 
     Args:
         literal: 命中实现源码的测试字面量（已 strip）。
 
     Returns:
-        桶名。``field_or_code`` 指标识符 / 字典键 / UPPER_SNAKE / 带连字符
-        模型 ID 等代码形态；``prose`` 指含 CJK、空白多词或句读标点的自然语言；
-        ``other`` 指其余（例如不含空白、标点与 CJK 的单个 token）。
+        ``field_or_code`` 表示不含空白与 CJK 的单个代码 token（标识符 /
+        字典键 / UPPER_SNAKE / 带连字符模型 ID / MIME / SQL 片段）；
+        ``prose`` 表示含空白或 CJK 的自然语言文案。
     """
     if _CODE_TOKEN_RE.fullmatch(literal):
         return "field_or_code"
-    if any("\u4e00" <= ch <= "\u9fff" for ch in literal):
-        return "prose"
-    if any(ch.isspace() for ch in literal) or any(ch in _PROSE_PUNCT for ch in literal):
-        return "prose"
-    return "other"
+    return "prose"
 
 
 def _report(stats: ProsePinStats, top: int) -> None:

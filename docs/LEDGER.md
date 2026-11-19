@@ -329,7 +329,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 - `cd backend && pixi run verify-slice -- --slice r2-hardening` → 0：tests-all **2808 passed**；coverage-gates **24 组 ≥80%**；lint `All checks passed!`；typecheck `Success: no issues found in 191 source files`；gates 尾标记命中。证据包 `docs/evidence/r2-hardening-ab346493.json`（sha8=`ab346493`）。
 - `cd backend && pixi run red-probe --all` → 0：3/3 `RED`（flow_gate / persona_rotation / compliance_guard 删实现后对应用例失败）。
 - `cd backend && pixi run red-probe-gate` → 0：源文件 190 / 冻结基线 190 / probe 3。
-- 根 `pixi run gates` → 0：注释门 violations=0；同步测试棘轮 +0；noqa 冻结 0 / 0 / 0 / 7 / 0（scripts 存量 7 未新增）；沙盒漂移 38 项一致；红探针门；文档真相；断言棘轮 8012 asserts / 593 raises / 190 文件；导出面（102 引用 / 62 已登记 / 40 豁免）与 env 键面（686 行）；prose-pin 命中实现源字面量 483 个，分桶 field_or_code=424 / prose=59 / other=0——「疑似 prose pin」按 prose 桶计 **59** 个（CJK 文案归入 prose 桶后修订）（原「483 疑似」是未分桶的命中总数），纯结构断言 7.7%。
+- 根 `pixi run gates` → 0：注释门 violations=0；同步测试棘轮 +0；noqa 冻结 0 / 0 / 0 / 7 / 0（scripts 存量 7 未新增）；沙盒漂移 38 项一致；红探针门；文档真相；断言棘轮 8012 asserts / 593 raises / 190 文件；导出面（102 引用 / 62 已登记 / 40 豁免）与 env 键面（686 行）；prose-pin 命中实现源字面量 483 个，分桶 field_or_code=424 / prose=59——「疑似 prose pin」按 prose 桶计 **59** 个（CJK 文案归入 prose 桶后修订；不可达的 other 桶已删除；原「483 疑似」是未分桶的命中总数），纯结构断言 7.7%。
 - 可选步骤验证：`cd backend && pixi run verify-slice -- --with-seekdb --only tests-seekdb` → 0（活 SeekDB 6 passed）；`--with-frontend --only frontend-test,frontend-coverage,frontend-lint,frontend-build` → 0（666 passed / statements 95.98% / lint / build），两条可选链路均已按摘要校验跑通。
 - 基线文件：`backend/red_manifest.toml` 190；`scripts/.assertion_baseline.json` 190 文件 / 8012 / 593；`scripts/.todo_baseline.json` 总数 7；`scripts/.surface_allowlist.json` 40 条。全部只降不升，更新入口分别为 `--prune` / `--update` / `--update`。
 - 存量问题处理：40 个未导出面（22 个 DTO / 结果模型 + 18 个 StrEnum 值域）按类别登记允许清单并写明 reason（声纹 PIPL 面、搜索管理面、语音 / 健康 / QQ webhook 等前端未建契约；`EpisodeBatchDelete*` 已由前端别名消费；枚举值域不进 BaseModel schema 导出器），未扩散修改前端契约；prose-pin 报告保留协议字段名类命中（启发式口径透明，不阻断）。
@@ -341,7 +341,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 1. 断言棘轮整删漏检（P1）：`scripts/assertion_freeze.py` 在 `--enforce` 下把「基线内路径但当前扫描缺失」计入 drops 并 exit 1（明细「基线内测试文件缺失（整删须 --update 重建基线）」），与计数下降同口径；报告模式仍只报告；合法整删必须 `--update` 重建基线。
 2. 证据 sha 含 egg-info（P1）：`scripts/verify_slice.py` 的 `_iter_hash_files` 跳过任一路径段以 `.egg-info` 结尾的条目（与 `red_probe.py` 复制副本的 `*.egg-info` ignore 口径一致），sha8 不再随 editable 安装漂移；删除孤儿证据 `docs/evidence/r2-hardening-main-ab346493.json` 与其 5 份日志，仅保留 canonical 证据与重跑产物。
 3. ad-hoc 探针（P2）：`scripts/red_probe.py --symbol <module:attr> --tests <nodeid[,...]>` 构造一次性探针（不读不写 manifest，先校验符号与 node id 存在）；省略 `--tests` 时保持清单查找语义。
-4. prose-pin 分桶（P2）：`scripts/prose_pin_check.py` 把命中文案分三桶——`field_or_code`（无空白无 CJK 的单 token：标识符 / 字典键 / UPPER_SNAKE / 带连字符模型 ID / MIME / 路径）、`prose`（含空白多词或句读标点的自然语言）、`other`；「疑似 prose pin」只统计 prose 桶，Top-N prose 桶优先并逐条标注桶名。
+4. prose-pin 分桶（P2）：`scripts/prose_pin_check.py` 把命中文案分三桶——`field_or_code`（无空白无 CJK 的单 token：标识符 / 字典键 / UPPER_SNAKE / 带连字符模型 ID / MIME / 路径）、`prose`（含空白或 CJK 的自然语言）；「疑似 prose pin」只统计 prose 桶，Top-N prose 桶优先并逐条标注桶名；原第三桶 `other` 因与 prose 桶判定域完全重合、分支不可达而在复审后删除。
 5. 孤儿证据与入库口径（P2）：新增 `docs/evidence/README.md`，`.gitignore` 证据段加注——仅 canonical slice 证据入库，`--only` 调试 / 手工探针证据不必提交。
 6. 允许清单规模棘轮（P2）：`scripts/.surface_allowlist.json` 增加 `max_entries`（当前 40）；`surface_check.py --enforce` 在条目数 > 上限时 exit 1，`--update` 重建清单并写 `max_entries=当前条目数`（对现有 40 条 byte-identical，重跑无 diff），陈旧条目报告逻辑保留。
 7. 常量探针假红（P2）：模块级常量改惰性占位（导入期不抛；属性访问 / 调用 / 迭代 / 比较 / 运算时抛，`repr` 不抛以免破坏 pytest 内省）；探针输出 `errors>0 且 failed==0` 时打印「疑似导入期假红（collection error 主导）」警示，仍计红。
@@ -354,15 +354,15 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 - 常量惰性桩：`pixi run red-probe --symbol packages.harness.core.enums:SUPPORTED_LOCALES --tests tests/unit/test_core_enums.py::TestLocale::test_supported_locales_frozenset` → 0，`RED (failed=1, errors=0)`（断言级红，非导入崩）。
 - 导入期假红标注（/tmp 最小副本：常量在导入期被 `LIMIT + 1` 消费）→ 0，`RED (exit=4, failed=0, errors=1)` 且输出「警示 …: 疑似导入期假红（collection error 主导）」。
 - 允许清单棘轮：临时加第 41 条（`max_entries` 仍 40）后 `pixi run surface-check` → **1**（「允许清单条目 41 > max_entries 40」）；恢复后 → 0；`--update` 重跑 `diff` 无差异（byte-identical）。
-- 根 `pixi run gates` → 0：注释门 violations=0（hints=30）；同步测试棘轮通过；noqa 冻结 0 / 0 / 0 / 7 / 0；沙盒漂移 38 项一致；红探针门（190 / 190 / 3）；文档真相通过；断言棘轮 8012 asserts / 593 raises / 190 文件（无缺失）；导出面 102 引用 / 62 已登记 / 40 豁免（清单 40 条 / max_entries=40）与 env 键面 686 行；prose-pin 命中 483，分桶 prose=59 / other=0 / field_or_code=424（CJK 文案归入 prose 桶后修订）。
+- 根 `pixi run gates` → 0：注释门 violations=0（hints=30）；同步测试棘轮通过；noqa 冻结 0 / 0 / 0 / 7 / 0；沙盒漂移 38 项一致；红探针门（190 / 190 / 3）；文档真相通过；断言棘轮 8012 asserts / 593 raises / 190 文件（无缺失）；导出面 102 引用 / 62 已登记 / 40 豁免（清单 40 条 / max_entries=40）与 env 键面 686 行；prose-pin 命中 483，分桶 prose=59 / field_or_code=424（CJK 文案归入 prose 桶后修订；不可达的 other 桶已删除）。
 - `cd backend && pixi run verify-slice -- --slice r2-hardening` → 0（tests-all **2808 passed** / coverage-gates **24 组 ≥80%** / lint / typecheck 191 源文件 / gates 全步摘要命中），证据包 `docs/evidence/r2-hardening-55a44a52.json`（sha8=`55a44a52`，640 文件，`result=pass`、`failed_steps=[]`、全部 `summary_matched=true`）。
 - 复算：`cd backend && pixi run verify-slice -- --hash-only` → `sha8=55a44a52 files=640`；把源码拷到不含 `*.egg-info` 的干净副本（`rsync` 排除 `.pixi` / `.git` / `node_modules` / `__pycache__` / `*.egg-info` / 缓存与覆盖产物）后在该副本 `cd backend && pixi run verify-slice -- --hash-only` → 同为 `sha8=55a44a52 files=640`（pixi install 在副本里重新生成了 `.egg-info`，标识仍不变，证明剔除口径生效）。
 
 ### 已完成切片：加固门禁复审残留闭环（Oracle 复审第 3 轮 P2×2）
 
-- prose 分桶：含 CJK 文案统一归入 prose 桶，全角括号 `【】（）` 补入句读标点；重跑 `pixi run prose-pin` → 命中 483（分桶 prose=59 / other=0 / field_or_code=424），纯结构断言 193 例 / 7.7%。
+- prose 分桶：含 CJK 文案统一归入 prose 桶，全角括号 `【】（）` 补入句读标点；重跑 `pixi run prose-pin` → 命中 483（分桶 prose=59 / field_or_code=424），纯结构断言 193 例 / 7.7%；不可达的 `other` 桶已从实现与报告删除。
 - 证据目录说明：`docs/evidence/README.md` 增补「`ab346493` 及更早 sha8 由旧哈希口径（含 `.egg-info`）计算，不能用当前代码复算，仅作历史留档」。
-- `cd backend && pixi run verify-slice -- --slice r2-hardening` → 0（tests-all 2808 passed / coverage 24 组 / lint / typecheck 191 源文件 / gates 全步摘要命中），证据包 `docs/evidence/r2-hardening-afaaf9a9.json`（sha8=`afaaf9a9`）；`55a44a52` 作为上一提交的历史证据保留，按 README 口径只认与当前 `--hash-only` 一致的一份。
+- `cd backend && pixi run verify-slice -- --slice r2-hardening` → 0（tests-all 2808 passed / coverage 24 组 / lint / typecheck 191 源文件 / gates 全步摘要命中），证据包 `docs/evidence/r2-hardening-c524502a.json`（sha8=`c524502a`，本提交为当前 canonical）；`afaaf9a9` / `55a44a52` / `ab346493` 作为前序提交的历史证据保留，按 README 口径只认与当前 `--hash-only` 一致的一份。
 
 ## 6. 遗留与部署台账（非阻塞）
 
