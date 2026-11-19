@@ -9,7 +9,8 @@
     - 无循环：两次都违规 → 只发生一次重试，第二次结果无条件采用；
     - 开关：守卫停用 / 重试次数 0 / 合规首次回复 → 均只有一次网关调用；
     - 协议面：重试文本照常经输出协议解析（心声不入可见正文与回合）；
-    - 工具循环分支：重试请求不带 tool 轮、不携带工具面；
+    - 工具循环分支：重试请求保留 assistant 工具调用轮与已包裹 tool 轮、
+      不携带工具面（不重跑工具）；
     - 流式：stream_reply 不重试（单次流式调用，零非流式调用）。
 """
 
@@ -292,8 +293,8 @@ async def test_reply_retry_uses_configured_bump() -> None:
     assert gateway.chat_calls[1]["params"].temperature == pytest.approx(1.2)
 
 
-async def test_tool_loop_retry_drops_tool_rounds_and_tool_surface() -> None:
-    """工具循环分支：重试只带组装消息 + 提醒块，不带 tool 轮与工具面。"""
+async def test_tool_loop_retry_keeps_tool_evidence_without_tool_surface() -> None:
+    """工具循环分支：重试保留工具轮证据与包裹，但不带工具面、不重跑工具。"""
     gateway = ScriptedGateway(
         [
             ChatResponseModel(
@@ -318,8 +319,23 @@ async def test_tool_loop_retry_drops_tool_rounds_and_tool_surface() -> None:
     assert content == _COMPLIANT_TEXT
     assert len(gateway.chat_calls) == 3
     retry = gateway.chat_calls[2]
-    assert all(message.role != ChatMessageRole.TOOL for message in retry["messages"])
-    assert retry["messages"][-1].content == render_compliance_nudge("大肥鱼")
+    retry_messages = retry["messages"]
+    assert retry_messages[-1].content == render_compliance_nudge("大肥鱼")
+    tool_rounds = [
+        message for message in retry_messages if message.role == ChatMessageRole.TOOL
+    ]
+    assert len(tool_rounds) == 1
+    assert tool_rounds[0].tool_call_id == "c1"
+    assert tool_rounds[0].content.startswith("[[[内容开始 ")
+    assistant_tool_calls = [
+        message
+        for message in retry_messages
+        if message.role == ChatMessageRole.ASSISTANT and message.tool_calls
+    ]
+    assert len(assistant_tool_calls) == 1
+    assistant_round = assistant_tool_calls[0]
+    assert assistant_round.tool_calls is not None
+    assert assistant_round.tool_calls[0].id == "c1"
     assert retry["kwargs"].get("tools") is None
     assert retry["params"].temperature == pytest.approx(1.0)
 

@@ -29,6 +29,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from packages.harness.chat.chat_models import ChatSessionStateModel
+from packages.harness.chat.service import compose_messages
 from packages.harness.persona.chara_card import CharaBookEntryModel
 from packages.harness.persona.trait_library import (
     SceneScriptSetModel,
@@ -143,7 +145,12 @@ async def test_generate_card_basic_composition() -> None:
     assert result.warnings == []
     assert result.card.name == "小测"
     assert result.card.personality == "测试预设描述；碎片一；碎片二"
-    assert result.card.system_prompt == "指令一\n指令二\n指令三"
+    prompt = result.card.system_prompt
+    assert prompt.startswith("你现在扮演「小测」")
+    assert "【角色设定】\n测试预设描述" in prompt
+    assert "【性格特点】\n碎片一；碎片二" in prompt
+    assert prompt.index("【角色设定】") < prompt.index("【性格特点】") < prompt.index("指令一")
+    assert "指令一\n指令二\n指令三" in prompt
     assert result.card.mes_example == "<START>\n小测: 台词一\n<START>\n小测: 台词二"
     assert result.card.character_book is None
 
@@ -196,7 +203,10 @@ async def test_generate_card_overrides_merge() -> None:
     )
     result = generate_card_from_preset(preset, registry, base_name="小测")
     assert result.card.personality == "测试预设描述；预设补充性格；碎片"
-    assert result.card.system_prompt == "指令\n预设提示行"
+    prompt = result.card.system_prompt
+    assert "【角色设定】\n测试预设描述" in prompt
+    assert "【性格特点】\n预设补充性格；碎片" in prompt
+    assert prompt.index("【性格特点】") < prompt.index("指令") < prompt.index("预设提示行")
     assert result.card.mes_example == "预设示例\n<START>\n小测: 台词"
 
 
@@ -802,12 +812,35 @@ async def test_generate_renders_scene_scripts_into_system_prompt() -> None:
     )
     result = generate_card_from_preset(preset, registry, base_name="小测")
     lines = result.card.system_prompt.splitlines()
-    assert lines[0] == "基础指令"
+    assert lines[0].startswith("你现在扮演「小测」")
+    assert "基础指令" in lines
     assert "【日常】" in lines and "【暧昧】" in lines
     assert "【亲密】" in lines and "【冲突】" in lines
+    assert lines.index("基础指令") < lines.index("【日常】")
     assert lines.index("【日常】") < lines.index("【暧昧】") < lines.index("【亲密】") < lines.index(
         "【冲突】"
     )
+
+
+async def test_tsundere_preset_composes_into_system_message_with_persona_body() -> None:
+    """集成：傲娇预设生成的覆写卡经 compose 仍携带人格碎片与场景段。"""
+    presets = load_official_presets()
+    registry = load_official_components()
+    tsundere = next(preset for preset in presets if preset.id == "tsundere")
+    result = generate_card_from_preset(tsundere, registry, base_name="小傲")
+    card = result.card
+    assert card.system_prompt.startswith("你现在扮演「小傲」")
+    assert "【角色设定】" in card.system_prompt
+    assert "【性格特点】" in card.system_prompt
+
+    state = ChatSessionStateModel(persona_id=1, persona_name="tsundere", card=card)
+    composed = compose_messages(state)
+    system = composed.messages[0].content
+    assert card.system_prompt in system
+    for fragment in card.personality.split("；"):
+        assert fragment in system
+    for scene_label in ("【日常】", "【暧昧】", "【亲密】", "【冲突】"):
+        assert scene_label in system
 
 
 async def test_generate_caps_mes_example_lines() -> None:

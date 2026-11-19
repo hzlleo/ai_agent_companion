@@ -73,7 +73,7 @@ app 装配从 `Settings.llm.top_logprobs` / `Settings.llm.prompt_logprobs`
 |---|---|---|---|
 | `LLM_INTIMATE_ENABLED` | `enabled` | `false` | 全局开关；与配置齐全性同时为真才可能被路由选中 |
 | `LLM_INTIMATE_BASE_URL` | `base_url` | 空 | 亲密端点根路径（含 `/v1`；空 = 未配置） |
-| `LLM_INTIMATE_API_KEY` | `api_key` | 空 | 亲密端点凭据（`SecretStr`；空 = 未配置；**不回落**全局 `LLM_API_KEY`） |
+| `LLM_INTIMATE_API_KEY` | `api_key` | 空 | 亲密端点凭据（`SecretStr`；装载期去除首尾空白，仅空白 = 未配置；**不回落**全局 `LLM_API_KEY`） |
 | `LLM_INTIMATE_MODEL` | `model` | 空 | 亲密端点模型名（空 = 未配置） |
 | `LLM_INTIMATE_TEMPERATURE` | `temperature` | 空 | 通道缺省采样温度（0-2；空 = 不注入；调用方显式 temperature 优先） |
 | `LLM_INTIMATE_MIN_INTIMACY_LEVEL` | `min_intimacy_level` | `2` | 触发通道的最低亲密等级（0-3，与关系摘要 `intimacy_level` 同轴） |
@@ -108,6 +108,9 @@ app 装配从 `Settings.llm.top_logprobs` / `Settings.llm.prompt_logprobs`
 
 关系摘要读取失败时 chat 域降级为空摘要（stranger / 0），因此该回合按
 `below_threshold` 回退默认通道——亲密通道不自行读库、不猜关系状态。
+`reply` 与 swipes 变体重生成同源：两者都经事实读取面派生关系摘要并把
+`intimacy_level` 传给网关；swipe 的关系读取面未接线时输入为 `None`，读取失败
+按空摘要（0）降级——均回退默认通道。
 
 ### 命中时链路
 

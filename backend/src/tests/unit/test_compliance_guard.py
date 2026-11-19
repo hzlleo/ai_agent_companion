@@ -3,9 +3,10 @@
 覆盖矩阵：
 
     - 检测：空文本 / 纯空白未命中；四类信号各自可命中；AI 自我声明单条即
-      达阈值；道歉开场 / 助手话术 / 短回复总结腔单条不达；道歉 + 总结腔
-      叠加达阈值；总结腔只在短回复内生效；道歉判定剥离开头协议标签、句中
-      道歉不算开场；正常角色台词零误报；阈值可显式覆盖；结果确定性；
+      达阈值（含全角与零宽插入变形）；道歉开场 / 助手话术 / 短回复总结腔
+      单条不达；道歉 + 总结腔叠加达阈值；总结腔只在短回复内生效；道歉判定
+      剥离开头协议标签、句中道歉不算开场；正常角色台词零误报；阈值可显式
+      覆盖；结果确定性；留证片段取自归一副本；
     - 参数：未携带参数时按基线构建；请求自带温度时以其为基线并保留其余
       字段；增量叠加夹取 2.0 上限；
     - 配置：缺省值锁定（启用 / 阈值 / 增量 / 重试次数）+ ``COMPLIANCE_``
@@ -44,6 +45,8 @@ async def test_detect_blank_text_not_violated() -> None:
         "我只是一个程序，没有真正的感受。",
         "我不是真正的人类，但我会认真听你说。",
         "As an AI, I cannot eat fish snacks.",
+        "作为一个ＡＩ，我觉得你该早点睡了。",
+        "作\u200b为\u200b一个\u200bAI，我建议你早点休息。",
     ],
 )
 async def test_detect_ai_disclaimer_triggers_alone(text: str) -> None:
@@ -52,6 +55,12 @@ async def test_detect_ai_disclaimer_triggers_alone(text: str) -> None:
     assert signal.violated is True
     assert signal.score == DEFAULT_COMPLIANCE_THRESHOLD
     assert [reason.kind for reason in signal.reasons] == [ComplianceKind.AI_DISCLAIMER]
+
+
+async def test_detect_evidence_uses_normalized_copy() -> None:
+    """命中留证取自归一副本（全角 / 零宽变形还原后的文本）。"""
+    signal = detect_assistant_violation("作\u200b为一个ＡＩ，我建议你早点休息。")
+    assert signal.reasons[0].matched == "作为一个AI"
 
 
 async def test_detect_apology_opening_scores_without_trigger() -> None:

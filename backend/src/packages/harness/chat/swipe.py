@@ -7,13 +7,16 @@
       正典正文，因此会自然进入后续回合的上下文）；
     - **生成路径**：与 ``ChatService.reply`` 同构的组装链（同一
       :func:`~packages.harness.chat.service.compose_messages`——人格 /
-      卡片 / 世界书 / 心情摘要全量复用，prompt 文本零变更）+ 网关
-      ``chat_by_role``（chat 角色 / ``purpose="chat"`` / persona_id 显式
-      直传）；**不装载工具面**（单轮候选生成——工具循环属 reply 的回合
-      语义）；末位 user 回合沿用组装链的注入防御开关（定界包裹 + 检测
-      提示；无来源分级信息时标签取 ``UNTRUSTED_LABEL_DEFAULT``，台词取
-      缺省风格——本服务不持有 ``INJECTION_`` 配置，检测阈值与风格用模块
-      缺省，见 docs/backend/defense.md）；
+      卡片 / 世界书 / 心情摘要 / 关系进展全量复用，prompt 文本零变更）+
+      网关 ``chat_by_role``（chat 角色 / ``purpose="chat"`` / persona_id
+      显式直传 / 派生 ``intimacy_level`` 原样透传——端点裁决在 llm 网关）；
+      **不装载工具面**（单轮候选生成——工具循环属 reply 的回合语义）；
+      关系摘要经既有事实读取面与 ``build_relationship_summary`` 派生，
+      读取面未接线时不注入关系块且路由输入为 None、读取失败降级空摘要；
+      末位 user 回合沿用组装链的注入防御开关（定界包裹 + 检测提示；无
+      来源分级信息时标签取 ``UNTRUSTED_LABEL_DEFAULT``，台词取缺省风格
+      ——本服务不持有 ``INJECTION_`` 配置，检测阈值与风格用模块缺省，见
+      docs/backend/defense.md）；
     - **协议面**：每个候选独立经 ``parse_assistant_output`` 解析——可见
       正文落变体行 content，心声 / 情绪增量落 meta（附 ``variant_index``）；
       变体情绪增量**不推进共享 M 态**（swipes 是探索面——只有选定变体经
@@ -43,8 +46,14 @@ from packages.harness.chat.injection_guard import build_injection_hint, detect_i
 from packages.harness.chat.injection_models import CounterStyle
 from packages.harness.chat.output_protocol import parse_assistant_output
 from packages.harness.chat.prompts import UNTRUSTED_LABEL_DEFAULT
-from packages.harness.chat.service import CHAT_PURPOSE, compose_messages
+from packages.harness.chat.service import (
+    CHAT_PURPOSE,
+    FactsReaderFace,
+    compose_messages,
+    derive_relationship_summary,
+)
 from packages.harness.config.model_entry import ModelRole
+from packages.harness.core import time_utils
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.emotion.service import EmotionService
 from packages.harness.llm.gateway import LlmGateway
@@ -53,6 +62,13 @@ from packages.harness.memory.dtos import ChatMessageDTO
 from packages.harness.memory.orm import ChatMessageRow
 from packages.harness.memory.service import ChatSessionService
 from packages.harness.persona.dtos import PersonaRecordDTO
+from packages.harness.persona.relationship import empty_relationship_summary
+from packages.harness.persona.relationship_models import (
+    DEFAULT_RELATIONSHIP_THRESHOLDS,
+    RelationshipSummaryModel,
+    RelationshipThresholdsModel,
+)
+from packages.harness.persona.service import bind_persona_context
 
 __all__ = ["SwipeService"]
 
@@ -71,6 +87,8 @@ class SwipeService:
         gateway: LlmGateway,
         session_service: ChatSessionService,
         emotion_service: EmotionService | None = None,
+        facts_reader: FactsReaderFace | None = None,
+        relationship_thresholds: RelationshipThresholdsModel | None = None,
     ) -> None:
         """初始化服务。
 
@@ -80,11 +98,20 @@ class SwipeService:
                 替换的唯一通道）。
             emotion_service: 轻情绪引擎（None = 现场构造默认实例——读
                 ``EMOTION_`` env；用于组装心情摘要与选定时的 M 态推进）。
+            facts_reader: 人物事实读取面（None = 未接线——不注入关系进展
+                块、亲密通道路由输入为 None，与既有降级语义一致）。
+            relationship_thresholds: 关系进展阈值表（None = 锁定缺省表）。
         """
         self._gateway = gateway
         self._session_service = session_service
         self._emotion_service = (
             emotion_service if emotion_service is not None else EmotionService()
+        )
+        self._facts_reader = facts_reader
+        self._relationship_thresholds = (
+            relationship_thresholds
+            if relationship_thresholds is not None
+            else DEFAULT_RELATIONSHIP_THRESHOLDS
         )
 
     # ------------------------------------------------------------------
@@ -160,6 +187,26 @@ class SwipeService:
             if self._emotion_service.enabled
             else None
         )
+        relationship: RelationshipSummaryModel | None = None
+        if self._facts_reader is not None:
+            now_ms = time_utils.now_ms()
+            try:
+                async with bind_persona_context(persona.id):
+                    relationship = await derive_relationship_summary(
+                        db_session,
+                        self._facts_reader,
+                        now_ms=now_ms,
+                        thresholds=self._relationship_thresholds,
+                    )
+            except Exception:  # best-effort：派生失败降级空摘要，不阻断变体生成
+                logger.opt(exception=True).warning(
+                    "变体重生成的关系进展派生失败（降级为空摘要）: persona_id={}",
+                    persona.id,
+                )
+                relationship = empty_relationship_summary(
+                    now_ms=now_ms, thresholds=self._relationship_thresholds
+                )
+        intimacy_level = relationship.intimacy_level if relationship is not None else None
         last_turn = state.turns[-1] if state.turns else None
         injection_hint: str | None = None
         if last_turn is not None and last_turn.role == ChatMessageRole.USER:
@@ -171,6 +218,7 @@ class SwipeService:
         composition = compose_messages(
             state,
             emotion_summary=emotion_summary,
+            relationship=relationship,
             wrap_current_message=True,
             current_message_label=UNTRUSTED_LABEL_DEFAULT,
             injection_hint=injection_hint,
@@ -182,6 +230,7 @@ class SwipeService:
                 composition.messages,
                 persona_id=str(persona.id),
                 purpose=CHAT_PURPOSE,
+                intimacy_level=intimacy_level,
             )
             parsed = parse_assistant_output(response.content)
             if not parsed.visible_text:

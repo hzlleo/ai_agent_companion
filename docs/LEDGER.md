@@ -171,6 +171,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 4. 测试：`test_relationship_summary.py`（派生矩阵 31 例（23 个用例含参数化）：空事实 / 混类与历史过滤 / 阶梯上下沿 / 衰减档边界与未来时间戳 / 夹取与阶段回落 / 事件裁剪顺序 / 边界上限 / 确定性 / 时间轴拒绝 / 阈值表不变式）+ `test_chat_relationship.py`（渲染 7 例 / 链序 2 例 / 服务集成 8 例：正常注入 / 阈值注入 / 读失败降级 / 未接线 / 纯内存零 I/O / 流式 / 工具循环 / 合规重试）+ prompts byte-lock 增补。
 5. docs：persona.md 关系进展摘要一节（来源 / 公式与阈值表 / 衰减档 / 夹取语义 / 注入位置 / 降级行为 / JSON 示例）、chat.md 组装链十六段完整重写与关系进展块示例、backend README 行、本台账状态行。
 **验证**（主 Agent 终验，全部经 pixi）：后端 2573 passed（新增 116 条企微用例）/ 23 组覆盖率门禁（harness/channels 97.0%、app/main 89.8%）/ mypy 175 文件零问题 / ruff 零问题 / 门禁链全绿（注释门 violations=0、同步测试棘轮 +0、noqa 冻结 0、沙盒漂移 36 项一致）/ `gen-examples` 再生成 byte-stable（仅 CHANNELS.WECOM 分节 39 行）。示意命令：`cd backend && pixi run tests-all`、`pixi run coverage-gates`、`pixi run lint`、`pixi run typecheck`、根 `pixi run gates`、根 `pixi run gen-examples`。
+**Oracle 深审修复批次（R2b+，P1/P2 全闭环）**：预设生成的 `system_prompt` 改为自包含覆写形态（名字头 /【角色设定】/【性格特点】/ 语气指令 / 四态场景脚本；`personality` 字段仍保留供 UI / 编辑面——覆写路径已修为含人格主体）；工具循环的合规重试基底保留 assistant 工具调用轮与已包裹 tool 轮（不携带工具面、不重跑工具）；swipe 变体重生成派生关系摘要并传 `intimacy_level`（与 reply 同语义）；config.md 补 INJECTION / COMPLIANCE / LLM.INTIMATE 分节；`LLM_INTIMATE_API_KEY` 装载期 strip（仅空白 = 未配置）；合规检测与注入守卫共用归一副本（全角 / 零宽变形不绕过）。**`mes_example` few-shot 注入仍为台账遗留**（本批未改）。
 
 ### 已完成切片：R2b+ 组件库 A + 成熟度分层（亲密补强）
 **已完成**：

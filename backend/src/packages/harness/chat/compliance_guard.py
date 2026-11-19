@@ -11,11 +11,17 @@
 触发，需与另一信号叠加。误伤代价是一轮多余生成，因此宁可漏一次重试，也
 不把角色真的在道歉、真的在收尾的正常回复反复重写。
 
+匹配前归一（锁定）：检测在**归一副本**上进行（与注入守卫共用
+:func:`~packages.harness.chat.text_normalization.normalize_for_matching`
+——NFKC 折叠全角 / 兼容字符、剔除零宽字符、空白折叠为单空格）；命中留证
+片段也取自该归一副本。原文不参与匹配，因此全角「ＡＩ」与零宽插入都不会
+绕过规则表，留证与判定文本同源。
+
 匹配细节（锁定）：每条规则对全文最多计一次权重（重复措辞不堆分）；总结腔
-类规则只在短回复（``max_chars`` 上限内）生效；道歉开场先剥掉开头的输出
-协议标签再判首字（模型常把 ``<心声>`` 写在最前，正文本体才是被听的那句）。
-检测只提示重试、不删改文本：重试结果无条件接受，重试后仍失守也照常进入
-解析与落回合——守卫不做二次判定、不循环。
+类规则只在短回复（``max_chars`` 上限内，长度按归一副本计）生效；道歉开场
+先剥掉开头的输出协议标签再判首字（模型常把 ``<心声>`` 写在最前，正文本体
+才是被听的那句）。检测只提示重试、不删改文本：重试结果无条件接受，重试后
+仍失守也照常进入解析与落回合——守卫不做二次判定、不循环。
 
 确定性：纯字符串匹配，不消耗随机源；同一文本多次检测结果一致。
 """
@@ -29,6 +35,7 @@ from packages.harness.chat.compliance_models import (
     ComplianceReasonModel,
     ComplianceSignalModel,
 )
+from packages.harness.chat.text_normalization import normalize_for_matching
 from packages.harness.llm.llm_models import ChatRequestParams
 
 __all__ = [
@@ -68,7 +75,7 @@ def _strip_leading_protocol_tags(text: str) -> str:
     """剥掉开头的输出协议标签，返回被听到的正文起点。
 
     Args:
-        text: 模型原始输出（可能以 ``<心声>`` / ``<情绪>`` 块开头）。
+        text: 归一副本（可能以 ``<心声>`` / ``<情绪>`` 块开头）。
 
     Returns:
         去掉开头协议标签与紧邻空白后的文本（无标签时原样返回）。
@@ -98,12 +105,19 @@ def detect_assistant_violation(
     """
     if not text or not text.strip():
         return ComplianceSignalModel()
+    normalized = normalize_for_matching(text)
+    if not normalized:
+        return ComplianceSignalModel()
     reasons: list[ComplianceReasonModel] = []
     score = 0.0
     for rule in COMPLIANCE_RULES:
-        if rule.max_chars is not None and len(text) > rule.max_chars:
+        if rule.max_chars is not None and len(normalized) > rule.max_chars:
             continue
-        target = _strip_leading_protocol_tags(text) if rule.strip_leading_tags else text
+        target = (
+            _strip_leading_protocol_tags(normalized)
+            if rule.strip_leading_tags
+            else normalized
+        )
         match = rule.pattern.search(target)
         if match is None:
             continue

@@ -3,7 +3,8 @@
 测试策略：共享 SQLite 引擎 + 真实 ChatSessionService + 脚本化假网关（零
 网络）+ 假情绪引擎（记录推进调用）。覆盖面：候选落库形态（共享父 seq /
 variant_index 续编 / meta 协议数据 / 快照恒 None）/ 上下文只回放正典脊柱
-（父回合之后回合与既有变体不进入组装）/ 父回合语义校验（非 assistant /
+（父回合之后回合与既有变体不进入组装）/ 关系进展摘要与亲密通道路由
+输入（高亲密事实 → 关系块 + intimacy_level）/ 父回合语义校验（非 assistant /
 变体 / 他会话）/ 空正文整体失败零残留 / 选定提升（正文替换 + 单次 M 态
 推进 + selected_variant_id 注记 + 变体行保留）/ 会话详情 include_variants
 嵌套与默认排除 / 引擎停用零推进。
@@ -31,6 +32,8 @@ from packages.harness.memory.dtos import (
 from packages.harness.memory.orm import ChatMessageRow
 from packages.harness.memory.service import ChatSessionService
 from packages.harness.persona.dtos import PersonaCreateDTO, PersonaRecordDTO
+from packages.harness.persona.facts import FactsService
+from packages.harness.persona.facts_models import FactCreateDTO, PersonaFactCategory
 from packages.harness.persona.service import PersonaService, bind_persona_context
 
 
@@ -280,6 +283,43 @@ async def test_regenerate_context_is_canonical_spine_only(swipe_env: SwipeEnv) -
     follow_up_messages = second.chat_calls[0]["messages"][1:]
     assert len(follow_up_messages) == 1
     assert "第一句" in follow_up_messages[0].content
+
+
+async def test_regenerate_derives_relationship_and_routes_intimate(
+    swipe_env: SwipeEnv,
+) -> None:
+    """高亲密事实：组装注入关系进展块，并把派生等级传给亲密通道路由。"""
+    facts = FactsService()
+    async with bind_persona_context(swipe_env.persona.id):
+        for index, content in enumerate(
+            ("主人喜欢被叫小名", "两人已经习惯拥抱", "约定吵架不过夜")
+        ):
+            await facts.upsert_fact(
+                swipe_env.db_session,
+                FactCreateDTO(
+                    category=PersonaFactCategory.RELATIONSHIP,
+                    content=f"{content}-{index}",
+                    confidence=1.0,
+                ),
+            )
+    gateway = ScriptedGateway(["候选一"])
+    service = SwipeService(
+        gateway=gateway,
+        session_service=swipe_env.session_service,
+        emotion_service=FakeEmotionService(),
+        facts_reader=facts,
+    )
+    await service.regenerate_variants(
+        swipe_env.db_session,
+        session_id=swipe_env.session_id,
+        parent_message_id=swipe_env.parent_id,
+        persona=swipe_env.persona,
+        count=1,
+    )
+    sent = gateway.chat_calls[0]["messages"]
+    assert "【关系进展】" in sent[0].content
+    assert "亲密等级 3/3" in sent[0].content
+    assert gateway.chat_calls[0]["intimacy_level"] == 3
 
 
 async def test_regenerate_wraps_last_user_turn_and_adds_injection_hint(

@@ -29,7 +29,6 @@ nonce，消费方可据此断言。
 from __future__ import annotations
 
 import secrets
-import unicodedata
 
 from packages.harness.chat.injection_counter_texts import pick_counter_text
 from packages.harness.chat.injection_models import (
@@ -40,6 +39,7 @@ from packages.harness.chat.injection_models import (
     WrappedContentModel,
 )
 from packages.harness.chat.prompts import render_injection_hint, render_untrusted_wrapper
+from packages.harness.chat.text_normalization import normalize_for_matching
 
 __all__ = [
     "NONCE_HEX_BYTES",
@@ -59,27 +59,6 @@ NONCE_MAX_ATTEMPTS: int = 8
 
 #: 检测触发阈值缺省值（保守——单一弱信号不触发；见模块 docstring）。
 DEFAULT_INJECTION_THRESHOLD: float = 2.0
-
-#: 检测前需要剔除的零宽字符（不可见字符可插入关键词中间绕过字面规则）。
-_ZERO_WIDTH_CHARS: str = "\u200b\u200c\u200d\ufeff"
-
-
-def _normalize_for_matching(text: str) -> str:
-    """构造检测用的归一副本（不修改原文，只供规则匹配与留证）。
-
-    归一链（锁定）：Unicode NFKC（全角 / 兼容字符折叠）→ 剔除零宽字符
-    （U+200B / U+200C / U+200D / FEFF）→ 空白折叠为单空格。原文仍由调用
-    方持有（会话回合 / 包裹内容保真），本副本只用于检测。
-
-    Args:
-        text: 待检测的原始文本。
-
-    Returns:
-        归一副本（零宽字符已剔除、空白已折叠；空输入返回空串）。
-    """
-    folded = unicodedata.normalize("NFKC", text)
-    without_zero_width = folded.translate(str.maketrans("", "", _ZERO_WIDTH_CHARS))
-    return " ".join(without_zero_width.split())
 
 
 def wrap_untrusted_content(
@@ -139,7 +118,7 @@ def detect_injection(text: str, *, threshold: float = DEFAULT_INJECTION_THRESHOL
     """
     if not text or not text.strip():
         return InjectionSignalModel()
-    normalized = _normalize_for_matching(text)
+    normalized = normalize_for_matching(text)
     reasons: list[InjectionReasonModel] = []
     score = 0.0
     for rule in INJECTION_RULES:

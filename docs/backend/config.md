@@ -36,7 +36,7 @@ config.yaml / extensions_config.json（结构化面：llm 模型注册表 /
 
 env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）走 env；多端点结构化配置（模型注册表）走 config.yaml。文件缺失为合法状态（首次部署 / 测试 scratch CWD——保持默认值）；文件存在但解析失败为 `CONFIG_INVALID` fail loud。
 
-## Settings env 面（.env.example 由 `pixi run gen-examples` 自动生成）
+## env 面分节（.env.example 由 `pixi run gen-examples` 自动生成）
 
 | 分节 | env 前缀 | 字段（默认值） |
 |---|---|---|
@@ -45,6 +45,7 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 | LogConfig | `LOG_` | `LEVEL`(INFO) · `FILE`(logs/app.log) · `JSON_FILE`(logs/app.json.log) · `ROTATION`(1 day) · `RETENTION`(30 days) · `MODULE_LEVELS`("") · `COLORIZE_CONSOLE`(true) · `DIAGNOSE_EXCEPTIONS`(false) |
 | PoolsConfig | `POOLS_` | `THREAD_POOL_SIZE`(8) · `HTTP_MAX_CONNECTIONS`(100) · `HTTP_MAX_KEEPALIVE_CONNECTIONS`(20) · `HTTP_CONNECT_TIMEOUT_SECONDS`(5.0) · `HTTP_TIMEOUT_SECONDS`(30.0) · `LLM_SEMAPHORE_LIMIT`(5) · `LLM_REQUEST_TIMEOUT_SECONDS`(120) · `CB_FAIL_MAX`(5) · `CB_RESET_TIMEOUT_SECONDS`(60) |
 | LlmEndpointConfig | `LLM_` | `BASE_URL`("") · `API_KEY`("") · `MODEL`("") · `TOP_LOGPROBS`(20) · `PROMPT_LOGPROBS`(20)（两项 int ≥1；留空 = 省略对应请求字段；`PROMPT_LOGPROBS` 仅非流式请求生效） |
+| IntimateChannelConfig（`llm/intimate_models.py`；llm 域本地设置，不经 `Settings` 聚合） | `LLM_INTIMATE_` | `ENABLED`(false) · `BASE_URL`(空) · `API_KEY`(空) · `MODEL`(空) · `TEMPERATURE`(空) · `MIN_INTIMACY_LEVEL`(2)（语义与半配置策略见 [llm.md](llm.md#配置键表env-example--setup-wizard亲密回复通道配置步骤同源)） |
 | SeekDBSettings | `SEEKDB_` | `ENABLED`(false) · `HOST`(127.0.0.1) · `PORT`(2881) · `USER`(root) · `PASSWORD_ENV`(SEEKDB_PASSWORD) · `DATABASE`(test) · `VECTOR_DIM`(1024) · `POOL_MIN`(1) · `POOL_MAX`(4) |
 | TelegramSettings | `TELEGRAM_` | `ENABLED`(false) · `BOT_TOKEN_ENV`(TELEGRAM_BOT_TOKEN) · `API_BASE`(https://api.telegram.org) · `POLL_TIMEOUT_SECONDS`(25) · `OWNER_CHAT_ID`(null) · `BACKOFF_BASE_SECONDS`(1.0) · `BACKOFF_MAX_SECONDS`(60.0) · `STATE_DIR`(data/channels) |
 | QqChannelSettings | `QQ_` | `ENABLED`(false) · `HTTP_API_BASE_URL`(http://127.0.0.1:3000) · `ACCESS_TOKEN_ENV`(QQ_ACCESS_TOKEN) · `WEBHOOK_TOKEN_ENV`(QQ_WEBHOOK_TOKEN) · `REQUEST_TIMEOUT_SECONDS`(15.0) |
@@ -63,6 +64,8 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 | RhythmSettings（`Settings.rhythm`） | `RHYTHM_` | `ENABLED`(false) · `BEDTIME`(23:30) · `WAKE_TIME`(08:00) · `TIMEZONE_NOTE`(naive-local) · `REPLY_DELAY_MIN_MS`(1500) · `REPLY_DELAY_MAX_MS`(45000) · `TYPING_SPEED_MS_PER_CHAR`(45) · `TYPING_BASE_MS`(800) · `BURST_PROBABILITY`(0.12) |
 | FlowGateSettings（`Settings.flow`） | `FLOW_` | `ENABLED`(false) · `BURST_WINDOW_MS`(4000) · `BURST_COUNT`(3) · `MERGE_QUIET_MS`(2500) · `MERGE_MAX_MESSAGES`(5) · `MIN_REPLY_GAP_MS`(1200) · `BACKLOG_DEFER_THRESHOLD`(6) · `BACKLOG_DEFER_STEP_MS`(8000) · `BACKLOG_DEFER_MAX_MS`(90000) · `PENDING_GRACE_MS`(60000) |
 | GroupPersonaSettings（`Settings.group_persona`） | `GROUP_PERSONA_` | `ENABLED`(false) · `MAX_RESPONDERS`(1) · `COOLDOWN_MS`(60000) |
+| InjectionGuardSettings（`chat/injection_models.py`；chat 域本地设置，不经 `Settings` 聚合） | `INJECTION_` | `ENABLED`(true) · `COUNTER_STYLE`(sassy) · `THRESHOLD`(2.0) · `ANTI_INJECTION_HINT`(true)（语义见 [chat.md](chat.md#会话流chatservice)） |
+| ComplianceGuardSettings（`chat/compliance_models.py`；chat 域本地设置，不经 `Settings` 聚合） | `COMPLIANCE_` | `ENABLED`(true) · `THRESHOLD`(2.0) · `TEMPERATURE_BUMP`(0.2) · `MAX_RETRIES`(1)（语义见 [chat.md](chat.md#人格输出契约与合规守卫)） |
 | Settings | （无前缀） | `ENV`(local) |
 
 分节与 `.env.example` 逐分节对齐（生成器 `scripts/generate_examples_env.py` 的 `_ENV_SECTIONS` 登记表为序——键面以 `.env.example` 为真源，本表为语义说明；敏感字段在 example 中恒留空）。各分节语义详见所属域文档（channels / duty / tools-sandbox / voice / realtime-voice / multimodal）；声纹与表情包分节见 [voice.md](voice.md#声纹档案pipl-合规面) 与 [multimodal.md](multimodal.md#表情包库与-vlm-标注sticker_-env-面默认关闭)。
