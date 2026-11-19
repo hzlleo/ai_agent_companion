@@ -208,7 +208,8 @@ async def test_flow_disabled_replies_immediately_without_scheduling() -> None:
 
 
 async def test_synthetic_event_is_not_replied() -> None:
-    """机器生成事件：门控 SKIP，不生成回复也不排程。"""
+    """机器生成事件：路由器恒跳过（门控开启时不建会话 / 不回复 / 不排程 /
+    不写节拍状态）。"""
     service = FakeChatService()
     adapter = FakeAdapter()
     scheduler = FakeScheduler()
@@ -222,8 +223,35 @@ async def test_synthetic_event_is_not_replied() -> None:
     )
     result = await router.handle_inbound(_inbound("心跳", synthetic=True))
     assert result.message_ids == []
+    assert service.create_calls == []
     assert service.reply_calls == []
     assert scheduler.jobs == []
+    assert router.session_count == 0
+    assert router.flow_state_count == 0
+    assert router.synthetic_skip_count == 1
+
+
+async def test_synthetic_event_skipped_when_flow_disabled() -> None:
+    """门控关闭（FLOW_ENABLED=false）时合成事件仍恒跳过——文档语义与部署
+    开关无关。"""
+    service = FakeChatService()
+    adapter = FakeAdapter()
+    scheduler = FakeScheduler()
+    router = _router(
+        service=service,
+        adapter=adapter,
+        clock=FakeClock(),
+        rhythm=FakeRhythm(),
+        scheduler=scheduler,
+        settings=FlowGateSettings(enabled=False),
+    )
+    result = await router.handle_inbound(_inbound("心跳", synthetic=True))
+    assert result.message_ids == []
+    assert service.create_calls == []
+    assert service.reply_calls == []
+    assert scheduler.jobs == []
+    assert router.session_count == 0
+    assert router.synthetic_skip_count == 1
 
 
 async def test_sleep_window_schedules_delayed_batch() -> None:

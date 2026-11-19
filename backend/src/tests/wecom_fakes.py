@@ -115,6 +115,8 @@ class FakeWeComConnection:
         sent_payloads: 收到的出站命令原文（JSON 文本，按发送顺序）。
         sent_commands: 收到的出站命令解析结果（含 cmd / req_id / body）。
         closed: 是否已关闭（关闭后 ``recv`` 立即抛断连异常）。
+        subscribed_event: 订阅应答入队后置位（事件门控等待面——替代轮询）。
+        closed_event: 连接关闭后置位（生命周期终态的事件门控等待面）。
         auto_ack: 是否自动应答（False = 测试手工 push 应答）。
         subscribe_errcode: 订阅应答的错误码（非 0 = 订阅被拒场景）。
         silent_commands: 不应答的命令值集合（应答超时场景）。
@@ -132,6 +134,8 @@ class FakeWeComConnection:
         self.sent_payloads: list[str] = []
         self.sent_commands: list[dict[str, Any]] = []
         self.closed = False
+        self.subscribed_event = asyncio.Event()
+        self.closed_event = asyncio.Event()
         self.auto_ack = auto_ack
         self.subscribe_errcode = 0
         self.silent_commands: set[str] = set()
@@ -181,6 +185,7 @@ class FakeWeComConnection:
             return
         self.closed = True
         self._inbound.put_nowait(FakeConnectionClosed("fake 连接已关闭"))
+        self.closed_event.set()
 
     # ------------------------------------------------------------------
     # 脚本化入站
@@ -232,6 +237,8 @@ class FakeWeComConnection:
         elif errcode == 0 and cmd == WECOM_CMD_UPLOAD_MEDIA_FINISH and not self.upload_finish_without_body:
             body = {"type": "file", "media_id": "fake-media-id"}
         self._inbound.put_nowait(make_ack(req_id, errcode=errcode, body=body))
+        if cmd == WECOM_CMD_SUBSCRIBE:
+            self.subscribed_event.set()
 
 
 class FakeWeComConnector:
@@ -240,6 +247,7 @@ class FakeWeComConnector:
     Attributes:
         attempts: 已发起的连接次数。
         connections: 已产出的连接实例（按顺序）。
+        connected_event: 首个连接产出后置位（事件门控等待面——替代轮询）。
     """
 
     def __init__(
@@ -256,6 +264,7 @@ class FakeWeComConnector:
         """
         self.attempts = 0
         self.connections: list[FakeWeComConnection] = []
+        self.connected_event = asyncio.Event()
         self._failures_left = failures_before_success
         self._auto_ack = auto_ack
 
@@ -278,6 +287,7 @@ class FakeWeComConnector:
             raise OSError("fake 握手失败")
         connection = FakeWeComConnection(auto_ack=self._auto_ack)
         self.connections.append(connection)
+        self.connected_event.set()
         return connection
 
 

@@ -389,6 +389,26 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **剩余**：无。
 
+### 已完成切片：R2a 通道底座 Oracle 补审修复（P2×4，本分支工作区）
+
+**已完成**（逐条闭环）：
+
+1. **合成事件恒不回**：`ChannelRouter.handle_inbound` 在适配器寻址之后、per-chat 锁与心流门控之前对 `message.synthetic is True` 恒跳过——返回空投递结果，不建会话、不写心流节拍状态、不调用门控判定；跳过计数 `synthetic_skip_count` 累加并记 debug 日志（含累计条数）。语义与 `FLOW_ENABLED` 无关（门控关闭的部署同样不回复）；判定层 `SKIP / SYNTHETIC_EVENT` 保留为纯函数契约与纵深防御。既有断言同步（行为契约变更）：`test_channel_router.py` 的 v2 附件透传用例改为 `synthetic=False`（附件透传意图保持），`test_channel_router_flow.py` 的合成事件用例改为断言「不建会话 / 不回复 / 不排程 / 节拍状态为零」；两文件各补一条「门控关闭时 synthetic 仍不回复」用例。docs/backend/channels.md 合成语义、心流门控链路、消费者边界与测试面表同步为「路由器恒跳过，与 FLOW_ENABLED 无关」。
+2. **TG 出站 429 retry_after**：`TelegramClient` 构造期新增注入 `sleep`（缺省 `asyncio.sleep`）；`_post_send_method` 遇 HTTP 429 解析响应 JSON `parameters.retry_after`（数字秒）→ 夹取到 1..30 秒 → 经注入休眠面延迟后**单次**重试同一请求；重试仍非 200 才抛既有 `CHANNEL_API_ERROR`（不发第三次）；429 缺该参数 / 非数字 / 体非 JSON 不重试，直接按既有映射上抛。请求执行拆为 `_post_once`（传输异常映射共用），重试只覆盖出站 POST（`getUpdates` / `getMe` 不参与）。测试 `test_tg_client.py` 新增六例（伪休眠断言 7s 延迟与两次请求 / 上界夹取 30s / 下界夹取 1s / 重试仍 429 只重试一次 / 缺参数不重试 / 媒体出站共用链路）。channels.md Telegram 节新增「出站 429 限流（`retry_after` 单次重试）」规则表与错误码表行。
+3. **群聊表情收录边界文档化**：channels.md 表情包桥节改写为「应答侧各人格用各自库；入站收录只进主人格（第一位候选）素材库」（多人格下表情归属歧义 → 首位候选为确定性选择）；`channel_service.py` 的 `gate_persona_id = group_pool[0].id` 处补同口径中文注释。代码语义未改。
+4. **企微踢线用例去 flake**：`tests/wecom_fakes.py` 新增 `FakeWeComConnector.connected_event` / `FakeWeComConnection.subscribed_event` / `FakeWeComConnection.closed_event`（连接产出 / 订阅应答入队 / 连接关闭三处显式事件）；`test_kicked_event_stops_reconnect` 改为事件门控（等连接产出 → 等订阅完成 → push 踢线事件 → 等连接关闭 → await run 收尾），删除真实 2s `wait_for` 与 `_wait_until` 轮询。重复实证：该用例单独循环 30 次，0 失败。
+
+**验证**（主 Agent 实跑，命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2824 passed**；新增 8 例）。
+- `cd backend && pixi run coverage-gates` → **0**（24 组 ≥80；harness/channels 97.1%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**（191 源文件零问题）。
+- 根 `pixi run gates` → **0**（注释门 violations=0；同步测试棘轮通过；noqa 冻结通过；沙盒漂移 38 项一致；红探针门通过；文档真相通过；断言棘轮 8074 asserts / 596 raises（无下降）；导出面 102 引用 / 62 登记 / 40 豁免 + env 键面 686 行；prose-pin 484 命中，prose=59）。
+- `cd backend && pixi run gen-examples` → **0** 连续两次；三件套 `.env.example` / `config.example.yaml` / `extensions_config.example.json` sha256 前后一致（与改动前亦一致——幂等、无 env 键新增）。
+- 踢线用例去 flake 实证：`for i in $(seq 1 30); do pixi run pytest "src/tests/unit/test_wecom_client.py::TestSubscribeAndLifecycle::test_kicked_event_stops_reconnect" -q --asyncio-mode=auto; done` → **0**（30 次运行，failures=0）。
+
+**剩余**：无。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
