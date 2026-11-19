@@ -34,10 +34,14 @@ from enum import StrEnum
 from typing import Annotated, Literal, Protocol
 
 from pydantic import BaseModel, Field, TypeAdapter, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = [
     "REALTIME_PROTOCOL_VERSION",
+    "REALTIME_AUDIO_CHUNK_MAX_BYTES",
+    "REALTIME_AUDIO_CHUNK_MAX_BASE64_CHARS",
+    "AUDIO_CHUNK_TOO_LARGE_ERROR_TYPE",
     "SentenceBufferModel",
     "RealtimeInboundType",
     "RealtimeOutboundType",
@@ -82,6 +86,21 @@ REALTIME_PROTOCOL_VERSION: str = "1"
 #: 上行音频块 base64 解码后的最小字节数（16 位单声道一帧 = 2 字节；
 #: 小于该值说明客户端分块异常）。
 _MIN_AUDIO_BYTES: int = 2
+
+#: 上行音频单块解码后的字节上限（64 KiB PCM16——16kHz 单声道约 2 秒音频）。
+#: 单块超过该上限视为客户端分块参数异常：解析期拒绝该块（可恢复错误，
+#: 会话保留），并在会话指标 ``audio_chunks_rejected`` 上计数。选 64 KiB 是
+#: 在「单块上传延迟」与「协议层内存上界」之间取整：默认 100ms 帧仅 3.2 KiB，
+#: 即使客户端按秒批量上传（32 KiB）也留有一倍余量。
+REALTIME_AUDIO_CHUNK_MAX_BYTES: int = 64 * 1024
+#: 上述字节上限对应的 base64 字符长度上限（``4 * ceil(n / 3)``）——字段级
+#: 前置拒绝，避免对明显超大的字符串做完整解码。该长度只是必要条件：长度
+#: 达标但解码后越界（例如 87384 字符无填充时解码为 65538 字节）仍由字段
+#: 校验器精确拒绝。
+REALTIME_AUDIO_CHUNK_MAX_BASE64_CHARS: int = 4 * ((REALTIME_AUDIO_CHUNK_MAX_BYTES + 2) // 3)
+#: 音频块超限的校验错误类型标识（字段校验器抛出；上行分派据此把超限与
+#: 其它协议错误区分开——独立指标计数与针对性提示文案）。
+AUDIO_CHUNK_TOO_LARGE_ERROR_TYPE: str = "audio_chunk_too_large"
 
 
 class RealtimeInboundType(StrEnum):
@@ -164,18 +183,24 @@ class RealtimeAudioInputChunkMessageModel(BaseModel):
         ts_ms: 客户端采集时间（epoch 毫秒）。
         seq: 客户端分块序号（单调递增；服务端只用于诊断日志与丢弃计数，
             不承担重排职责——WS 单连接内有序）。
-        data: base64 编码的 16 位小端 PCM 字节（解码后非空）。
+        data: base64 编码的 16 位小端 PCM 字节（解码后 2 字节至 64 KiB；
+            超过单块上限的块在解析期拒绝，会话保留并计入
+            ``audio_chunks_rejected``）。
     """
 
     type: Literal["audio_chunk"] = "audio_chunk"
     ts_ms: int = Field(ge=0, description="客户端采集时间（epoch 毫秒）")
     seq: int = Field(ge=0, description="客户端分块序号")
-    data: str = Field(min_length=1, description="base64 编码的 PCM16 字节")
+    data: str = Field(
+        min_length=1,
+        max_length=REALTIME_AUDIO_CHUNK_MAX_BASE64_CHARS,
+        description="base64 编码的 PCM16 字节（解码后不超过 64 KiB）",
+    )
 
     @field_validator("data")
     @classmethod
     def _validate_audio_payload(cls, value: str) -> str:
-        """校验 base64 形态与最小字节数（解析期拒绝非法载荷）。
+        """校验 base64 形态与解码后字节长度（解析期拒绝非法 / 超限载荷）。
 
         Args:
             value: 客户端载荷字符串。
@@ -186,6 +211,7 @@ class RealtimeAudioInputChunkMessageModel(BaseModel):
 
         Raises:
             ValueError: 非 base64 / 解码后不足一帧（2 字节）。
+            PydanticCustomError: 解码后超过单块上限（64 KiB）。
         """
         try:
             decoded = base64.b64decode(value, validate=True)
@@ -193,6 +219,12 @@ class RealtimeAudioInputChunkMessageModel(BaseModel):
             raise ValueError(f"audio_chunk.data 不是合法 base64: {exc}") from exc
         if len(decoded) < _MIN_AUDIO_BYTES:
             raise ValueError("audio_chunk.data 解码后不足一帧（至少 2 字节 PCM16）")
+        if len(decoded) > REALTIME_AUDIO_CHUNK_MAX_BYTES:
+            raise PydanticCustomError(
+                AUDIO_CHUNK_TOO_LARGE_ERROR_TYPE,
+                "audio_chunk.data 解码后 {actual} 字节，超过单块上限 {limit} 字节",
+                {"actual": len(decoded), "limit": REALTIME_AUDIO_CHUNK_MAX_BYTES},
+            )
         return value
 
 
@@ -664,6 +696,7 @@ class RealtimeSessionMetricsModel(BaseModel):
         started_ms: 会话开始时间（epoch 毫秒）。
         audio_chunks_received: 收到的音频块数。
         audio_chunks_dropped: 背压丢弃的音频块数。
+        audio_chunks_rejected: 超过单块上限被解析期拒绝的音频块数。
         speech_starts: VAD 检测到的起说次数。
         segments_ready: 切段送 ASR 的语段数。
         segments_discarded: 短语音丢弃的语段数。
@@ -684,6 +717,7 @@ class RealtimeSessionMetricsModel(BaseModel):
     started_ms: int = Field(ge=0, description="会话开始时间（epoch 毫秒）")
     audio_chunks_received: int = Field(default=0, ge=0, description="收到音频块数")
     audio_chunks_dropped: int = Field(default=0, ge=0, description="背压丢弃音频块数")
+    audio_chunks_rejected: int = Field(default=0, ge=0, description="超限拒绝音频块数")
     speech_starts: int = Field(default=0, ge=0, description="起说次数")
     segments_ready: int = Field(default=0, ge=0, description="送 ASR 语段数")
     segments_discarded: int = Field(default=0, ge=0, description="丢弃短语音数")

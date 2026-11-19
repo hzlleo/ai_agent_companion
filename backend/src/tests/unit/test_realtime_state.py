@@ -66,6 +66,7 @@ async def test_start_moves_idle_to_listening() -> None:
         (RealtimeSessionPhase.THINKING, RealtimeStateEvent.TTS_FAILURE, RealtimeSessionPhase.THINKING),
         (RealtimeSessionPhase.SPEAKING, RealtimeStateEvent.SPEECH_START, RealtimeSessionPhase.SPEAKING),
         (RealtimeSessionPhase.SPEAKING, RealtimeStateEvent.SEGMENT_READY, RealtimeSessionPhase.THINKING),
+        (RealtimeSessionPhase.SPEAKING, RealtimeStateEvent.ASR_DONE, RealtimeSessionPhase.SPEAKING),
         (RealtimeSessionPhase.SPEAKING, RealtimeStateEvent.AUDIO_PLAYING, RealtimeSessionPhase.SPEAKING),
         (RealtimeSessionPhase.SPEAKING, RealtimeStateEvent.TURN_DONE, RealtimeSessionPhase.LISTENING),
         (RealtimeSessionPhase.SPEAKING, RealtimeStateEvent.BARGE_IN, RealtimeSessionPhase.LISTENING),

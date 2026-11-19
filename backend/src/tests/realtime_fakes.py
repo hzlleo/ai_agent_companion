@@ -150,17 +150,25 @@ class FakeRealtimeTransport:
     """内存双工传输——入站队列 + 出站记录（零网络）。
 
     出站消息按 JSON 解析为字典记录；用例经 :meth:`wait_for` 以谓词等待
-    指定消息出现（事件驱动，无固定 sleep）。
+    指定消息出现（事件驱动，无固定 sleep）。``send_gate`` 可门闩下行发送
+    （制造在途发送阻塞——背压用例用它把音频工人停在状态迁移的下行上）。
     """
 
     def __init__(self) -> None:
         self._inbound: asyncio.Queue[str | None] = asyncio.Queue()
         self.sent: list[dict[str, Any]] = []
         self.closed: tuple[int, str] | None = None
+        self.send_gate: asyncio.Event | None = None
+        self._blocked_sends = 0
+        self._blocked_changed = asyncio.Event()
         self._changed = asyncio.Event()
 
     async def send_text(self, payload: str) -> None:
-        """记录下行 JSON 并唤醒等待者。"""
+        """记录下行 JSON 并唤醒等待者（``send_gate`` 存在时先阻塞）。"""
+        if self.send_gate is not None:
+            self._blocked_sends += 1
+            self._blocked_changed.set()
+            await self.send_gate.wait()
         self.sent.append(json.loads(payload))
         self._changed.set()
 
@@ -223,6 +231,29 @@ class FakeRealtimeTransport:
             if predicate(self.sent):
                 return list(self.sent)
             await asyncio.wait_for(self._changed.wait(), timeout=remaining)
+
+    async def wait_for_blocked_sends(self, count: int, *, timeout: float = 5.0) -> None:
+        """等待指定数量的下行发送进入 ``send_gate`` 阻塞。
+
+        Args:
+            count: 需要观察到的阻塞发送条数。
+            timeout: 超时秒数（测试预算——不参与业务时序）。
+
+        Raises:
+            asyncio.TimeoutError: 超时仍不足指定条数。
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while self._blocked_sends < count:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"等待下行发送阻塞超时：已阻塞 {self._blocked_sends} 条"
+                )
+            self._blocked_changed.clear()
+            if self._blocked_sends >= count:
+                return
+            await asyncio.wait_for(self._blocked_changed.wait(), timeout=remaining)
 
 
 class FakeVoiceService(VoiceService):

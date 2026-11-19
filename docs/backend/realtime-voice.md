@@ -31,14 +31,15 @@
 
 ```
 浏览器麦克风（AudioContext，16kHz 单声道 PCM16）
-    ↓ WS audio_chunk（base64，seq 递增）
+    ↓ WS audio_chunk（base64，seq 递增；单块解码后 ≤ 64 KiB）
 realtime_session 收帧循环
     ↓ 背压队列（REALTIME_VOICE_AUDIO_QUEUE_MAX_CHUNKS；溢出丢最旧块并计数）
     ↓ 批量出队（REALTIME_VOICE_AUDIO_BATCH_MAX_CHUNKS）
 EnergyVad（起说防抖 / 语音态 / 静音窗 / 单段上限）
     ↓ speech_start（播放中 → barge-in，见下文时序）
     ↓ segment_ready / segment_forced（PCM16 + 有效语音时长）
-VoiceService.transcribe → Qwen3-ASR（批量端点）
+转写任务（音频工人只投递；转写期间 VAD / 打断判定继续）
+    ↓ VoiceService.transcribe → Qwen3-ASR（批量端点）
     ↓ final_transcript（下行；中途 partial 由节流批量转写产生）
 ChatService.stream_reply（人格正典 / 宪章 / 注入防御 / 关系进展 / 情绪块 / 合规守卫配置）
     ↓ assistant_text 增量（下行）
@@ -49,6 +50,8 @@ VoiceService.synthesize → CosyVoice（整句 WAV）
     ↓ state（speaking）→ 客户端聚合收齐后 decodeAudioData 串行播放
     ↓ 全部句播完 → state（listening）
 ```
+
+多段转写可并行；转写完成的文本按**完成序**进入生成请求通道（单会话同一时刻只有一个活跃轮次，其余排队依次消费）。客户端以 `segment_id` 对齐 final_transcript 与对应轮次，因此近似同时完成的多段可能先收到后段语段的结果。
 
 ## WS 端点与准入
 
@@ -92,7 +95,7 @@ VoiceService.synthesize → CosyVoice（整句 WAV）
 }
 ```
 
-相位实际迁移时服务端会即时下行 `state`（客户端据此更新状态 / 字幕提示）；`closed` 前同样先下行 `state(closed)` 再下行 `closed`。心跳 `ping` 的应答是携带 `detail="心跳应答"` 的 `state` 消息。
+相位实际迁移时服务端会即时下行 `state`（客户端据此更新状态 / 字幕提示）。五条关闭路径（`client_end` / `idle_timeout` / `max_duration` / `internal_error` / `session_rejected`）的 wire 顺序均为（可选 `error`）→ `state(closed)` → `closed`；传输断开（`transport_closed`）时对端已不可达，`closed` 尽力发送，不保证 `state(closed)`。心跳 `ping` 的应答是携带 `detail="心跳应答"` 的 `state` 消息。
 
 `ready` 字段说明：
 
@@ -114,8 +117,8 @@ VoiceService.synthesize → CosyVoice（整句 WAV）
 | type | 字段 | 语义 |
 |---|---|---|
 | `start` | `ts_ms` / `persona_id`(可选) / `sample_rate_hz`(可选) / `channels`(可选) | 建立会话；采样率 / 声道提供时必须与服务端配置一致 |
-| `audio_chunk` | `ts_ms` / `seq` / `data`(base64 PCM16) | 麦克风 PCM16 分块（解码后至少一帧；按序入队） |
-| `end` | `ts_ms` | 客户端结束：服务端冲刷尾段、等待在途轮次播完后 `closed` |
+| `audio_chunk` | `ts_ms` / `seq` / `data`(base64 PCM16) | 麦克风 PCM16 分块（解码后 2 字节至 64 KiB；超过单块上限即拒绝该块：可恢复 `error(VALIDATION_ERROR)` + `audio_chunks_rejected` 计数，会话保留） |
+| `end` | `ts_ms` | 客户端结束：服务端冲刷尾段、排空在途转写与轮次播报后 `closed`（排空期间服务端超时 / 内部关闭先到即取消在途工作并收尾） |
 | `barge_in` | `ts_ms` / `reason`(`manual` / `vad`) | 手动打断（播放面板按钮） |
 | `barge_in_ack` | `ts_ms` / `interruption_id` | 客户端已停止本地播放的确认（回传下行 interrupted 的标识） |
 | `ping` | `ts_ms` | 心跳（服务端以 `state` 应答并刷新空闲计时） |
@@ -171,6 +174,7 @@ VoiceService.synthesize → CosyVoice（整句 WAV）
 | thinking | turn_done / barge_in / asr_error / generation_error | listening |
 | speaking | speech_start / audio_playing / tts_failure / generation_error | speaking |
 | speaking | segment_ready | thinking（新语段串行进入转写） |
+| speaking | asr_done | speaking（转写完成，等待当前轮播完后生成） |
 | speaking | turn_done / barge_in / asr_error | listening |
 | 任意非关闭态 | client_end / idle_timeout / max_duration / internal_error | closed |
 | closed | 任意关闭事件 | closed（吸收态） |
@@ -205,25 +209,28 @@ VoiceService.synthesize → CosyVoice（整句 WAV）
 客户端：清空播放队列（停止在播音源 + 作废在途解码）→ 上行 barge_in_ack
 ```
 
-安全边界（锁定）：打断后派生任务集合清空（生成 / 合成 / 中途转写任务全部 cancel + gather），会话关闭后任务集合为空；被取消的生成轮次不写入助手回合（与既有 `stream_reply` 半截不入历史的语义一致）。
+安全边界（锁定）：打断后生成 / 合成 / 中途转写任务全部 cancel + gather，任务集合只剩仍在转写已说完语段的任务（其结果照常产出 final_transcript 与回复）；会话关闭后任务集合为空。被取消的生成轮次不写入助手回合（与既有 `stream_reply` 半截不入历史的语义一致）。
 
 ## 并发、背压与资源上限
 
 | 机制 | 行为 |
 |---|---|
 | 音频入队 | 有界队列 `REALTIME_VOICE_AUDIO_QUEUE_MAX_CHUNKS`；满时**丢最旧块**并计数（实时音频宁丢旧帧不阻塞收帧循环）；丢弃数每 32 块落一条 warning，关闭时落指标日志 |
+| 音频块上限 | 单块 base64 解码后 **≤ 64 KiB**（`REALTIME_AUDIO_CHUNK_MAX_BYTES`；对应编码长度上限同步校验）；超限块在解析期拒绝——可恢复 `error(VALIDATION_ERROR)`，计入 `audio_chunks_rejected`，不进入队列、不影响后续帧 |
 | 批量出队 | 单次最多 `REALTIME_VOICE_AUDIO_BATCH_MAX_CHUNKS` 块喂 VAD（降低逐帧调度开销） |
+| 转写并发 | 切段后转写以独立任务执行并登记进统一任务集合——音频工人只投递，VAD / 起说判定 / 打断在转写窗口内持续工作；多段转写可并行，结果按完成序进入生成请求通道 |
 | 轮次串行 | 单会话同一时刻只有一个活跃轮次；打断开关关闭时新语段排队（播完当前轮再生成） |
 | 会话上限 | `REALTIME_VOICE_MAX_SESSION_MS`（到时 `closed(max_duration)`） |
 | 空闲超时 | `REALTIME_VOICE_IDLE_TIMEOUT_MS`（无任何上行消息即 `closed(idle_timeout)`；ping / 音频 / 控制消息均刷新） |
 | 心跳 | `REALTIME_VOICE_HEARTBEAT_INTERVAL_MS` 为 `ready` 建议值；服务端只按空闲超时判定 |
-| 优雅关闭 | `end` → 冲刷尾段 → 等待在途轮次播完 → `closed(client_end)`；服务端主动关闭同样先 `closed` 再关闭传输 |
+| 优雅关闭 | `end` → 冲刷尾段 → 排空在途转写与轮次播报 → `closed(client_end)`；排空期间服务端超时 / 内部关闭先到即取消在途生成与 TTS 并立即收尾（`closed` 原因取先到者）。服务端主动关闭（超时 / 错误 / 拒绝）与客户端 `end` 均在 `closed` 前下行 `state(closed)` |
 
 ## 错误码（复用 core 码表，不新增错误码）
 
 | 场景 | code | recoverable |
 |---|---|---|
 | 非法 JSON / 未知 type / 字段越界 / 采样率或声道不一致 / start.persona_id 不一致 / 重复 start / 未 start 的音频 | `VALIDATION_ERROR` | true（采样率与 persona 不一致时 false，随后 `closed(session_rejected)`） |
+| 音频块超过单块上限（解码后 > 64 KiB） | `VALIDATION_ERROR` | true（该块丢弃并计入 `audio_chunks_rejected`，会话保留） |
 | ASR 未启用（start 时） | `CONFLICT` | false（随后 `closed(session_rejected)`） |
 | 总闸关闭（WS 准入） | `CONFLICT` | false（1013 关闭） |
 | 鉴权失败（WS 准入） | `UNAUTHORIZED` | false（1008 关闭） |
@@ -295,11 +302,11 @@ VOICE_TTS_ENABLED=true
 
 `src/tests/unit/test_realtime_{models,vad,state,sentence,audio,session}.py` + `test_app_realtime_voice.py`（共享 fake 基建 `src/tests/realtime_fakes.py`）：
 
-- 协议：全部上行类型解析 / 非法载荷拒绝 / 下行联合序列化往返 / 配置不变式与 env 前缀；
+- 协议：全部上行类型解析 / 非法载荷拒绝 / 单块 64KiB 上限边界（恰好通过 / 超限拒绝 / 超限后会话继续）/ 下行联合序列化往返 / 配置不变式与 env 前缀；
 - VAD：单帧不触发 / 防抖起说 / 静音切段 / 短语音丢弃 / 句中停顿不切分 / 单段强制 / 冲刷 / 多段序列；
 - 状态机：合法边矩阵穷举 / 关闭事件全相位 / 非法边 / 吸收态 / 规则唯一性；
 - 句切与音频：标点保留 / 收尾符号 / 长度上限与停顿优先 / 硬切 / 流式累积；能量 / WAV 容器 / 分片拼接 / 时长；
-- 会话端到端：ready 字段、完整轮次（转写 → 文本 → 音频 → 回聆听）、中途转写节流、强制切段、手动 / VAD 打断（任务集合清空、无泄漏）、打断关闭态、背压丢最旧块、空闲 / 最大时长、end 尾段冲刷、ASR / 生成 / TTS 失败可恢复、TTS 关闭降级、传输断开、心跳应答、协议对称性、真实 `ChatService` 适配；
+- 会话端到端：ready 字段、完整轮次（转写 → 文本 → 音频 → 回聆听）、中途转写节流、强制切段、手动 / VAD 打断（任务集合清空、无泄漏）、打断关闭态、转写任务挂起时 VAD 打断仍生效、关闭取消挂起转写、背压丢最旧块、超限音频块拒绝后会话继续、空闲 / 最大时长、end 尾段冲刷、end 排空被关闭事件抢占、关闭 wire 顺序（state(closed) → closed）、ASR / 生成 / TTS 失败可恢复、TTS 关闭降级、传输断开、心跳应答、协议对称性、真实 `ChatService` 适配；
 - 端点：路由挂载、总闸 / 鉴权 / 人格解析拒绝面、真实人格与聊天会话落库、传输适配（文本 / 二进制 / 断开 / 幂等关闭）。
 
 前端：`api/realtimeVoice.test.ts`、`lib/realtimeAudio.test.ts`、`lib/realtimeVoiceClient.test.ts`、`pages/realtime/RealtimeVoicePage.test.tsx`。
@@ -307,6 +314,8 @@ VOICE_TTS_ENABLED=true
 ## 边界（未做项，见 LEDGER §6）
 
 心流门控仅作用于通道入站；实时语音直连 `ChatService.stream_reply`，不经门控裁决。
+
+转写任务化：切段后转写经独立任务执行，音频工人只投递——转写窗口内 VAD、起说与打断判定持续工作，不会因 ASR 在途而停摆。多段转写可并行，转写结果按完成序进入生成队列（不按语段序号重排）；因此同一说话人两段近似同时完成时，先完成者先回复，客户端应据 `segment_id` 对齐字幕与轮次。
 
 - **AEC / 回声消除**：未实现；外放场景可能自触发打断，建议耳机或浏览器平台 AEC。
 - **移动端优化**：未做（ScriptProcessor 采集、下行 WAV 解码）；移动浏览器后台切走时连接可能被系统挂起。

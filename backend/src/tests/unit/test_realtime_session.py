@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from typing import Any
 
 import pytest
@@ -24,7 +25,9 @@ from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.llm.llm_models import ChatResponseModel, ChatStreamChunkModel
 from packages.harness.persona.dtos import PersonaRecordDTO
 from packages.harness.voice.realtime_models import (
+    REALTIME_AUDIO_CHUNK_MAX_BYTES,
     REALTIME_OUTBOUND_ADAPTER,
+    RealtimeCloseReason,
     RealtimeVoiceSettings,
 )
 from packages.harness.voice.realtime_session import (
@@ -570,23 +573,20 @@ async def test_barge_in_ack_is_counted() -> None:
 
 
 async def test_audio_backpressure_drops_oldest_chunks() -> None:
-    """背压：队列满时丢最旧块并计数（收帧循环不被慢 ASR 阻塞）。"""
+    """背压：队列满时丢最旧块并计数（收帧循环不被下游处理阻塞）。"""
     harness = SessionHarness(audio_queue_max_chunks=2, audio_batch_max_chunks=1)
     await harness.boot()
     release = asyncio.Event()
-    harness.voice.asr_gate = release
+    harness.transport.send_gate = release
     await harness.push_frames([loud_frame(), loud_frame(), silence_frame()])
-    # 转写被门闩阻塞 → 音频工人停在段处理，后续帧堆满队列后开始丢弃。
-    await asyncio.wait_for(harness.voice.asr_started.wait(), timeout=_WAIT_TIMEOUT)
+    # 第一道屏障：切段状态迁移的下行被门闩挡住——证明音频工人已消费起说帧
+    # 并停在段处理上，此时再灌帧才会稳定触发队列溢出。
+    await harness.transport.wait_for_blocked_sends(1)
     await harness.push_frames([silence_frame() for _ in range(6)], start_seq=10)
-    # 心跳屏障：上行按序处理——心跳应答 state 到达即说明前述音频块均已入队。
+    # 第二道屏障：心跳应答同样被门闩挡住——它排在全部音频块之后，阻塞即证明
+    # 前述音频块已全部入队（此时才可断言丢弃计数）。
     await harness.push({"type": "ping", "ts_ms": 0})
-    await harness.transport.wait_for(
-        lambda sent: any(
-            message.get("type") == "state" and message.get("detail") == "心跳应答"
-            for message in sent
-        )
-    )
+    await harness.transport.wait_for_blocked_sends(2)
     assert harness.session is not None
     assert harness.session.metrics.audio_chunks_dropped >= 3
     release.set()
@@ -777,3 +777,153 @@ async def test_settings_invariants_surface_via_session_construction() -> None:
             chat=ScriptedChatStream(),
             voice_service=FakeVoiceService(),
         )
+
+
+# ---------------------------------------------------------------------------
+# 音频块上限 / 转写任务化 / 关闭顺序与排空抢占
+# ---------------------------------------------------------------------------
+
+
+class _PermitSleeper:
+    """按许可推进伪时钟的休眠面（由用例决定看门狗何时判定超时）。"""
+
+    def __init__(self, clock: FakeClock, *, advance_ms: int) -> None:
+        self._clock = clock
+        self._advance_ms = advance_ms
+        self.permit = asyncio.Event()
+
+    async def __call__(self, _seconds: float) -> None:
+        """等待许可后推进伪时钟并让出事件循环。"""
+        await self.permit.wait()
+        self.permit.clear()
+        self._clock.advance(self._advance_ms)
+        await asyncio.sleep(0)
+
+
+async def _assert_no_leaked_tasks(baseline: set[asyncio.Task[Any]]) -> None:
+    """断言除当前用例任务与既有任务外无未完成任务（事件循环级泄漏面）。"""
+    current = asyncio.current_task()
+    await asyncio.sleep(0)
+    leaked = [
+        task
+        for task in asyncio.all_tasks()
+        if task is not current and task not in baseline and not task.done()
+    ]
+    assert leaked == [], f"会话遗留任务: {[task.get_coro() for task in leaked]}"
+
+
+async def test_oversized_audio_chunk_is_rejected_and_session_continues() -> None:
+    """超限音频块：可恢复 error + 独立指标计数；会话继续可用。"""
+    harness = SessionHarness()
+    await harness.boot()
+    oversized = base64.b64encode(
+        b"\x00" * (REALTIME_AUDIO_CHUNK_MAX_BYTES + 1)
+    ).decode("ascii")
+    await harness.push({"type": "audio_chunk", "ts_ms": 0, "seq": 0, "data": oversized})
+    await harness.wait_for_type("error")
+    error = harness.messages("error")[0]
+    assert error["code"] == "VALIDATION_ERROR"
+    assert error["recoverable"] is True
+    assert harness.session is not None
+    assert harness.session.metrics.audio_chunks_rejected == 1
+    assert harness.session.metrics.audio_chunks_received == 0
+    await harness.push_frames([loud_frame(), loud_frame(), silence_frame()], start_seq=1)
+    await harness.wait_for_type("final_transcript")
+    mark = _mark(harness)
+    await harness.finish_chat(["继续。"])
+    await _wait_state_after(harness, "listening", mark)
+    await harness.request_end()
+    assert harness.session.metrics.audio_chunks_rejected == 1
+
+
+async def test_vad_barge_in_survives_pending_transcription() -> None:
+    """转写任务挂起期间新语音仍触发 VAD barge-in（音频工人不被 ASR 阻塞）。"""
+    harness = SessionHarness()
+    await harness.boot()
+    gate = asyncio.Event()
+    harness.voice.asr_gate = gate
+    await harness.push_frames([loud_frame(), loud_frame(), silence_frame()])
+    await asyncio.wait_for(harness.voice.asr_started.wait(), timeout=_WAIT_TIMEOUT)
+    mark = _mark(harness)
+    await harness.push_frames([loud_frame(), loud_frame()], start_seq=10)
+    await _wait_type_after(harness, "interrupted", mark)
+    interrupted = harness.messages("interrupted")[-1]
+    assert interrupted["reason"] == "vad"
+    assert harness.session is not None
+    assert harness.session.metrics.interruptions == 1
+    gate.set()
+    await harness.wait_for_type("final_transcript")
+    await harness.chat.push("好。")
+    await harness.chat.finish()
+    await harness.chat.push("嗯。")
+    await harness.chat.finish()
+    await harness.request_end()
+    assert harness.session.active_task_count == 0
+
+
+async def test_close_cancels_pending_transcription_without_leak() -> None:
+    """关闭取消挂起转写任务：门闩未释放、任务集合与事件循环均无残留。"""
+    baseline = asyncio.all_tasks()
+    harness = SessionHarness()
+    await harness.boot()
+    gate = asyncio.Event()
+    harness.voice.asr_gate = gate
+    await harness.push_frames([loud_frame(), loud_frame(), silence_frame()])
+    await asyncio.wait_for(harness.voice.asr_started.wait(), timeout=_WAIT_TIMEOUT)
+    await harness.transport.push_disconnect()
+    await harness.await_close()
+    assert gate.is_set() is False
+    assert harness.session is not None
+    assert harness.session.metrics.closed_reason is RealtimeCloseReason.TRANSPORT_CLOSED
+    assert harness.session.active_task_count == 0
+    await _assert_no_leaked_tasks(baseline)
+
+
+async def test_client_end_emits_state_closed_before_closed() -> None:
+    """客户端 end：wire 序以 state(closed) → closed 收尾。"""
+    harness = SessionHarness()
+    await harness.boot()
+    await harness.request_end()
+    sent = harness.transport.sent
+    assert [message["type"] for message in sent[-2:]] == ["state", "closed"]
+    assert sent[-2]["state"] == "closed"
+    assert sent[-1]["reason"] == "client_end"
+
+
+async def test_idle_timeout_emits_state_closed_before_closed() -> None:
+    """空闲超时：wire 序以 state(closed) → closed 收尾。"""
+    harness = SessionHarness(idle_timeout_ms=20_000, max_session_ms=100_000)
+    await harness.boot(sleeper=instant_sleeper(harness.clock, advance_ms=10_000))
+    await harness.await_close()
+    sent = harness.transport.sent
+    assert [message["type"] for message in sent[-2:]] == ["state", "closed"]
+    assert sent[-2]["state"] == "closed"
+    assert sent[-1]["reason"] == "idle_timeout"
+
+
+async def test_end_drain_is_preempted_by_close_event() -> None:
+    """end 排空与关闭事件竞争：生成挂起时 max_duration 先到 → 取消在途并收尾。"""
+    baseline = asyncio.all_tasks()
+    harness = SessionHarness(
+        idle_timeout_ms=100_000, max_session_ms=101_000, barge_in_enabled=False
+    )
+    sleeper = _PermitSleeper(harness.clock, advance_ms=20_000)
+    await harness.boot(sleeper=sleeper)
+    await harness.push_frames([loud_frame(), loud_frame(), silence_frame()])
+    await harness.wait_for_type("final_transcript")
+    harness.clock.advance(90_000)
+    await harness.push_frames([loud_frame(), loud_frame()], start_seq=10)
+    mark = _mark(harness)
+    await harness.push({"type": "ping", "ts_ms": 0})
+    await _wait_type_after(harness, "state", mark)
+    await harness.push({"type": "end", "ts_ms": 0})
+    await harness.wait_for_type("final_transcript", count=2)
+    sleeper.permit.set()
+    assert harness.task is not None
+    await asyncio.wait_for(harness.task, timeout=_WAIT_TIMEOUT)
+    assert harness.messages("closed")[0]["reason"] == "max_duration"
+    assert harness.transport.closed == (1000, "max_duration")
+    assert harness.session is not None
+    assert harness.session.metrics.closed_reason is RealtimeCloseReason.MAX_DURATION
+    assert harness.session.active_task_count == 0
+    await _assert_no_leaked_tasks(baseline)
