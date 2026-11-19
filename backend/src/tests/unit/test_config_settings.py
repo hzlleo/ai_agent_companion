@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import os
 
+import pytest
+from pydantic import ValidationError
+
 from packages.harness.config.models import (
     DatabaseConfig,
     LlmEndpointConfig,
@@ -212,3 +215,16 @@ async def test_settings_unknown_env_keys_tolerated() -> None:
         assert config.port == 8000
     finally:
         del os.environ["AI_COMPANION_UNKNOWN_TEST_VAR"]
+
+
+async def test_llm_logprobs_env_surface_and_validation() -> None:
+    """LLM logprobs 旋钮：env 面读值、空串归一 None、非正数拒绝。"""
+    assert settings.llm.top_logprobs == 20
+    assert settings.llm.prompt_logprobs == 20
+    assert LlmEndpointConfig(top_logprobs="").top_logprobs is None
+    assert LlmEndpointConfig(prompt_logprobs=" none ").prompt_logprobs is None
+    assert LlmEndpointConfig(top_logprobs="7").top_logprobs == 7
+    with pytest.raises(ValidationError):
+        LlmEndpointConfig(top_logprobs=0)
+    with pytest.raises(ValidationError):
+        LlmEndpointConfig(prompt_logprobs=0)

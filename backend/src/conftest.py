@@ -98,6 +98,10 @@ os.environ["POOLS_CB_RESET_TIMEOUT_SECONDS"] = "60"
 os.environ["LLM_BASE_URL"] = "http://127.0.0.1:9/v1"
 os.environ["LLM_API_KEY"] = "test-only-llm-api-key"
 os.environ["LLM_MODEL"] = "test-model"
+# logprobs 传输旋钮（默认 20/20；空串 = 省略对应字段——测试固定默认值，
+# 开发者 shell 导出的同名值不得泄入测试）
+os.environ["LLM_TOP_LOGPROBS"] = "20"
+os.environ["LLM_PROMPT_LOGPROBS"] = "20"
 
 # --- SeekDB 检索存储（SEEKDB_ 前缀 → SeekDBSettings；默认关闭 → 测试恒走
 #     SQLite 回退存储，零真实连接；S3 硬覆盖模式——开发者 shell 导出的

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
@@ -223,6 +224,35 @@ async def test_chat_by_role_success_emits_usage(
     assert event.error_code is None
     assert event.ts_ms > 0
     assert event.latency_ms >= 0
+
+
+async def test_gateway_passes_logprobs_knobs_to_client() -> None:
+    """网关构造旋钮透传传输层：双 None 时请求体整体不含 logprobs 面。"""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return _ok_response()
+
+    manager = await _make_pool_manager(handler)
+    gateway = LlmGateway(
+        resolver=ModelResolver([_entry("main-chat", roles=("chat",))]),
+        pool_manager=manager,
+        settings=build_isolated_settings(pools=PoolsConfig(cb_fail_max=2)),
+        retry_attempts=1,
+        retry_wait_seconds=0.0,
+        top_logprobs=None,
+        prompt_logprobs=None,
+    )
+    try:
+        await gateway.chat_by_role("chat", _messages())
+    finally:
+        await manager.stop()
+
+    sent = json.loads(captured[0].content)
+    assert "logprobs" not in sent
+    assert "top_logprobs" not in sent
+    assert "prompt_logprobs" not in sent
 
 
 async def test_chat_by_role_reads_context_axes(

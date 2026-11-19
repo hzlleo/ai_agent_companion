@@ -44,7 +44,7 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 | DatabaseConfig | `DATABASE_` | `TYPE`(mysql) · `HOST`(127.0.0.1) · `PORT`(3306) · `NAME`(ai_agent_companion) · `USER`(root) · `PASSWORD`("") · `POOL_SIZE`(10) · `MAX_OVERFLOW`(20) · `POOL_RECYCLE`(3600) · `POOL_PRE_PING`(true) |
 | LogConfig | `LOG_` | `LEVEL`(INFO) · `FILE`(logs/app.log) · `JSON_FILE`(logs/app.json.log) · `ROTATION`(1 day) · `RETENTION`(30 days) · `MODULE_LEVELS`("") · `COLORIZE_CONSOLE`(true) · `DIAGNOSE_EXCEPTIONS`(false) |
 | PoolsConfig | `POOLS_` | `THREAD_POOL_SIZE`(8) · `HTTP_MAX_CONNECTIONS`(100) · `HTTP_MAX_KEEPALIVE_CONNECTIONS`(20) · `HTTP_CONNECT_TIMEOUT_SECONDS`(5.0) · `HTTP_TIMEOUT_SECONDS`(30.0) · `LLM_SEMAPHORE_LIMIT`(5) · `LLM_REQUEST_TIMEOUT_SECONDS`(120) · `CB_FAIL_MAX`(5) · `CB_RESET_TIMEOUT_SECONDS`(60) |
-| LlmEndpointConfig | `LLM_` | `BASE_URL`("") · `API_KEY`("") · `MODEL`("") |
+| LlmEndpointConfig | `LLM_` | `BASE_URL`("") · `API_KEY`("") · `MODEL`("") · `TOP_LOGPROBS`(20) · `PROMPT_LOGPROBS`(20)（两项 int ≥1；留空 = 省略对应请求字段；`PROMPT_LOGPROBS` 仅非流式请求生效） |
 | SeekDBSettings | `SEEKDB_` | `ENABLED`(false) · `HOST`(127.0.0.1) · `PORT`(2881) · `USER`(root) · `PASSWORD_ENV`(SEEKDB_PASSWORD) · `DATABASE`(test) · `VECTOR_DIM`(1024) · `POOL_MIN`(1) · `POOL_MAX`(4) |
 | TelegramSettings | `TELEGRAM_` | `ENABLED`(false) · `BOT_TOKEN_ENV`(TELEGRAM_BOT_TOKEN) · `API_BASE`(https://api.telegram.org) · `POLL_TIMEOUT_SECONDS`(25) · `OWNER_CHAT_ID`(null) · `BACKOFF_BASE_SECONDS`(1.0) · `BACKOFF_MAX_SECONDS`(60.0) · `STATE_DIR`(data/channels) |
 | QqChannelSettings | `QQ_` | `ENABLED`(false) · `HTTP_API_BASE_URL`(http://127.0.0.1:3000) · `ACCESS_TOKEN_ENV`(QQ_ACCESS_TOKEN) · `WEBHOOK_TOKEN_ENV`(QQ_WEBHOOK_TOKEN) · `REQUEST_TIMEOUT_SECONDS`(15.0) |

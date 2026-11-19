@@ -45,9 +45,14 @@ gateway = LlmGateway(
     retry_attempts=3,         # 传输重试总次数上限（含首次）
     retry_wait_seconds=0.5,   # 指数退避基数秒（Retry-After 缺失时）
     retry_after_max_seconds=30.0,  # Retry-After 等待封顶
+    top_logprobs=20,          # 每次生成位置回传前 N 候选（None = 省略；LLM_TOP_LOGPROBS）
+    prompt_logprobs=20,       # 提示词 logprobs 数（None = 省略；LLM_PROMPT_LOGPROBS；流式恒省）
     intimate_config=None,     # None = 按 LLM_INTIMATE_* env 构造（默认关闭形态）
 )
 ```
+
+app 装配从 `Settings.llm.top_logprobs` / `Settings.llm.prompt_logprobs`
+读取后传入网关（env `LLM_TOP_LOGPROBS` / `LLM_PROMPT_LOGPROBS`）。
 
 `wire_default_usage_recorder()` 是 llm → usage 的唯一接线点（函数体内惰性 import——llm 模块导入期零耦合；app 装配调用）。
 
@@ -158,7 +163,7 @@ chat_by_role(role, messages, params, intimacy_level=N)
 
 - **共享连接**：`httpx.AsyncClient` 一律注入（pools.PoolManager 下发 / 测试 MockTransport）——无私建连接（硬规则）；per-request 超时覆盖共享 client 默认；
 - **非流式**：`POST {base_url}/chat/completions` → `ChatResponseModel`（content / finish_reason / model / usage / latency_ms）；
-- **流式**：请求体固定声明 `stream_options.include_usage`；SSE 行解析（`data:` 载荷、`[DONE]` 终止、注释 / event 行忽略）→ `ChatStreamChunkModel` 增量迭代（末块携带 usage 时归一为 usage-only 块）；
+- **流式**：请求体固定声明 `stream_options.include_usage`；SSE 行解析（`data:` 载荷、`[DONE]` 终止、注释 / event 行忽略）→ `ChatStreamChunkModel` 增量迭代（末块携带 usage 时归一为 usage-only 块）；流式请求**恒省略 `prompt_logprobs`**（vLLM 对 `stream=true` 且 `prompt_logprobs>0` 返回 400，且流式响应不回传该字段——见「logprobs 与置信度」节）；
 - **重试（tenacity）**：幂等安全集 = 连接错误（ConnectError / ConnectTimeout）/ HTTP 5xx / 408 / 429；429 尊重 `Retry-After` 头（秒数或 HTTP-date；封顶 `retry_after_max_seconds`），缺失回落指数退避；**流式仅「发起 → 2xx 确认」阶段可重试**（首块产出后重放非幂等）；
 - **超时**：`settings.pools.llm_request_timeout_seconds`（env `POOLS_LLM_REQUEST_TIMEOUT_SECONDS`，默认 120）。
 
@@ -194,9 +199,14 @@ chat_by_role(role, messages, params, intimacy_level=N)
   "temperature": 0.7,
   "max_tokens": 1024,
   "top_p": 0.9,
-  "presence_penalty": 0.1
+  "presence_penalty": 0.1,
+  "logprobs": true,
+  "top_logprobs": 20,
+  "prompt_logprobs": 20
 }
 ```
+
+上例为非流式形态；流式请求的 `prompt_logprobs` 恒被省略（端点上界约束见「logprobs 与置信度」节）。
 
 携带原生工具面时（`tools` 非空进入请求体，`tool_choice` 缺省 `auto`）：
 
@@ -260,34 +270,61 @@ data: [DONE]
 
 ## logprobs 与置信度（强制字段）
 
-新版 vLLM 仅在请求**显式声明** logprob 字段时才回传对应数据——因此网关的
-每个 chat/completions 请求（含流式与工具请求）固定携带以下三字段（缺省
-构造旋钮：``DEFAULT_TOP_LOGPROBS=20`` / ``DEFAULT_PROMPT_LOGPROBS=20``，
-client/gateway 构造参数置 ``None`` 可省略对应字段，仅用于旧端点兼容；
-三项全关时 ``logprobs`` 亦不发送）：
+新版 vLLM 仅在请求**显式声明** logprob 字段时才回传对应数据。非流式
+chat/completions 请求（含工具请求）按配置携带以下三字段；**流式请求
+恒省略 `prompt_logprobs`**：
 
-| 请求字段 | 缺省值 | 语义 |
-|---|---|---|
-| ``logprobs`` | ``true`` | 要求回传生成 token 的对数概率数据 |
-| ``top_logprobs`` | ``20`` | 每个生成位置回传前 N 候选分布 |
-| ``prompt_logprobs`` | ``20`` | 提示词每个位置回传对数概率（可识别提示词各 token 的置信度） |
+| 请求字段 | 非流式缺省 | 流式 | 语义 |
+|---|---|---|---|
+| ``logprobs`` | ``true`` | 按 `top_logprobs` 旋钮声明 | 要求回传生成 token 的对数概率数据 |
+| ``top_logprobs`` | ``20`` | ``20``（可配） | 每个生成位置回传前 N 候选分布 |
+| ``prompt_logprobs`` | ``20`` | **不发送** | 提示词每个位置回传对数概率（可识别提示词各 token 的置信度） |
 
-响应侧归一（``ChatResponseModel``）：``content_logprobs``（生成 token 的
-token/logprob/候选分布列表）、``prompt_logprobs``（提示词条目列表，
-端点以 ``null`` 占位的位次原样保留为 ``None`` 元素）、以及派生字段
-``mean_token_logprob``（生成 token 平均对数概率）与 ``confidence``
-（``exp(平均对数概率)``——几何平均 token 概率的观测信号，不参与生成
-逻辑）。流式块（``ChatStreamChunkModel``）尽力捕获增量 logprobs 与首块
-prompt_logprobs；端点未回传 / 旧端点缺失时对应字段为 ``None``，解析
-对畸形条目不抛异常（跳过 + debug 日志）。
+流式约束（端点事实）：vLLM 协议校验器对 ``stream=true`` 且
+``prompt_logprobs > 0`` 直接返回 400；流式响应本身也不回传 prompt
+logprobs（该字段只出现在非流式响应顶层）。因此流式路径只声明
+``logprobs`` + ``top_logprobs``，``prompt_logprobs`` 由请求体构建层
+强制省略——即使调用方显式传入也丢弃；``logprobs`` 是否声明只取决于
+``top_logprobs``。
+
+配置面（旧端点逃生门）：网关构造参数 ``top_logprobs`` /
+``prompt_logprobs``（缺省 ``DEFAULT_TOP_LOGPROBS=20`` /
+``DEFAULT_PROMPT_LOGPROBS=20``；置 ``None`` 省略对应字段），app 装配
+从 ``Settings.llm`` 读取；env 面为 ``LLM_TOP_LOGPROBS`` /
+``LLM_PROMPT_LOGPROBS``（int ≥1；留空 / ``none`` / ``null`` = 省略）。
+两项全关时 ``logprobs`` 亦不发送。
+
+响应侧归一（``ChatResponseModel``）：
+
+- ``content_logprobs``：生成 token 的 token/logprob/候选分布列表；
+  条目的 ``logprob`` 为 ``null`` 表示端点真缺失，映射层跳过并记一条
+  debug 计数日志（不打印原文）；空 token 与 ``0.0`` 是合法回传值，
+  原样保留；
+- ``prompt_logprobs``：提示词条目列表；端点以 ``null`` 占位、以及空
+  dict / 无整数 token_id 的元素均保留为 ``None`` 占位（位次不左移）；
+  回传长度与提示词长度不一致时按实际位次归一，不抛异常；
+- ``mean_token_logprob``：生成 token 平均对数概率；派生输入过滤
+  NaN / ``+inf``（丢弃），保留 ``-inf``（``exp`` 下溢为 0.0，语义
+  正确）；全组无可用值时该字段与 ``confidence`` 均为 ``None``；
+- ``confidence``：``exp(平均对数概率)``（几何平均 token 概率的观测
+  信号，不参与生成逻辑）；平均对数概率大于 0 时直接取 1.0，不调用
+  ``math.exp``（防上溢）。
+
+流式块（``ChatStreamChunkModel``）尽力捕获增量 logprobs 与首块
+prompt_logprobs；端点未回传 / 旧端点缺失时对应字段为 ``None``。
 
 请求 / 响应示例（裁剪自真机形态；``prompt_logprobs`` 首元素为 null 表示
 该位次不计分——无权值 token 位）：
 
 ```json
-// 请求（网关自动附加——调用方无需手写）
+// 非流式请求（网关自动附加——调用方无需手写）
 {"model": "...", "messages": [...], "logprobs": true,
  "top_logprobs": 20, "prompt_logprobs": 20}
+
+// 流式请求（prompt_logprobs 强制省略）
+{"model": "...", "messages": [...], "stream": true,
+ "stream_options": {"include_usage": true}, "logprobs": true,
+ "top_logprobs": 20}
 
 // 响应片段
 {"choices": [{"index": 0, "message": {"role": "assistant", "content": "量子计算"},
@@ -384,7 +421,7 @@ prompt_logprobs；端点未回传 / 旧端点缺失时对应字段为 ``None``�
 
 `ChatRequestParams`：`temperature`（0.0-2.0）/ `max_tokens`（≥1）/ `top_p`（0-1.0）/ `extra`（provider 透传 dict）——未设置字段不进 wire 请求体。
 
-`ChatResponseModel`：`content` / **`tool_calls`**（`list[ToolCallModel]`——空列表 = 纯文本回复；content 与 tool_calls 可并存，调用方按 tool_calls 非空优先走工具循环）/ `finish_reason` / `model`（端点回显，缺省回落请求名）/ `usage: TokenUsageModel | None` / `latency_ms`（epoch 毫秒差）。
+`ChatResponseModel`：`content` / **`tool_calls`**（`list[ToolCallModel]`——空列表 = 纯文本回复；content 与 tool_calls 可并存，调用方按 tool_calls 非空优先走工具循环）/ `finish_reason` / `model`（端点回显，缺省回落请求名）/ `usage: TokenUsageModel | None` / `latency_ms`（epoch 毫秒差）/ `content_logprobs: list[LogprobTokenModel] | None`（生成 token logprobs；真缺失条目已跳过）/ `prompt_logprobs: list[PromptLogprobEntryModel | None] | None`（提示词条目，None 占位保留位次）/ `mean_token_logprob: float | None` / `confidence: float | None`（`exp(平均对数概率)`，平均值为正时直接 1.0）。
 
 `TokenUsageModel`：`input_tokens` / `output_tokens` / `total_tokens`（未提供时按 input+output 归一）。
 
@@ -508,7 +545,7 @@ config.yaml 是 LLM 注册表**唯一真源**：`/api/v1/models` 管理面对注
 
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_llm_models.py` / `test_llm_client.py` / `test_llm_gateway.py` / `test_llm_embeddings.py`（4 份）；
+- 测试位置：`src/tests/unit/test_llm_models.py` / `test_llm_client.py` / `test_llm_gateway.py` / `test_llm_embeddings.py` / `test_llm_logprobs.py`（5 份）；
 - 全部 `async def test_`；HTTP 一律 `httpx.MockTransport`（零真实出站）；网关经注入解析器 + 隔离 Settings 的真实 PoolManager（共享 client 替换为 MockTransport）；重试等待零 sleep（Retry-After 0 / 等待策略直测）；熔断 open 经预开熔断器确定性触发；embeddings 面覆盖请求形态 / index 归位 / 数量与序号契约 / purpose=embed 用量发射 / persona 解析序 / 角色未绑定；
 - 默认接线全链测试：gateway → `wire_default_usage_recorder` → usage 服务 → 共享 SQLite 引擎（`test_llm_gateway.py::test_default_usage_recorder_full_chain`）；
 - 覆盖率（`pixi run tests-unit` 实测）：harness/llm 组 **95%**（client 95% / gateway 100% / llm_models 100%）；

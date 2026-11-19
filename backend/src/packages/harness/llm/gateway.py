@@ -71,6 +71,8 @@ from packages.harness.llm.intimate_router import (
     log_incomplete_intimate_config,
 )
 from packages.harness.llm.llm_models import (
+    DEFAULT_PROMPT_LOGPROBS,
+    DEFAULT_TOP_LOGPROBS,
     ChatMessageModel,
     ChatRequestParams,
     ChatResponseModel,
@@ -114,6 +116,8 @@ class LlmGateway:
         retry_attempts: int = 3,
         retry_wait_seconds: float = 0.5,
         retry_after_max_seconds: float = 30.0,
+        top_logprobs: int | None = DEFAULT_TOP_LOGPROBS,
+        prompt_logprobs: int | None = DEFAULT_PROMPT_LOGPROBS,
         intimate_config: IntimateChannelConfig | None = None,
     ) -> None:
         """初始化网关。
@@ -128,6 +132,12 @@ class LlmGateway:
             retry_attempts: 传输重试总次数上限（含首次）。
             retry_wait_seconds: 指数退避基数秒。
             retry_after_max_seconds: Retry-After 等待封顶秒数。
+            top_logprobs: 每次生成位置回传的前 N 候选数（None = 省略
+                该字段；app 装配从 ``Settings.llm.top_logprobs`` 传入——
+                env ``LLM_TOP_LOGPROBS``）。
+            prompt_logprobs: 提示词 token logprobs 数（None = 省略；app
+                装配从 ``Settings.llm.prompt_logprobs`` 传入——env
+                ``LLM_PROMPT_LOGPROBS``；流式请求仍恒省该字段）。
             intimate_config: 亲密回复通道配置（None = 现场按
                 ``LLM_INTIMATE_`` env 构造——默认关闭形态；注入即替换
                 整个通道配置，见模块 docstring「亲密通道」）。
@@ -139,6 +149,8 @@ class LlmGateway:
         self._retry_attempts = retry_attempts
         self._retry_wait_seconds = retry_wait_seconds
         self._retry_after_max_seconds = retry_after_max_seconds
+        self._top_logprobs = top_logprobs
+        self._prompt_logprobs = prompt_logprobs
         #: 亲密通道配置（默认实例读 LLM_INTIMATE_ env——关闭即零行为变更）。
         self._intimate_config = (
             intimate_config if intimate_config is not None else IntimateChannelConfig()
@@ -580,6 +592,9 @@ class LlmGateway:
         config 全局单例。``wire_api_key`` 非 None 时直接用该明文构建 wire
         配置（亲密通道凭据来自 ``LLM_INTIMATE_API_KEY``，不参与全局兜底）。
 
+        logprobs 旋钮（``top_logprobs`` / ``prompt_logprobs``）原样透传
+        传输 client；流式请求的 ``prompt_logprobs`` 由 client 层强制省略。
+
         Args:
             entry: 模型条目（base_url / model / provider 来源）。
             wire_api_key: wire 密钥覆盖（None = 走条目密钥解析链）。
@@ -608,6 +623,8 @@ class LlmGateway:
             retry_attempts=self._retry_attempts,
             retry_wait_seconds=self._retry_wait_seconds,
             retry_after_max_seconds=self._retry_after_max_seconds,
+            top_logprobs=self._top_logprobs,
+            prompt_logprobs=self._prompt_logprobs,
         )
 
     async def _stream_for_entry(

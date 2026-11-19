@@ -352,15 +352,46 @@ class LlmEndpointConfig(BaseSettings):
     model 三键。模型注册表（多端点 + 角色绑定）经 config.yaml ``llm`` 段
     配置（见 :class:`LlmConfig`），与本 env 面互补。
 
-    Attributes:
+     Attributes:
         base_url: 默认端点 API 基础 URL（如 ``https://api.example.com/v1``）。
         api_key: 默认端点 API Key（SecretStr 存储，repr 不泄露）。
         model: 默认端点模型名（传给 provider 的 model 参数）。
+        top_logprobs: 每次生成位置回传的前 N 候选数（≥1；None = 省略
+            该字段——旧端点兼容）。
+        prompt_logprobs: 提示词 token logprobs 数（≥1；None = 省略该
+            字段；流式请求恒省略——见 llm 域传输客户端约束）。
     """
 
     base_url: str = Field(default="", description="默认端点 API 基础 URL")
     api_key: SecretStr = Field(default=SecretStr(""), description="默认端点 API Key")
     model: str = Field(default="", description="默认端点模型名")
+    top_logprobs: int | None = Field(
+        default=20,
+        ge=1,
+        description="每次生成位置回传的前 N 候选数（≥1；空值 = 省略该字段）",
+    )
+    prompt_logprobs: int | None = Field(
+        default=20,
+        ge=1,
+        description="提示词 token logprobs 数（≥1；空值 = 省略该字段；流式请求恒省略）",
+    )
+
+    @field_validator("top_logprobs", "prompt_logprobs", mode="before")
+    @classmethod
+    def _blank_logprobs_to_none(cls, value: Any) -> Any:
+        """空字符串 env 值归一为 None（``.env`` 中留空即省略该字段）。
+
+        Args:
+            value: 原始输入（环境变量为字符串）。
+
+        Returns:
+            None（空串 / ``none`` / ``null``）或原值（交由 pydantic 校验）。
+        """
+        if isinstance(value, str):
+            text = value.strip()
+            if not text or text.lower() in {"none", "null"}:
+                return None
+        return value
 
     model_config = SettingsConfigDict(
         env_prefix="LLM_",

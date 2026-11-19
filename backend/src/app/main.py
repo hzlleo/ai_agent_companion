@@ -273,6 +273,8 @@ async def startup_app_state(
     app.state.gateway = LlmGateway(
         settings=settings,
         usage_recorder=wire_default_usage_recorder(),
+        top_logprobs=settings.llm.top_logprobs,
+        prompt_logprobs=settings.llm.prompt_logprobs,
     )
     app.state.memory_store = build_memory_store(settings)
     _assemble_memory_services(app)

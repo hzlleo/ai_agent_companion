@@ -339,6 +339,8 @@ async def run_chat_cli(
             else LlmGateway(
                 settings=resolved_settings,
                 usage_recorder=wire_default_usage_recorder(),
+                top_logprobs=resolved_settings.llm.top_logprobs,
+                prompt_logprobs=resolved_settings.llm.prompt_logprobs,
             )
         )
         service = ChatService(

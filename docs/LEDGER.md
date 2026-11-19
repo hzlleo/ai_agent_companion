@@ -132,7 +132,7 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2759 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 2788 passed）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
 cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift；当前 mypy 190 文件零问题）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 6 用例（迁移链/并发唯一键/行锁/混合检索）
@@ -148,7 +148,9 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 - 测试环境：全异步 asyncio_mode=auto；SQLite 共享 fixture；不依赖真实配置；conftest 硬覆盖 env。
 - 关键模块坐标：harness/{core,config,database,pools,llm,usage,persona,chat,memory,channels（含 douyin）,canvas,tools,duty,scheduler,voice（含 voiceprint_*）,multimodal（含 sticker_*）,search,emotion,intent,rhythm,reminders}、app/api/{personas,memories,usage,models,voice,voiceprints,look_at,stickers,facts,reminders,directives,skills,core_memory,canvas,health,channels_qq}、前台 pages/{personas,memories,usage,models,stickers,canvas}。
 
-**LLM 网关强制 logprobs 字段**：新版 vLLM 仅在请求显式携带 `logprobs/top_logprobs/prompt_logprobs` 时回传 logprob 数据（置信度计算输入面）——网关全请求（含流式/工具）固定携带（缺省 20/20，构造旋钮 None 可省略）；响应侧解析为 `content_logprobs/prompt_logprobs` 并派生 `mean_token_logprob/confidence`（exp 均值，观测信号）。已实现于 `feat/llm-confidence-logprobs`（`08dd81e`）；请求构造测试 7 例（含流式 / 工具分支 / 旋钮略省）全异步。
+**LLM 网关强制 logprobs 字段**：新版 vLLM 仅在请求显式携带 `logprobs/top_logprobs/prompt_logprobs` 时回传 logprob 数据（置信度计算输入面）——网关非流式请求（含工具）固定携带（缺省 20/20，构造旋钮 None 可省略），流式请求省略 `prompt_logprobs`（端点约束见下条）；响应侧解析为 `content_logprobs/prompt_logprobs` 并派生 `mean_token_logprob/confidence`（exp 均值，观测信号）。已实现于 `feat/llm-confidence-logprobs`（`08dd81e`）；请求构造测试 7 例（含流式 / 工具分支 / 旋钮略省）全异步。
+
+**logprobs 批次修复（P0/P1/P2 闭环）**：流式请求强制省略 `prompt_logprobs`——vLLM 协议校验器对 `stream=true` 且 `prompt_logprobs>0` 直接 400，流式响应也不回传该字段；网关构造新增 `top_logprobs` / `prompt_logprobs` 并接通 `LLM_TOP_LOGPROBS` / `LLM_PROMPT_LOGPROBS` env（int ≥1；空 = 省略）；置信度派生对正均值短路 1.0、过滤 NaN 并保留 -inf，全 NaN 时派生字段为 None；wire `logprob` 改可空并以 `None` 为真缺失判据（空 token / 0.0 合法值保留）；prompt 空 dict / 无整数键元素占位 None 保持位次；畸形条目跳过记 debug 计数（不打印原文）。测试与文档同步（`test_llm_logprobs.py` 全异步）。
 
 ### 已完成切片：R2c 记忆能力（核心记忆 + 关系进展 + 前端面板）——已合并（PR#12，`3872504`）
 **已完成**：
