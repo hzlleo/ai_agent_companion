@@ -428,6 +428,12 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **剩余**：无。
 
+### 已完成切片：记忆批次复审残留闭环（成功路径单次提交）
+
+- `correct_fact` 成功路径改为 `else` 分支记录日志并直接返回，第二个 `_upsert_once` 仅作冲突后的重试路径；此前 try 体为赋值导致每次成功更正都重复执行一次写入（终态依赖合并分支的偶然幂等）。
+- 用例 `test_correct_happy_path_commits_once` 以计数 `_commit` 钉死「无冲突时恰好一次提交」（反向：去掉 `else` 短路即红）。
+- 验证：`cd backend && pixi run verify-slice -- --slice memory-review`（见当前 canonical 证据文件）；`test_facts_service.py` + `test_skills_service.py` 47 passed。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
