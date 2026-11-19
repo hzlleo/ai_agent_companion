@@ -1,0 +1,166 @@
+{
+  "version": 1,
+  "note": "HTTP wire 模型导出豁免清单——每项必须写明不导出前端契约的理由（scripts/surface_check.py 消费）；陈旧条目在门禁输出中报告并应删除。",
+  "entries": [
+    {
+      "surface": "AsrResultModel",
+      "reason": "语音转写响应；语音面当前仅 CLI 与内部链路消费，前端未建立类型契约。"
+    },
+    {
+      "surface": "CanvasKind",
+      "reason": "StrEnum 画布类型查询参数值域；导出器只序列化 BaseModel JSON Schema，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "CoreBlockKey",
+      "reason": "StrEnum 四块键值域；导出器只序列化 BaseModel JSON Schema，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "CuratedKind",
+      "reason": "StrEnum 策展记忆类型查询参数值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "CuratedSort",
+      "reason": "StrEnum 策展列表排序值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "CuratedStatus",
+      "reason": "StrEnum 策展记忆状态查询参数值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "EpisodeBatchDeleteRequest",
+      "reason": "情景批量删除请求体（ids 列表）；前端手写镜像已存在，未登记为导出器 schema 键。"
+    },
+    {
+      "surface": "EpisodeBatchDeleteResponseDTO",
+      "reason": "批量删除结果；与 PersonaBatchDeleteResponseDTO 同构，memory.ts 以别名消费，导出器按 Persona 键登记。"
+    },
+    {
+      "surface": "EpisodeKind",
+      "reason": "StrEnum 情景事件类型查询参数值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "HealthStatusDTO",
+      "reason": "存活探针响应，仅部署/监控探针消费，前端不建契约。"
+    },
+    {
+      "surface": "LookAtResultModel",
+      "reason": "look_at 工具/API 结果；随调用上下文回传，前端未建类型契约。"
+    },
+    {
+      "surface": "MemoryProvenance",
+      "reason": "StrEnum 记忆来源分级查询参数值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "PersonaFactCategory",
+      "reason": "StrEnum 人物事实类别查询参数值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "PersonaFactStatus",
+      "reason": "StrEnum 人物事实状态值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "PersonaStateLayer",
+      "reason": "StrEnum L/M/S 状态层值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "PersonaStatus",
+      "reason": "StrEnum 人格状态查询参数值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "QqWebhookAckDTO",
+      "reason": "QQ webhook 平台侧应答（NapCat 消费），前端不参与该链路。"
+    },
+    {
+      "surface": "ReminderStatus",
+      "reason": "StrEnum 提醒状态查询参数值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "SearchProviderCreateDTO",
+      "reason": "搜索 provider 注册表创建请求；前端搜索面板未落地，先行后端管理面。"
+    },
+    {
+      "surface": "SearchProviderUpdateDTO",
+      "reason": "搜索 provider 注册表更新请求；前端搜索面板未落地，先行后端管理面。"
+    },
+    {
+      "surface": "SearchRegistryStateDTO",
+      "reason": "搜索 provider 注册表状态响应；前端搜索面板未落地，先行后端管理面。"
+    },
+    {
+      "surface": "SearchUsageSummaryDTO",
+      "reason": "搜索用量汇总响应；前端搜索面板未落地，先行后端管理面。"
+    },
+    {
+      "surface": "Settings",
+      "reason": "运行时配置聚合对象（WS 端点依赖注入），不是请求/响应载荷。"
+    },
+    {
+      "surface": "SkillStatus",
+      "reason": "StrEnum 技能状态查询参数值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "StickerAnnotationStatus",
+      "reason": "StrEnum 表情包标注状态查询参数值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "UsageGroupBy",
+      "reason": "StrEnum 用量聚合维度值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "UsagePurpose",
+      "reason": "StrEnum 用量用途查询参数值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "UsageStatus",
+      "reason": "StrEnum 用量状态查询参数值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "UsageTimeBucket",
+      "reason": "StrEnum 用量时间桶查询参数值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "VoiceTtsRequestDTO",
+      "reason": "TTS 合成请求；前端语音面板未建立类型契约，CLI 直接消费。"
+    },
+    {
+      "surface": "VoiceprintConsentGrantDTO",
+      "reason": "声纹同意授予请求；PIPL 管理面先行，前端声纹面板未落地。"
+    },
+    {
+      "surface": "VoiceprintConsentRecordDTO",
+      "reason": "声纹同意记录响应；PIPL 管理面先行，前端声纹面板未落地。"
+    },
+    {
+      "surface": "VoiceprintDeleteResultModel",
+      "reason": "声纹档案删除结果；PIPL 管理面先行，前端声纹面板未落地。"
+    },
+    {
+      "surface": "VoiceprintEnrollRequestDTO",
+      "reason": "声纹批量注册请求；PIPL 管理面先行，前端声纹面板未落地。"
+    },
+    {
+      "surface": "VoiceprintEnrollResultModel",
+      "reason": "声纹注册结果；PIPL 管理面先行，前端声纹面板未落地。"
+    },
+    {
+      "surface": "VoiceprintPrivacyNoticeDTO",
+      "reason": "声纹隐私告知文本响应；PIPL 管理面先行，前端声纹面板未落地。"
+    },
+    {
+      "surface": "VoiceprintProfileDTO",
+      "reason": "声纹档案聚合响应；PIPL 管理面先行，前端声纹面板未落地。"
+    },
+    {
+      "surface": "VoiceprintVerifyRequestDTO",
+      "reason": "声纹校验请求；PIPL 管理面先行，前端声纹面板未落地。"
+    },
+    {
+      "surface": "VoiceprintVerifyResultModel",
+      "reason": "声纹校验结果；PIPL 管理面先行，前端声纹面板未落地。"
+    },
+    {
+      "surface": "VoiceprintWithdrawResultModel",
+      "reason": "声纹同意撤回结果；PIPL 管理面先行，前端声纹面板未落地。"
+    }
+  ]
+}

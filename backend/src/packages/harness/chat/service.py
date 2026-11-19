@@ -110,12 +110,15 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
 可选工具循环（R2a-4——构造注入 ``tools`` + ``tool_executor`` 后，
 ``reply`` 走有界工具循环；缺省 ``tools=None`` 保持既有零工具形态）：
 
-    - 循环机械与 duty 域同构（``duty_service._tool_loop`` 镜像）：
-      gateway ``chat_by_role(chat, messages, tools=specs)`` →
-      ``tool_calls`` 非空则 assistant 轮回放 + 逐调用经 ``tool_executor``
-      （:class:`ToolExecutorFace`——``ToolRegistry.execute_call`` 结构
-      满足）执行 + tool 轮反馈（``tool_call_id`` 配对）；``tool_calls``
-      空则 content 即最终回复；
+    - 循环机械与 duty 域同源：gateway ``chat_by_role(chat, messages,
+      tools=specs)`` → ``tool_calls`` 非空则 assistant 轮回放 + 逐调用经
+      ``tool_executor``（:class:`ToolExecutorFace`——``ToolRegistry.execute_call``
+      结构满足）执行 + tool 轮反馈（``tool_call_id`` 配对）；``tool_calls``
+      空则 content 即最终回复。返回形态与接线跟 duty 域不同：本域返回
+      :class:`ToolLoopResultModel`（最终正文 + 尾部轮次——合规重试据此
+      复用工具证据、不重跑工具）；``duty_service._tool_loop`` 只返回最终
+      报告文本，由值班轮收敛进 ``DutyReportModel``；发送者来源分级工具闸
+      与会话主键绑定是本域独有接线（见 ``_tool_loop`` 方法文档）；
     - 步数上限 :data:`CHAT_TOOL_STEP_CAP`（锁定 5——chat 单轮收敛快于
       duty 巡检）；超限追加收尾指令（system）+ **无工具面**最终调用
       （final-report forcing）；
@@ -1525,7 +1528,7 @@ class ChatService:
         sender_provenance: MemoryProvenance = MemoryProvenance.OWNER,
         intimacy_level: int | None = None,
     ) -> ToolLoopResultModel:
-        """有界工具循环（返回最终回复与尾部轮次；机械镜像 duty_service._tool_loop）。
+        """有界工具循环（返回最终回复与尾部轮次；骨架与 duty_service._tool_loop 同源，返回形态不同）。
 
         循环消息为本地副本（组装结果 + assistant 工具调用轮回放 + tool
         反馈轮）——**不进入 ``state.turns`` / 持久化**（仅最终 assistant
