@@ -133,7 +133,7 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2816 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 2827 passed）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
 cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift；当前 mypy 191 文件零问题）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 9 用例（迁移链/并发唯一键/行锁/混合检索）
@@ -406,6 +406,25 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 - 根 `pixi run gates` → **0**（注释门 violations=0；同步测试棘轮通过；noqa 冻结通过；沙盒漂移 38 项一致；红探针门通过；文档真相通过；断言棘轮 8074 asserts / 596 raises（无下降）；导出面 102 引用 / 62 登记 / 40 豁免 + env 键面 686 行；prose-pin 484 命中，prose=59）。
 - `cd backend && pixi run gen-examples` → **0** 连续两次；三件套 `.env.example` / `config.example.yaml` / `extensions_config.example.json` sha256 前后一致（与改动前亦一致——幂等、无 env 键新增）。
 - 踢线用例去 flake 实证：`for i in $(seq 1 30); do pixi run pytest "src/tests/unit/test_wecom_client.py::TestSubscribeAndLifecycle::test_kicked_event_stops_reconnect" -q --asyncio-mode=auto; done` → **0**（30 次运行，failures=0）。
+
+**剩余**：无。
+
+### 已完成切片：R2c 记忆批次 Oracle 补审修复（P2×2，本分支工作区）
+
+**范围澄清**：记忆域（facts / skills / core memory / dreaming）的代码载体为 PR#12（本台账 R2c 行）；PR#11（R2b 人格表达，`6b54b2a`）仅轻触 memory 三文件与迁移 `0010` / `0011`（swipes 变体 + 提醒），不构成文档漂移来源。
+
+**已完成**（逐条闭环）：
+
+1. **P2 facts 更正并发**：`FactsService.correct_fact` 对 `_upsert_once` 套上与 `upsert_fact` 同款的 `IntegrityError` 处理——捕获后回滚、重读目标行（回滚使行对象过期）并**单次**重试；重试仍撞 `uq_ff_persona_facts_active` 按既有 `INTERNAL_ERROR` 语义上抛（`details={id, category}`）；docstring 的并发面段落与 Raises 同步该语义。测试 `test_correct_converges_after_concurrent_active_conflict`：提交点钩子先回滚本次半成品、提交同身份竞争活动行，再用一条同身份待插入行触发**真实** SQLite 唯一键 `IntegrityError`（断言 `orig` 含 `UNIQUE constraint failed`），复现「旧行降级后、新行置标记前」被他写者抢先的时序；断言终态仅一条 active、旧行 superseded 且 `superseded_by_id` 指向竞争现行行、更正说明已并入该行证据、无异常上抛、重试恰一次。`test_correct_retry_conflict_raises_internal_error`：两次提交均撞键 → `INTERNAL_ERROR`，回滚后原行仍 active / version=1（无半成品行）。反向实证：去掉重试编排后首条用例单跑 1 failed，复原后通过。
+2. **P2 skills 扫描确定性**：`match_for_compose` 候选查询在 `.limit(SKILL_MATCH_SCAN_LIMIT)` 前加 `ORDER BY use_count DESC, id ASC`——扫描帽只裁剪低强化候选，高强化技能不再被插入顺序挤出命中面；模块 docstring 与 persona.md 技能节改写为「按强化度（`use_count` 降序、`id` 升序）取前 500 后评估」。测试 `test_match_scan_limit_keeps_highest_strength_candidates`：ORM 批量插入 500 条填充启用技能 + 1 条 `use_count=999` 的命中技能（共 501 条启用行），断言最高强化技能必在命中面且两次调用结果一致。反向实证：临时去掉 ORDER BY 后该用例单跑 1 failed，复原后通过。
+
+**验证**（主 Agent 实跑，命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2827 passed**；新增 3 例）。
+- `cd backend && pixi run coverage-gates` → **0**（24 组 ≥80%；harness/persona 95.7%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**（191 源文件零问题）。
+- 根 `pixi run gates` → **0**（注释门 violations=0 hints=30；同步测试棘轮通过；noqa 冻结 0/0/0/7；沙盒漂移 38 项一致；红探针 190/190/3；文档真相门 env 分节表一致 + 未完成标记 7=基线；导出面 102 引用 / 62 登记 / 40 豁免 + env 键面 686 行；断言棘轮 asserts=8090 raises=597 无下降；prose-pin 484 命中，prose=59）。
+- `cd backend && pixi run gen-examples` → **0** 连续两次；三件套 `.env.example` / `config.example.yaml` / `extensions_config.example.json` sha256 两次完全一致（幂等，无 env 键新增）。
 
 **剩余**：无。
 

@@ -727,7 +727,9 @@ refs = await service.active_skill_refs(session)                      # 梦境提
 result = await service.upsert_mined(session, SkillCreateModel(...))  # 梦境写入（result.created / merged）
 ```
 
-compose 匹配语义：候选集为启用态技能；命中 = 任一触发短语（归一化后）出现在
+compose 匹配语义：候选集为启用态技能中按强化度（`use_count` 降序、`id` 升序）
+排序后取前 500 条（`SKILL_MATCH_SCAN_LIMIT`）再评估——扫描帽只裁剪低强化候选，
+高强化技能不会被插入顺序挤出命中面；命中 = 任一触发短语（归一化后）出现在
 本轮用户文本中，或描述关键词任一片段出现；排序 = `use_count` 降序、同次数按
 名称升序；最多取 2 条（`SKILL_COMPOSE_MAX_SKILLS`）；命中后调度后台任务把
 `use_count + 1` / `last_used_ms` 落当前时刻。梦境写入（`upsert_mined`）对同

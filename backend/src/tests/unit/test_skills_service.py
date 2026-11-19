@@ -5,7 +5,8 @@ active + manual）/ 同名冲突（CONFLICT——中文消息）/ 触发短语�
 去重 / 原地编辑（版本递增、改名换 slug、与他人格内技能冲突）/ 状态
 切换（停用 / 启用幂等）/ 硬删除 / 列表（状态过滤 + 使用次数降序 +
 游标分页）/ compose 匹配（触发短语字面命中 / 描述关键词弱命中 / 无命中
-/ 条数帽与排序 / 使用计数 fire-and-forget 写入）/ 梦境写入（新建 mined /
+/ 条数帽与排序 / 扫描帽按强化度取前 500（501 条启用行下最高强化技能
+必在命中面）/ 使用计数 fire-and-forget 写入）/ 梦境写入（新建 mined /
 同 slug 元数据合并：置信度最大值 + 触发短语并集上限、状态与版本不变）/
 人格隔离。
 """
@@ -26,6 +27,7 @@ from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.database.engine import db_engine_holder
 from packages.harness.persona.service import bind_persona_context
 from packages.harness.persona.skills import (
+    SKILL_MATCH_SCAN_LIMIT,
     SkillsService,
     _normalize_triggers,
     normalize_skill_slug,
@@ -344,6 +346,50 @@ async def test_match_caps_and_orders_by_use_count(db_session: AsyncSession) -> N
         hits = await service.match_for_compose(db_session, "帮我总结一下今天的事")
     assert len(hits) == SKILL_COMPOSE_MAX_SKILLS
     assert [item.id for item in hits] == [high.id, mid.id]
+
+
+async def test_match_scan_limit_keeps_highest_strength_candidates(
+    db_session: AsyncSession,
+) -> None:
+    """501 条启用技能：扫描帽按强化度取前 500——最高 use_count 技能必在命中面且两次一致。"""
+    service = SkillsService(clock=lambda: NOW, usage_write_scheduler=lambda coro: coro.close())
+    async with bind_persona_context(PERSONA_A):
+        fillers = [
+            PersonaSkillRow(
+                name=f"填充技能{index}",
+                slug=f"填充技能{index}",
+                description="filler keyword",
+                triggers=["闲聊话题"],
+                content="1. 填充",
+                status=SkillStatus.ACTIVE.value,
+                source=SkillSource.MANUAL.value,
+                confidence=0.5,
+                use_count=index % 3,
+                last_used_ms=None,
+                version=1,
+            )
+            for index in range(SKILL_MATCH_SCAN_LIMIT)
+        ]
+        hot = PersonaSkillRow(
+            name="热技能",
+            slug="热技能",
+            description="weekly report",
+            triggers=["写周报"],
+            content="1. 写周报",
+            status=SkillStatus.ACTIVE.value,
+            source=SkillSource.MANUAL.value,
+            confidence=0.6,
+            use_count=999,
+            last_used_ms=None,
+            version=1,
+        )
+        db_session.add_all([*fillers, hot])
+        await db_session.commit()
+        first_hits = await service.match_for_compose(db_session, "帮我写周报吧")
+        second_hits = await service.match_for_compose(db_session, "帮我写周报吧")
+    assert len(fillers) == SKILL_MATCH_SCAN_LIMIT
+    assert [item.id for item in first_hits] == [hot.id]
+    assert [item.id for item in second_hits] == [hot.id]
 
 
 async def test_match_bumps_usage_fire_and_forget(
