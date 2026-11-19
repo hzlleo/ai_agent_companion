@@ -28,8 +28,9 @@
 
 compose 匹配面（:meth:`SkillsService.match_for_compose`）：
 
-    - 候选集 = 现行 ``active`` 技能（状态过滤在查询层，扫描上限
-      :data:`SKILL_MATCH_SCAN_LIMIT`）；
+    - 候选集 = 现行 ``active`` 技能中按强化度（``use_count`` 降序、
+      ``id`` 升序）排序后取前 :data:`SKILL_MATCH_SCAN_LIMIT` 条再评估
+      （扫描帽只裁剪低强化候选——高强化技能不会被插入顺序挤出命中面）；
     - 命中判定 = **字面包含**：任一触发短语（NFKC + casefold 后）出现在
       本轮用户文本中；或描述关键词（描述按非单词字符切分后的 2-40 字符
       片段、最多 12 个、去重）任一出现在用户文本中——描述匹配是弱轴，
@@ -87,8 +88,8 @@ __all__ = [
     "SkillsService",
 ]
 
-#: compose 匹配的候选扫描上限（现行技能全量评估的硬帽——防异常数据量
-#: 把单轮回复的匹配面拖成全表扫描）。
+#: compose 匹配的候选扫描上限（按 ``use_count`` 降序 / ``id`` 升序裁剪后
+#: 评估的硬帽——防异常数据量把单轮回复的匹配面拖成全表扫描）。
 SKILL_MATCH_SCAN_LIMIT: int = 500
 
 #: 描述关键词的最大提取数（弱匹配轴的确定性上限）。
@@ -640,6 +641,9 @@ class SkillsService:
                 await session.execute(
                     select(PersonaSkillRow)
                     .where(PersonaSkillRow.status == SkillStatus.ACTIVE.value)
+                    .order_by(
+                        desc(PersonaSkillRow.use_count), PersonaSkillRow.id.asc()
+                    )
                     .limit(SKILL_MATCH_SCAN_LIMIT)
                 )
             )

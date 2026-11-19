@@ -299,6 +299,9 @@ class FactsService:
         身份时不产生新版本（元数据刷新 + 更正说明追加——文档化边界）；若
         更正回更早的正文（目标身份已有其它现行行），证据合并到该现行行并
         直接把旧行置为 superseded（同样不新起版本——同身份单现行行不变式）。
+        并发面：同身份写入者先抢到活动标记时提交撞唯一键 → 回滚后
+        重读目标行并**单次**重试（重试会走「目标身份已有现行行」的合并分支
+        收敛）；重试仍冲突按 ``INTERNAL_ERROR`` 上抛。
 
         Args:
             session: 注入的异步 Session（人格上下文已绑定）。
@@ -310,7 +313,8 @@ class FactsService:
 
         Raises:
             BusinessException: 事实不存在（``NOT_FOUND``）；非现行状态 /
-                正文边界非法（``VALIDATION_ERROR``）。
+                正文边界非法（``VALIDATION_ERROR``）；并发抢活动标记冲突
+                重试后仍失败（``INTERNAL_ERROR``）。
         """
         row = await self._require_fact(session, fact_id)
         if row.status != PersonaFactStatus.ACTIVE.value:
@@ -329,16 +333,45 @@ class FactsService:
             provenance=MemoryProvenance.OWNER,
         )
         confidence = dto.confidence if dto.confidence is not None else row.confidence
-        result = await self._upsert_once(
-            session,
-            category=PersonaFactCategory(row.category),
-            content=content,
-            confidence=confidence,
-            evidence=_merge_evidence(prior_evidence, [correction_note]),
-            provenance=MemoryProvenance.OWNER,
-            source=PersonaFactSource.CORRECTION,
-            demote=row,
-        )
+        evidence = _merge_evidence(prior_evidence, [correction_note])
+        category = PersonaFactCategory(row.category)
+        try:
+            result = await self._upsert_once(
+                session,
+                category=category,
+                content=content,
+                confidence=confidence,
+                evidence=evidence,
+                provenance=MemoryProvenance.OWNER,
+                source=PersonaFactSource.CORRECTION,
+                demote=row,
+            )
+        except IntegrityError:
+            await self._rollback_quietly(session)
+            logger.info(
+                "人物事实更正并发抢活动标记冲突，重读行后重试: id={}, category={}",
+                fact_id,
+                category.value,
+            )
+            row = await self._require_fact(session, fact_id)  # 回滚已使行对象过期，重读
+        try:
+            result = await self._upsert_once(
+                session,
+                category=category,
+                content=content,
+                confidence=confidence,
+                evidence=evidence,
+                provenance=MemoryProvenance.OWNER,
+                source=PersonaFactSource.CORRECTION,
+                demote=row,
+            )
+        except IntegrityError as exc:
+            await self._rollback_quietly(session)
+            raise BusinessException(
+                code=ErrorCode.INTERNAL_ERROR,
+                message="人物事实并发写入冲突（重试后仍冲突）",
+                details={"id": fact_id, "category": category.value},
+            ) from exc
         logger.info(
             "人物事实已更正: old_id={}, new_id={}, version={}",
             fact_id,

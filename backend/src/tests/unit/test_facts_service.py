@@ -3,7 +3,8 @@
 覆盖面：正文归一化与身份指纹（确定性 / 空白折叠）/ 创建（首版现行行 +
 证据落库）/ 同身份写入的元数据刷新（置信度最大值 + 证据合并，不推进
 版本）/ provenance 与 source 配对强制 / 正文边界 / 更正（新版本 +
-旧行 superseded + 证据保留追加更正说明）/ 更正非现行行拒绝 / 驳回
+旧行 superseded + 证据保留追加更正说明）/ 更正非现行行拒绝 / 更正并发
+抢活动标记（冲突后单次重试收敛 / 重试仍冲突 INTERNAL_ERROR）/ 驳回
 （幂等 + 驳回后同身份可重新起链）/ 硬删除（引用清理）/ 列表过滤与
 游标分页 / compose 注入裁剪（置信度排序 + 条数帽 + 字符帽）/ 证据
 校验（未知事件丢弃不抛出）/ 人格隔离。
@@ -14,6 +15,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import packages.harness.memory.orm as memory_orm  # noqa: F401  模型注册副作用导入（共享建表）
@@ -281,6 +283,113 @@ async def test_correct_requires_active_fact(db_session: AsyncSession) -> None:
             await facts_service.correct_fact(db_session, 424242, FactCorrectDTO(content="不存在"))
     assert stale.value.code == ErrorCode.VALIDATION_ERROR
     assert missing.value.code == ErrorCode.NOT_FOUND
+
+
+async def test_correct_converges_after_concurrent_active_conflict(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """更正并发抢活动标记：撞唯一键 → 单次重试并入竞争现行行（不抛 500）。
+
+    竞态注入口径：竞争写入者在本事务提交前把同身份（同 category /
+    normalized_hash）的活动行落库；钩子在该提交点回滚半成品、先提交竞争行，
+    再用一条同身份的待插入行触发**真实** ``uq_ff_persona_facts_active``
+    唯一键失败（SQLAlchemy ``IntegrityError`` 由 SQLite 抛出，非构造）——
+    恰好复现「旧行降级后、新行置标记前」被并发写入者抢先的时序，重试路径因此面对
+    一条真实可见的竞争现行行。
+    """
+    new_content = "主人其实更喜欢无糖绿茶"
+
+    def _active_row() -> PersonaFactRow:
+        return PersonaFactRow(
+            category=PersonaFactCategory.PREFERENCE.value,
+            content=new_content,
+            normalized_hash=fact_content_hash(normalize_fact_content(new_content)),
+            confidence=0.5,
+            status=PersonaFactStatus.ACTIVE.value,
+            provenance=MemoryProvenance.OWNER.value,
+            source=PersonaFactSource.MANUAL.value,
+            evidence=[],
+            superseded_by_id=None,
+            version=1,
+            active_marker=FACT_ACTIVE_MARKER,
+        )
+
+    async with bind_persona_context(PERSONA_A):
+        first = await facts_service.upsert_fact(db_session, _create())
+        competitor = _active_row()
+        real_commit = FactsService._commit
+        attempts = 0
+        conflicts: list[IntegrityError] = []
+
+        async def racing_commit(session: AsyncSession) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                await session.rollback()
+                session.add(competitor)
+                await real_commit(session)
+                session.add(_active_row())
+                try:
+                    await real_commit(session)
+                except IntegrityError as exc:
+                    conflicts.append(exc)
+                    raise
+                return
+            await real_commit(session)
+
+        monkeypatch.setattr(FactsService, "_commit", staticmethod(racing_commit))
+        corrected = await facts_service.correct_fact(
+            db_session, first.record.id, FactCorrectDTO(content=new_content)
+        )
+        rows = list(
+            (await db_session.execute(select(PersonaFactRow).order_by(PersonaFactRow.id.asc())))
+            .scalars()
+            .all()
+        )
+    assert attempts == 2
+    assert len(conflicts) == 1
+    assert "UNIQUE constraint failed" in str(conflicts[0].orig)
+    assert corrected.id == competitor.id
+    assert [row.status for row in rows] == [
+        PersonaFactStatus.SUPERSEDED.value,
+        PersonaFactStatus.ACTIVE.value,
+    ]
+    old_row = rows[0]
+    assert old_row.id == first.record.id
+    assert old_row.active_marker is None
+    assert old_row.superseded_by_id == corrected.id
+    assert sum(row.active_marker == FACT_ACTIVE_MARKER for row in rows) == 1
+    assert any(item.quote.startswith("主人纠正：") for item in corrected.evidence)
+
+
+async def test_correct_retry_conflict_raises_internal_error(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """更正重试仍撞唯一键：INTERNAL_ERROR 上抛，事务回滚（终态无半成品行）。"""
+    async with bind_persona_context(PERSONA_A):
+        first = await facts_service.upsert_fact(db_session, _create())
+        attempts = 0
+
+        async def always_conflict(session: AsyncSession) -> None:
+            nonlocal attempts
+            attempts += 1
+            raise IntegrityError(
+                "UNIQUE constraint failed: uq_ff_persona_facts_active",
+                None,
+                RuntimeError("unique"),
+            )
+
+        monkeypatch.setattr(FactsService, "_commit", staticmethod(always_conflict))
+        with pytest.raises(BusinessException) as exc_info:
+            await facts_service.correct_fact(
+                db_session, first.record.id, FactCorrectDTO(content="主人其实更喜欢无糖绿茶")
+            )
+        rows = list((await db_session.execute(select(PersonaFactRow))).scalars().all())
+    assert exc_info.value.code == ErrorCode.INTERNAL_ERROR
+    assert attempts == 2
+    assert [(row.id, row.status, row.version) for row in rows] == [
+        (first.record.id, PersonaFactStatus.ACTIVE.value, 1)
+    ]
 
 
 async def test_correct_same_content_refreshes_in_place(db_session: AsyncSession) -> None:
