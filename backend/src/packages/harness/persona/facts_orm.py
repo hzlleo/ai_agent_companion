@@ -90,6 +90,12 @@ class PersonaFactRow(Base, BigIntIdMixin, TimestampMixin, PersonaMixin):
         Index("ix_ff_persona_facts_normalized_hash", "normalized_hash"),
         Index("ix_ff_persona_facts_category", "category"),
         Index("ix_ff_persona_facts_status", "status"),
+        Index(
+            "ix_ff_persona_facts_persona_status_confidence",
+            "persona_id",
+            "status",
+            "confidence",
+        ),
     )
 
     category: Mapped[str] = mapped_column(

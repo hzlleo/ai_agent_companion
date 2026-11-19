@@ -97,8 +97,20 @@ pixi run alembic upgrade head                        # 应用迁移
 ```
 
 - `alembic/env.py`：异步引擎（`run_sync` 桥接）+ `sqlalchemy.url` 由 `settings.database.async_sqlalchemy_url` 动态注入（alembic.ini 留空）+ `sys.path` 注入 backend/src；
-- `versions/000000000001_initial.py`：空基线（版本链锚点）；域表迁移链：`0002_add_usage_records`（用量）→ `0003_add_personas`（人格注册表 + 状态）→ `0004_add_memory_tables`（记忆四表）→ `0005_add_dream_runs`（梦境运行日志）→ `0006_add_persona_voice_profile`（人格音色绑定）→ `0007_memory_concurrency_constraints`（策展单 active 唯一键 + 会话消息 seq 唯一键——memory 域并发不变式）→ `0008_persona_primary_marker`（persona 域多激活可寻址模型：`ff_personas` 增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active` 单激活位退役——旧激活行回填 `'primary'` 后删列，降级逆向重建；与 0007 同「NULL 共存唯一键」模式）→ `0009_add_chat_message_meta`（会话消息 meta 列）→ `0010_chat_message_variants`（消息变体列）→ `0011_add_reminders`（提醒表）→ `0012_curated_lifecycle`（策展生命周期列）→ `0013_persona_facts`（人物事实）→ `0014_persona_skills`（程序性技能）→ `0015_core_memory`（核心记忆块 + append-only 修订）→ `0016_voiceprint_sticker`（声纹样本 / 同意记录 / 表情包库三表）；
+- `versions/000000000001_initial.py`：空基线（版本链锚点）；域表迁移链：`0002_add_usage_records`（用量）→ `0003_add_personas`（人格注册表 + 状态）→ `0004_add_memory_tables`（记忆四表）→ `0005_add_dream_runs`（梦境运行日志）→ `0006_add_persona_voice_profile`（人格音色绑定）→ `0007_memory_concurrency_constraints`（策展单 active 唯一键 + 会话消息 seq 唯一键——memory 域并发不变式）→ `0008_persona_primary_marker`（persona 域多激活可寻址模型：`ff_personas` 增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active` 单激活位退役——旧激活行回填 `'primary'` 后删列，降级逆向重建；与 0007 同「NULL 共存唯一键」模式）→ `0009_add_chat_message_meta`（会话消息 meta 列）→ `0010_chat_message_variants`（消息变体列）→ `0011_add_reminders`（提醒表）→ `0012_curated_lifecycle`（策展生命周期列）→ `0013_persona_facts`（人物事实）→ `0014_persona_skills`（程序性技能）→ `0015_core_memory`（核心记忆块 + append-only 修订）→ `0016_voiceprint_sticker`（声纹样本 / 同意记录 / 表情包库三表）→ `0017_canvas_documents`（画布产物表 + 人格 / 更新时间复合索引）→ `0018_persona_facts_confidence_index`（人物事实 `(persona_id, status, confidence)` 复合索引）；
 - `target_metadata = Base.metadata`（autogenerate 对比基准）。
+
+### 0017_canvas_documents（画布产物）
+
+`ff_canvas_documents`（PersonaMixin 人格作用域）：`title` / `kind`（html / svg / markdown）/ `content`（自包含文本）/ `revision`（创建 1、修改递增）/ `created_at` / `updated_at`（epoch 毫秒）。索引：`ix_ff_canvas_documents_persona_id`、`ix_ff_canvas_documents_persona_updated (persona_id, updated_at)`（「当前人格最近修改」列表查询）。无唯一键——同名产物合法（标题是展示面，主键与修订号才是标识）。降级删索引后删表（数据整体丢弃）。
+
+### 0018_persona_facts_confidence_index（人物事实复合索引）
+
+为 `ff_persona_facts` 增加 `ix_ff_persona_facts_persona_status_confidence (persona_id, status, confidence)`：服务层按人格作用域 + 状态过滤、再按置信度排序读取现行事实面（管理面板 / compose 注入候选 / 关系摘要派生）。表时间列为 epoch 毫秒（`created_at` / `updated_at` BigInteger），`confidence` 为 0-1 浮点。升级仅建索引、无数据迁移；降级仅删索引、事实行保留。
+
+## 人格级联删除（服务层批删，无跨域 FK）
+
+记忆域 / 画像域表与 `ff_personas` 之间**没有跨域外键**（PersonaMixin 是逻辑作用域列，不是 FK）——人格删除的级联由 `PersonaService.delete` 在单事务内按 `persona_id` 批删：`ff_persona_states` / `ff_memory_episodes` / `ff_curated_memory` / `ff_dream_runs` / `ff_persona_facts` / `ff_persona_skills` / `ff_core_memory_blocks` / `ff_core_memory_revisions` / `ff_chat_sessions` / `ff_chat_messages`，并同步清理 `ff_memory_index_lite` 回退索引行（SeekDB 生产索引经注入 indexer 提交后 best-effort 清理）。这条服务层级联是方言一致性的唯一保证（SQLite 测试方言默认不启用 FK 强制；DB 级 CASCADE 仅作直删 SQL 兜底）。范围与逐表处理见 [persona.md](persona.md#删除级联范围personaservicedelete)。
 
 ## 测试与门禁
 

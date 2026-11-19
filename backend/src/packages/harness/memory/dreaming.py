@@ -9,6 +9,8 @@
     DreamService.run_dream(db, gateway=..., persona_name=..., store=?, now_ms=?, cfg=?)
         ↓ ⓪ 孤儿 running 行收敛（stale_running_threshold_ms 阈值内的
           崩溃遗留行批量置 failed——进程崩溃遗留的唯一出口）
+        ↓ ⓪.5 重入闸（DREAM_REENTRY_WINDOW_MS 窗内本人格 running 行存在
+          → 直接返回该运行记录，不新建行、不再跑阶段——单飞语义）
         ↓ ① DreamRunRow 落库（status=running——运行日志面，先落库可追溯）
         ↓ ② 取窗口事件 fetch_day_episodes（[now-window, now) 左闭右开；
           超出 max_episodes 按时间序截断并告警）
@@ -84,6 +86,10 @@ fail-closed 语义（锁定决策，逐条）：
     - **合并中断决策补齐**：事实提取 / 技能挖矿 / 合并 / 晋升阶段异常
       中断时，过门但未决策的候选事件补 skipped 决策（reason 标注中断
       阶段）——失败运行的决策面对全部可信候选同样全覆盖；
+    - **重入单飞**：run_dream 入口在孤儿收敛后检查本人格重入窗
+      （``DREAM_REENTRY_WINDOW_MS``）内的 running 行——存在即返回该行
+      （日志一条），不新建运行、不再调用模型；上游重复触发收敛为同一次
+      在途运行；
     - **孤儿 running 行收敛**：run_dream 入口把本人格
       ``started_ms < now - stale_running_threshold_ms`` 且无终态的
       running 行批量置 failed（error=进程崩溃遗留）——进程崩溃是
@@ -100,7 +106,10 @@ fail-closed 语义（锁定决策，逐条）：
 构造级旋钮：:class:`DreamJobConfig`（窗口 / 半衰期 / 分数门 / 上限 /
 相关度加成 / 日记开关 / 孤儿 running 收敛阈值 / 已晋升回溯窗 / 单次
 事件上限——构造注入，与 llm 网关 retry 旋钮同模式；Settings env 面
-迁移为已文档化的演进方向）。
+迁移为已文档化的演进方向）。输入上限为模块常量（``dreaming_models``：
+单事件正文 500 字符 / 日记 200 条与 60000 字符 / 合并主题 50 条 /
+重入窗 3600000 毫秒）——超限只截断本次 prompt 输入并记 debug 计数，
+不打印原文、不修改已落库事件。
 """
 
 from __future__ import annotations
@@ -123,6 +132,8 @@ from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.llm.gateway import LlmGateway
 from packages.harness.llm.llm_models import ChatMessageModel, ChatMessageRole
 from packages.harness.memory.dreaming_models import (
+    DREAM_EVENT_TEXT_MAX_CHARS,
+    DREAM_REENTRY_WINDOW_MS,
     DreamDecisionAction,
     DreamDecisionModel,
     DreamFactProposedItemModel,
@@ -136,10 +147,13 @@ from packages.harness.memory.dreaming_models import (
 )
 from packages.harness.memory.dreaming_orm import DreamRunRow
 from packages.harness.memory.dreaming_prompts import (
+    count_truncated_events,
     render_diary_prompt,
     render_facts_prompt,
     render_merge_prompt,
     render_skills_prompt,
+    select_diary_episodes,
+    select_prompt_topics,
 )
 from packages.harness.memory.dtos import (
     CuratedRecordDTO,
@@ -707,9 +721,10 @@ class DreamService:
 
         链路与 fail-closed 语义见模块 docstring。入口先收敛孤儿
         running 行（``stale_running_threshold_ms`` 阈值内的崩溃遗留
-        行批量置 failed）；关键排序决策：**晋升全部提交后才生成日记**
-        ——日记失败标记运行 failed 但保留已提交晋升（decisions 如实
-        记录）。
+        行批量置 failed），再执行重入闸——窗内已有本人格 running 行时
+        直接返回该运行记录（不新建行、不再跑阶段）。关键排序决策：
+        **晋升全部提交后才生成日记**——日记失败标记运行 failed 但保留
+        已提交晋升（decisions 如实记录）。
 
         Args:
             session: 注入的异步 Session（调用方已绑定人格上下文）。
@@ -722,7 +737,8 @@ class DreamService:
             cfg: 任务参数（None = DreamJobConfig 全默认）。
 
         Returns:
-            运行记录 DTO（status=success / failed——失败原因在 error）。
+            运行记录 DTO（重入闸命中时返回在途 running 行；否则
+            status=success / failed——失败原因在 error）。
 
         Raises:
             BusinessException: 人格上下文未绑定（``PERSONA_CONTEXT_REQUIRED``
@@ -739,6 +755,14 @@ class DreamService:
                 details={"fix": "调用方先经 bind_persona_context 绑定人格上下文"},
             )
         await self._converge_stale_running(session, run_now=run_now, cfg=resolved_cfg)
+        reentrant = await self._find_fresh_running(session, run_now=run_now)
+        if reentrant is not None:
+            logger.info(
+                "梦境重入拦截: 本人格已有新鲜运行行，直接返回: run_id={}, started_ms={}",
+                reentrant.id,
+                reentrant.started_ms,
+            )
+            return DreamRunRecordDTO.model_validate(reentrant)
         row = DreamRunRow(
             status=DreamRunStatus.RUNNING.value,
             started_ms=run_now,
@@ -786,7 +810,7 @@ class DreamService:
             if error_message is not None
             else DreamRunStatus.SUCCESS.value
         )
-        row.finished_ms = time_utils.now_ms()
+        row.finished_ms = run_now
         row.stats = stats.model_dump()
         row.decisions = [decision.model_dump() for decision in decisions]
         row.error = error_message
@@ -800,6 +824,41 @@ class DreamService:
             stats.superseded,
         )
         return DreamRunRecordDTO.model_validate(row)
+
+    async def _find_fresh_running(
+        self, session: AsyncSession, *, run_now: int
+    ) -> DreamRunRow | None:
+        """取本人格重入窗内的 running 行（单飞闸门——最新一行）。
+
+        判定：``status=running AND finished_ms IS NULL AND started_ms >=
+        run_now - DREAM_REENTRY_WINDOW_MS``（人格作用域经 PersonaMixin
+        自动过滤——仅本人格行）。排序 ``(started_ms, id)`` 降序——并发
+        多行时取最近创建的一行；正常单飞语义下至多一行。
+
+        Args:
+            session: 注入的异步 Session（人格作用域自动过滤）。
+            run_now: 注入时钟（epoch 毫秒——重入窗参考轴）。
+
+        Returns:
+            新鲜 running 行（None = 无在途运行，可新建）。
+        """
+        fresh_since = run_now - DREAM_REENTRY_WINDOW_MS
+        return (
+            (
+                await session.execute(
+                    select(DreamRunRow)
+                    .where(
+                        DreamRunRow.status == DreamRunStatus.RUNNING.value,
+                        DreamRunRow.finished_ms.is_(None),
+                        DreamRunRow.started_ms >= fresh_since,
+                    )
+                    .order_by(DreamRunRow.started_ms.desc(), DreamRunRow.id.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
 
     async def _converge_stale_running(
         self, session: AsyncSession, *, run_now: int, cfg: DreamJobConfig
@@ -907,9 +966,23 @@ class DreamService:
             if record.provenance
             not in (MemoryProvenance.UNTRUSTED, MemoryProvenance.PEER)
         ]
+        truncated_events = count_truncated_events(trusted)
+        if truncated_events:
+            logger.debug(
+                "梦境事件正文超限截断: count={}, cap={}",
+                truncated_events,
+                DREAM_EVENT_TEXT_MAX_CHARS,
+            )
         already_promoted = await self._previous_promoted_ids(session, run_now=run_now, cfg=cfg)
         active_topics = await self._active_topics(session)
-        prompt_topics = [topic for topic in active_topics if not topic.frozen]
+        unfrozen_topics = [topic for topic in active_topics if not topic.frozen]
+        prompt_topics = select_prompt_topics(unfrozen_topics)
+        if len(prompt_topics) < len(unfrozen_topics):
+            logger.debug(
+                "合并 prompt 主题超限截断: total={}, kept={}",
+                len(unfrozen_topics),
+                len(prompt_topics),
+            )
         frozen_keys = frozenset(
             (topic.kind.value, topic.topic) for topic in active_topics if topic.frozen
         )
@@ -963,12 +1036,20 @@ class DreamService:
                 decided_ids=decided_ids,
             )
         if cfg.diary_enabled and trusted:
+            diary_episodes, diary_dropped = select_diary_episodes(trusted)
+            if diary_dropped:
+                logger.debug(
+                    "日记输入超限截断: total={}, kept={}, dropped={}",
+                    len(trusted),
+                    len(diary_episodes),
+                    diary_dropped,
+                )
             row.diary_episode_id = await self._write_diary(
                 session,
                 gateway=gateway,
                 persona_scope=persona_scope,
                 persona_name=persona_name,
-                day_episodes=trusted,
+                day_episodes=diary_episodes,
                 run_now=run_now,
                 cfg=cfg,
                 row_id=row.id,
