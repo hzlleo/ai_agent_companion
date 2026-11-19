@@ -111,7 +111,7 @@
 | 文件白名单 | diff 文件清单 vs 任务书第 2 节 | `<PASS/FAIL>` |
 | 既有测试改动 | 任务书第 5 节 + `assertion_freeze` 输出 | |
 | 断言计数 | 基线 vs 当前（只降不升） | |
-| prose pin | `pixi run prose-pin` 的 prose 桶 Top-N（`field_or_code` 桶是协议字段名，不计入疑似；`other` 单列） | |
+| prose pin | `pixi run prose-pin` 的 prose 桶 Top-N（`field_or_code` 桶是协议字段名，不计入疑似） | |
 | 截断 / 空跑 | `verify_slice` JSON 的 `summary_matched` 全 true | |
 | 文档真值 | `docs-truth` / `surface-check` 结果 | |
 

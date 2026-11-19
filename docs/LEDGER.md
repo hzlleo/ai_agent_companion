@@ -360,9 +360,9 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 ### 已完成切片：加固门禁复审残留闭环（Oracle 复审第 3 轮 P2×2）
 
-- prose 分桶：含 CJK 文案统一归入 prose 桶，全角括号 `【】（）` 补入句读标点；重跑 `pixi run prose-pin` → 命中 483（分桶 prose=59 / field_or_code=424），纯结构断言 193 例 / 7.7%；不可达的 `other` 桶已从实现与报告删除。
+- prose 分桶：含 CJK 文案统一归入 prose 桶，全角括号 `【】（）` 补入句读标点；重跑 `pixi run prose-pin` → 命中 483（分桶 prose=59 / field_or_code=424），纯结构断言 193 例 / 7.7%；不可达的 `other` 桶已从实现、报告与三处文档（模块 docstring / docs/README / 验收 SOP）删除。
 - 证据目录说明：`docs/evidence/README.md` 增补「`ab346493` 及更早 sha8 由旧哈希口径（含 `.egg-info`）计算，不能用当前代码复算，仅作历史留档」。
-- `cd backend && pixi run verify-slice -- --slice r2-hardening` → 0（tests-all 2808 passed / coverage 24 组 / lint / typecheck 191 源文件 / gates 全步摘要命中），证据包 `docs/evidence/r2-hardening-c524502a.json`（sha8=`c524502a`，本提交为当前 canonical）；`afaaf9a9` / `55a44a52` / `ab346493` 作为前序提交的历史证据保留，按 README 口径只认与当前 `--hash-only` 一致的一份。
+- `cd backend && pixi run verify-slice -- --slice r2-hardening` → 0（tests-all 2808 passed / coverage 24 组 / lint / typecheck 191 源文件 / gates 全步摘要命中），证据包 `docs/evidence/r2-hardening-d193c13e.json`（sha8=`d193c13e`，本提交为当前 canonical）；`c524502a` / `afaaf9a9` / `55a44a52` / `ab346493` 作为前序提交的历史证据保留，按 README 口径只认与当前 `--hash-only` 一致的一份。
 
 ## 6. 遗留与部署台账（非阻塞）
 
