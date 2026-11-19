@@ -112,6 +112,19 @@ class IntimateChannelConfig(BaseSettings):
         """
         return value.strip()
 
+    @field_validator("api_key")
+    @classmethod
+    def _strip_secret(cls, value: SecretStr) -> SecretStr:
+        """去除密钥首尾空白（仅空白等同未配置——与 base_url / model 同语义）。
+
+        Args:
+            value: 原始密钥值。
+
+        Returns:
+            去除首尾空白后的密钥（空串保持「未配置」语义）。
+        """
+        return SecretStr(value.get_secret_value().strip())
+
     @property
     def is_configured(self) -> bool:
         """通道必填项是否齐全（base_url / api_key / model 三项全部非空）。

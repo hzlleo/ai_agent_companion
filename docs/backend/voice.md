@@ -4,6 +4,8 @@
 
 锁定设计决策：**语音服务是部署机上的外部本地进程**——CosyVoice3 与 Qwen3-ASR 权重经 `models/` 子模块承载（部署机关注；compose 接线由部署侧另行承接），后端**只经 HTTP 契约消费，永不读取模型文件路径**（与 llm 域「只连端点」同约定）。缺省双关闭（`VOICE_TTS_ENABLED=false` / `VOICE_ASR_ENABLED=false`）——零配置开发可用、测试 hermetic。
 
+全双工实时会话（WS 协议 / VAD 切段 / 逐句播报 / 打断）建立在本域服务之上，独立建档见 [realtime-voice.md](realtime-voice.md)。
+
 ## 模块一览
 
 | 模块 | 职责 | 关键导出 |

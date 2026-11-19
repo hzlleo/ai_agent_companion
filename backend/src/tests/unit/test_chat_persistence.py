@@ -285,8 +285,14 @@ async def test_resume_roundtrip(persist_env: tuple) -> None:
     assert len(resumed.turns) == 6
     sent_messages = gateway.chat_calls[-1]["messages"]
     sent_contents = [m.content for m in sent_messages][1:]
-    # 历史回合原文回放；当轮入站回合经不可信内容定界包裹（注入防御）
-    assert sent_contents[:4] == ["第一句", "假回复", "第二句", "假回复"]
+    # 历史 user 回合经定界包裹（「历史消息」标签）；assistant 回合原文回放；
+    # 当轮入站回合同样经不可信内容定界包裹（注入防御）。
+    assert sent_contents[0].startswith("[[[内容开始 ")
+    assert "第一句" in sent_contents[0]
+    assert sent_contents[1] == "假回复"
+    assert sent_contents[2].startswith("[[[内容开始 ")
+    assert "第二句" in sent_contents[2]
+    assert sent_contents[3] == "假回复"
     assert sent_contents[4].startswith("[[[内容开始 ")
     assert "恢复后的第三句" in sent_contents[4]
     async with bind_persona_context(persona.id):

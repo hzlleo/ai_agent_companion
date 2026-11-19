@@ -162,12 +162,13 @@ async def test_regenerate_and_detail_include_variants(swipe_api_env: SwipeApiEnv
     assert [variant["content"] for variant in messages[1]["variants"]] == ["候选一", "候选二"]
     assert messages[0]["variants"] == []
 
-    # 网关调用面：正典脊柱组装（[system] + 第一句），用途 / persona 直传。
+    # 网关调用面：正典脊柱组装（[system] + 末位 user 回合包裹），用途 / persona 直传。
     assert swipe_api_env.gateway.chat_calls[0]["purpose"] == "chat"
     assert swipe_api_env.gateway.chat_calls[0]["persona_id"] == str(swipe_api_env.persona_id)
-    assert [message.content for message in swipe_api_env.gateway.chat_calls[0]["messages"][1:]] == [
-        "第一句"
-    ]
+    sent_messages = swipe_api_env.gateway.chat_calls[0]["messages"][1:]
+    assert len(sent_messages) == 1
+    assert sent_messages[0].content.startswith("[[[内容开始 ")
+    assert "第一句" in sent_messages[0].content
 
 
 async def test_select_variant_endpoint_promotes(swipe_api_env: SwipeApiEnv) -> None:

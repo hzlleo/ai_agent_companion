@@ -222,19 +222,25 @@ def _map_wire_usage(usage: WireTokenUsage) -> TokenUsageModel:
 def _map_wire_logprobs(
     wire: WireLogprobContent | None,
 ) -> list[LogprobTokenModel] | None:
-    """wire content logprobs → 域内归一（缺失 / 空 = None；坏元素跳过）。
+    """wire content logprobs → 域内归一（缺失 / 空 = None）。
+
+    ``logprob`` 为 None 表示端点真缺失，跳过并记一条 debug 计数日志
+    （不打印原文）；空 token 与 ``0.0`` 是合法回传值，原样保留——不能
+    按缺省值误判为畸形条目。
 
     Args:
         wire: wire logprobs 容器（可为 None）。
 
     Returns:
-        :class:`LogprobTokenModel` 列表（None = 端点未回传/为空）。
+        :class:`LogprobTokenModel` 列表（None = 端点未回传/为空/全缺失）。
     """
     if wire is None or not wire.content:
         return None
     mapped: list[LogprobTokenModel] = []
+    skipped = 0
     for token in wire.content:
-        if not token.token and token.logprob == 0.0 and not token.top_logprobs:
+        if token.logprob is None:
+            skipped += 1
             continue
         mapped.append(
             LogprobTokenModel(
@@ -248,9 +254,12 @@ def _map_wire_logprobs(
                         bytes=candidate.bytes,
                     )
                     for candidate in token.top_logprobs
+                    if candidate.logprob is not None
                 ],
             )
         )
+    if skipped:
+        logger.debug("LLM content logprobs 缺失 logprob 的条目已跳过: count={}", skipped)
     return mapped or None
 
 
@@ -259,11 +268,16 @@ def _map_wire_prompt_logprobs(
 ) -> list[PromptLogprobEntryModel | None] | None:
     """wire prompt_logprobs → 域内归一（null 占位保留位次；缺失 = None）。
 
+    空 dict 或没有可解析整数 token_id 的元素同样占位 None——若直接跳过
+    会使后续条目左移，与提示词位次错位。回传长度与提示词长度是否一致
+    不在本映射校验（不抛异常）。
+
     Args:
         raw: wire prompt_logprobs 数组（元素为 null 或 token_id 映射）。
 
     Returns:
-        :class:`PromptLogprobEntryModel` 列表（含 None 占位；None = 未回传）。
+        :class:`PromptLogprobEntryModel` 列表（含 None 占位；None = 未回传
+        或全部为空）。
     """
     if raw is None:
         return None
@@ -272,20 +286,20 @@ def _map_wire_prompt_logprobs(
         if item is None:
             entries.append(None)
             continue
+        entry: PromptLogprobEntryModel | None = None
         for token_id_raw, value in item.items():
             try:
                 token_id = int(token_id_raw)
             except (TypeError, ValueError):
                 continue
-            entries.append(
-                PromptLogprobEntryModel(
-                    token_id=token_id,
-                    logprob=value.logprob,
-                    rank=value.rank,
-                    decoded_token=value.decoded_token,
-                )
+            entry = PromptLogprobEntryModel(
+                token_id=token_id,
+                logprob=value.logprob,
+                rank=value.rank,
+                decoded_token=value.decoded_token,
             )
             break
+        entries.append(entry)
     return entries or None
 
 
@@ -293,6 +307,10 @@ def _derive_confidence(
     content_logprobs: list[LogprobTokenModel] | None,
 ) -> tuple[float | None, float | None]:
     """由 content logprobs 派生平均对数概率与置信度（exp 均值）。
+
+    派生输入先过滤非有限值：NaN / ``+inf`` 丢弃（不可比较、不参与均值），
+    ``-inf`` 保留（exp 下溢为 0.0，语义正确）；全组无可用值时两个派生
+    字段均为 None。均值大于 0 时置信度直接取 1.0，避免 ``math.exp`` 上溢。
 
     Args:
         content_logprobs: 生成 token logprobs（None / 空 = 不可派生）。
@@ -304,9 +322,20 @@ def _derive_confidence(
     """
     if not content_logprobs:
         return None, None
-    mean_logprob = sum(entry.logprob for entry in content_logprobs) / len(
-        content_logprobs
-    )
+    usable: list[float] = []
+    skipped = 0
+    for entry in content_logprobs:
+        if math.isfinite(entry.logprob) or entry.logprob == -math.inf:
+            usable.append(entry.logprob)
+        else:
+            skipped += 1
+    if skipped:
+        logger.debug("LLM logprob 派生跳过非有限值: count={}", skipped)
+    if not usable:
+        return None, None
+    mean_logprob = sum(usable) / len(usable)
+    if mean_logprob > 0.0:
+        return mean_logprob, 1.0
     return mean_logprob, min(1.0, max(0.0, math.exp(mean_logprob)))
 
 
@@ -465,6 +494,11 @@ class LlmHttpClient:
         重试仅覆盖「发起请求 → 2xx 确认」阶段；首块产出后的流中断
         **不重试**（重放会导致消费方收到重复增量——非幂等）。
 
+        logprobs 声明面：只按 ``top_logprobs`` 旋钮决定是否发送
+        ``logprobs``；``prompt_logprobs`` 恒不发送——vLLM 对
+        ``stream=true`` 且 ``prompt_logprobs>0`` 直接 400，流式响应也不
+        回传该字段。
+
         Args:
             messages: 聊天消息序列。
             params: 采样参数（None = 端点默认）。
@@ -485,9 +519,9 @@ class LlmHttpClient:
             list(messages),
             params,
             stream=True,
-            logprobs=self._top_logprobs is not None or self._prompt_logprobs is not None,
+            logprobs=self._top_logprobs is not None,
             top_logprobs=self._top_logprobs,
-            prompt_logprobs=self._prompt_logprobs,
+            prompt_logprobs=None,
         )
         response = await self._open_stream_with_retry(body)
         try:

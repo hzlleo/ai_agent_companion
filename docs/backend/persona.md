@@ -19,7 +19,7 @@
 | `core_memory.py` / `core_memory_models.py` / `core_memory_orm.py` | 自编辑核心记忆（四块自我模型 / 主人锁定 / append-only 修订 / 工具注册）服务、DTO 与 `ff_core_memory_blocks` / `ff_core_memory_revisions` ORM（R2c） | `CoreMemoryService` / `register_core_memory_tools` / `CoreMemoryBlockDTO` / `CoreMemoryRevDTO` / `OwnerEditModel` / `AgentEditModel` / `CoreMemoryBlockRow` / `CoreBlockKey` |
 | `relationship.py` / `relationship_models.py` | 关系进展摘要（关系类事实派生 / 时间衰减得分 / 阶段阶梯 / 边界识别，Unit 文件——无独立存储与 API） | `build_relationship_summary` / `empty_relationship_summary` / `decay_weight` / `derive_stage` / `RelationshipSummaryModel` / `RelationshipEventModel` / `RelationshipThresholdsModel` / `RelationshipStage` / `DEFAULT_RELATIONSHIP_THRESHOLDS` |
 
-依赖方向：persona → core（dtos 分页 / errors / context）+ database（Base Mixins / get_async_db）+ voice（预设建议语音 `VoiceProfileModel`）+ memory（人物事实的证据校验复用 `MemoryService.get_episode` 与检索层取段规则；梦境编排反向消费 `FactsService` / `SkillsService`——见 memory.md 夜间梦境）+ tools（核心记忆工具注册复用 `ToolRegistry` / `ToolSpecModel`）；app 层（api/personas + api/directives + api/facts + api/skills + api/core_memory + middleware/error_handler）→ persona + core + database。**`ff_personas` / `ff_persona_states` 两张表非 PersonaMixin**（见下）；**`ff_persona_facts` / `ff_persona_skills` / `ff_core_memory_blocks` 是 PersonaMixin 人格作用域表**（画像 / 做事方式 / 自我模型都属某个人格对主人的认知；`ff_core_memory_revisions` 经 `block_id` 外键间接归属，见该表说明）。关系进展摘要（`relationship.py` / `relationship_models.py`）只依赖事实值域与标准库——纯派生、无存储、无 API，由 chat 域消费。
+依赖方向：persona → core（dtos 分页 / errors / context）+ database（Base Mixins / get_async_db）+ voice（预设建议语音 `VoiceProfileModel`）+ chat.prompts（预设生成复用 `PERSONA_*` 叙事段模板——仅此纯文本模块，模块级无环）+ memory（人物事实的证据校验复用 `MemoryService.get_episode` 与检索层取段规则；梦境编排反向消费 `FactsService` / `SkillsService`——见 memory.md 夜间梦境）+ tools（核心记忆工具注册复用 `ToolRegistry` / `ToolSpecModel`）；app 层（api/personas + api/directives + api/facts + api/skills + api/core_memory + middleware/error_handler）→ persona + core + database。**`ff_personas` / `ff_persona_states` 两张表非 PersonaMixin**（见下）；**`ff_persona_facts` / `ff_persona_skills` / `ff_core_memory_blocks` 是 PersonaMixin 人格作用域表**（画像 / 做事方式 / 自我模型都属某个人格对主人的认知；`ff_core_memory_revisions` 经 `block_id` 外键间接归属，见该表说明）。关系进展摘要（`relationship.py` / `relationship_models.py`）只依赖事实值域与标准库——纯派生、无存储、无 API，由 chat 域消费。
 
 ## L / M / S 三层心理状态模型
 
@@ -396,11 +396,13 @@ scene_scripts:
 
 - 生效亲密等级 = 请求的 `intimacy_level_override`（提供时）否则 `preset.intimacy_level`；成熟度超出该等级的组件在组合前被过滤（映射见上表）；
 - `name` = 基础名 + `name_suffix`（存在时；基础名 = 期望名或预设中文名）；
-- `personality` = 预设描述 → 预设级补充 → 保留组件碎片，`；` 拼接；
-- `system_prompt` = 保留组件的语气指令行（声明序）→ 预设级补充行 → 场景脚本命名段，换行拼接；
+- `personality` = 预设描述 → 预设级补充 → 保留组件碎片，`；` 拼接（字段继续供 UI / 编辑 / 导入读面使用）；
+- `system_prompt` = **自包含的人格覆写文本**：自称头（名字 + 角色身份）→【角色设定】（预设描述）→【性格特点】（预设级补充 + 保留组件描述碎片）→ 保留组件的语气指令行（声明序）→ 预设级补充行 → 场景脚本命名段（日常 / 暧昧 / 亲密 / 冲突）；段落名复用默认人格模板（`PERSONA_*` 模板）；
 - `mes_example` = 预设级示例 → 保留组件的示例台词（各成 `<START>\n{name}: 台词` 块；组件台词合计至多 24 条，超出截断）；
 - `character_book` = 建议条目非空时建书（名 = `{预设id}-book`），否则 None；
 - 保留组件命中冲突声明 → `GenerationWarningModel` 列表**返回不抛错**（调用方并入导入结果 `warnings` 呈现）；被过滤掉的组件不参与冲突判定。
+
+预设生成卡是**覆写形态**：`system_prompt` 非空时 `render_persona_system_prompt` 直接采用该文本，因此生成结果必须自包含人格主体（正典含名字头 / `【角色设定】` / `【性格特点】` / 语气指令 / 四态场景脚本），不能只靠 `personality` 字段——覆写路径不会回读后者的叙事段模板。`personality` 字段仍按上表规则保留（UI 编辑、导入读面与既有存储语义不变）；`mes_example` 的 few-shot 注入仍为台账遗留项，本批不改变生成内容。
 
 **装载面**（`load_official_components` / `load_official_presets`）：路径相对资源加载（`presets/` 数据文件）+ 模型校验 + 模块级缓存——**模块导入期零副作用**，首次调用（端点）即校验，非法数据文件 fail loud（`ValueError` → 端点映射 500）。官方库不变式（装载期校验拒绝违约数据）：预设引用组件恒存在、id 唯一、组合集内无重复、**官方预设自身零冲突**（命中冲突声明 = 发行数据作者错误）、冲突引用指向已知组件、每个组件示例台词 3-5 条、**预设组件成熟度不越过该预设自身亲密等级上限**。显式传入数据目录（测试合成数据）绕过缓存。
 

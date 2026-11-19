@@ -44,6 +44,12 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from packages.harness.chat.prompts import (
+    PERSONA_DESCRIPTION_SECTION_TEMPLATE,
+    PERSONA_NAME_HEADER_TEMPLATE,
+    PERSONA_PERSONALITY_SECTION_TEMPLATE,
+    WORLD_BOOK_SECTION_SEPARATOR,
+)
 from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
     CharaBookModel,
@@ -518,10 +524,16 @@ def generate_card_from_preset(
         - ``name`` = ``base_name`` + ``base_card_overrides.name_suffix``
           （后缀存在时拼接；None = 原名）；
         - ``personality`` = 预设描述 → 预设级补充 → 保留下来的组件描述
-          碎片，非 ``；`` 空段拼接（中文分号）；
-        - ``system_prompt`` = 保留组件的语气指令行（声明序）→ 预设级
-          补充行 → 场景脚本命名段（日常 / 暧昧 / 亲密 / 冲突），换行
-          拼接（无任何内容时为空串——回落默认人格模板）；
+          碎片，空段以 ``；`` 拼接（中文分号；该字段继续供 UI / 编辑面
+          使用，运行期提示不依赖它）；
+        - ``system_prompt`` = **自包含的人格覆写文本**：自称头（名字 +
+          角色身份）→【角色设定】（预设描述）→【性格特点】（预设级性格
+          补充 + 保留组件的描述碎片）→ 保留组件的语气指令行（声明序）→
+          预设级补充行 → 场景脚本命名段（日常 / 暧昧 / 亲密 / 冲突）。
+          段落名复用默认人格模板（``PERSONA_*`` 模板），意即
+          ``render_persona_system_prompt`` 的覆写路径直接采用本字段时，
+          人格主体仍完整进入提示；无任何尾段（指令 / 补充 / 场景）时只
+          保留自称头与两个叙事段；
         - ``mes_example`` = 预设级示例 → 保留组件的示例台词（各成
           ``<START>\\n{name}: 台词`` 块，合计至多 24 条台词块——超出
           截断），换行拼接；
@@ -581,14 +593,31 @@ def generate_card_from_preset(
         if part
     )
     scene_block = render_scene_scripts(preset.scene_scripts)
-    system_prompt = "\n".join(
+    personality_body = "；".join(
+        part
+        for part in [overrides.personality]
+        + [component.description_zh for component in resolved]
+        if part
+    )
+    system_sections: list[str] = [
+        PERSONA_NAME_HEADER_TEMPLATE.format(name=name),
+        PERSONA_DESCRIPTION_SECTION_TEMPLATE.format(description=preset.description_zh),
+    ]
+    if personality_body:
+        system_sections.append(
+            PERSONA_PERSONALITY_SECTION_TEMPLATE.format(personality=personality_body)
+        )
+    tail_lines = [
         line
         for line in [
             directive for component in resolved for directive in component.tone_directives
         ]
         + [overrides.system_prompt_fragment, scene_block]
         if line
-    )
+    ]
+    if tail_lines:
+        system_sections.append("\n".join(tail_lines))
+    system_prompt = WORLD_BOOK_SECTION_SEPARATOR.join(system_sections)
     example_blocks: list[str] = [overrides.mes_example] if overrides.mes_example else []
     line_count = 0
     for component in resolved:

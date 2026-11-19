@@ -33,6 +33,7 @@ __all__ = [
     "ChatTurnModel",
     "ChatSessionStateModel",
     "MessageCompositionResult",
+    "ToolLoopResultModel",
 ]
 
 
@@ -160,4 +161,23 @@ class MessageCompositionResult(BaseModel):
     )
     injection_hint: str | None = Field(
         default=None, description="本次追加的注入提示块（None = 未触发）"
+    )
+
+
+class ToolLoopResultModel(BaseModel):
+    """有界工具循环的结果（最终回复 + 尾部轮次）。
+
+    尾部轮次是循环内部生成的 assistant 工具调用轮与已包裹的 tool 反馈轮
+    （按生成序）——**不进入会话历史 / 持久化**，只供合规重试沿用工具证据：
+    重试请求以「组装消息 + 尾部轮次 + 角色提醒」为基底，保留模型看到过的
+    工具调用与结果，但不携带工具面、不重新执行工具。
+
+    Attributes:
+        content: 循环产出的最终回复文本（空串 = 模型未产出）。
+        tail_messages: 工具调用与反馈轮次（无工具调用时为空列表）。
+    """
+
+    content: str = Field(description="工具循环最终回复文本")
+    tail_messages: list[ChatMessageModel] = Field(
+        default_factory=list, description="assistant 工具调用轮 + 已包裹 tool 反馈轮"
     )

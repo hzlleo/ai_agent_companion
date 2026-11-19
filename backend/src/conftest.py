@@ -98,6 +98,10 @@ os.environ["POOLS_CB_RESET_TIMEOUT_SECONDS"] = "60"
 os.environ["LLM_BASE_URL"] = "http://127.0.0.1:9/v1"
 os.environ["LLM_API_KEY"] = "test-only-llm-api-key"
 os.environ["LLM_MODEL"] = "test-model"
+# logprobs 传输旋钮（默认 20/20；空串 = 省略对应字段——测试固定默认值，
+# 开发者 shell 导出的同名值不得泄入测试）
+os.environ["LLM_TOP_LOGPROBS"] = "20"
+os.environ["LLM_PROMPT_LOGPROBS"] = "20"
 
 # --- SeekDB 检索存储（SEEKDB_ 前缀 → SeekDBSettings；默认关闭 → 测试恒走
 #     SQLite 回退存储，零真实连接；S3 硬覆盖模式——开发者 shell 导出的
@@ -251,6 +255,30 @@ os.environ["VOICE_ASR_LANGUAGE"] = ""
 # 上传上限（与生产默认同值——字节精确边界测试经 app.state.settings
 # 注入小上限隔离驱动，不依赖本全局值）
 os.environ["VOICE_ASR_MAX_UPLOAD_BYTES"] = "26214400"
+
+# --- 实时语音全双工会话（REALTIME_VOICE_ 前缀 → RealtimeVoiceSettings；
+#     默认关闭 → WS 端点拒绝连接、零音频资源；S3 硬覆盖模式——开发者
+#     shell 导出的同名真实配置不得泄入测试。ASR / TTS 沿用 VOICE_* 分节
+#     开关（会话单测经注入 fake 服务消费，永不触达真实模型服务） ---
+os.environ["REALTIME_VOICE_ENABLED"] = "false"
+os.environ["REALTIME_VOICE_SAMPLE_RATE_HZ"] = "16000"
+os.environ["REALTIME_VOICE_CHANNELS"] = "1"
+os.environ["REALTIME_VOICE_VAD_SPEECH_RMS_THRESHOLD"] = "0.06"
+os.environ["REALTIME_VOICE_VAD_SILENCE_RMS_THRESHOLD"] = "0.03"
+os.environ["REALTIME_VOICE_VAD_START_CONSECUTIVE_FRAMES"] = "3"
+os.environ["REALTIME_VOICE_VAD_MIN_SPEECH_MS"] = "300"
+os.environ["REALTIME_VOICE_VAD_SILENCE_END_MS"] = "700"
+os.environ["REALTIME_VOICE_VAD_MAX_SEGMENT_MS"] = "15000"
+os.environ["REALTIME_VOICE_PARTIAL_TRANSCRIPT_INTERVAL_MS"] = "800"
+os.environ["REALTIME_VOICE_PARTIAL_MIN_SPEECH_MS"] = "600"
+os.environ["REALTIME_VOICE_SENTENCE_MAX_CHARS"] = "80"
+os.environ["REALTIME_VOICE_TTS_CHUNK_BYTES"] = "16384"
+os.environ["REALTIME_VOICE_AUDIO_QUEUE_MAX_CHUNKS"] = "64"
+os.environ["REALTIME_VOICE_AUDIO_BATCH_MAX_CHUNKS"] = "8"
+os.environ["REALTIME_VOICE_MAX_SESSION_MS"] = "600000"
+os.environ["REALTIME_VOICE_IDLE_TIMEOUT_MS"] = "60000"
+os.environ["REALTIME_VOICE_HEARTBEAT_INTERVAL_MS"] = "15000"
+os.environ["REALTIME_VOICE_BARGE_IN_ENABLED"] = "true"
 
 # --- 联网搜索（SEARCH_ 前缀 → WebSearchSettings；默认关闭 → 测试零真实
 #     连接（搜索 provider 为外部 API）；S3 硬覆盖模式——开发者 shell

@@ -43,6 +43,7 @@ __all__ = [
     "log_admin_auth_startup_notice",
     "require_admin_token",
     "resolve_admin_token",
+    "verify_admin_token",
 ]
 
 
@@ -79,6 +80,24 @@ def _bearer_token(authorization: str) -> str | None:
     return stripped if stripped else None
 
 
+def verify_admin_token(presented: str | None, settings: Settings) -> bool:
+    """恒时比对管理面 token（HTTP Bearer 与 WebSocket 查询参数共用判定）。
+
+    Args:
+        presented: 请求携带的 token 本值（None / 空串 = 未携带）。
+        settings: 生效 Settings（``admin_token_env`` 间接读取期望值）。
+
+    Returns:
+        True 表示通过（鉴权关闭时空 token 也通过）；False 表示应拒绝。
+    """
+    expected = resolve_admin_token(settings)
+    if not expected:
+        return True
+    if presented is None:
+        return False
+    return secrets.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
+
+
 async def require_admin_token(request: Request) -> None:
     """管理面鉴权依赖（token 配置时恒时比较 Bearer；不匹配 → 401）。
 
@@ -98,18 +117,15 @@ async def require_admin_token(request: Request) -> None:
     settings = cast("Settings | None", getattr(request.app.state, "settings", None)) or (
         global_settings
     )
-    expected = resolve_admin_token(settings)
-    if not expected:
-        return
-    presented = _bearer_token(request.headers.get("authorization", ""))
-    if presented is None or not secrets.compare_digest(
-        presented.encode("utf-8"), expected.encode("utf-8")
+    if verify_admin_token(
+        _bearer_token(request.headers.get("authorization", "")), settings
     ):
-        raise BusinessException(
-            code=ErrorCode.UNAUTHORIZED,
-            message="管理面鉴权失败：Authorization Bearer token 缺失或不匹配",
-            details={"admin_token_env": settings.server.admin_token_env},
-        )
+        return
+    raise BusinessException(
+        code=ErrorCode.UNAUTHORIZED,
+        message="管理面鉴权失败：Authorization Bearer token 缺失或不匹配",
+        details={"admin_token_env": settings.server.admin_token_env},
+    )
 
 
 def log_admin_auth_startup_notice(settings: Settings) -> None:

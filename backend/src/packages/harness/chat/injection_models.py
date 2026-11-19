@@ -71,11 +71,12 @@ class InjectionReasonModel(BaseModel):
 
     Attributes:
         kind: 命中的信号种类。
-        matched: 命中的原文片段（截断到可观测长度；不参与判定）。
+        matched: 归一副本上的命中片段（检测前经 NFKC / 零宽剔除 / 空白
+            折叠；截断到可观测长度；不参与判定）。
     """
 
     kind: InjectionKind = Field(description="命中的信号种类")
-    matched: str = Field(description="命中的原文片段（截断留证）")
+    matched: str = Field(description="归一副本上的命中片段（截断留证）")
 
 
 class InjectionSignalModel(BaseModel):
@@ -172,10 +173,14 @@ class InjectionGuardSettings(BaseSettings):
     )
 
 
-#: 检测规则表（顺序即原因列表顺序——确定性；``search`` 语义，命中即留证）。
+#: 检测规则表（共 29 条：imperative 10 / fake_system 5 / identity_claim 8 /
+#: format_demand 4 / tag_mimicry 2；顺序即原因列表顺序——确定性；
+#: ``search`` 语义，命中即留证）。
 #:
-#: 权重约定：身份断言 1.5（直接改写人设）；其余种类 1.0。同一类可有多条
-#: 规则同时命中（如「【系统】规则已更新」两条伪系统帧叠加 = 2.0 触发）。
+#: 权重约定：身份断言 1.5（直接改写人设）；英文强断言「disregard …」与
+#: 「as an AI」2.0（单条即触发——措辞已明确否定既有规则 / 人设）；其余
+#: 种类 1.0。同一类可有多条规则同时命中（如「【系统】规则已更新」两条伪
+#: 系统帧叠加 = 2.0 触发）。
 INJECTION_RULES: tuple[InjectionRuleModel, ...] = (
     InjectionRuleModel(
         kind=InjectionKind.IMPERATIVE,
@@ -206,6 +211,14 @@ INJECTION_RULES: tuple[InjectionRuleModel, ...] = (
             r"(?:instructions|prompts|rules|settings)"
         ),
         weight=1.0,
+    ),
+    InjectionRuleModel(
+        kind=InjectionKind.IMPERATIVE,
+        pattern=re.compile(
+            r"(?i)disregard (?:all |the )?(?:previous|prior|above) "
+            r"(?:instructions|rules|prompts)"
+        ),
+        weight=2.0,
     ),
     InjectionRuleModel(
         kind=InjectionKind.IMPERATIVE,
@@ -273,6 +286,26 @@ INJECTION_RULES: tuple[InjectionRuleModel, ...] = (
         kind=InjectionKind.IDENTITY_CLAIM,
         pattern=re.compile(r"作为.{0,3}(?:AI|ai|人工智能|语言模型)"),
         weight=1.5,
+    ),
+    InjectionRuleModel(
+        kind=InjectionKind.IDENTITY_CLAIM,
+        pattern=re.compile(r"(?i)\byou are now\b"),
+        weight=1.5,
+    ),
+    InjectionRuleModel(
+        kind=InjectionKind.IDENTITY_CLAIM,
+        pattern=re.compile(r"(?i)\bpretend (?:to be|you are)\b"),
+        weight=1.5,
+    ),
+    InjectionRuleModel(
+        kind=InjectionKind.IDENTITY_CLAIM,
+        pattern=re.compile(r"(?i)\bact as\b"),
+        weight=1.5,
+    ),
+    InjectionRuleModel(
+        kind=InjectionKind.IDENTITY_CLAIM,
+        pattern=re.compile(r"(?i)\bas an? (?:ai|artificial intelligence|language model)\b"),
+        weight=2.0,
     ),
     InjectionRuleModel(
         kind=InjectionKind.FORMAT_DEMAND,

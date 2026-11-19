@@ -1,11 +1,14 @@
-"""harness/llm logprobs 强制字段与置信度派生测试（MockTransport 零真实出站）。
+"""harness/llm logprobs 传输与置信度派生测试（MockTransport 零真实出站）。
 
 覆盖面：
-- 请求体强制携带 ``logprobs`` / ``top_logprobs`` / ``prompt_logprobs``
-  （非流式 / 流式 / 工具请求三面），构造旋钮 None 省略对应字段；
-- 响应 logprobs 解析（content 含 top 候选、prompt_logprobs 含 null 占位）；
-- 平均对数概率与置信度派生（exp 均值，精确数值断言）；
-- 缺失 / 畸形容忍（跳过不抛）与流式块 logprobs 捕获。
+- 非流式请求强制携带 ``logprobs`` / ``top_logprobs`` / ``prompt_logprobs``；
+  流式请求恒省略 ``prompt_logprobs``（vLLM 400 约束）但仍携带
+  ``logprobs`` / ``top_logprobs``；构造旋钮 None 省略对应字段；
+- 响应 logprobs 解析（content 含 top 候选、prompt_logprobs 含 null / 空
+  dict 占位且位次不左移）；
+- 平均对数概率与置信度派生（exp 均值、正均值上溢短路、NaN 过滤）；
+- 缺失 / 畸形容忍（真缺失跳过且不抛；空 token / 0.0 合法值保留）与
+  流式块 logprobs 捕获。
 """
 
 from __future__ import annotations
@@ -47,6 +50,33 @@ def _wire() -> LlmClientConfigModel:
 def _user_message() -> list[ChatMessageModel]:
     """单条用户消息。"""
     return [ChatMessageModel(role=ChatMessageRole.USER, content="你好")]
+
+
+def _content_logprobs_response(
+    content: list[dict[str, Any]],
+    *,
+    prompt_logprobs: list[Any] | None = None,
+) -> httpx.Response:
+    """构造只含 logprobs 面的非流式响应（畸形 / 边界用例驱动）。"""
+    payload: dict[str, Any] = {
+        "id": "resp-lp-edge",
+        "model": "test-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "片段"},
+                "finish_reason": "stop",
+                "logprobs": {"content": content},
+            }
+        ],
+    }
+    if prompt_logprobs is not None:
+        payload["prompt_logprobs"] = prompt_logprobs
+    return httpx.Response(
+        200,
+        content=json.dumps(payload, ensure_ascii=False, allow_nan=True).encode("utf-8"),
+        headers={"content-type": "application/json"},
+    )
 
 
 def _logprob_response() -> httpx.Response:
@@ -119,12 +149,19 @@ async def test_build_request_forces_logprobs_fields() -> None:
     assert body["prompt_logprobs"] == DEFAULT_PROMPT_LOGPROBS == 20
 
 
-async def test_build_request_stream_and_tools_still_force_logprobs_fields() -> None:
-    """流式与工具请求同样强制携带（不因形态差异省略）。"""
+async def test_build_request_stream_omits_prompt_logprobs() -> None:
+    """流式请求恒省 prompt_logprobs（vLLM stream=true + >0 直接 400）。"""
     stream_body = build_chat_request_body("m", _user_message(), None, stream=True)
     assert stream_body["logprobs"] is True
     assert stream_body["top_logprobs"] == 20
-    assert stream_body["prompt_logprobs"] == 20
+    assert "prompt_logprobs" not in stream_body
+
+    explicit_body = build_chat_request_body(
+        "m", _user_message(), None, stream=True, prompt_logprobs=5
+    )
+    assert explicit_body["top_logprobs"] == 20
+    assert "prompt_logprobs" not in explicit_body
+
     tool = ToolDefinitionModel(name="t", description="d")
     tool_body = build_chat_request_body(
         "m", _user_message(), None, stream=False, tools=[tool]
@@ -132,6 +169,64 @@ async def test_build_request_stream_and_tools_still_force_logprobs_fields() -> N
     assert tool_body["logprobs"] is True
     assert tool_body["top_logprobs"] == 20
     assert tool_body["prompt_logprobs"] == 20
+
+
+async def test_chat_client_both_knobs_none_omits_all_logprobs(
+    make_client: Any,
+) -> None:
+    """client 双旋钮 None：非流式请求整体不声明 logprobs 面。"""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp-plain",
+                "model": "test-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "好"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    client = make_client(handler, top_logprobs=None, prompt_logprobs=None)
+    await client.chat(_user_message())
+    sent = json.loads(captured[0].content)
+    assert "logprobs" not in sent
+    assert "top_logprobs" not in sent
+    assert "prompt_logprobs" not in sent
+
+
+async def test_stream_client_never_sends_prompt_logprobs(make_client: Any) -> None:
+    """client.stream 默认旋钮：流式体含 logprobs/top，绝不含 prompt_logprobs。"""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        lines = [
+            f"data: {json.dumps({'choices': [{'index': 0, 'delta': {'content': '好'}}]})}",
+            "data: [DONE]",
+            "",
+        ]
+        return httpx.Response(
+            200,
+            text="\n".join(lines),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = make_client(handler)
+    chunks = [chunk async for chunk in client.stream(_user_message())]
+    assert chunks[0].content == "好"
+    sent = json.loads(captured[0].content)
+    assert sent["stream"] is True
+    assert sent["logprobs"] is True
+    assert sent["top_logprobs"] == 20
+    assert "prompt_logprobs" not in sent
 
 
 async def test_build_request_knob_none_omits_individual_fields() -> None:
@@ -224,6 +319,137 @@ async def test_chat_tolerates_absent_logprobs(make_client: Any) -> None:
     assert response.prompt_logprobs is None
     assert response.mean_token_logprob is None
     assert response.confidence is None
+
+
+async def test_confidence_positive_mean_overflow_short_circuits(
+    make_client: Any,
+) -> None:
+    """平均对数概率 > 0（如 1e308）不调用 exp：不抛异常且置信度 1.0。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _content_logprobs_response([{"token": "极", "logprob": 1e308}])
+
+    client = make_client(handler)
+    response = await client.chat(_user_message())
+    assert response.mean_token_logprob == 1e308
+    assert response.confidence == 1.0
+
+
+async def test_confidence_filters_nan_and_keeps_negative_infinity(
+    make_client: Any,
+) -> None:
+    """派生过滤 NaN（丢弃）但保留 -inf（exp 下溢为 0.0——语义正确）。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _content_logprobs_response(
+            [
+                {"token": "A", "logprob": float("nan")},
+                {"token": "B", "logprob": -2.0},
+                {"token": "C", "logprob": -math.inf},
+            ]
+        )
+
+    client = make_client(handler)
+    response = await client.chat(_user_message())
+    assert response.content_logprobs is not None
+    assert len(response.content_logprobs) == 3
+    assert response.mean_token_logprob == -math.inf
+    assert response.confidence == 0.0
+
+
+async def test_confidence_all_nan_yields_none(make_client: Any) -> None:
+    """全组 NaN：均值与置信度为 None（不把 NaN 泄漏给消费方）。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _content_logprobs_response(
+            [
+                {"token": "A", "logprob": float("nan")},
+                {"token": "B", "logprob": float("nan")},
+            ]
+        )
+
+    client = make_client(handler)
+    response = await client.chat(_user_message())
+    assert response.mean_token_logprob is None
+    assert response.confidence is None
+
+
+async def test_content_logprobs_skips_true_missing_only(
+    make_client: Any,
+) -> None:
+    """真缺失（logprob 为 null / 键缺失）跳过；空 token 与 0.0 保留。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _content_logprobs_response(
+            [
+                {"token": "", "logprob": 0.0},
+                {"token": "空值", "logprob": None},
+                {"token": "无键"},
+                {"token": "正常", "logprob": -1.0},
+            ]
+        )
+
+    client = make_client(handler)
+    response = await client.chat(_user_message())
+    assert response.content_logprobs is not None
+    assert [entry.token for entry in response.content_logprobs] == ["", "正常"]
+    assert [entry.logprob for entry in response.content_logprobs] == [0.0, -1.0]
+    assert response.mean_token_logprob == pytest.approx(-0.5)
+
+
+async def test_prompt_logprobs_empty_dicts_keep_positions(make_client: Any) -> None:
+    """空 dict / 无 int 键元素占位 None——有效条目仍落在原提示词位次。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _content_logprobs_response(
+            [{"token": "答", "logprob": -0.1}],
+            prompt_logprobs=[
+                None,
+                {},
+                {"bad-key": {"logprob": -9.0, "rank": 1, "decoded_token": "坏"}},
+                {"5": {"logprob": -1.58, "rank": 1, "decoded_token": "#"}},
+                None,
+            ],
+        )
+
+    client = make_client(handler)
+    response = await client.chat(_user_message())
+    assert response.prompt_logprobs is not None
+    assert len(response.prompt_logprobs) == 5
+    assert [entry is None for entry in response.prompt_logprobs] == [
+        True,
+        True,
+        True,
+        False,
+        True,
+    ]
+    valid = response.prompt_logprobs[3]
+    assert valid is not None
+    assert valid.token_id == 5
+    assert valid.logprob == pytest.approx(-1.58)
+
+
+async def test_prompt_logprobs_length_mismatch_does_not_raise(
+    make_client: Any,
+) -> None:
+    """prompt_logprobs 与提示词长度不一致：按回传位次归一，不抛异常。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _content_logprobs_response(
+            [{"token": "答", "logprob": -0.1}],
+            prompt_logprobs=[
+                None,
+                {"7": {"logprob": -1.5, "rank": 2, "decoded_token": "你"}},
+            ],
+        )
+
+    client = make_client(handler)
+    response = await client.chat(_user_message())
+    assert response.prompt_logprobs is not None
+    assert len(response.prompt_logprobs) == 2
+    assert response.prompt_logprobs[0] is None
+    assert response.prompt_logprobs[1] is not None
+    assert response.prompt_logprobs[1].token_id == 7
 
 
 async def test_stream_chunk_carries_logprobs_best_effort(make_client: Any) -> None:

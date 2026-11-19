@@ -12,6 +12,7 @@ import UsagePage from '@/pages/usage/UsagePage'
 import ModelsPage from '@/pages/models/ModelsPage'
 import StickersPage from '@/pages/stickers/StickersPage'
 import CanvasPage from '@/pages/canvas/CanvasPage'
+import RealtimeVoicePage from '@/pages/realtime/RealtimeVoicePage'
 
 /**
  * 应用路由（本工程约定）：
@@ -22,6 +23,7 @@ import CanvasPage from '@/pages/canvas/CanvasPage'
  * - /models 模型注册表（条目 / 角色绑定）；
  * - /stickers 表情包库（上传 / 标签 / 删除 / VLM 标注）；
  * - /canvas 画布（渲染产物创建 / 预览 / 修订 / 导出）；
+ * - /realtime 实时语音（全双工会话：麦克风上行 / 字幕 / 播报 / 打断）；
  * - 全部页面挂 AppShell（侧边栏导航）之下，ToastProvider 包裹根。
  */
 const routes: RouteObject[] = [
@@ -45,6 +47,7 @@ const routes: RouteObject[] = [
           { path: 'models', element: <ModelsPage /> },
           { path: 'stickers', element: <StickersPage /> },
           { path: 'canvas', element: <CanvasPage /> },
+          { path: 'realtime', element: <RealtimeVoicePage /> },
           { path: '*', element: <Navigate to="/personas" replace /> },
         ],
       },

@@ -456,9 +456,10 @@ class PromptLogprobEntryModel(BaseModel):
 class WireLogprobToken(BaseModel):
     """wire logprob token（content 元素 / 候选元素共用形态）。
 
-    Attributes:
+     Attributes:
         token: token 文本。
-        logprob: 对数概率。
+        logprob: 对数概率（端点未提供时为 None——真缺失，映射层跳过；
+            空 token / 0.0 是合法回传值，不因缺省值被误判为缺失）。
         bytes: 字节序列。
         top_logprobs: 候选分布（候选元素自身为空列表）。
     """
@@ -466,7 +467,7 @@ class WireLogprobToken(BaseModel):
     model_config = ConfigDict(protected_namespaces=(), extra="ignore")
 
     token: str = Field(default="", description="token 文本")
-    logprob: float = Field(default=0.0, description="对数概率")
+    logprob: float | None = Field(default=None, description="对数概率（缺失为 None）")
     bytes: list[int] | None = Field(default=None, description="字节序列")
     top_logprobs: list[WireLogprobToken] = Field(
         default_factory=list, description="候选分布"
@@ -795,6 +796,12 @@ def build_chat_request_body(
     （缺省 ``auto``——模型自行决定）；**tools 与多模态内容分块可组合**
     （视觉 + 工具调用形态——duty 轮工具循环消费）。
 
+    logprobs 字段面：非流式请求按调用方旋钮携带 ``logprobs`` /
+    ``top_logprobs`` / ``prompt_logprobs``；**流式请求强制省略
+    ``prompt_logprobs``**——vLLM 协议校验器对 ``stream=true`` 且
+    ``prompt_logprobs > 0`` 直接返回 400，且流式响应本身不回传该字段
+    （后端只在非流式响应顶层返回 prompt logprobs）。
+
     Args:
         model: 模型名（provider model 参数）。
         messages: 聊天消息序列（含 assistant 工具调用轮 / tool 结果轮 /
@@ -805,6 +812,11 @@ def build_chat_request_body(
         tools: 原生工具定义列表（None / 空 = 不携带工具面）。
         tool_choice: 工具选择策略（None = ``auto``；仅 ``tools`` 非空时
             进入请求体）。
+        logprobs: 是否声明 logprob 字段面（False = 三字段全省略）。
+        top_logprobs: 每位置候选分布数（None = 省略；仅 ``logprobs`` 为
+            真时生效）。
+        prompt_logprobs: 提示词 token logprobs 数（None = 省略；**流式
+            请求恒省略**——见函数说明的端点约束）。
 
     Returns:
         可直接作为 HTTP JSON body 的 dict。
@@ -852,7 +864,9 @@ def build_chat_request_body(
         body["logprobs"] = True
         if top_logprobs is not None:
             body["top_logprobs"] = top_logprobs
-        if prompt_logprobs is not None:
+        # 流式请求强制省略 prompt_logprobs：vLLM 校验器对 stream=true 且
+        # prompt_logprobs>0 直接 400，流式响应也不回传该字段。
+        if prompt_logprobs is not None and not stream:
             body["prompt_logprobs"] = prompt_logprobs
     if params is not None:
         if params.temperature is not None:

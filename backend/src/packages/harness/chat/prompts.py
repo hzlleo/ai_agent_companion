@@ -108,6 +108,7 @@ __all__ = [
     "UNTRUSTED_LABEL_PEER",
     "UNTRUSTED_LABEL_TOOL_RESULT",
     "UNTRUSTED_LABEL_DEFAULT",
+    "UNTRUSTED_LABEL_HISTORY",
     "INJECTION_HINT_TEMPLATE",
     "PERSONA_NAME_HEADER_TEMPLATE",
     "PERSONA_DESCRIPTION_SECTION_TEMPLATE",
@@ -261,6 +262,10 @@ UNTRUSTED_LABEL_TOOL_RESULT: str = "工具结果"
 
 #: 不可信内容来源标签——缺省（调用方未指明来源时的中性标签）。
 UNTRUSTED_LABEL_DEFAULT: str = "消息"
+
+#: 不可信内容来源标签——历史回合（compose 历史包裹面；发送者不可逐条
+#: 标注时的统一标签）。
+UNTRUSTED_LABEL_HISTORY: str = "历史消息"
 
 #: 注入提示块（检测命中后追加；占位符 ``{counter}``——该风格的一句参考
 #: 回怼）。语义：提示模型这段话里可能藏着指令、宪章仍然最高，允许轻轻

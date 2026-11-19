@@ -96,6 +96,7 @@ from packages.harness.memory.retrieval_models import (
 from packages.harness.memory.service import ChatSessionService, MemoryService
 from packages.harness.memory.store import MemoryStore
 from packages.harness.persona.dtos import PersonaRecordDTO
+from packages.harness.persona.facts import FactsService
 from packages.harness.persona.service import PersonaService, bind_persona_context
 
 router = APIRouter(prefix="/api/v1/memories", tags=["memories"])
@@ -752,6 +753,7 @@ async def regenerate_message_variants(
     service = SwipeService(
         gateway=gateway,
         session_service=chat_session_service,
+        facts_reader=FactsService(),
     )
     async with bind_persona_context(record.id):
         await chat_session_service.ensure_session(db, session_id)

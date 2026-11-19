@@ -265,10 +265,19 @@ async def test_config_partial_missing_keys_matrix() -> None:
 
 
 async def test_config_strips_whitespace_and_rejects_out_of_range() -> None:
-    """首尾空白归一；温度 / 阈值越界由模型校验拒绝。"""
-    config = _complete_config(base_url="  http://intimate.test/v1  ", model=" m ")
+    """首尾空白归一（含密钥）；温度 / 阈值越界由模型校验拒绝。"""
+    config = _complete_config(
+        base_url="  http://intimate.test/v1  ",
+        api_key=SecretStr("  key-trimmed  "),
+        model=" m ",
+    )
     assert config.base_url == _INTIMATE_BASE_URL
+    assert config.api_key.get_secret_value() == "key-trimmed"
     assert config.model == "m"
+
+    blank_key = _complete_config(api_key=SecretStr("   "))
+    assert blank_key.is_configured is False
+    assert blank_key.missing_env_keys == ("LLM_INTIMATE_API_KEY",)
 
     with pytest.raises(ValidationError):
         IntimateChannelConfig(temperature=2.5)

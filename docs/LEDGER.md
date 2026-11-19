@@ -90,12 +90,13 @@
 | R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | ✅ 代码完成、PR #15 OPEN（`b5846c0`）；甲套件 core + 组件库A/成熟度分层 + 关系连续性A + 乙分轨已全门禁绿；**剩余仅「示例台词 few-shot」** |
 | R2d 心流社交 | R2d-1 心流门控（`FLOW_` env 面——判定矩阵 / 连发合并 / 延迟批次经调度器 / 关系与节律输入）+ 群聊多人格（`GROUP_PERSONA_` env 面——轮转 / 冷却 / 重复抑制 / 人格会话归属）；R2d-2 声纹（`VOICEPRINT_` env 面——PIPL 告知 / 同意记录 / 注册 / 校验 / 撤回删除 / 保存期）+ 表情包库与 VLM 标注（`STICKER_` env 面——哈希去重 / 来源授权备注 / 标注状态机 / 通道附件 v2 收发桥 / 前端面板），迁移 0016 | ✅ R2d-1 + R2d-2 代码完成（本分支；全门禁见第 5 节） |
 | R2e 通道扩展 | R2e-1 企微智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 去重 / 回复上下文 / 文本分段 / 素材分片上传 / 配置面 / 装配 / 文档）；R2e-2 抖音 web 通道（浏览器 sidecar 底座：页面采集 / 发送脚本、去重、synthetic、图片附件、指数退避、配置面、装配、文档）+ 画布产物面（迁移 0017 / 服务 / API / 沙箱预览面板 / 导出）；余项：GUI 微信容器化（PoC 门——部署机未跑） | 🔄 R2e-1 ✅ 代码完成、全门禁绿；R2e-2 ✅ 代码完成、全门禁绿（本分支，验证数值见第 5 节）；GUI 微信容器化 ⏳（部署机 PoC 门） |
-| R2f 实时语音 | 独立全双工会话（VAD+流式ASR+句级TTS+打断），允许溢出 R3 | ⏳ |
+| R2f 实时语音 | 实时语音全双工会话：WS 协议 + 相位状态机 + 能量/静音 VAD 切段 + 切段转写（节流中途字幕）+ 人格回复句切与逐句 TTS 分片下行 + barge-in（取消在途生成/合成 + 清空队列）+ 会话资源上限（背压/空闲/最大时长/优雅关闭）+ `REALTIME_VOICE_` env 面 + 管理台实时字幕面板 | ✅ 代码完成、全门禁绿（本分支；溢出项与验证数值见第 5 节） |
 | R3 | 安全/防穿透/性能深度审计版（独立版本）：admin 鉴权已前置完成，余项：提示注入纵深/SSRF/SeekDB DSL 注入/密钥治理/限流背压/性能基线 | ⏳ |
 
 **当前分支状态**：
 - main：R2b（PR #11 → `6b54b2a`）、R2c（PR #12 → `3872504`）、R2-defense（PR #13 → `7fe68a0`）、logprobs 通道（PR #14 → `1305420`）已合并。
 - `feat/r2b-plus-intimacy`：PR #15 OPEN（`b5846c0`），承载 R2b+ 甲/乙/组件库/关系连续性；剩余仅示例台词 few-shot。
+- `feat/r2f-realtime-voice`：从合并后 main `56cf148` 新建，承载 R2f 实时语音全双工会话（本台账第 5 节「R2f 验证记录」）。
 - 本机工作区在 `feat/r2b-plus-intimacy` 分支上堆叠 R2d-1 + R2d-2 改动（未提交/未推送，以本台账第 5 节为准）。
 
 ## 4. 全部拍板记录（原文语义）
@@ -131,11 +132,11 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2630 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 2788 passed）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
-cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift）
+cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift；当前 mypy 190 文件零问题）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 6 用例（迁移链/并发唯一键/行锁/混合检索）
-cd frontend && pixi run test / coverage / lint / build   # 623 passed
+cd frontend && pixi run test / coverage / lint / build   # 666 passed（高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
 根级：pixi run gen-examples（三件套再生成）、pixi run gates
 ```
@@ -147,7 +148,9 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 - 测试环境：全异步 asyncio_mode=auto；SQLite 共享 fixture；不依赖真实配置；conftest 硬覆盖 env。
 - 关键模块坐标：harness/{core,config,database,pools,llm,usage,persona,chat,memory,channels（含 douyin）,canvas,tools,duty,scheduler,voice（含 voiceprint_*）,multimodal（含 sticker_*）,search,emotion,intent,rhythm,reminders}、app/api/{personas,memories,usage,models,voice,voiceprints,look_at,stickers,facts,reminders,directives,skills,core_memory,canvas,health,channels_qq}、前台 pages/{personas,memories,usage,models,stickers,canvas}。
 
-**LLM 网关强制 logprobs 字段**：新版 vLLM 仅在请求显式携带 `logprobs/top_logprobs/prompt_logprobs` 时回传 logprob 数据（置信度计算输入面）——网关全请求（含流式/工具）固定携带（缺省 20/20，构造旋钮 None 可省略）；响应侧解析为 `content_logprobs/prompt_logprobs` 并派生 `mean_token_logprob/confidence`（exp 均值，观测信号）。已实现于 `feat/llm-confidence-logprobs`（`08dd81e`）；请求构造测试 7 例（含流式 / 工具分支 / 旋钮略省）全异步。
+**LLM 网关强制 logprobs 字段**：新版 vLLM 仅在请求显式携带 `logprobs/top_logprobs/prompt_logprobs` 时回传 logprob 数据（置信度计算输入面）——网关非流式请求（含工具）固定携带（缺省 20/20，构造旋钮 None 可省略），流式请求省略 `prompt_logprobs`（端点约束见下条）；响应侧解析为 `content_logprobs/prompt_logprobs` 并派生 `mean_token_logprob/confidence`（exp 均值，观测信号）。已实现于 `feat/llm-confidence-logprobs`（`08dd81e`）；请求构造测试 7 例（含流式 / 工具分支 / 旋钮略省）全异步。
+
+**logprobs 批次修复（P0/P1/P2 闭环）**：流式请求强制省略 `prompt_logprobs`——vLLM 协议校验器对 `stream=true` 且 `prompt_logprobs>0` 直接 400，流式响应也不回传该字段；网关构造新增 `top_logprobs` / `prompt_logprobs` 并接通 `LLM_TOP_LOGPROBS` / `LLM_PROMPT_LOGPROBS` env（int ≥1；空 = 省略）；置信度派生对正均值短路 1.0、过滤 NaN 并保留 -inf，全 NaN 时派生字段为 None；wire `logprob` 改可空并以 `None` 为真缺失判据（空 token / 0.0 合法值保留）；prompt 空 dict / 无整数键元素占位 None 保持位次；畸形条目跳过记 debug 计数（不打印原文）。测试与文档同步（`test_llm_logprobs.py` 全异步）。
 
 ### 已完成切片：R2c 记忆能力（核心记忆 + 关系进展 + 前端面板）——已合并（PR#12，`3872504`）
 **已完成**：
@@ -168,6 +171,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 4. 测试：`test_relationship_summary.py`（派生矩阵 31 例（23 个用例含参数化）：空事实 / 混类与历史过滤 / 阶梯上下沿 / 衰减档边界与未来时间戳 / 夹取与阶段回落 / 事件裁剪顺序 / 边界上限 / 确定性 / 时间轴拒绝 / 阈值表不变式）+ `test_chat_relationship.py`（渲染 7 例 / 链序 2 例 / 服务集成 8 例：正常注入 / 阈值注入 / 读失败降级 / 未接线 / 纯内存零 I/O / 流式 / 工具循环 / 合规重试）+ prompts byte-lock 增补。
 5. docs：persona.md 关系进展摘要一节（来源 / 公式与阈值表 / 衰减档 / 夹取语义 / 注入位置 / 降级行为 / JSON 示例）、chat.md 组装链十六段完整重写与关系进展块示例、backend README 行、本台账状态行。
 **验证**（主 Agent 终验，全部经 pixi）：后端 2573 passed（新增 116 条企微用例）/ 23 组覆盖率门禁（harness/channels 97.0%、app/main 89.8%）/ mypy 175 文件零问题 / ruff 零问题 / 门禁链全绿（注释门 violations=0、同步测试棘轮 +0、noqa 冻结 0、沙盒漂移 36 项一致）/ `gen-examples` 再生成 byte-stable（仅 CHANNELS.WECOM 分节 39 行）。示意命令：`cd backend && pixi run tests-all`、`pixi run coverage-gates`、`pixi run lint`、`pixi run typecheck`、根 `pixi run gates`、根 `pixi run gen-examples`。
+**Oracle 深审修复批次（R2b+，P1/P2 全闭环）**：预设生成的 `system_prompt` 改为自包含覆写形态（名字头 /【角色设定】/【性格特点】/ 语气指令 / 四态场景脚本；`personality` 字段仍保留供 UI / 编辑面——覆写路径已修为含人格主体）；工具循环的合规重试基底保留 assistant 工具调用轮与已包裹 tool 轮（不携带工具面、不重跑工具）；swipe 变体重生成派生关系摘要并传 `intimacy_level`（与 reply 同语义）；config.md 补 INJECTION / COMPLIANCE / LLM.INTIMATE 分节；`LLM_INTIMATE_API_KEY` 装载期 strip（仅空白 = 未配置）；合规检测与注入守卫共用归一副本（全角 / 零宽变形不绕过）。**`mes_example` few-shot 注入仍为台账遗留**（本批未改）。
 
 ### 已完成切片：R2b+ 组件库 A + 成熟度分层（亲密补强）
 **已完成**：
@@ -204,12 +208,13 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 **已完成**：
 1. `chat/injection_models.py` / `injection_guard.py` / `injection_counter_texts.py`：不可信内容 nonce 定界包裹（12 位十六进制，碰撞重生成上限 8 次，内容逐字节保真）+ 规则表加权检测（5 种类 / 24 条规则 / 身份断言 1.5 / 保守阈值 2.0）+ 三风格台词确定性选句。
 2. `chat/prompts.py`：`CONSTITUTION_TEMPLATE`（五条）、`UNTRUSTED_WRAP_*_TEMPLATE`、`INJECTION_HINT_TEMPLATE`、来源标签常量；PROMPTS_VERSION 1.6.0（1.5.0 → 1.6.0）；既有模板字节零变更。
-3. `chat/service.py`：compose 链人格正典之后恒注入宪章；`compose_messages` 新增 `wrap_current_message` / `current_message_label` / `injection_hint`（只包裹当轮入站，历史原文）；`ChatService` 装配 `InjectionGuardSettings`（`INJECTION_` env），reply / stream_reply 检测 + 提示 + 来源标签，工具循环 tool 轮正文定界包裹。
+3. `chat/service.py`：compose 链人格正典之后恒注入宪章；`compose_messages` 新增 `wrap_current_message` / `current_message_label` / `injection_hint`（包裹当轮入站与最近 10 条历史 user 回合；assistant 与更早回合原文）；`ChatService` 装配 `InjectionGuardSettings`（`INJECTION_` env），reply / stream_reply 检测 + 提示 + 来源标签，工具循环 tool 轮正文定界包裹。
 4. `duty/duty_prompts.py`：值班工具反馈恒加「工具结果」定界包裹（与 chat 同语义；不跟随 chat 开关，文档化）。
 5. 测试：`test_injection_guard.py`（机制）+ `test_prompt_injection_red_team.py`（38 条模板 / 20 阳性 / 18 阴性 + 服务层开关与流式）+ prompts byte-lock 增补；既有测试仅按新契约更新 3 处断言（tool 反馈包裹正文、resume 续聊当轮包裹）。
 6. docs：`backend/defense.md`（攻击面 × 防线 × 缺口矩阵 / 包裹格式 / 检测矩阵 / JSON 示例 / env 表）、chat.md / channels.md / backend README。
 **验证**：后端 2189 passed / 23 组覆盖率（harness/chat 95.5%）/ mypy 151 文件 / ruff / 注释门 + 棘轮 + noqa 冻结 + 漂移 36 / 活 SeekDB 6 用例；前端未改（DTO fixture 零变更）。
 **办结**：`INJECTION_*` 四键已由主 Agent 纳入 `.env.example` / Setup Wizard 生成器（已验证两处各 4 键）；R2b+ 的 compliance_guard 联动已落地（见上节）。
+**Oracle 深审修复批次（P1/P2 全闭环）**：swipe 重生成末位 user 回合复用 compose 包裹开关 + 检测提示（缺省「消息」标签 / 默认台词风格）；检测前归一副本（NFKC + 零宽剔除 + 空白折叠，留证取自副本）并新增 5 条英文规则（规则表 24 → 29 条）；compose 对最近 10 条历史 user 回合定界包裹（标签「历史消息」，assistant / 更早回合原文）；红队集 38 → 47 条（含混淆形与防误报阴性）、prose pin 改结构断言、补工具循环×注入共存与合规重试不变量用例；defense.md 失效部署待办删除并同步矩阵 / 边界，chat.md 同步 compose 链与 swipe 说明。
 
 ### 已完成切片：R2d-1 心流门控 + 群聊多人格（未提交工作区）
 **已完成**：
@@ -276,11 +281,40 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **验证**（主 Agent 终验，全部经 pixi）：后端 2630 passed / 24 组覆盖率门禁（harness/canvas 98.7%、harness/channels 97.3%、app/api 81.7%、app/main.py 89.9%）/ mypy 183 文件零问题 / ruff 零问题 / 门禁链全绿（注释门 violations=0、同步测试棘轮 +0、noqa 冻结 0、沙盒漂移 38 项一致）/ 活 SeekDB 6 用例（迁移链 0017 升 / 降 base / 复升）；DTO fixture 94 组双侧重生成；前端 623 passed / coverage perFile（96.08% statements / 92.60% branches）/ lint / build。示意命令：`cd backend && pixi run tests-all`、`pixi run coverage-gates`、`pixi run lint`、`pixi run typecheck`、根 `pixi run gates`、`SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto`、`cd frontend && pixi run test / coverage / lint / build`。
 
+### 已完成切片：R2f 实时语音全双工会话（本分支未提交工作区）
+
+**拍板覆盖度与取舍（拍板未覆盖部分在此定性，不改写拍板原文）**：P9=B「真全双工 + 独立新会话」；本切片按独立 WS 端点 + 独立会话引擎落地（不复用通道 runner）。「流式 ASR / 流式 TTS」在既有服务端点上的实际取材：ASR 为 Qwen3-ASR **批量** audio 端点（无流式通道），中途字幕由**节流的中途批量转写**产生；TTS 为 CosyVoice **整句** WAV（无流式音频通道），逐句合成后按固定字节分片下行、客户端整句聚合解码播放（半句音频永不下发）。两端点的真实连通性留部署侧一次性验证（开发机测试全经 fake，零真实网络）。
+
+**已完成**：
+1. `harness/voice/realtime_models.py`：上下行判别联合（start / audio_chunk / end / barge_in / barge_in_ack / ping；ready / partial_transcript / final_transcript / assistant_text / audio_chunk / state / interrupted / error / closed）、VAD 公开参数与会话上限、`RealtimeVoiceSettings`（19 键 + 跨字段不变式：双阈值滞回 / 批量≤队列 / 空闲<最大时长 / 单段>最短语音 / 中途起点≤单段上限）、指标快照、传输与回复生成面协议。
+2. `harness/voice/realtime_vad.py`：能量/静音窗口 VAD（起说防抖帧 / 双阈值滞回 / 最短语音丢弃 / 单段上限强制切段 / 冲刷），帧时长累加计时（不读系统时钟，伪时钟可复现同一事件序列）。
+3. `harness/voice/realtime_state.py`：相位迁移规则表（idle→listening→thinking→speaking→listening；打断/超时/错误/关闭；closed 吸收态；非法事件不改变相位）。
+4. `harness/voice/realtime_sentence.py` + `realtime_audio.py`：句切（标点/收尾符号/长度上限/停顿优先/流式累积）与 PCM16 能量、WAV 封装、字节分片。
+5. `harness/voice/realtime_session.py`：会话引擎——有界音频队列（批量出队 / 溢出丢最旧并计数）、VAD 事件处理、切段转写与节流中途转写、`ChatService.stream_reply` 生成、句切与逐句 TTS 分片下行、barge-in（取消生成/合成任务 + 清空句队列 + 下行 interrupted/state + 指标日志）、看门狗（空闲/最大时长，注入时钟与休眠面）、end 尾段冲刷与等待播完后 graceful close、统一任务登记与取消（关闭后任务集合为空）、关闭指标日志。`ChatSessionStreamAdapter` 委托真实 ChatService。
+6. `app/api/realtime_voice.py` + `app/main.py`：WS 端点（`GET /api/v1/realtime/voice/ws`）——查询参数 token（浏览器 WS 无法设置自定义头）/ Authorization 头鉴权（复用 `verify_admin_token` 恒时比较）、总闸与 ASR 门控、人格解析、连接级持久化聊天会话（与文字通道同表落库）、Starlette 传输适配；`admin_auth` 抽出 `verify_admin_token` 供 HTTP/WS 共用。豁免面清单同步 README 认证一节。
+7. 配置面：`Settings.realtime_voice` 聚合、`build_isolated_settings` 参数、`scripts/generate_examples_env.py` 的 `REALTIME_VOICE` 分节、Setup Wizard「实时语音会话配置」步骤、`src/conftest.py` 19 键硬覆盖。
+8. 测试：`tests/realtime_fakes.py`（内存双工 / 脚本语音与聊天面 / 伪时钟 / 即时与挂起休眠面）+ 六个后端测试文件（协议 / VAD / 状态机 / 句切 / 音频 / 会话端到端 27 例 / WS 端点 9 例）——全部异步、零真实网络、零固定等待。
+9. 前端：`/realtime` 面板（开始/停止、麦克风 16kHz PCM 分块上行、句级音频聚合与串行播放、实时字幕、打断按钮、状态与错误提示、会话参数展示）+ `types/realtimeVoice` / `api/realtimeVoice`（ws 地址构造）/ `lib/realtimeAudio`（降采样/编码/播放队列）/ `lib/realtimeVoiceClient`（WS 客户端 + 采集）/ 路由与侧栏 + 四个测试文件。
+10. 文档：`docs/backend/realtime-voice.md`（协议全示例与字段表 / 状态迁移表 / VAD 矩阵 / 打断时序 / 背压与上限 / 错误码 / 配置表与 .env 片段 / 前端面板 / 部署真机验证步骤 / 测试面 / 边界）、README 索引与认证豁免表、config.md 分节行、voice.md 交叉引用、根 README 特性行、本台账。
+
+**验证记录**（主 Agent 终验，全部经 pixi；命令与退出码）：
+
+- `cd backend && pixi run coverage-gates`（含全量测试）→ 0：**2759 passed**；24 组覆盖率全部 ≥80（harness/voice 95.1%、app/api 83.2%、app/main.py 90.1%）；
+- `cd backend && pixi run lint` → 0（`All checks passed!`）；`pixi run typecheck` → 0（190 源文件零问题）；
+- 根 `pixi run gates` → 0：注释门 violations=0（hints=30 为既有报告面）、同步测试棘轮 +0、noqa/type:ignore 全基线通过、沙盒漂移 38 项一致；
+- `cd backend && pixi run tests-seekdb`（活 SeekDB 1.4.0 容器）→ 0：6 passed（迁移链 0001..0017 / 并发唯一键 / 行锁 / 混合检索——本切片无新增迁移，回归确认既有链不受影响）；
+- `cd backend && pixi run gen-examples` → 幂等：仅 `.env.example` 新增 `REALTIME_VOICE` 分节 60 行，`config.example.yaml` / `extensions_config.example.json` 零变化（套件内 byte-stable 测试同步通过）；
+- `cd frontend && pixi run test` → 0：**666 passed**；`pixi run coverage` → 0（perFile ≥80 envelope 全过；总 statements 96.21%，realtimeAudio.ts 99.13% lines / 87.5% branches，pages/realtime 95.61% statements）；`pixi run lint` → 0；`pixi run build` → 0（仅既有 chunk>500kB 提示）；
+- 说明：本机在终验窗口负载可达 48/20 核，前端 coverage 全量并发跑时既有页面用例偶发 `findBy` 默认 1s 超时（canvas / memories / personas / stickers / reminders hooks，均与本切片无关）；以 `pixi run coverage -- --maxWorkers=4` 复跑全绿（85 文件 / 666 用例）。
+
+**溢出项与未做项**（诚实标注）：真实 ASR / TTS 供应商连通性与首字/首音延迟留部署侧一次性验证（步骤见 docs/backend/realtime-voice.md）；AEC / 回声消除未做；移动端采集与后台挂起优化未做；既有 ASR/TTS 端点无真流式通道（partial 为节流中途批量转写、句级音频整句解码后播放）；实时语音轮次不注入工具面；流式路径沿用合规守卫「不重试」边界。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
 - SmsForwarder 短信通道（D3 记账推迟）；WhatsApp/其他平台未列入 R2。
 - 声纹（PIPL 合规）与表情包素材法律边界提示义务已随 R2d-2 交付（默认关闭，部署侧按需配置 `VOICEPRINT_*` / `STICKER_*` 并起说话人向量服务）。
+- 实时语音（R2f）遗留：真实 ASR / TTS 连通性与首字/首音延迟需部署机一次性验证（步骤见 docs/backend/realtime-voice.md「部署侧一次性真机验证」）；AEC / 回声消除未做（外放可能自触发打断，建议耳机或浏览器平台 AEC）；移动端采集（ScriptProcessor）与后台挂起优化未做；ASR/TTS 服务端点无真流式通道（partial 为节流中途批量转写、句级音频整句解码后播放）；实时语音轮次不注入工具面（需要搜索/沙盒走文字通道）。
 - 已知部署机注意：开发机无 NVIDIA GPU（Iris Xe）；GPU/模型项一律在 Clevo 机执行。
 
 ## 7. 恢复指引（新会话首读）

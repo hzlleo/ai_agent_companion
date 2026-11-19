@@ -36,7 +36,7 @@ config.yaml / extensions_config.json（结构化面：llm 模型注册表 /
 
 env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）走 env；多端点结构化配置（模型注册表）走 config.yaml。文件缺失为合法状态（首次部署 / 测试 scratch CWD——保持默认值）；文件存在但解析失败为 `CONFIG_INVALID` fail loud。
 
-## Settings env 面（.env.example 由 `pixi run gen-examples` 自动生成）
+## env 面分节（.env.example 由 `pixi run gen-examples` 自动生成）
 
 | 分节 | env 前缀 | 字段（默认值） |
 |---|---|---|
@@ -44,7 +44,8 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 | DatabaseConfig | `DATABASE_` | `TYPE`(mysql) · `HOST`(127.0.0.1) · `PORT`(3306) · `NAME`(ai_agent_companion) · `USER`(root) · `PASSWORD`("") · `POOL_SIZE`(10) · `MAX_OVERFLOW`(20) · `POOL_RECYCLE`(3600) · `POOL_PRE_PING`(true) |
 | LogConfig | `LOG_` | `LEVEL`(INFO) · `FILE`(logs/app.log) · `JSON_FILE`(logs/app.json.log) · `ROTATION`(1 day) · `RETENTION`(30 days) · `MODULE_LEVELS`("") · `COLORIZE_CONSOLE`(true) · `DIAGNOSE_EXCEPTIONS`(false) |
 | PoolsConfig | `POOLS_` | `THREAD_POOL_SIZE`(8) · `HTTP_MAX_CONNECTIONS`(100) · `HTTP_MAX_KEEPALIVE_CONNECTIONS`(20) · `HTTP_CONNECT_TIMEOUT_SECONDS`(5.0) · `HTTP_TIMEOUT_SECONDS`(30.0) · `LLM_SEMAPHORE_LIMIT`(5) · `LLM_REQUEST_TIMEOUT_SECONDS`(120) · `CB_FAIL_MAX`(5) · `CB_RESET_TIMEOUT_SECONDS`(60) |
-| LlmEndpointConfig | `LLM_` | `BASE_URL`("") · `API_KEY`("") · `MODEL`("") |
+| LlmEndpointConfig | `LLM_` | `BASE_URL`("") · `API_KEY`("") · `MODEL`("") · `TOP_LOGPROBS`(20) · `PROMPT_LOGPROBS`(20)（两项 int ≥1；留空 = 省略对应请求字段；`PROMPT_LOGPROBS` 仅非流式请求生效） |
+| IntimateChannelConfig（`llm/intimate_models.py`；llm 域本地设置，不经 `Settings` 聚合） | `LLM_INTIMATE_` | `ENABLED`(false) · `BASE_URL`(空) · `API_KEY`(空) · `MODEL`(空) · `TEMPERATURE`(空) · `MIN_INTIMACY_LEVEL`(2)（语义与半配置策略见 [llm.md](llm.md#配置键表env-example--setup-wizard亲密回复通道配置步骤同源)） |
 | SeekDBSettings | `SEEKDB_` | `ENABLED`(false) · `HOST`(127.0.0.1) · `PORT`(2881) · `USER`(root) · `PASSWORD_ENV`(SEEKDB_PASSWORD) · `DATABASE`(test) · `VECTOR_DIM`(1024) · `POOL_MIN`(1) · `POOL_MAX`(4) |
 | TelegramSettings | `TELEGRAM_` | `ENABLED`(false) · `BOT_TOKEN_ENV`(TELEGRAM_BOT_TOKEN) · `API_BASE`(https://api.telegram.org) · `POLL_TIMEOUT_SECONDS`(25) · `OWNER_CHAT_ID`(null) · `BACKOFF_BASE_SECONDS`(1.0) · `BACKOFF_MAX_SECONDS`(60.0) · `STATE_DIR`(data/channels) |
 | QqChannelSettings | `QQ_` | `ENABLED`(false) · `HTTP_API_BASE_URL`(http://127.0.0.1:3000) · `ACCESS_TOKEN_ENV`(QQ_ACCESS_TOKEN) · `WEBHOOK_TOKEN_ENV`(QQ_WEBHOOK_TOKEN) · `REQUEST_TIMEOUT_SECONDS`(15.0) |
@@ -56,15 +57,18 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 | ToolsSandboxSettings | `TOOLS_SANDBOX_` | `ENABLED`(false) · `BASE_URL`(http://127.0.0.1:8765) · `TOKEN_ENV`(SANDBOX_TOKEN) · `REQUEST_TIMEOUT_SECONDS`(15.0) |
 | VoiceSettings.tts（TtsSettings） | `VOICE_TTS_` | `ENABLED`(false) · `BASE_URL`(http://127.0.0.1:9880) · `MODEL_ENTRY`(cosyvoice3) · `REQUEST_TIMEOUT_SECONDS`(30.0) · `DEFAULT_SPEAKER`(中文女) · `DEFAULT_SPEED`(1.0) |
 | VoiceSettings.asr（AsrSettings） | `VOICE_ASR_` | `ENABLED`(false) · `BASE_URL`(http://127.0.0.1:8082) · `MODEL_ENTRY`(qwen3-asr-0.6b) · `REQUEST_TIMEOUT_SECONDS`(60.0) · `LANGUAGE`(null) · `MAX_UPLOAD_BYTES`(26214400) |
+| RealtimeVoiceSettings（`Settings.realtime_voice`） | `REALTIME_VOICE_` | `ENABLED`(false) · `SAMPLE_RATE_HZ`(16000) · `CHANNELS`(1) · `VAD_SPEECH_RMS_THRESHOLD`(0.06) · `VAD_SILENCE_RMS_THRESHOLD`(0.03) · `VAD_START_CONSECUTIVE_FRAMES`(3) · `VAD_MIN_SPEECH_MS`(300) · `VAD_SILENCE_END_MS`(700) · `VAD_MAX_SEGMENT_MS`(15000) · `PARTIAL_TRANSCRIPT_INTERVAL_MS`(800) · `PARTIAL_MIN_SPEECH_MS`(600) · `SENTENCE_MAX_CHARS`(80) · `TTS_CHUNK_BYTES`(16384) · `AUDIO_QUEUE_MAX_CHUNKS`(64) · `AUDIO_BATCH_MAX_CHUNKS`(8) · `MAX_SESSION_MS`(600000) · `IDLE_TIMEOUT_MS`(60000) · `HEARTBEAT_INTERVAL_MS`(15000) · `BARGE_IN_ENABLED`(true)（跨字段不变式见 [realtime-voice.md](realtime-voice.md#配置realtime_voice_-env-面默认关闭)） |
 | VoiceprintSettings（`Settings.voiceprint`） | `VOICEPRINT_` | `ENABLED`(false) · `EMBEDDING_BASE_URL`("") · `EMBEDDING_PATH`(/embedding) · `EMBEDDING_MODEL`(voiceprint-embedding) · `REQUEST_TIMEOUT_SECONDS`(30.0) · `SIMILARITY_THRESHOLD`(0.75) · `MIN_SAMPLES`(3) · `MAX_SAMPLES`(20) · `MIN_SAMPLE_DURATION_MS`(1500) · `MIN_VERIFY_DURATION_MS`(1000) · `MIN_SAMPLE_RATE_HZ`(8000) · `MAX_UPLOAD_BYTES`(10485760) · `MAX_BATCH_SAMPLES`(20) · `RETENTION_DAYS`(365) · `STORAGE_DIR`(data/voiceprints) |
 | StickerSettings（`Settings.sticker`） | `STICKER_` | `ENABLED`(false) · `STORAGE_DIR`(data/stickers) · `MAX_UPLOAD_BYTES`(5242880) · `MAX_TAGS`(8) · `TAG_MAX_LENGTH`(24) · `DESCRIPTION_MAX_LENGTH`(500) · `SOURCE_NOTE_MAX_LENGTH`(512) · `MAX_BATCH_ITEMS`(20) · `CHANNEL_REPLY_ENABLED`(true) |
 | WebSearchSettings（`Settings.search`） | `SEARCH_` | `ENABLED`(false) · `TOOL_ENABLED`(false) · `DAILY_BUDGET_PER_PERSONA`(50) · `DAILY_BUDGET_GLOBAL`(200) · `COOLDOWN_SECONDS`(60) |
 | RhythmSettings（`Settings.rhythm`） | `RHYTHM_` | `ENABLED`(false) · `BEDTIME`(23:30) · `WAKE_TIME`(08:00) · `TIMEZONE_NOTE`(naive-local) · `REPLY_DELAY_MIN_MS`(1500) · `REPLY_DELAY_MAX_MS`(45000) · `TYPING_SPEED_MS_PER_CHAR`(45) · `TYPING_BASE_MS`(800) · `BURST_PROBABILITY`(0.12) |
 | FlowGateSettings（`Settings.flow`） | `FLOW_` | `ENABLED`(false) · `BURST_WINDOW_MS`(4000) · `BURST_COUNT`(3) · `MERGE_QUIET_MS`(2500) · `MERGE_MAX_MESSAGES`(5) · `MIN_REPLY_GAP_MS`(1200) · `BACKLOG_DEFER_THRESHOLD`(6) · `BACKLOG_DEFER_STEP_MS`(8000) · `BACKLOG_DEFER_MAX_MS`(90000) · `PENDING_GRACE_MS`(60000) |
 | GroupPersonaSettings（`Settings.group_persona`） | `GROUP_PERSONA_` | `ENABLED`(false) · `MAX_RESPONDERS`(1) · `COOLDOWN_MS`(60000) |
+| InjectionGuardSettings（`chat/injection_models.py`；chat 域本地设置，不经 `Settings` 聚合） | `INJECTION_` | `ENABLED`(true) · `COUNTER_STYLE`(sassy) · `THRESHOLD`(2.0) · `ANTI_INJECTION_HINT`(true)（语义见 [chat.md](chat.md#会话流chatservice)） |
+| ComplianceGuardSettings（`chat/compliance_models.py`；chat 域本地设置，不经 `Settings` 聚合） | `COMPLIANCE_` | `ENABLED`(true) · `THRESHOLD`(2.0) · `TEMPERATURE_BUMP`(0.2) · `MAX_RETRIES`(1)（语义见 [chat.md](chat.md#人格输出契约与合规守卫)） |
 | Settings | （无前缀） | `ENV`(local) |
 
-分节与 `.env.example` 逐分节对齐（生成器 `scripts/generate_examples_env.py` 的 `_ENV_SECTIONS` 登记表为序——键面以 `.env.example` 为真源，本表为语义说明；敏感字段在 example 中恒留空）。各分节语义详见所属域文档（channels / duty / tools-sandbox / voice / multimodal）；声纹与表情包分节见 [voice.md](voice.md#声纹档案pipl-合规面) 与 [multimodal.md](multimodal.md#表情包库与-vlm-标注sticker_-env-面默认关闭)。
+分节与 `.env.example` 逐分节对齐（生成器 `scripts/generate_examples_env.py` 的 `_ENV_SECTIONS` 登记表为序——键面以 `.env.example` 为真源，本表为语义说明；敏感字段在 example 中恒留空）。各分节语义详见所属域文档（channels / duty / tools-sandbox / voice / realtime-voice / multimodal）；声纹与表情包分节见 [voice.md](voice.md#声纹档案pipl-合规面) 与 [multimodal.md](multimodal.md#表情包库与-vlm-标注sticker_-env-面默认关闭)。
 
 - `DatabaseConfig.async_sqlalchemy_url`：`mysql` → `mysql+aiomysql://user:pwd@host:port/db?charset=utf8mb4`（用户名/密码 URL 编码）；`sqlite` → `sqlite+aiosqlite:///{name}`（`name=":memory:"` 内存库）。
 - `LogConfig.to_core_config()`：字段一一映射为 `core.LoggingConfig`（`file→log_file` / `json_file→log_json_file`）；app lifespan 经 `setup_logging_from_settings(settings)` 接线 `core.setup_logging`。

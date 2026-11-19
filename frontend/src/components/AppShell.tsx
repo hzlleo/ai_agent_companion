@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { Bot, Brain, Frame, Gauge, LogOut, Sparkles, Sticker } from 'lucide-react'
+import { Bot, Brain, Frame, Gauge, LogOut, Mic, Sparkles, Sticker } from 'lucide-react'
 import { clearAdminToken, notifyAuthRequired } from '@/api/auth'
 import { cn } from '@/lib/utils'
 
@@ -20,12 +20,13 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/models', label: '模型', icon: Sparkles },
   { to: '/stickers', label: '表情包', icon: Sticker },
   { to: '/canvas', label: '画布', icon: Frame },
+  { to: '/realtime', label: '实时语音', icon: Mic },
 ]
 
 /**
  * 管理台应用壳：左侧导航 + 主内容区。
  *
- * 导航面（本工程约定）：人格 / 记忆 / 用量 / 模型 / 表情包 / 画布六个管理模块入口，
+ * 导航面（本工程约定）：人格 / 记忆 / 用量 / 模型 / 表情包 / 画布 / 实时语音七个管理模块入口，
  * 各自挂真实路由页面（模块落地情况见 App.tsx 路由表）；侧栏底部
  * 「注销」清除本地 owner token 并回到令牌门（经鉴权需求事件——与
  * 401 门同一承接面，见 AdminTokenScreen）。

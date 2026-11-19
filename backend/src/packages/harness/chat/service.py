@@ -29,7 +29,8 @@
               情绪标签指令——R2b）
         ↓ ⑬ 世界书 after_char 条目块                       检索增强（后段）
         ↓ ⑭ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合；
-              当轮入站回合经 nonce 定界包裹——历史保持原文，见下节）
+              当轮入站回合经 nonce 定界包裹——历史 user 回合最近 10 条同样
+              定界包裹（标签「历史消息」），更早与 assistant 回合保持原文）
         ↓ ⑮ 注入提示块（检测命中时）                        紧接当轮包裹消息之后
         ↓ ⑯ prompts.render_post_history_message(card)      历史后再注入（末块）
 
@@ -37,11 +38,14 @@
 docs/backend/defense.md）：
 
     - **当轮入站消息定界包裹**：``compose_messages(..., wrap_current_message=True,
-      current_message_label=...)`` 时，仅**最新一条 user 回合**被
+      current_message_label=...)`` 时，**最新一条 user 回合**被
       ``wrap_untrusted_content`` 包进 nonce 定界的「内容开始 / 内容结束」
-      帧（标签区分主人消息 / 群友消息）；更早的历史回合保持原文——历史是
-      已发生的对话记录，逐条重包裹会让上下文膨胀且稀释边界信号，文档化
-      为已知边界；
+      帧（标签区分主人消息 / 群友消息）；历史中的 **user 角色**回合同样
+      定界包裹（统一标签「历史消息」），上限
+      :data:`HISTORY_WRAP_MAX_TURNS`（最近 10 条）——更早回合与 assistant
+      回合保持原文：长会话逐条包裹会让上下文线性膨胀，且边界信号边际
+      收益递减；包裹只发生在请求消息面，不改变 ``state.turns`` 原文与
+      落库内容；
     - **工具结果定界包裹**：``_render_tool_result_content`` 对执行器回灌的
       tool 轮正文统一包裹（标签「工具结果」）——搜索摘要 / 浏览器
       ``read_text`` / 任意执行器结果里的「指令」都不再裸奔；duty 域
@@ -285,6 +289,7 @@ from packages.harness.chat.chat_models import (
     ChatSessionStateModel,
     ChatTurnModel,
     MessageCompositionResult,
+    ToolLoopResultModel,
 )
 from packages.harness.chat.compliance_guard import (
     build_retry_params,
@@ -304,6 +309,7 @@ from packages.harness.chat.output_protocol import (
 )
 from packages.harness.chat.prompts import (
     UNTRUSTED_LABEL_DEFAULT,
+    UNTRUSTED_LABEL_HISTORY,
     UNTRUSTED_LABEL_OWNER,
     UNTRUSTED_LABEL_PEER,
     UNTRUSTED_LABEL_TOOL_RESULT,
@@ -382,12 +388,18 @@ __all__ = [
     "ToolExecutorFace",
     "IntentShortcutFace",
     "CHAT_TOOL_STEP_CAP",
+    "HISTORY_WRAP_MAX_TURNS",
     "compose_messages",
     "estimate_text_tokens",
+    "derive_relationship_summary",
 ]
 
 #: 用途常量——chat 会话调用恒以 chat 用途落用量账（usage 域枚举校验）。
 CHAT_PURPOSE: str = "chat"
+
+#: 历史回合包裹上限（最近 N 条 user 回合定界包裹；更早回合保持原文——
+#: 长会话逐条包裹会让上下文线性膨胀，且边界信号边际收益递减）。
+HISTORY_WRAP_MAX_TURNS: Final[int] = 10
 
 #: chat 工具循环步数上限（锁定决策：5——chat 单轮回复的工具面收敛快于
 #: duty 巡检的 8 步；超限触发收尾指令 + 无工具面最终调用）。
@@ -485,7 +497,8 @@ def compose_messages(
                   心情状态块 + 长期指令块 + 人物事实块 + 核心记忆块 +
                   关系进展块 + 相关技能块 + 输出格式协议块 + 世界书 after 段
         [user/assistant ...]  全部历史回合（含刚追加的用户回合；当轮入站
-                  回合在 ``wrap_current_message=True`` 时被定界包裹）
+                  回合与最近 10 条历史 user 回合在 ``wrap_current_message=True``
+                  时被定界包裹）
         [system]  注入提示块（仅检测命中且调用方传入 ``injection_hint`` 时；
                   紧接当轮包裹消息之后）
         [system]  历史后再注入（卡片声明 post_history_instructions 时；
@@ -514,11 +527,15 @@ def compose_messages(
     ``chat/output_protocol``）。
 
     当轮入站包裹（结构隔离，锁定边界）：``wrap_current_message=True``
-    时**只包裹最后一条 user 回合**（即本轮刚追加的入站消息），历史回合
-    保持原文——历史是已发生的对话记录，不逐条重包裹。包裹用
-    ``wrap_untrusted_content``（nonce 定界 + 来源标签）；标签缺省回落
-    「消息」。``injection_hint`` 非空且确实发生包裹时，提示块作为 system
-    消息紧接包裹回合之后追加（先于历史后再注入）。
+    时**最后一条 user 回合**（即本轮刚追加的入站消息）被定界包裹；历史
+    中的 **user 角色**回合也定界包裹，上限为最近
+    :data:`HISTORY_WRAP_MAX_TURNS` 条（更早回合保持原文），assistant 回合
+    不包裹（人格自己的发言是受信输出）。包裹用
+    ``wrap_untrusted_content``（nonce 定界 + 来源标签）；当轮标签缺省回落
+    「消息」，历史回合统一使用「历史消息」标签。``injection_hint`` 非空且
+    确实发生包裹时，提示块作为 system 消息紧接当轮包裹回合之后追加（先于
+    历史后再注入）。包裹仅作用于请求消息面，不改变 ``state.turns`` 原文
+    与落库内容。
 
     世界书选择经 ``world_book.select_world_book_entries``（算法链与
     渲染序裁定见该模块文档）；推进后的回合状态（冷却时钟 + 注入
@@ -545,9 +562,10 @@ def compose_messages(
         skills: 命中本轮用户文本的技能记录列表（None / 空 = 不注入相关
             技能块；匹配与条数帽在调用方、字符帽在 ``render_skills_block``
             ——本函数保持纯函数无 I/O）。
-        wrap_current_message: 是否把当轮入站 user 回合包进不可信内容定界帧
-            （注入防御启用时由 ChatService 传 True；直调缺省 False 保持
-            既有组装形态）。
+        wrap_current_message: 是否把当轮入站 user 回合与最近
+            :data:`HISTORY_WRAP_MAX_TURNS` 条历史 user 回合包进不可信内容
+            定界帧（注入防御启用时由 ChatService 传 True；直调缺省 False
+            保持既有组装形态）。
         current_message_label: 当轮入站消息的来源标签（主人消息 / 群友消息
             ／……；空白回落 ``UNTRUSTED_LABEL_DEFAULT``）。
         injection_hint: 注入提示块文本（检测命中时由调用方渲染；None = 不
@@ -602,6 +620,24 @@ def compose_messages(
         ChatMessageModel(role=ChatMessageRole.SYSTEM, content=system_prompt)
     ]
     messages.extend(ChatMessageModel(role=turn.role, content=turn.content) for turn in state.turns)
+    if wrap_current_message:
+        current_is_user = bool(state.turns) and state.turns[-1].role == ChatMessageRole.USER
+        history_end = len(state.turns) - 1 if current_is_user else len(state.turns)
+        history_user_indices = [
+            index
+            for index in range(history_end)
+            if state.turns[index].role == ChatMessageRole.USER
+        ]
+        for index in history_user_indices[-HISTORY_WRAP_MAX_TURNS:]:
+            message_index = index + 1
+            history_content = messages[message_index].content
+            if isinstance(history_content, str):
+                messages[message_index] = ChatMessageModel(
+                    role=ChatMessageRole.USER,
+                    content=wrap_untrusted_content(
+                        history_content, label=UNTRUSTED_LABEL_HISTORY
+                    ).text,
+                )
     current_message_wrapped = False
     applied_hint: str | None = None
     current_content = messages[-1].content
@@ -734,6 +770,44 @@ class FactsReaderFace(Protocol):
             分页响应（``items`` 为事实记录；空页 = 无匹配事实）。
         """
         ...
+
+
+async def derive_relationship_summary(
+    db_session: AsyncSession,
+    facts_reader: FactsReaderFace,
+    *,
+    now_ms: int,
+    thresholds: RelationshipThresholdsModel,
+) -> RelationshipSummaryModel:
+    """经事实读取面派生关系进展摘要（reply 与 swipe 共用的唯一读取链）。
+
+    读取面固定查询类别 ``relationship`` / 状态 ``active``、页大小取阈值表
+    的扫描上限；聚合交给
+    :func:`~packages.harness.persona.relationship.build_relationship_summary`
+    纯函数。时间由调用方注入（本函数不读系统时钟），读取 / 派生异常由调用
+    方按各自降级语义处理。
+
+    Args:
+        db_session: 注入的异步 Session（人格上下文已绑定）。
+        facts_reader: 人物事实读取面（生产 = ``FactsService``）。
+        now_ms: 派生时刻（Linux Epoch 毫秒）。
+        thresholds: 关系进展阈值表（扫描上限与阶段阶梯的唯一来源）。
+
+    Returns:
+        关系进展摘要（空事实即 stranger / 0 的摘要）。
+
+    Raises:
+        Exception: 事实读取面异常（原样上抛——调用方决定降级或跳过）。
+    """
+    page = await facts_reader.list_facts(
+        db_session,
+        FactQueryDTO(
+            category=RELATIONSHIP_FACT_CATEGORY,
+            status=PersonaFactStatus.ACTIVE,
+            limit=thresholds.event_scan_limit,
+        ),
+    )
+    return build_relationship_summary(page.items, now_ms=now_ms, thresholds=thresholds)
 
 
 class SkillsReaderFace(Protocol):
@@ -1163,14 +1237,17 @@ class ChatService:
         # 亲密通道路由输入：只声明本轮关系摘要的等级；端点选择与阈值裁决
         # 在 llm 网关完成（摘要缺失 / 降级为空摘要 → None / 0 → 默认通道）。
         intimacy_level = relationship.intimacy_level if relationship is not None else None
+        tool_tail: list[ChatMessageModel] = []
         if self._tools_binding is not None:
-            raw_content = await self._tool_loop(
+            loop_result = await self._tool_loop(
                 result.messages,
                 state,
                 self._tools_binding,
                 sender_provenance=sender_provenance,
                 intimacy_level=intimacy_level,
             )
+            raw_content = loop_result.content
+            tool_tail = loop_result.tail_messages
         else:
             response: ChatResponseModel = await self._gateway.chat_by_role(
                 ModelRole.CHAT,
@@ -1181,7 +1258,11 @@ class ChatService:
             )
             raw_content = response.content
         raw_content = await self._apply_compliance_retry(
-            result.messages, raw_content, state, intimacy_level=intimacy_level
+            result.messages,
+            raw_content,
+            state,
+            tool_tail=tool_tail,
+            intimacy_level=intimacy_level,
         )
         parsed = parse_assistant_output(raw_content)
         content = parsed.visible_text
@@ -1367,6 +1448,7 @@ class ChatService:
         raw_content: str,
         state: ChatSessionStateModel,
         *,
+        tool_tail: Sequence[ChatMessageModel] = (),
         intimacy_level: int | None = None,
     ) -> str:
         """人格输出合规守卫：命中助手腔时做一次强化重试。
@@ -1379,15 +1461,18 @@ class ChatService:
         （参数构建见 :func:`build_retry_params`）。重试结果**无条件返回**
         ——不再检测、不循环；重试仍失守的回复照常进入协议解析与落回合。
 
-        工具循环分支的重试请求只带组装消息与提醒块、不携带工具面：工具步
-        是循环内部状态，本次重写的是最终可见文本，不需要重新执行工具。
+        工具循环分支的重试请求以「组装消息 + 工具循环尾部轮次 + 提醒块」为
+        基底：保留模型已经看到的 assistant 工具调用轮与已包裹的 tool 反馈
+        轮（工具证据不丢），但不携带工具面、不重新执行工具——本次重写的
+        是最终可见文本，工具步不重跑。
 
         Args:
-            messages: 组装结果消息序列（重试请求的基底——不含工具循环内部
-                的 assistant 调用轮与 tool 反馈轮）。
+            messages: 组装结果消息序列（重试请求的基底）。
             raw_content: 网关返回的原始回复文本（含可能的协议标签）。
             state: 会话状态（卡片人格名进提醒块——与角色契约同名；人格
                 ID 进日志与请求参数）。
+            tool_tail: 工具循环尾部轮次（assistant 工具调用轮 + 已包裹
+                tool 反馈轮；非工具路径为空——重试基底保持组装消息原样）。
             intimacy_level: 本轮关系摘要的亲密等级（0-3；None = 摘要不可用）
                 ——重试请求沿用同一路由输入，避免重试回合被换到另一条
                 通道。
@@ -1413,6 +1498,7 @@ class ChatService:
             return raw_content
         retry_messages = [
             *messages,
+            *tool_tail,
             ChatMessageModel(
                 role=ChatMessageRole.SYSTEM,
                 content=render_compliance_nudge(state.card.name),
@@ -1438,8 +1524,8 @@ class ChatService:
         *,
         sender_provenance: MemoryProvenance = MemoryProvenance.OWNER,
         intimacy_level: int | None = None,
-    ) -> str:
-        """有界工具循环（返回最终回复文本；机械镜像 duty_service._tool_loop）。
+    ) -> ToolLoopResultModel:
+        """有界工具循环（返回最终回复与尾部轮次；机械镜像 duty_service._tool_loop）。
 
         循环消息为本地副本（组装结果 + assistant 工具调用轮回放 + tool
         反馈轮）——**不进入 ``state.turns`` / 持久化**（仅最终 assistant
@@ -1465,8 +1551,9 @@ class ChatService:
                 的每一步与收尾调用保持同一路由输入）。
 
         Returns:
-            最终回复文本（空串 = 模型未产出——调用方归
-            ``LLM_CALL_FAILED``）。
+            工具循环结果：最终回复文本（空串 = 模型未产出——调用方归
+            ``LLM_CALL_FAILED``）+ 尾部轮次（assistant 工具调用轮与已包裹
+            tool 反馈轮；供合规重试沿用工具证据，不重跑工具）。
 
         Raises:
             Exception: 网关链路异常（原样上抛——与零工具形态同失败语义；
@@ -1477,6 +1564,7 @@ class ChatService:
             definitions, sender_provenance
         )
         loop_messages: list[ChatMessageModel] = list(messages)
+        tool_tail: list[ChatMessageModel] = []
         persona_id = str(state.persona_id)
         session_token = core_memory_session_id_var.set(state.session_id)
         try:
@@ -1490,27 +1578,29 @@ class ChatService:
                     intimacy_level=intimacy_level,
                 )
                 if not response.tool_calls:
-                    return response.content.strip()
-                loop_messages.append(
-                    ChatMessageModel(
-                        role=ChatMessageRole.ASSISTANT,
-                        content=response.content,
-                        tool_calls=response.tool_calls,
+                    return ToolLoopResultModel(
+                        content=response.content.strip(), tail_messages=tool_tail
                     )
+                assistant_round = ChatMessageModel(
+                    role=ChatMessageRole.ASSISTANT,
+                    content=response.content,
+                    tool_calls=response.tool_calls,
                 )
+                loop_messages.append(assistant_round)
+                tool_tail.append(assistant_round)
                 for call in response.tool_calls:
                     result = await executor.execute_call(
                         ToolCallRequestModel(name=call.name, arguments=call.arguments)
                     )
-                    loop_messages.append(
-                        ChatMessageModel(
-                            role=ChatMessageRole.TOOL,
-                            content=_render_tool_result_content(
-                                result, wrap=self._injection_settings.enabled
-                            ),
-                            tool_call_id=call.id,
-                        )
+                    tool_round = ChatMessageModel(
+                        role=ChatMessageRole.TOOL,
+                        content=_render_tool_result_content(
+                            result, wrap=self._injection_settings.enabled
+                        ),
+                        tool_call_id=call.id,
                     )
+                    loop_messages.append(tool_round)
+                    tool_tail.append(tool_round)
             # 步数上限触发：收尾指令 + 无工具面最终调用（final-report forcing）。
             loop_messages.append(
                 ChatMessageModel(role=ChatMessageRole.SYSTEM, content=_TOOL_LOOP_FINAL_INSTRUCTION)
@@ -1522,7 +1612,9 @@ class ChatService:
                 purpose=CHAT_PURPOSE,
                 intimacy_level=intimacy_level,
             )
-            return final_response.content.strip()
+            return ToolLoopResultModel(
+                content=final_response.content.strip(), tail_messages=tool_tail
+            )
         finally:
             core_memory_session_id_var.reset(session_token)
 
@@ -1787,19 +1879,12 @@ class ChatService:
         now_ms = time_utils.now_ms()
         try:
             async with session_scope() as db_session, bind_persona_context(state.persona_id):
-                page = await self._facts_reader.list_facts(
+                return await derive_relationship_summary(
                     db_session,
-                    FactQueryDTO(
-                        category=RELATIONSHIP_FACT_CATEGORY,
-                        status=PersonaFactStatus.ACTIVE,
-                        limit=self._relationship_thresholds.event_scan_limit,
-                    ),
+                    self._facts_reader,
+                    now_ms=now_ms,
+                    thresholds=self._relationship_thresholds,
                 )
-            return build_relationship_summary(
-                page.items,
-                now_ms=now_ms,
-                thresholds=self._relationship_thresholds,
-            )
         except Exception:  # best-effort：关系摘要失败不阻断回复链路（降级空摘要）
             logger.opt(exception=True).warning(
                 "关系进展派生失败（本轮降级为空摘要）: persona_id={}", state.persona_id

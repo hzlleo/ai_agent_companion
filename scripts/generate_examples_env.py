@@ -46,6 +46,7 @@ from packages.harness.intent.intent_models import IntentSettings
 from packages.harness.llm.intimate_models import IntimateChannelConfig
 from packages.harness.multimodal.sticker_models import StickerSettings
 from packages.harness.rhythm.rhythm_models import RhythmSettings
+from packages.harness.voice.realtime_models import RealtimeVoiceSettings
 from packages.harness.voice.voiceprint_models import VoiceprintSettings
 
 # .env.example 分节标题: (section_title, config_classes)
@@ -68,6 +69,7 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("TOOLS_BROWSER_SIDECAR — 浏览器 sidecar 配置（可选运行时；令牌经 BROWSER_SIDECAR_TOKEN 间接；容器侧 BROWSER_SIDECAR_* 键见 compose）", [ToolsBrowserSidecarSettings]),
     ("VOICE.TTS — 语音合成配置（CosyVoice3 服务端点）", [TtsSettings]),
     ("VOICE.ASR — 语音识别配置（Qwen3-ASR 服务端点）", [AsrSettings]),
+    ("REALTIME_VOICE — 实时语音全双工会话配置（默认关闭；VAD 双阈值 / 静音窗 / 句切上限 / 音频队列与时长上限 / 打断开关）", [RealtimeVoiceSettings]),
     ("VOICEPRINT — 声纹档案配置（默认关闭；说话人向量服务端点 + 阈值 / 样本门槛 / 保存期）", [VoiceprintSettings]),
     ("STICKER — 表情包库配置（默认关闭；哈希去重 / VLM 标注 / 通道表情收发）", [StickerSettings]),
     ("SEARCH.WEB — 联网搜索运营配置（默认关闭；密钥经 SEARCH_BOCHA_API_KEY / SEARCH_ZHIPU_API_KEY 间接——条目表在 config.yaml search 节管理）", [WebSearchSettings]),
