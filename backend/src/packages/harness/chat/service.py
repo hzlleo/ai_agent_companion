@@ -29,7 +29,8 @@
               情绪标签指令——R2b）
         ↓ ⑬ 世界书 after_char 条目块                       检索增强（后段）
         ↓ ⑭ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合；
-              当轮入站回合经 nonce 定界包裹——历史保持原文，见下节）
+              当轮入站回合经 nonce 定界包裹——历史 user 回合最近 10 条同样
+              定界包裹（标签「历史消息」），更早与 assistant 回合保持原文）
         ↓ ⑮ 注入提示块（检测命中时）                        紧接当轮包裹消息之后
         ↓ ⑯ prompts.render_post_history_message(card)      历史后再注入（末块）
 
@@ -37,11 +38,14 @@
 docs/backend/defense.md）：
 
     - **当轮入站消息定界包裹**：``compose_messages(..., wrap_current_message=True,
-      current_message_label=...)`` 时，仅**最新一条 user 回合**被
+      current_message_label=...)`` 时，**最新一条 user 回合**被
       ``wrap_untrusted_content`` 包进 nonce 定界的「内容开始 / 内容结束」
-      帧（标签区分主人消息 / 群友消息）；更早的历史回合保持原文——历史是
-      已发生的对话记录，逐条重包裹会让上下文膨胀且稀释边界信号，文档化
-      为已知边界；
+      帧（标签区分主人消息 / 群友消息）；历史中的 **user 角色**回合同样
+      定界包裹（统一标签「历史消息」），上限
+      :data:`HISTORY_WRAP_MAX_TURNS`（最近 10 条）——更早回合与 assistant
+      回合保持原文：长会话逐条包裹会让上下文线性膨胀，且边界信号边际
+      收益递减；包裹只发生在请求消息面，不改变 ``state.turns`` 原文与
+      落库内容；
     - **工具结果定界包裹**：``_render_tool_result_content`` 对执行器回灌的
       tool 轮正文统一包裹（标签「工具结果」）——搜索摘要 / 浏览器
       ``read_text`` / 任意执行器结果里的「指令」都不再裸奔；duty 域
@@ -304,6 +308,7 @@ from packages.harness.chat.output_protocol import (
 )
 from packages.harness.chat.prompts import (
     UNTRUSTED_LABEL_DEFAULT,
+    UNTRUSTED_LABEL_HISTORY,
     UNTRUSTED_LABEL_OWNER,
     UNTRUSTED_LABEL_PEER,
     UNTRUSTED_LABEL_TOOL_RESULT,
@@ -382,12 +387,17 @@ __all__ = [
     "ToolExecutorFace",
     "IntentShortcutFace",
     "CHAT_TOOL_STEP_CAP",
+    "HISTORY_WRAP_MAX_TURNS",
     "compose_messages",
     "estimate_text_tokens",
 ]
 
 #: 用途常量——chat 会话调用恒以 chat 用途落用量账（usage 域枚举校验）。
 CHAT_PURPOSE: str = "chat"
+
+#: 历史回合包裹上限（最近 N 条 user 回合定界包裹；更早回合保持原文——
+#: 长会话逐条包裹会让上下文线性膨胀，且边界信号边际收益递减）。
+HISTORY_WRAP_MAX_TURNS: Final[int] = 10
 
 #: chat 工具循环步数上限（锁定决策：5——chat 单轮回复的工具面收敛快于
 #: duty 巡检的 8 步；超限触发收尾指令 + 无工具面最终调用）。
@@ -485,7 +495,8 @@ def compose_messages(
                   心情状态块 + 长期指令块 + 人物事实块 + 核心记忆块 +
                   关系进展块 + 相关技能块 + 输出格式协议块 + 世界书 after 段
         [user/assistant ...]  全部历史回合（含刚追加的用户回合；当轮入站
-                  回合在 ``wrap_current_message=True`` 时被定界包裹）
+                  回合与最近 10 条历史 user 回合在 ``wrap_current_message=True``
+                  时被定界包裹）
         [system]  注入提示块（仅检测命中且调用方传入 ``injection_hint`` 时；
                   紧接当轮包裹消息之后）
         [system]  历史后再注入（卡片声明 post_history_instructions 时；
@@ -514,11 +525,15 @@ def compose_messages(
     ``chat/output_protocol``）。
 
     当轮入站包裹（结构隔离，锁定边界）：``wrap_current_message=True``
-    时**只包裹最后一条 user 回合**（即本轮刚追加的入站消息），历史回合
-    保持原文——历史是已发生的对话记录，不逐条重包裹。包裹用
-    ``wrap_untrusted_content``（nonce 定界 + 来源标签）；标签缺省回落
-    「消息」。``injection_hint`` 非空且确实发生包裹时，提示块作为 system
-    消息紧接包裹回合之后追加（先于历史后再注入）。
+    时**最后一条 user 回合**（即本轮刚追加的入站消息）被定界包裹；历史
+    中的 **user 角色**回合也定界包裹，上限为最近
+    :data:`HISTORY_WRAP_MAX_TURNS` 条（更早回合保持原文），assistant 回合
+    不包裹（人格自己的发言是受信输出）。包裹用
+    ``wrap_untrusted_content``（nonce 定界 + 来源标签）；当轮标签缺省回落
+    「消息」，历史回合统一使用「历史消息」标签。``injection_hint`` 非空且
+    确实发生包裹时，提示块作为 system 消息紧接当轮包裹回合之后追加（先于
+    历史后再注入）。包裹仅作用于请求消息面，不改变 ``state.turns`` 原文
+    与落库内容。
 
     世界书选择经 ``world_book.select_world_book_entries``（算法链与
     渲染序裁定见该模块文档）；推进后的回合状态（冷却时钟 + 注入
@@ -545,9 +560,10 @@ def compose_messages(
         skills: 命中本轮用户文本的技能记录列表（None / 空 = 不注入相关
             技能块；匹配与条数帽在调用方、字符帽在 ``render_skills_block``
             ——本函数保持纯函数无 I/O）。
-        wrap_current_message: 是否把当轮入站 user 回合包进不可信内容定界帧
-            （注入防御启用时由 ChatService 传 True；直调缺省 False 保持
-            既有组装形态）。
+        wrap_current_message: 是否把当轮入站 user 回合与最近
+            :data:`HISTORY_WRAP_MAX_TURNS` 条历史 user 回合包进不可信内容
+            定界帧（注入防御启用时由 ChatService 传 True；直调缺省 False
+            保持既有组装形态）。
         current_message_label: 当轮入站消息的来源标签（主人消息 / 群友消息
             ／……；空白回落 ``UNTRUSTED_LABEL_DEFAULT``）。
         injection_hint: 注入提示块文本（检测命中时由调用方渲染；None = 不
@@ -602,6 +618,24 @@ def compose_messages(
         ChatMessageModel(role=ChatMessageRole.SYSTEM, content=system_prompt)
     ]
     messages.extend(ChatMessageModel(role=turn.role, content=turn.content) for turn in state.turns)
+    if wrap_current_message:
+        current_is_user = bool(state.turns) and state.turns[-1].role == ChatMessageRole.USER
+        history_end = len(state.turns) - 1 if current_is_user else len(state.turns)
+        history_user_indices = [
+            index
+            for index in range(history_end)
+            if state.turns[index].role == ChatMessageRole.USER
+        ]
+        for index in history_user_indices[-HISTORY_WRAP_MAX_TURNS:]:
+            message_index = index + 1
+            history_content = messages[message_index].content
+            if isinstance(history_content, str):
+                messages[message_index] = ChatMessageModel(
+                    role=ChatMessageRole.USER,
+                    content=wrap_untrusted_content(
+                        history_content, label=UNTRUSTED_LABEL_HISTORY
+                    ).text,
+                )
     current_message_wrapped = False
     applied_hint: str | None = None
     current_content = messages[-1].content

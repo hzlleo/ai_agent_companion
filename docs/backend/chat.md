@@ -75,8 +75,9 @@
                                                         （心声 / 情绪标签指令）
     ⑬ 世界书 after_char 条目块                          检索增强（行为补充）
 [历史回合]
-    ⑭ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合；当轮入站
-       回合在注入防御启用时被 nonce 定界包裹——历史回合保持原文）
+    ⑭ 全部 turns → ChatMessageModel（时间序；含刚追加的用户回合；最近 10 条
+       历史 user 回合与当轮入站回合在注入防御启用时被 nonce 定界包裹——
+       更早 user 与 assistant 回合保持原文）
 [system 注入提示]
     ⑮ render_injection_hint(...)                       仅检测命中且提示开关
                                                         开启时（紧接包裹回合；
@@ -175,10 +176,12 @@ wrap_current_message=False, current_message_label="", injection_hint=None)`
 宪章块（④）恒注入且紧跟人格正典——五条规则先于一切记忆层与对话内容生效；
 角色契约块（⑤）紧随宪章之后：宪章管身份与规则从哪来，契约管说出来的话像不像
 这个人（逐条见下方「人格输出契约与合规守卫」）。
-当轮入站包裹（`wrap_current_message=True` → 只包裹最后一条 user 回合）与注入
-提示块（`injection_hint` 非空且确实发生包裹时追加）由 `ChatService` 按
-`INJECTION_` 配置驱动；包裹格式、检测矩阵、来源标签与攻击面缺口见
-[defense.md](defense.md)。
+当轮入站包裹（`wrap_current_message=True` → 包裹最后一条 user 回合与最近 10 条
+历史 user 回合，历史标签「历史消息」）与注入提示块（`injection_hint` 非空且
+确实发生包裹时追加）由 `ChatService` 按 `INJECTION_` 配置驱动；`SwipeService`
+重生成走同一组装开关（无来源分级时缺省标签「消息」、默认台词风格）；包裹不
+改变 `state.turns` 原文与落库内容。包裹格式、检测矩阵、来源标签与攻击面缺口
+见 [defense.md](defense.md)。
 
 ### 意图快径（含 DIRECTIVE 常备指令捕获——R2b D7-14）
 
@@ -258,12 +261,14 @@ gateway `chat_by_role(..., tools=specs)` → assistant 工具调用轮回放 →
 CLI 不注入工具面，行为零变化。
 
 **注入面防护（结构隔离 + 检测提示）**：`reply` / `stream_reply` 在组装前
-按 `INJECTION_` 配置处理当轮入站文本——启用时把**当轮 user 回合**包进
-nonce 定界帧（标签按 `sender_provenance`：主人消息 / 群友消息），检测命中
-阈值时在包裹回合之后追加【注入提示】（宪章复述 + 一句风格台词）；工具循环
-回灌的 tool 轮正文同样定界包裹（「工具结果」）。检测只记 debug 日志与提示，
-不拦截回合；`INJECTION_ENABLED=false` 回到未包裹、未检测形态。完整格式、
-规则矩阵与缺口见 [defense.md](defense.md)。
+按 `INJECTION_` 配置处理当轮入站文本——启用时把**当轮 user 回合**与最近
+10 条**历史 user 回合**包进 nonce 定界帧（当轮标签按 `sender_provenance`：
+主人消息 / 群友消息；历史统一「历史消息」），检测命中阈值时在包裹回合之后
+追加【注入提示】（宪章复述 + 一句风格台词）；swipe 重生成对末位 user 回合
+同语义包裹与检测（缺省「消息」标签 / 默认台词风格）；工具循环回灌的 tool
+轮正文同样定界包裹（「工具结果」）。检测只记 debug 日志与提示，不拦截回合；
+`INJECTION_ENABLED=false` 回到未包裹、未检测形态。完整格式、规则矩阵与缺口
+见 [defense.md](defense.md)。
 
 **人格输出合规守卫（助手腔检测 + 单次强化重试）**：`reply` 在网关响应之后、
 输出协议解析之前对原始回复跑 `detect_assistant_violation`，命中助手腔
@@ -611,7 +616,8 @@ COMPLIANCE_MAX_RETRIES=1
 - **生成路径**：与 `reply` 同一 `compose_messages`（人格卡片 / 世界书 / 情绪摘要 /
   输出协议全量复用，**prompt 字节零变更**）+ `chat_by_role`（`role=chat`、
   `purpose="chat"`、`persona_id` 直传）；**不装载工具面**（单轮候选——工具循环属
-  `reply` 的回合语义）；
+  `reply` 的回合语义）；末位 user 回合沿用组装链注入防御（定界包裹 + 命中提示块；
+  无来源分级时标签「消息」、默认毒舌台词风格，服务不持有 `INJECTION_` 配置）；
 - **协议面**：每个候选独立经 `parse_assistant_output` 解析——可见正文落变体 `content`，
   心声 / 情绪增量落 `meta`（附 `variant_index`）；变体情绪增量**不推进共享 M 态**
   （探索面：只有选定变体经 select API 时推进，见下）；
@@ -842,14 +848,14 @@ lifespan                                          上述函数对的 asynccontex
   混类与历史过滤 / 阶段阶梯上下沿 / 衰减档边界与未来时间戳 / 等级上限夹取与
   阶段回落 / 事件条数与顺序·摘要截断 / 边界识别与上限 / 确定性 / 时间轴拒绝 /
   阈值表不变式；
-- `tests/unit/test_chat_swipe.py`——消息变体全语义（候选落库形态 / 脊柱-only 上下文 / 序号续编 / 空正文零残留 / 父回合校验 / 选定替换 + 单次 M 态推进 + 注记 / include_variants 读侧 / 引擎停用零推进）；
+- `tests/unit/test_chat_swipe.py`——消息变体全语义（候选落库形态 / 脊柱-only 上下文 / 末位 user 回合包裹 + 检测提示 / 序号续编 / 空正文零残留 / 父回合校验 / 选定替换 + 单次 M 态推进 + 注记 / include_variants 读侧 / 引擎停用零推进）；
 - `tests/unit/test_chat_swipe_api.py`——变体端点（ASGITransport）：重生成 / 详情嵌套 / 选定 / 错误面（父回合语义 / 数量边界 / 缺失资源）；
 - `tests/unit/test_migration_chat_message_variants.py`——迁移 0010 SQLite 升 / 降 / 复升 + 复合唯一键语义；
 - `tests/unit/test_injection_guard.py`——注入防御机制：包裹保真 / nonce 碰撞规避与重试上限 / 标签边界 / 检测规则逐种类可达 / 保守阈值边界 / 台词确定性；
-- `tests/unit/test_prompt_injection_red_team.py`——38 条红队模板检测矩阵 + 阳性模板组装面防线（宪章 / 包裹 / 提示 / 风格台词）+ 阴性零误报 + owner / peer 标签 / 开关 / 流式；
+- `tests/unit/test_prompt_injection_red_team.py`——47 条红队模板检测矩阵（含全角 / 零宽 / 多空格 / 英文改写混淆形）+ 阳性模板组装面防线（宪章 / 包裹 / 提示 / 风格台词）+ 阴性零误报 + owner / peer 标签 / 开关 / 流式 / 历史包裹上限 / 工具循环共存 / 合规重试不变量；
 - `tests/unit/test_compliance_guard.py`——人格输出合规机制：四类助手腔逐条可达 / AI 自我声明单条触发 / 道歉与话术单条不触发 / 短回复总结腔限定与长回复豁免 / 协议标签之后的开场判定 / 正常角色台词零误报 / 阈值覆盖 / 重试参数（基线、克隆保留字段、2.0 夹取）/ `COMPLIANCE_` env 面；
 - `tests/unit/test_chat_compliance.py`——守卫接入：契约块链位置（宪章之后、记忆层之前）/ 违规首次 + 合规重试（提醒块 + 提升温度 + 参数直通）/ 两次违规只重试一次 / 停用与零重试单调用 / 合规首次不重试 / 重试文本走输出协议 / 工具循环分支重试不带 tool 轮与工具面 / 流式不重试；
-- `tests/unit/test_chat_persistence.py`——持久化集成：落库 / 网关失败保留用户回合 / resume 全链路（历史原文 + 当轮包裹边界）/ 持久化关闭兼容纯内存形态 / CLI `/new` `/sessions` `/resume` 命令（真实启动栈 + tmp SQLite + 假网关）；
+- `tests/unit/test_chat_persistence.py`——持久化集成：落库 / 网关失败保留用户回合 / resume 全链路（历史 user 包裹上限 + 当轮包裹边界）/ 持久化关闭兼容纯内存形态 / CLI `/new` `/sessions` `/resume` 命令（真实启动栈 + tmp SQLite + 假网关）；
 - `tests/unit/test_chat_cli.py`——注入式 I/O 驱动全流程（真实启动栈 + tmp SQLite + 假网关，never real stdin）：命令面 / 无主人格指引（退出码 1）/ 业务异常不崩 REPL / main 入口；
 - `tests/unit/test_app_main.py`——create_app 路由注册 / startup-shutdown 函数对（真实组件 + LIFO 追踪）/ health 与 personas 经 ASGITransport 走真实 app / lifespan 全周期 / 外部引擎治理；
 - 门禁：`harness/chat` ≥80%（实测 99.4%）、`app/main.py` ≥80%（实测 100%）、`app/api` ≥80%（实测 100%）。

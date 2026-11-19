@@ -205,12 +205,13 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 **已完成**：
 1. `chat/injection_models.py` / `injection_guard.py` / `injection_counter_texts.py`：不可信内容 nonce 定界包裹（12 位十六进制，碰撞重生成上限 8 次，内容逐字节保真）+ 规则表加权检测（5 种类 / 24 条规则 / 身份断言 1.5 / 保守阈值 2.0）+ 三风格台词确定性选句。
 2. `chat/prompts.py`：`CONSTITUTION_TEMPLATE`（五条）、`UNTRUSTED_WRAP_*_TEMPLATE`、`INJECTION_HINT_TEMPLATE`、来源标签常量；PROMPTS_VERSION 1.6.0（1.5.0 → 1.6.0）；既有模板字节零变更。
-3. `chat/service.py`：compose 链人格正典之后恒注入宪章；`compose_messages` 新增 `wrap_current_message` / `current_message_label` / `injection_hint`（只包裹当轮入站，历史原文）；`ChatService` 装配 `InjectionGuardSettings`（`INJECTION_` env），reply / stream_reply 检测 + 提示 + 来源标签，工具循环 tool 轮正文定界包裹。
+3. `chat/service.py`：compose 链人格正典之后恒注入宪章；`compose_messages` 新增 `wrap_current_message` / `current_message_label` / `injection_hint`（包裹当轮入站与最近 10 条历史 user 回合；assistant 与更早回合原文）；`ChatService` 装配 `InjectionGuardSettings`（`INJECTION_` env），reply / stream_reply 检测 + 提示 + 来源标签，工具循环 tool 轮正文定界包裹。
 4. `duty/duty_prompts.py`：值班工具反馈恒加「工具结果」定界包裹（与 chat 同语义；不跟随 chat 开关，文档化）。
 5. 测试：`test_injection_guard.py`（机制）+ `test_prompt_injection_red_team.py`（38 条模板 / 20 阳性 / 18 阴性 + 服务层开关与流式）+ prompts byte-lock 增补；既有测试仅按新契约更新 3 处断言（tool 反馈包裹正文、resume 续聊当轮包裹）。
 6. docs：`backend/defense.md`（攻击面 × 防线 × 缺口矩阵 / 包裹格式 / 检测矩阵 / JSON 示例 / env 表）、chat.md / channels.md / backend README。
 **验证**：后端 2189 passed / 23 组覆盖率（harness/chat 95.5%）/ mypy 151 文件 / ruff / 注释门 + 棘轮 + noqa 冻结 + 漂移 36 / 活 SeekDB 6 用例；前端未改（DTO fixture 零变更）。
 **办结**：`INJECTION_*` 四键已由主 Agent 纳入 `.env.example` / Setup Wizard 生成器（已验证两处各 4 键）；R2b+ 的 compliance_guard 联动已落地（见上节）。
+**Oracle 深审修复批次（P1/P2 全闭环）**：swipe 重生成末位 user 回合复用 compose 包裹开关 + 检测提示（缺省「消息」标签 / 默认台词风格）；检测前归一副本（NFKC + 零宽剔除 + 空白折叠，留证取自副本）并新增 5 条英文规则（规则表 24 → 29 条）；compose 对最近 10 条历史 user 回合定界包裹（标签「历史消息」，assistant / 更早回合原文）；红队集 38 → 47 条（含混淆形与防误报阴性）、prose pin 改结构断言、补工具循环×注入共存与合规重试不变量用例；defense.md 失效部署待办删除并同步矩阵 / 边界，chat.md 同步 compose 链与 swipe 说明。
 
 ### 已完成切片：R2d-1 心流门控 + 群聊多人格（未提交工作区）
 **已完成**：

@@ -10,7 +10,10 @@
       卡片 / 世界书 / 心情摘要全量复用，prompt 文本零变更）+ 网关
       ``chat_by_role``（chat 角色 / ``purpose="chat"`` / persona_id 显式
       直传）；**不装载工具面**（单轮候选生成——工具循环属 reply 的回合
-      语义）；
+      语义）；末位 user 回合沿用组装链的注入防御开关（定界包裹 + 检测
+      提示；无来源分级信息时标签取 ``UNTRUSTED_LABEL_DEFAULT``，台词取
+      缺省风格——本服务不持有 ``INJECTION_`` 配置，检测阈值与风格用模块
+      缺省，见 docs/backend/defense.md）；
     - **协议面**：每个候选独立经 ``parse_assistant_output`` 解析——可见
       正文落变体行 content，心声 / 情绪增量落 meta（附 ``variant_index``）；
       变体情绪增量**不推进共享 M 态**（swipes 是探索面——只有选定变体经
@@ -36,7 +39,10 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.harness.chat.chat_models import ChatSessionStateModel
+from packages.harness.chat.injection_guard import build_injection_hint, detect_injection
+from packages.harness.chat.injection_models import CounterStyle
 from packages.harness.chat.output_protocol import parse_assistant_output
+from packages.harness.chat.prompts import UNTRUSTED_LABEL_DEFAULT
 from packages.harness.chat.service import CHAT_PURPOSE, compose_messages
 from packages.harness.config.model_entry import ModelRole
 from packages.harness.core.errors import BusinessException, ErrorCode
@@ -154,7 +160,21 @@ class SwipeService:
             if self._emotion_service.enabled
             else None
         )
-        composition = compose_messages(state, emotion_summary=emotion_summary)
+        last_turn = state.turns[-1] if state.turns else None
+        injection_hint: str | None = None
+        if last_turn is not None and last_turn.role == ChatMessageRole.USER:
+            signal = detect_injection(last_turn.content)
+            if signal.suspected:
+                injection_hint = build_injection_hint(
+                    CounterStyle.SASSY, last_turn.content
+                )
+        composition = compose_messages(
+            state,
+            emotion_summary=emotion_summary,
+            wrap_current_message=True,
+            current_message_label=UNTRUSTED_LABEL_DEFAULT,
+            injection_hint=injection_hint,
+        )
         candidates: list[tuple[str, dict[str, Any]]] = []
         for _ in range(count):
             response = await self._gateway.chat_by_role(

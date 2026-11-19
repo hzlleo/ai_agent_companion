@@ -49,6 +49,9 @@ _BYTE_LOCKS: dict[str, str] = {
     "UNTRUSTED_LABEL_DEFAULT": (
         "4da199fae933d4fa14bb7495676aed4269884851ee727a67297b4035c74d7d43"
     ),
+    "UNTRUSTED_LABEL_HISTORY": (
+        "aca974c5bd1f5f53c2a6241fc20a68c6aec24f871f0c4032da2f57f414bf7cd7"
+    ),
     "PERSONA_NAME_HEADER_TEMPLATE": (
         "b57da3cee1563aa0f345eab963c732ca5dd8798efceeac463d382c4fdbb24bf6"
     ),

@@ -16,6 +16,11 @@
 才触发——单一「必须」「请严格」这类日常措辞不触发。阈值可经配置覆盖，
 但调低属运维决策（单人弱信号开始触发提示）。
 
+匹配前归一（锁定）：检测在**归一副本**上进行——NFKC 折叠全角 / 兼容字符
+（``ＳＹＳＴＥＭ：`` → ``SYSTEM:``）、剔除零宽字符（U+200B / U+200C /
+U+200D / FEFF）、空白折叠为单空格；命中留证片段也取自该归一副本（40 字符
+截断）。原文不参与匹配，因此零宽字符插入与多空格变形不会绕过规则表。
+
 确定性：检测与台词选择都不消耗随机源；包裹 nonce 是安全随机（每次包裹
 唯一），同文本两次包裹的定界不同是预期形态。WrappedContentModel 输出携带
 nonce，消费方可据此断言。
@@ -24,6 +29,7 @@ nonce，消费方可据此断言。
 from __future__ import annotations
 
 import secrets
+import unicodedata
 
 from packages.harness.chat.injection_counter_texts import pick_counter_text
 from packages.harness.chat.injection_models import (
@@ -53,6 +59,27 @@ NONCE_MAX_ATTEMPTS: int = 8
 
 #: 检测触发阈值缺省值（保守——单一弱信号不触发；见模块 docstring）。
 DEFAULT_INJECTION_THRESHOLD: float = 2.0
+
+#: 检测前需要剔除的零宽字符（不可见字符可插入关键词中间绕过字面规则）。
+_ZERO_WIDTH_CHARS: str = "\u200b\u200c\u200d\ufeff"
+
+
+def _normalize_for_matching(text: str) -> str:
+    """构造检测用的归一副本（不修改原文，只供规则匹配与留证）。
+
+    归一链（锁定）：Unicode NFKC（全角 / 兼容字符折叠）→ 剔除零宽字符
+    （U+200B / U+200C / U+200D / FEFF）→ 空白折叠为单空格。原文仍由调用
+    方持有（会话回合 / 包裹内容保真），本副本只用于检测。
+
+    Args:
+        text: 待检测的原始文本。
+
+    Returns:
+        归一副本（零宽字符已剔除、空白已折叠；空输入返回空串）。
+    """
+    folded = unicodedata.normalize("NFKC", text)
+    without_zero_width = folded.translate(str.maketrans("", "", _ZERO_WIDTH_CHARS))
+    return " ".join(without_zero_width.split())
 
 
 def wrap_untrusted_content(
@@ -96,12 +123,13 @@ def wrap_untrusted_content(
 def detect_injection(text: str, *, threshold: float = DEFAULT_INJECTION_THRESHOLD) -> InjectionSignalModel:
     """检测文本里的注入信号（规则表逐条匹配 + 加权求和，纯函数）。
 
-    匹配语义（锁定）：每条规则对全文做一次 ``search``（同一规则的多次
-    出现只计一次权重——避免重复措辞把分数堆高）；命中片段截断留证；
-    原因列表按规则表顺序输出（确定性）。
+    匹配语义（锁定）：先把原文归一为检测副本（NFKC + 零宽剔除 + 空白
+    折叠），再让每条规则对副本做一次 ``search``（同一规则的多次出现只计
+    一次权重——避免重复措辞把分数堆高）；命中片段取自归一副本并截断为
+    40 字符留证；原因列表按规则表顺序输出（确定性）。
 
     Args:
-        text: 待检测文本（入站消息原文）。
+        text: 待检测文本（入站消息原文；原文不由本函数修改）。
         threshold: 触发阈值（缺省 :data:`DEFAULT_INJECTION_THRESHOLD`；配置
             面传入 ``INJECTION_THRESHOLD`` 的值——保守缺省不调低）。
 
@@ -111,10 +139,11 @@ def detect_injection(text: str, *, threshold: float = DEFAULT_INJECTION_THRESHOL
     """
     if not text or not text.strip():
         return InjectionSignalModel()
+    normalized = _normalize_for_matching(text)
     reasons: list[InjectionReasonModel] = []
     score = 0.0
     for rule in INJECTION_RULES:
-        match = rule.pattern.search(text)
+        match = rule.pattern.search(normalized)
         if match is None:
             continue
         reasons.append(
