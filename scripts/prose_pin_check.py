@@ -55,7 +55,7 @@ _MIN_LITERAL_CHARS = 8
 _CODE_TOKEN_RE = re.compile(r"^[^\s\u4e00-\u9fff]+$")
 
 #: 句读标点：出现即视为自然语言句子（中文句读 + 英文句读 + 引号包裹的书名）。
-_PROSE_PUNCT = frozenset("，。！？；：、,.!?;:…—「」《》")
+_PROSE_PUNCT = frozenset("，。！？；：、,.!?;:…—「」《》【】（）")
 
 #: 分桶名（报告与 Top-N 排序用）。
 _BUCKETS = ("prose", "other", "field_or_code")
@@ -191,11 +191,13 @@ def _classify_literal(literal: str) -> str:
 
     Returns:
         桶名。``field_or_code`` 指标识符 / 字典键 / UPPER_SNAKE / 带连字符
-        模型 ID 等代码形态；``prose`` 指含空白多词或句读标点的自然语言；
-        ``other`` 指其余（例如无标点的单段中文）。
+        模型 ID 等代码形态；``prose`` 指含 CJK、空白多词或句读标点的自然语言；
+        ``other`` 指其余（例如不含空白、标点与 CJK 的单个 token）。
     """
     if _CODE_TOKEN_RE.fullmatch(literal):
         return "field_or_code"
+    if any("\u4e00" <= ch <= "\u9fff" for ch in literal):
+        return "prose"
     if any(ch.isspace() for ch in literal) or any(ch in _PROSE_PUNCT for ch in literal):
         return "prose"
     return "other"
