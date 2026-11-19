@@ -23,7 +23,7 @@
 | 存储形态 | 人格作用域的行内文本列（`ff_canvas_documents`），不落文件 | HTML / SVG / Markdown 均为 UTF-8 文本；行删即内容删，没有「行没了文件还在」的清理面 |
 | 类型固定 | 类型创建后不可改（更新只改标题 / 内容） | 类型决定预览方式与导出 MIME / 扩展名；跨类型改写在语义上是「换一份产物」 |
 | 修订号 | `revision` 创建为 1、每次修改递增；导出文件名带修订号 | 同一产物多次导出不互相覆盖，历史版本可从命名区分 |
-| 预览沙箱 | `iframe sandbox=""`（**不带 allow-scripts**） | 模型生成的 HTML / SVG 里的脚本不在管理台上下文执行——生成内容不产生副作用 |
+| 预览沙箱 | `iframe sandbox=""`（**不带 allow-scripts**）+ `csp` 阻断外部子资源 | 模型生成的 HTML / SVG 里的脚本不在管理台上下文执行，外部请求（跟踪信标）也不外发——生成内容不产生副作用 |
 | 导出 | 原始文本字节直出（`Content-Disposition: attachment`） | 产物自包含；下载后的执行由打开者决定，MIME 按类型固定 |
 | 人格隔离 | `PersonaMixin` 上下文自动注入 / 过滤 | 与他人格数据同轴；他人格产物与不存在同为 `NOT_FOUND` |
 
@@ -143,7 +143,11 @@ ASCII 字母数字折成 slug（中文标题退化为无 slug 段，避免乱码
 
 - **预览沙箱**：前端 iframe 恒 `sandbox=""`（无 `allow-same-origin`、无
   `allow-scripts`）——产物里的脚本不执行、不能触达管理台 DOM / storage；
-  样式与结构照常渲染。Markdown 按纯文本展示（不引入 Markdown 渲染依赖）。
+  样式与结构照常渲染。预览同时设置
+  `csp="default-src 'none'; style-src 'unsafe-inline'; img-src data:"`——
+  沙箱无脚本 + CSP 阻断外部子资源（样式/内联数据图除外），产物里的跟踪
+  信标不再外发；不支持 iframe `csp` 属性的浏览器按规范忽略该属性，退回纯
+  沙箱行为。Markdown 按纯文本展示（不引入 Markdown 渲染依赖）。
 - **导出**：原始文本直出；`Content-Disposition` 为 attachment（浏览器下载
   而非导航），不改变管理台页面状态。
 - **人格隔离**：全部读写经 `PersonaMixin` 上下文过滤，覆盖跨人格读取 /

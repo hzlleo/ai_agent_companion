@@ -43,6 +43,7 @@ from tests.wecom_fakes import (
     FakeWeComConnection,
     FakeWeComConnector,
     RecordingSleep,
+    make_ack,
     make_callback_frame,
     make_event_frame,
 )
@@ -319,6 +320,35 @@ class TestCommandFace:
             assert reply[0]["body"]["markdown"]["content"] == "回复"
             assert push[0]["body"]["chatid"] == "u1"
             assert push[0]["body"]["chat_type"] == 1
+        finally:
+            client.request_stop()
+            await asyncio.wait_for(task, timeout=2.0)
+
+    async def test_duplicate_pending_req_id_rejected(self) -> None:
+        """同键在途重复 → 受控拒绝且原在途 future 未被替换（应答仍归位原请求）。"""
+        connector = FakeWeComConnector()
+        client = _client(connector=connector, request_timeout_seconds=1.0)
+        task = asyncio.create_task(client.run())
+        try:
+            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            connection = connector.connections[0]
+            connection.silent_commands = {WECOM_CMD_RESPOND_MSG}
+            first = asyncio.create_task(
+                client.send_markdown_reply(callback_req_id="cb-dup", content="第一条")
+            )
+            await _wait_until(
+                lambda: len(connection.commands_for(WECOM_CMD_RESPOND_MSG)) == 1
+            )
+            with pytest.raises(BusinessException) as exc_info:
+                await client.send_markdown_reply(callback_req_id="cb-dup", content="第二条")
+            assert exc_info.value.code == ErrorCode.CHANNEL_API_ERROR
+            assert exc_info.value.message == "请求号在途重复，拒绝覆盖在途应答"
+            assert exc_info.value.details == {"req_id": "cb-dup"}
+            assert len(connection.commands_for(WECOM_CMD_RESPOND_MSG)) == 1
+            assert first.done() is False
+            connection.push(make_ack("cb-dup"))
+            ack = await asyncio.wait_for(first, timeout=2.0)
+            assert ack.errcode == 0
         finally:
             client.request_stop()
             await asyncio.wait_for(task, timeout=2.0)

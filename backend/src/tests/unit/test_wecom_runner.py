@@ -21,6 +21,7 @@ from typing import Any
 
 import httpx
 import pytest
+from loguru import logger
 
 from packages.harness.channels.channel_models import (
     ChannelAttachmentKind,
@@ -280,6 +281,41 @@ class TestInbound:
             router.hold.set()
             runner.request_stop()
             await asyncio.wait_for(task, timeout=2.0)
+
+    async def test_queue_overflow_does_not_register_dropped_msgid(self) -> None:
+        """丢弃不登记去重：队列排空后平台重投同 msgid 可重新消费。"""
+        router = FakeRouter()
+        router.hold = asyncio.Event()
+        client = FakeWeComClient()
+        runner = _runner(client=client, router=router, inbound_queue_size=1, worker_count=1)
+        captured: list[str] = []
+        handler_id = logger.add(lambda message: captured.append(str(message)), level="ERROR")
+        task = asyncio.create_task(runner.run())
+        try:
+            await _wait_until(lambda: client.run_started)
+            await client.emit_frame(_text_frame(msgid="q1"))
+            await _wait_until(lambda: runner.pending_inbound == 0)
+            await client.emit_frame(_text_frame(msgid="q2"))
+            await client.emit_frame(_text_frame(msgid="q3"))
+            assert runner.dropped_inbound == 1
+            assert any(
+                "企微入站队列已满" in message
+                and "未登记去重" in message
+                and "msgid=q3" in message
+                and "dropped=1" in message
+                for message in captured
+            )
+            router.hold.set()
+            await _wait_until(lambda: len(router.received) == 2 and runner.pending_inbound == 0)
+            await client.emit_frame(_text_frame(msgid="q3"))
+            await _wait_until(lambda: len(router.received) == 3)
+            assert [message.message_id for message in router.received] == ["q1", "q2", "q3"]
+            assert runner.dropped_inbound == 1
+        finally:
+            router.hold.set()
+            runner.request_stop()
+            await asyncio.wait_for(task, timeout=2.0)
+            logger.remove(handler_id)
 
     async def test_router_failure_isolated(self) -> None:
         """路由器异常不终止 worker（后续消息照常处理）。"""

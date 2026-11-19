@@ -614,11 +614,14 @@ WeComChannelRunner._handle_callback
     ① 事件帧分流（aibot_event_callback 不产出人类回合：enter_chat /
        template_card_event / feedback_event 仅记日志；disconnected_event 由
        客户端状态机消费并停止重连）
-    ② msgid 去重（官方指定排重键；进程内有界 FIFO 窗口 1024，超容淘汰最旧）
+    ② msgid 去重（官方指定排重键；进程内有界 FIFO 窗口 1024，超容淘汰最旧；
+       仅在入队成功后登记）
     ③ 回复上下文登记（req_id + 到达时刻——出站 aibot_respond_msg 的寻址原料）
     ④ map_wecom_callback_to_inbound（会话键 / 文本归一 / 附件 / 群聊标记 /
        compat_info → synthetic）
-    ⑤ 有界入站队列（容量 64；满则丢弃并记 ERROR——平台重投由 msgid 去重兜底）
+    ⑤ 有界入站队列（容量 64；满则丢弃并记 ERROR——过载丢弃为终态策略：
+       不入队即不登记去重，平台重投可在队列恢复后重新消费；已入队消息的
+       重投由 msgid 去重保证不二次消费）
     ⑥ 固定 worker（默认 2）→ ChannelRouter.handle_inbound
        （per-chat 锁 / 心流门控 / 群聊多人格 / 人格绑定 / ChatService.reply /
         兜底回发——与 telegram、QQ 完全同一套路由语义）
@@ -807,8 +810,10 @@ IDLE → CONNECTING（wss 握手）→ 订阅（aibot_subscribe：BotID + Secret
 | 优雅停机 | `request_stop()` 置位 → 收帧循环与退避等待立即收口 → 关闭 WebSocket → worker 收尾；app 停机路径 bounded 等待 5s，超时 `cancel` 兜底 |
 | 观测 | 连接建立 / 订阅成功 / 就绪 / 断开退避 / 被踢 / 停机均落日志（含 endpoint、BotID、连续失败次数、退避秒数）；`state` / `reconnect_attempt` 暴露状态机读数 |
 
-命令应答关联：每条出站命令生成独立 `req_id` 并在在途表登记，应答按 `req_id`
-归位；超时、平台拒绝、连接中断都会拒绝在途请求（`CHANNEL_API_ERROR`），不悬挂。
+命令应答关联：订阅 / 心跳 / 推送等主动命令生成独立 `req_id` 并在在途表登记；
+`aibot_respond_msg` 的帧头 `req_id` 回抄 callback `req_id`，在途表同样以该键
+登记。应答按 `req_id` 归位；同键在途重复登记即拒绝（不覆盖原 future），超时、
+平台拒绝、连接中断都会拒绝在途请求（`CHANNEL_API_ERROR`），不悬挂。
 
 ### 错误码映射（企微面——复用 channels 域既有码表）
 

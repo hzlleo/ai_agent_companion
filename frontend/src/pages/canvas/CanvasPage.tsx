@@ -2,7 +2,9 @@
  * 画布产物管理面板：创建 / 预览 / 修订 / 导出 / 删除。
  *
  * 安全边界（与后端同口径）：预览在**不带 allow-scripts** 的沙箱 iframe 内
- * 渲染——模型生成的 HTML / SVG 里的脚本不执行，只保留结构与样式；Markdown
+ * 渲染——模型生成的 HTML / SVG 里的脚本不执行，只保留结构与样式；并用 CSP
+ * 阻断外部子资源（仅放行内联样式与 data: 图片），产物里的跟踪信标不再外发。
+ * 不支持 iframe csp 属性的浏览器按规范忽略该属性，退回纯沙箱行为。Markdown
  * 按纯文本展示（面板不引入 Markdown 渲染依赖）。导出是原始产物字节——下载后
  * 由打开者决定如何执行。
  *
@@ -55,6 +57,13 @@ function saveBlob(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url)
 }
 
+/**
+ * 预览节点的内容安全策略（沙箱之外再阻断外部子资源——仅放行内联样式与内联图）。
+ *
+ * iframe `csp` 尚未进入 React 类型定义，故以属性展开透传（运行时按原样输出）。
+ */
+const PREVIEW_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+
 /** 预览节点（沙箱 iframe / 纯文本——见模块 docstring 安全边界）。 */
 function CanvasPreview({ record }: { record: CanvasRecord }) {
   if (record.kind === 'markdown') {
@@ -68,6 +77,7 @@ function CanvasPreview({ record }: { record: CanvasRecord }) {
     <iframe
       title={`画布预览 ${record.id}`}
       sandbox=""
+      {...{ csp: PREVIEW_CSP }}
       srcDoc={record.content}
       className="h-48 w-full rounded-md border border-[var(--color-border)] bg-white"
     />

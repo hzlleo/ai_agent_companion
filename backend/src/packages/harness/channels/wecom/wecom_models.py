@@ -969,14 +969,13 @@ def build_ping_command(*, req_id: str) -> WeComCommandModel:
     return WeComCommandModel(cmd=WECOM_CMD_PING, headers=WeComHeadersModel(req_id=req_id))
 
 
-def build_markdown_reply_command(
-    *, req_id: str, callback_req_id: str, content: str
-) -> WeComCommandModel:
-    """构造回复消息回调的 markdown 命令（透传回调 req_id）。
+def build_markdown_reply_command(*, callback_req_id: str, content: str) -> WeComCommandModel:
+    """构造回复消息回调的 markdown 命令（帧头回抄回调 req_id）。
+
+    响应帧头携带 callback req_id 供平台归位，命令自身不再生成请求号。
 
     Args:
-        req_id: 本次请求的唯一标识。
-        callback_req_id: 触发回复的消息回调 req_id（官方文档要求原样透传）。
+        callback_req_id: 触发回复的消息回调 req_id（官方文档要求原样回抄）。
         content: markdown 文本。
 
     Returns:

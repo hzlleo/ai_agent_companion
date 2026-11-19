@@ -25,6 +25,9 @@ describe('CanvasPage', () => {
     const preview = await screen.findByTitle('画布预览 1')
     expect(preview.tagName).toBe('IFRAME')
     expect(preview.getAttribute('sandbox')).toBe('')
+    expect(preview.getAttribute('csp')).toBe(
+      "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+    )
     expect(preview.getAttribute('srcdoc')).toBe('<div>今天很好</div>')
     expect(screen.getByText('HTML 卡片')).toBeInTheDocument()
     expect(screen.getByText(/修订 1/)).toBeInTheDocument()

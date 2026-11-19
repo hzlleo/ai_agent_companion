@@ -21,9 +21,11 @@
 完成订阅会踢掉旧连接）：``run()`` 以在途任务句柄保证幂等——重复调用不产生
 第二条连接（记 warning 后直接返回），连接与心跳任务的生命周期均归本对象。
 
-请求 / 应答关联：每条出站命令携带自生成 ``req_id``，应答按 ``req_id`` 归位
-（``_pending`` 表）；超时（``request_timeout_seconds``）与连接中断都会以
-``CHANNEL_API_ERROR`` 拒绝在途请求，不静默悬挂。
+请求 / 应答关联：订阅 / 心跳 / 推送等主动命令自生成 ``req_id``；
+``aibot_respond_msg`` 的帧头 ``req_id`` 必须回抄 callback ``req_id``，在途表
+亦以该键登记。应答按 ``req_id`` 归位（``_pending`` 表）；同键在途重复登记
+即拒绝（不覆盖原 future），超时（``request_timeout_seconds``）与连接中断都会
+以 ``CHANNEL_API_ERROR`` 拒绝在途请求，不静默悬挂。
 
 心跳（官方文档：建议每 30 秒 ping）：独立任务按
 ``heartbeat_interval_seconds`` 发送应用层 ``ping``，单次应答超时
@@ -649,7 +651,7 @@ class WeComLongConnectionClient:
     # ------------------------------------------------------------------
 
     async def send_markdown_reply(self, *, callback_req_id: str, content: str) -> WeComAckModel:
-        """回复消息回调（``aibot_respond_msg`` + markdown；透传回调 req_id）。
+        """回复消息回调（``aibot_respond_msg`` + markdown；帧头回抄回调 req_id）。
 
         Args:
             callback_req_id: 触发回复的消息回调 req_id。
@@ -659,10 +661,11 @@ class WeComLongConnectionClient:
             平台应答（成功语义已校验）。
 
         Raises:
-            BusinessException: 连接未就绪 / 应答超时 / 平台拒绝（``CHANNEL_API_ERROR``）。
+            BusinessException: 连接未就绪 / 应答超时 / 平台拒绝（``CHANNEL_API_ERROR``）；
+                同一 callback req_id 已有在途命令时拒绝（不覆盖原 future）。
         """
         command = build_markdown_reply_command(
-            req_id=self._next_req_id(), callback_req_id=callback_req_id, content=content
+            callback_req_id=callback_req_id, content=content
         )
         return await self._execute(command)
 
@@ -832,7 +835,8 @@ class WeComLongConnectionClient:
 
         Raises:
             BusinessException: 连接未就绪 / 应答超时 / 传输失败 / 平台拒绝
-                （``error_code``——缺省 ``CHANNEL_API_ERROR``）。
+                （``error_code``——缺省 ``CHANNEL_API_ERROR``）；``req_id`` 已在途
+                （不覆盖登记中的 future）。
         """
         target_connection = connection if connection is not None else self._connection
         if target_connection is None:
@@ -842,6 +846,12 @@ class WeComLongConnectionClient:
                 details={"cmd": command.cmd},
             )
         req_id = command.headers.req_id
+        if req_id in self._pending:
+            raise BusinessException(
+                code=ErrorCode.CHANNEL_API_ERROR,
+                message="请求号在途重复，拒绝覆盖在途应答",
+                details={"req_id": req_id},
+            )
         future: asyncio.Future[WeComAckModel] = asyncio.get_running_loop().create_future()
         self._pending[req_id] = future
         wait_seconds = self._request_timeout_seconds if timeout is None else timeout
