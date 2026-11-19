@@ -10,7 +10,7 @@ prose pin（文案钉死）指测试断言的是实现源码里的某个字符�
     - 若同一字面量出现在 ``packages/harness/**`` 的实现源码中，按形态分桶：
       ``field_or_code``（标识符 / 字典键 / UPPER_SNAKE / 带连字符模型 ID——
       本质是协议字段名，改它等于改契约，不算文案钉死）、``prose``（含空白
-      多词或句读标点的自然语言）、``other``（其余）；
+      或 CJK 的自然语言；代码 token 的补集与 prose 完全等价，故只有两桶）；
     - **「疑似 prose pin」只统计 prose 桶**，Top-N 也 prose 桶优先——把字段名
       混进总数会让清单虚高、真正的文案断言被淹没；
     - 统计「纯结构断言」占比：一个测试函数内的断言只由 ``status_code``
@@ -54,11 +54,8 @@ _MIN_LITERAL_CHARS = 8
 #: 自然语言，改它属于改契约而非改文案。
 _CODE_TOKEN_RE = re.compile(r"^[^\s\u4e00-\u9fff]+$")
 
-#: 句读标点：出现即视为自然语言句子（中文句读 + 英文句读 + 引号包裹的书名）。
-_PROSE_PUNCT = frozenset("，。！？；：、,.!?;:…—「」《》")
-
 #: 分桶名（报告与 Top-N 排序用）。
-_BUCKETS = ("prose", "other", "field_or_code")
+_BUCKETS = ("prose", "field_or_code")
 _STRUCTURAL_NODES = (
     ast.Assert,
     ast.Compare,
@@ -184,21 +181,22 @@ def _collect_file(
 
 
 def _classify_literal(literal: str) -> str:
-    """把命中文案分为 field_or_code / prose / other 三桶。
+    """把命中文案分为 field_or_code / prose 两桶。
+
+    ``_CODE_TOKEN_RE`` 的补集（含空白或 CJK）与 prose 桶完全等价，因此
+    不存在第三桶：不相交的判定语句对会留下不可达分支。
 
     Args:
         literal: 命中实现源码的测试字面量（已 strip）。
 
     Returns:
-        桶名。``field_or_code`` 指标识符 / 字典键 / UPPER_SNAKE / 带连字符
-        模型 ID 等代码形态；``prose`` 指含空白多词或句读标点的自然语言；
-        ``other`` 指其余（例如无标点的单段中文）。
+        ``field_or_code`` 表示不含空白与 CJK 的单个代码 token（标识符 /
+        字典键 / UPPER_SNAKE / 带连字符模型 ID / MIME / SQL 片段）；
+        ``prose`` 表示含空白或 CJK 的自然语言文案。
     """
     if _CODE_TOKEN_RE.fullmatch(literal):
         return "field_or_code"
-    if any(ch.isspace() for ch in literal) or any(ch in _PROSE_PUNCT for ch in literal):
-        return "prose"
-    return "other"
+    return "prose"
 
 
 def _report(stats: ProsePinStats, top: int) -> None:
