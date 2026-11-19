@@ -50,6 +50,7 @@ __all__ = [
     "drop_scratch_database",
     "fetch_alembic_version",
     "fetch_column_names",
+    "fetch_index_names",
     "fetch_table_names",
     "recreate_scratch_database",
     "assert_reminder_scan_lock",
@@ -85,14 +86,14 @@ _MISSING_ENV_MESSAGE = (
     "未注入测试服务 env 的本地运行。"
 )
 
-#: alembic 迁移链 head 版本戳（0017——画布产物表迁移）。
-HEAD_REVISION = "000000000017"
+#: alembic 迁移链 head 版本戳（0018——人物事实复合索引迁移）。
+HEAD_REVISION = "000000000018"
 
 #: 升级 head 后的全量表集（alembic_version + 17 张 ff_* 域表——0011 新增
 #: ff_reminders；0013 新增 ff_persona_facts；0014 新增 ff_persona_skills；
 #: 0015 新增 ff_core_memory_blocks / ff_core_memory_revisions；0016 新增
 #: ff_voiceprint_samples / ff_voiceprint_consents / ff_stickers；0017 新增
-#: ff_canvas_documents）。
+#: ff_canvas_documents；0018 为 ff_persona_facts 复合索引，不新增表）。
 EXPECTED_HEAD_TABLES: frozenset[str] = frozenset(
     {
         "alembic_version",
@@ -301,6 +302,30 @@ async def fetch_alembic_version(target: SeekDbTestTarget) -> str | None:
     finally:
         conn.close()
     return str(row[0]) if row else None
+
+
+async def fetch_index_names(target: SeekDbTestTarget, table_name: str) -> set[str]:
+    """读指定表的索引名集合（迁移索引断言面——information_schema 直查）。
+
+    Args:
+        target: 连接目标。
+        table_name: 表名。
+
+    Returns:
+        索引名集合（含主键与唯一键）。
+    """
+    conn = await connect_scratch(target)
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT DISTINCT INDEX_NAME FROM information_schema.statistics "
+                "WHERE table_schema = %s AND table_name = %s",
+                (target.database, table_name),
+            )
+            rows = await cur.fetchall()
+    finally:
+        conn.close()
+    return {str(row[0]) for row in rows}
 
 
 async def fetch_column_names(target: SeekDbTestTarget, table_name: str) -> set[str]:

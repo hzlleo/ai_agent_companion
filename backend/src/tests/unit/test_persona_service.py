@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import cast
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -27,9 +28,24 @@ from sqlalchemy.pool import StaticPool
 from packages.harness.core.context import current_context, persona_id_var
 from packages.harness.core.dtos import PageResponse
 from packages.harness.core.errors import BusinessException, ErrorCode
-from packages.harness.database.base import Base
+from packages.harness.database.base import PERSONA_FILTER_SKIP_OPTION, Base
 from packages.harness.database.engine import db_engine_holder
+from packages.harness.memory.dreaming_orm import DreamRunRow
+from packages.harness.memory.models import ChatTurnPayloadModel, MemoryProvenance
+from packages.harness.memory.orm import (
+    ChatMessageRow,
+    ChatSessionRow,
+    CuratedMemoryRow,
+    MemoryEpisodeRow,
+)
+from packages.harness.memory.retrieval import MemoryIndexer
+from packages.harness.memory.retrieval_models import MemoryRefType
+from packages.harness.memory.sqlite_store import MemoryIndexLiteRow
 from packages.harness.persona.chara_card import CharaCardModel
+from packages.harness.persona.core_memory_orm import (
+    CoreMemoryBlockRow,
+    CoreMemoryRevisionRow,
+)
 from packages.harness.persona.dtos import (
     CharaCardPatchDTO,
     PersonaCopyDTO,
@@ -39,9 +55,11 @@ from packages.harness.persona.dtos import (
     PersonaStateUpsertDTO,
     PersonaUpdateDTO,
 )
+from packages.harness.persona.facts_orm import PersonaFactRow
 from packages.harness.persona.models import PersonaStateLayer, PersonaStatus
 from packages.harness.persona.orm import PERSONA_PRIMARY_MARKER, PersonaRow, PersonaStateRow
 from packages.harness.persona.service import PersonaService, bind_persona_context
+from packages.harness.persona.skills_orm import PersonaSkillRow
 
 
 @pytest.fixture
@@ -727,6 +745,292 @@ async def test_copy_missing_source_not_found(
 # ---------------------------------------------------------------------------
 # 删除守卫 + 状态级联清理
 # ---------------------------------------------------------------------------
+
+
+async def _seed_persona_domain(db_session: AsyncSession, persona_id: int) -> tuple[int, int]:
+    """为指定人格造齐记忆域七表 + 会话消息 + 回退索引行（级联测试种子）。
+
+    Args:
+        db_session: 注入的异步 Session。
+        persona_id: 目标人格主键。
+
+    Returns:
+        ``(episode_id, curated_id)``——供索引清理分发断言引用。
+    """
+    episode = MemoryEpisodeRow(
+        persona_id=str(persona_id),
+        kind="chat",
+        source="chat",
+        content=ChatTurnPayloadModel(
+            user_content="级联测试事件", assistant_content="", session_id=1
+        ).model_dump(),
+        importance=5,
+        provenance=MemoryProvenance.OWNER.value,
+        content_hash="cascade-hash",
+        ts_ms=1,
+    )
+    curated = CuratedMemoryRow(
+        persona_id=str(persona_id),
+        kind="memory",
+        topic="级联测试主题",
+        content="级联测试策展记忆",
+        importance=5,
+        provenance=MemoryProvenance.OWNER.value,
+        status="active",
+        superseded_by_id=None,
+        version=1,
+        active_marker="active",
+        pinned=False,
+        frozen=False,
+        access_count=0,
+        last_accessed_ms=None,
+    )
+    dream_run = DreamRunRow(
+        persona_id=str(persona_id),
+        status="success",
+        started_ms=1,
+        finished_ms=2,
+        stats={},
+        decisions=[],
+        diary_episode_id=None,
+        error=None,
+    )
+    fact = PersonaFactRow(
+        persona_id=str(persona_id),
+        category="preference",
+        content="级联测试事实",
+        normalized_hash="cascade-fact-hash",
+        confidence=0.8,
+        status="active",
+        provenance="owner",
+        source="manual",
+        evidence=[],
+        superseded_by_id=None,
+        version=1,
+        active_marker="active",
+    )
+    skill = PersonaSkillRow(
+        persona_id=str(persona_id),
+        name="级联测试技能",
+        slug="cascade-skill",
+        description="级联测试技能描述",
+        triggers=["测试"],
+        content="1. 执行测试",
+        status="active",
+        source="manual",
+        confidence=0.8,
+        use_count=0,
+        last_used_ms=None,
+        version=1,
+    )
+    block = CoreMemoryBlockRow(
+        persona_id=str(persona_id),
+        block_key="self_identity",
+        content="级联测试自我认知",
+        locked=False,
+        version=1,
+        updated_by="owner",
+        last_edited_session_id=None,
+    )
+    chat_session = ChatSessionRow(
+        persona_id=str(persona_id),
+        title="级联测试会话",
+        message_count=1,
+        last_active_at=1,
+    )
+    db_session.add_all(
+        [episode, curated, dream_run, fact, skill, block, chat_session]
+    )
+    await db_session.flush()
+    db_session.add(
+        CoreMemoryRevisionRow(
+            block_id=block.id,
+            version=1,
+            content="级联测试修订",
+            provenance="owner",
+            source="admin",
+            session_id=None,
+            ts_ms=1,
+        )
+    )
+    db_session.add(
+        ChatMessageRow(
+            session_id=chat_session.id,
+            seq=1,
+            role="user",
+            content="级联测试消息",
+            ts_ms=1,
+            meta=None,
+            variant_of_id=None,
+            variant_index=None,
+        )
+    )
+    db_session.add(
+        MemoryIndexLiteRow(
+            persona_id=persona_id,
+            ref_type=MemoryRefType.EPISODE.value,
+            ref_id=episode.id,
+            kind="chat",
+            provenance=MemoryProvenance.OWNER.value,
+            ts_ms=1,
+            content="级联测试索引行",
+        )
+    )
+    await db_session.commit()
+    return episode.id, curated.id
+
+
+class _RecordingIndexer:
+    """记录索引删除分发的假管道（生产 SeekDB 清理面的观测替身）。"""
+
+    def __init__(self) -> None:
+        """初始化空分发记录。"""
+        self.deleted: list[tuple[MemoryRefType, int, int]] = []
+
+    async def dispatch_delete(
+        self, ref_type: MemoryRefType, ref_id: int, persona_id: int
+    ) -> None:
+        """记录一次删除分发。"""
+        self.deleted.append((ref_type, ref_id, persona_id))
+
+
+async def _count_persona_domain(
+    db_session: AsyncSession, persona_id: int
+) -> tuple[int, int, int, int, int, int, int, int, int]:
+    """统计单人格的记忆域行数（固定顺序便于级联断言）。
+
+    Args:
+        db_session: 注入的异步 Session。
+        persona_id: 目标人格主键。
+
+    Returns:
+        九元组：episodes / curated / dream_runs / facts / skills /
+        core_blocks / core_revisions / chat_sessions / chat_messages。
+    """
+    skip_filter = {PERSONA_FILTER_SKIP_OPTION: True}
+    tables = (
+        MemoryEpisodeRow,
+        CuratedMemoryRow,
+        DreamRunRow,
+        PersonaFactRow,
+        PersonaSkillRow,
+        CoreMemoryBlockRow,
+    )
+    counts: list[int] = []
+    for model in tables:
+        value = (
+            await db_session.execute(
+                select(func.count())
+                .select_from(model)
+                .where(model.persona_id == str(persona_id)),
+                execution_options=skip_filter,
+            )
+        ).scalar_one()
+        counts.append(int(value))
+    block_ids = select(CoreMemoryBlockRow.id).where(
+        CoreMemoryBlockRow.persona_id == str(persona_id)
+    )
+    revision_count = (
+        await db_session.execute(
+            select(func.count())
+            .select_from(CoreMemoryRevisionRow)
+            .where(CoreMemoryRevisionRow.block_id.in_(block_ids)),
+            execution_options=skip_filter,
+        )
+    ).scalar_one()
+    session_ids = select(ChatSessionRow.id).where(
+        ChatSessionRow.persona_id == str(persona_id)
+    )
+    chat_session_count = (
+        await db_session.execute(
+            select(func.count())
+            .select_from(ChatSessionRow)
+            .where(ChatSessionRow.persona_id == str(persona_id)),
+            execution_options=skip_filter,
+        )
+    ).scalar_one()
+    message_count = (
+        await db_session.execute(
+            select(func.count())
+            .select_from(ChatMessageRow)
+            .where(ChatMessageRow.session_id.in_(session_ids)),
+            execution_options=skip_filter,
+        )
+    ).scalar_one()
+    counts.extend([int(revision_count), int(chat_session_count), int(message_count)])
+    return (
+        counts[0],
+        counts[1],
+        counts[2],
+        counts[3],
+        counts[4],
+        counts[5],
+        counts[6],
+        counts[7],
+        counts[8],
+    )
+
+
+async def test_delete_cascades_entire_memory_domain(
+    persona_service: PersonaService, db_session: AsyncSession
+) -> None:
+    """删除人格级联：A 的记忆域七表 / 会话消息 / 索引全空，B 原样保留。
+
+    七表 = episodes / curated / dream_runs / persona_facts /
+    persona_skills / core_memory_blocks / core_memory_revisions；另含
+    chat_sessions / chat_messages 与回退检索索引行。二次删除走既有
+    NOT_FOUND 语义（幂等失败面）。
+    """
+    persona_a = await persona_service.create(db_session, _create_dto(name="cascade-a"))
+    persona_b = await persona_service.create(db_session, _create_dto(name="cascade-b"))
+    await _seed_persona_domain(db_session, persona_a.id)
+    await _seed_persona_domain(db_session, persona_b.id)
+
+    await persona_service.delete(db_session, persona_a.id)
+
+    assert await _count_persona_domain(db_session, persona_a.id) == (0, 0, 0, 0, 0, 0, 0, 0, 0)
+    assert await _count_persona_domain(db_session, persona_b.id) == (1, 1, 1, 1, 1, 1, 1, 1, 1)
+    index_a = list(
+        (
+            await db_session.execute(
+                select(MemoryIndexLiteRow).where(MemoryIndexLiteRow.persona_id == persona_a.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    index_b = list(
+        (
+            await db_session.execute(
+                select(MemoryIndexLiteRow).where(MemoryIndexLiteRow.persona_id == persona_b.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert index_a == []
+    assert len(index_b) == 1
+
+    with pytest.raises(BusinessException) as exc_info:
+        await persona_service.delete(db_session, persona_a.id)
+    assert exc_info.value.code == ErrorCode.NOT_FOUND
+
+
+async def test_delete_dispatches_remote_index_purge(
+    db_session: AsyncSession,
+) -> None:
+    """删除提交后按 ref 集合分发生产索引清理（episode + curated 两类）。"""
+    recorder = _RecordingIndexer()
+    service = PersonaService(indexer=cast("MemoryIndexer", recorder))
+    persona = await service.create(db_session, _create_dto(name="index-purge"))
+    episode_id, curated_id = await _seed_persona_domain(db_session, persona.id)
+
+    await service.delete(db_session, persona.id)
+
+    assert set(recorder.deleted) == {
+        (MemoryRefType.EPISODE, episode_id, persona.id),
+        (MemoryRefType.CURATED, curated_id, persona.id),
+    }
 
 
 async def test_delete_primary_persona_forbidden(

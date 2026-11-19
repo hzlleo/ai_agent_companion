@@ -83,8 +83,35 @@ from packages.harness.persona.trait_library import (
 
 router = APIRouter(prefix="/api/v1/personas", tags=["personas"])
 
-#: 人格服务实例（无状态——Session 逐请求注入，服务可安全共享）。
+#: 直调面（测试直接调用 handler）的 request 缺省值——FastAPI 运行期恒注入
+#: 真实 Request，本哨兵只服务「不传 request 的函数直调」形态。
+_NO_REQUEST: Request = cast("Request", None)
+
+#: 人格服务实例（无状态——Session 逐请求注入，服务可安全共享；未装配
+#: lifespan 的直调 / 测试面回落形态——无检索索引联动）。
 persona_service = PersonaService()
+
+
+def _resolve_request_persona_service(request: Request | None) -> PersonaService:
+    """解析请求可用的人格服务（app.state.memory_indexer 存在时绑定）。
+
+    删除路径需要清理生产检索索引（SeekDB 独立数据面）；lifespan 装配的
+    ``app.state.memory_indexer`` 是进程级索引管道。本地测试 / 直调面没有
+    lifespan 装配时回落模块级无索引实例（级联删除与回退索引表清理仍
+    生效）。
+
+    Args:
+        request: 当前请求（None = 直调形态——回落模块级实例）。
+
+    Returns:
+        人格服务实例（删除路径按需绑定索引清理面）。
+    """
+    if request is None:
+        return persona_service
+    indexer = getattr(request.app.state, "memory_indexer", None)
+    if indexer is None:
+        return persona_service
+    return PersonaService(indexer=indexer)
 
 #: 导入请求体大小上限（multipart 面；JSON 面共用——卡片文档小体量，
 #: 2MB 已远超任何合法单卡 / 批量卡片集；不引入新 settings 键）。
@@ -392,6 +419,7 @@ async def create_persona(
 async def batch_delete_personas(
     req: PersonaBatchDeleteRequest,
     db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
 ) -> ResultDTO[PersonaBatchDeleteResponseDTO]:
     """批量删除人格（部分成功形态——逐 id 独立事务，单项失败不阻塞其余）。
 
@@ -403,7 +431,7 @@ async def batch_delete_personas(
         批量结果（total / succeeded / failed / 逐 id 结果——主人格项
         记 CONFLICT 失败，缺失项记 NOT_FOUND 失败）。
     """
-    result = await persona_service.batch_delete(db, req.ids)
+    result = await _resolve_request_persona_service(request).batch_delete(db, req.ids)
     return ResultDTO.ok(
         data=result, message=f"批量删除完成（成功 {result.succeeded} / 失败 {result.failed}）"
     )
@@ -632,6 +660,7 @@ async def update_persona(
 async def delete_persona(
     persona_id: int,
     db: AsyncSession = Depends(get_async_db),
+    request: Request = _NO_REQUEST,
 ) -> ResultDTO[None]:
     """删除人格（主人格守卫：当前主人格禁止删除——先另设主人格）。
 
@@ -646,7 +675,7 @@ async def delete_persona(
         BusinessException: 人格不存在（``NOT_FOUND``）；当前主人格禁止
             删除（``CONFLICT``）。
     """
-    await persona_service.delete(db, persona_id)
+    await _resolve_request_persona_service(request).delete(db, persona_id)
     return ResultDTO[None].ok(message="人格已删除")
 
 

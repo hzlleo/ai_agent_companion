@@ -118,7 +118,7 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | 列 | 类型 | 约束 / 索引 | 说明 |
 |---|---|---|---|
 | `id` | BIGINT | PK 自增（SQLite 渲染 INTEGER） | 主键 |
-| `persona_id` | VARCHAR(64) | 非空；索引（PersonaMixin 自动注入 / 过滤） | 所属人格 |
+| `persona_id` | VARCHAR(64) | 非空；索引；复合索引 `ix_ff_persona_facts_persona_status_confidence (persona_id, status, confidence)`（迁移 0018——画像读取面） | 所属人格 |
 | `category` | VARCHAR(16) | 非空；索引 | 类别（preference / biography / relationship / context） |
 | `content` | VARCHAR(1000) | 非空 | 事实陈述（服务层归一化后落库） |
 | `normalized_hash` | VARCHAR(64) | 非空；索引 | 正文归一化 sha256（事实身份轴） |
@@ -151,7 +151,7 @@ PUT /{id}/states/{layer}（layer ∈ {M, S}；PersonaStateUpsertDTO：state JSON
 | `version` | INT | 非空 | 原地编辑版本号（首版 1，编辑递增——无历史链） |
 | `created_at` / `updated_at` | BIGINT | 非空 | epoch 毫秒（TimestampMixin） |
 
-迁移链：`backend/alembic/versions/000000000003_add_personas.py`（Revision 000000000003，Revises 000000000002——两表 + 索引 + 唯一约束）→ `000000000006_add_persona_voice_profile.py`（Revision 000000000006，Revises 000000000005——`ff_personas` 增 `voice_profile` JSON 可空列，纯增列、既有行落 NULL）→ `000000000008_persona_primary_marker.py`（Revision 000000000008，Revises 000000000007——多激活可寻址模型重构：增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active=1` 行回填 `'primary'`（旧单激活不变式保证至多一行），删 `is_active` 列；降级逆向重建；升级 / 降级 / 再升级均经 SQLite 冒烟验证）→ `000000000013_persona_facts.py`（Revision 000000000013，Revises 000000000012——新建 `ff_persona_facts` + 单 active 唯一键 + 索引；SQLite 冒烟与 SeekDB 真引擎 round-trip 双双覆盖）→ `000000000014_persona_skills.py`（Revision 000000000014，Revises 000000000013——新建 `ff_persona_skills` + slug 唯一键 + 状态索引；SQLite 冒烟与 SeekDB 真引擎 round-trip 双双覆盖）→ `000000000015_core_memory.py`（Revision 000000000015，Revises 000000000014——新建 `ff_core_memory_blocks`（四块唯一键 + persona 索引）与 `ff_core_memory_revisions`（block_id 级联外键 + block_id / ts_ms 索引）；降级先删修订表再删块表；SQLite 冒烟与 SeekDB 真引擎 round-trip 双双覆盖）。
+迁移链：`backend/alembic/versions/000000000003_add_personas.py`（Revision 000000000003，Revises 000000000002——两表 + 索引 + 唯一约束）→ `000000000006_add_persona_voice_profile.py`（Revision 000000000006，Revises 000000000005——`ff_personas` 增 `voice_profile` JSON 可空列，纯增列、既有行落 NULL）→ `000000000008_persona_primary_marker.py`（Revision 000000000008，Revises 000000000007——多激活可寻址模型重构：增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active=1` 行回填 `'primary'`（旧单激活不变式保证至多一行），删 `is_active` 列；降级逆向重建；升级 / 降级 / 再升级均经 SQLite 冒烟验证）→ `000000000013_persona_facts.py`（Revision 000000000013，Revises 000000000012——新建 `ff_persona_facts` + 单 active 唯一键 + 索引；SQLite 冒烟与 SeekDB 真引擎 round-trip 双双覆盖）→ `000000000014_persona_skills.py`（Revision 000000000014，Revises 000000000013——新建 `ff_persona_skills` + slug 唯一键 + 状态索引；SQLite 冒烟与 SeekDB 真引擎 round-trip 双双覆盖）→ `000000000015_core_memory.py`（Revision 000000000015，Revises 000000000014——新建 `ff_core_memory_blocks`（四块唯一键 + persona 索引）与 `ff_core_memory_revisions`（block_id 级联外键 + block_id / ts_ms 索引）；降级先删修订表再删块表；SQLite 冒烟与 SeekDB 真引擎 round-trip 双双覆盖）→ `000000000018_persona_facts_confidence_index.py`（Revision 000000000018，Revises 000000000017——为 `ff_persona_facts` 增 `(persona_id, status, confidence)` 复合索引；降级仅删索引、数据保留；SeekDB 真引擎迁移链 round-trip 覆盖）。
 
 ### ff_core_memory_blocks / ff_core_memory_revisions（自编辑核心记忆——R2c，迁移 0015）
 
@@ -465,6 +465,22 @@ async with bind_persona_context(persona.id):                      # 运行期任
 ```
 
 `PersonaRecordDTO` 携带 `voice_profile: VoiceProfileModel | None`（None = 未绑定）——创建 / 更新 / 复制 / 读取全链路透出人格语音绑定，语音合成面（`voice` 域）据此以人格级 speaker / speed 覆盖 settings 缺省（优先级：请求参数 > 人格绑定 > settings 缺省）。
+
+### 删除级联范围（PersonaService.delete）
+
+删除非主人格时，服务层在**同一事务**内按 `persona_id` 批删该人格的记忆域与画像域全部行——本工程不使用跨域外键作唯一依赖（SQLite 测试方言默认不启用 FK 强制），级联由服务层显式完成以保证方言一致：
+
+| 表 | 处理 |
+|---|---|
+| `ff_persona_states` | 按 `persona_id` 删除（M/S 状态层） |
+| `ff_memory_episodes` / `ff_curated_memory` / `ff_dream_runs` | 按 `persona_id` 删除；事实 / 策展的自引用 `superseded_by_id` 先置 NULL（避免 MySQL 自引用外键的删除序歧义） |
+| `ff_persona_facts` / `ff_persona_skills` | 按 `persona_id` 删除 |
+| `ff_core_memory_blocks` / `ff_core_memory_revisions` | 先按块集合删修订行，再删块行 |
+| `ff_chat_sessions` / `ff_chat_messages` | 先按会话集合删消息行，再删会话行（消息经 session_id 归属人格） |
+| `ff_memory_index_lite` | 按 `persona_id` + 收集到的 episode / curated ref 集合同事务删除（回退检索索引） |
+| `ff_memory_index`（SeekDB 生产索引） | 提交后经注入的 `app.state.memory_indexer` 按 ref 分散发删除（best-effort，失败不翻转删除结果） |
+
+索引清理覆盖 episode 与 curated 两类 ref（策展行同样随人格删除）。重复删除走既有 `NOT_FOUND` 语义（幂等失败面）。
 
 卡片补丁合并语义（`PersonaUpdateDTO.card`）：仅出现字段覆写既有卡片（`exclude_unset` 合并后整体重校验——合并结果违约 `VALIDATION_ERROR` fail loud）；`character_book` 提供时整体替换（不做条目级合并），显式 `null` 清除世界书。
 

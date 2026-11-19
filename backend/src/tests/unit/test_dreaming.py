@@ -725,9 +725,9 @@ async def test_run_dream_empty_window_zero_calls(db_session: AsyncSession) -> No
         run = await dream_service.run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )
+    assert run.stats.candidates == 0
     assert run.status == "success"
     assert gateway.calls == []
-    assert run.stats.candidates == 0
     assert run.diary_episode_id is None
 
 
@@ -1040,17 +1040,16 @@ async def test_run_dream_converges_stale_running_rows(db_session: AsyncSession) 
                 error=None,
             )
         )
-        db_session.add(
-            DreamRunRow(
-                status="running",
-                started_ms=NOW - 1_000,  # 新鲜 running 行——阈值内不动
-                finished_ms=None,
-                stats={},
-                decisions=[],
-                diary_episode_id=None,
-                error=None,
-            )
+        fresh_row = DreamRunRow(
+            status="running",
+            started_ms=NOW - 1_000,  # 新鲜 running 行——阈值内不动（重入闸返回）
+            finished_ms=None,
+            stats={},
+            decisions=[],
+            diary_episode_id=None,
+            error=None,
         )
+        db_session.add(fresh_row)
         await db_session.commit()
     async with bind_persona_context(PERSONA_B):
         db_session.add(
@@ -1071,7 +1070,9 @@ async def test_run_dream_converges_stale_running_rows(db_session: AsyncSession) 
         run = await dream_service.run_dream(
             db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
         )
-    assert run.status == "success"
+    assert run.id == fresh_row.id
+    assert run.status == "running"
+    assert gateway.calls == []
 
     async with bind_persona_context(PERSONA_A):
         a_runs = list((await db_session.execute(select(DreamRunRow))).scalars().all())
@@ -1082,11 +1083,56 @@ async def test_run_dream_converges_stale_running_rows(db_session: AsyncSession) 
     assert stale.error is not None
     assert "进程崩溃遗留" in stale.error
     fresh = by_started[NOW - 1_000]
-    assert fresh.status == "running"  # 阈值内行未被收敛
+    assert fresh.status == "running"  # 阈值内行未被收敛（重入闸直接返回）
     assert fresh.error is None
+    assert len(a_runs) == 2  # 未新建运行行
     async with bind_persona_context(PERSONA_B):
         b_runs = list((await db_session.execute(select(DreamRunRow))).scalars().all())
     assert b_runs[0].status == "running"  # 他人格行未被收敛
+
+
+async def test_run_dream_reentry_returns_same_running_row(
+    db_session: AsyncSession,
+) -> None:
+    """重入闸：窗内已有本人格 running 行时直接返回该行（零网关调用）。"""
+    async with bind_persona_context(PERSONA_A):
+        fresh = DreamRunRow(
+            status="running",
+            started_ms=NOW - 1_000,
+            finished_ms=None,
+            stats={},
+            decisions=[],
+            diary_episode_id=None,
+            error=None,
+        )
+        db_session.add(fresh)
+        await db_session.commit()
+        gateway = FakeDreamGateway([])
+        first = await dream_service.run_dream(
+            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+        )
+        second = await dream_service.run_dream(
+            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+        )
+        assert first.id == fresh.id
+        assert second.id == fresh.id
+        assert gateway.calls == []
+        assert await _count_runs(db_session) == 1
+
+
+async def test_run_dream_finished_ms_uses_injected_clock(
+    db_session: AsyncSession,
+) -> None:
+    """终态时间轴：finished_ms 与 started_ms 同用注入时钟（不读系统时钟）。"""
+    async with bind_persona_context(PERSONA_A):
+        gateway = FakeDreamGateway([])
+        run = await dream_service.run_dream(
+            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+        )
+        assert run.started_ms == NOW
+        assert run.finished_ms == NOW
+        rows = list((await db_session.execute(select(DreamRunRow))).scalars().all())
+        assert rows[0].finished_ms == NOW
 
 
 # ---------------------------------------------------------------------------

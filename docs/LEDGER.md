@@ -126,16 +126,17 @@
 - 微信=企微智能机器人主轨+GUI 微信实验轨（D2-A）；抖音=GUI/浏览器底座（D4）；短信=SmsForwarder 记账推迟（D3）。
 - TTS=CosyVoice3-0.5B、ASR=Qwen3-ASR-0.6B、Embedding=Qwen3-Embedding-0.6B 主+bge-m3 备、look_at=Qwen3-VL（GGUF）。
 - 管理台鉴权=owner Bearer（ADMIN_AUTH_TOKEN env；空=禁用+启动提示）。
-- 数据库迁移链 0001..0017；0012=curated lifecycle；0013=persona facts；0014=persona skills；0015=core memory（blocks + append-only revisions）；0016=voiceprint samples/consents + sticker library；0017=canvas documents。
+- 数据库迁移链 0001..0018；0012=curated lifecycle；0013=persona facts；0014=persona skills；0015=core memory（blocks + append-only revisions）；0016=voiceprint samples/consents + sticker library；0017=canvas documents；0018=persona facts 复合索引（persona_id/status/confidence）。
+- **记忆域保留期 = append-only 无限期保留**：不设 TTL 自动清理；删除权由单条管理面删除 + 人格级联删除覆盖。理由：审计与梦境回溯（运行决策 / 证据链 / 修订链需全量可复算）。
 
 ## 5. 工程实现事实（恢复续跑所需）
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2788 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 2816 passed）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
-cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift；当前 mypy 190 文件零问题）
-cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 6 用例（迁移链/并发唯一键/行锁/混合检索）
+cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift；当前 mypy 191 文件零问题）
+cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 9 用例（迁移链/并发唯一键/行锁/混合检索）
 cd frontend && pixi run test / coverage / lint / build   # 666 passed（高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
 根级：pixi run gen-examples（三件套再生成）、pixi run gates
@@ -363,6 +364,30 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 - prose 分桶：含 CJK 文案统一归入 prose 桶，全角括号 `【】（）` 补入句读标点；重跑 `pixi run prose-pin` → 命中 483（分桶 prose=59 / field_or_code=424），纯结构断言 193 例 / 7.7%；不可达的 `other` 桶已从实现、报告与三处文档（模块 docstring / docs/README / 验收 SOP）删除。
 - 证据目录说明：`docs/evidence/README.md` 增补「`ab346493` 及更早 sha8 由旧哈希口径（含 `.egg-info`）计算，不能用当前代码复算，仅作历史留档」。
 - `cd backend && pixi run verify-slice -- --slice r2-hardening` → 0（tests-all 2808 passed / coverage 24 组 / lint / typecheck 191 源文件 / gates 全步摘要命中），证据包 `docs/evidence/r2-hardening-d193c13e.json`（sha8=`d193c13e`，本提交为当前 canonical）；`c524502a` / `afaaf9a9` / `55a44a52` / `ab346493` 作为前序提交的历史证据保留，按 README 口径只认与当前 `--hash-only` 一致的一份。
+
+### 已完成切片：R2c 记忆批次 Oracle 深审修复（P1×1 + P2×7，本分支工作区）
+
+**已完成**（逐条闭环）：
+
+1. **P1 人格删除级联**：`PersonaService.delete` 在同一事务内按 `persona_id` 批删 `ff_persona_states` / `ff_memory_episodes` / `ff_curated_memory` / `ff_dream_runs` / `ff_persona_facts` / `ff_persona_skills` / `ff_core_memory_blocks` / `ff_core_memory_revisions` / `ff_chat_sessions` / `ff_chat_messages`；事实与策展自引用 `superseded_by_id` 先置 NULL；`ff_memory_index_lite` 按 episode / curated ref 集合同事务清理，SeekDB `ff_memory_index` 经 `app.state.memory_indexer` 提交后 best-effort 分发删除（`app/api/personas.py` 的 delete / batch-delete 解析请求级 indexer）。测试 `test_delete_cascades_entire_memory_domain` 覆盖双人格七表 + 索引行（A 全空 / B 原样 / 二次删除 NOT_FOUND）；docs persona.md / database.md 写明级联范围与「无跨域 FK，由服务层批删」。
+2. **P2 梦境输入上限**：`dreaming_models` 新增 `DREAM_EVENT_TEXT_MAX_CHARS=500` / `DREAM_DIARY_MAX_EPISODES=200` / `DREAM_DIARY_MAX_CHARS=60000` / `DREAM_MERGE_TOPIC_LIMIT=50`；`dreaming_prompts` 统一截断单事件正文（省略标记、按码点不破 UTF-8）、日记双帽取样、合并主题按 `updated_at`/`id` 降序取样；`_run_phases` 接线并记 debug 计数（不打印原文）。测试覆盖长事件截断 / 日记条数与总字符双帽 / 主题上限与同刻确定性；docs memory.md 增上限表。
+3. **P2 梦境重入闸**：`DREAM_REENTRY_WINDOW_MS=3600000`；`run_dream` 在孤儿收敛后查询本人格窗内 running 行，命中直接返回该记录（不新建行、不跑阶段、零模型调用）。测试覆盖连续两次触发返回同一 run id 且网关零调用；既有 `test_run_dream_converges_stale_running_rows` 的期望按新单飞契约调整（新鲜 running 行改为返回而非新建运行——任务要求的行为变更）。docs memory.md 记录。
+4. **P2 活引擎并发覆盖**：`test_concurrency_invariants.py` 新增 facts 更正腾位写序（NULL 标记插入 → 旧行 superseded → 取标记；两连接重叠事务，后提交者 1062 `uq_ff_persona_facts_active`，终态仅一条 active）、skills slug（`uq_ff_persona_skills_slug`）、core memory key（`uq_ff_core_memory_blocks_key`）三例；均断言 1062 + 约束名，实跑活 SeekDB 通过。
+5. **P2 复合索引**：新迁移 `000000000018_persona_facts_confidence_index.py`（down_revision=000000000017）为 `ff_persona_facts` 增 `(persona_id, status, confidence)` 索引，ORM `__table_args__` 同步；migration_chain 测试升级/降级/复升覆盖并断言索引存在（`support.HEAD_REVISION=000000000018`）；database.md / persona.md 补链与索引说明。
+6. **P2 时钟一致**：`run_dream` 终态 `finished_ms` 改用注入 `run_now`（与 `started_ms` 同轴）；测试固定注入时钟断言 `finished_ms == NOW`。
+7. **P2 PII 保留期决策**：不改代码；memory.md 增「保留期决策（append-only 无限期）」、LEDGER §4 增同条拍板（删除权由单条删除 + 人格级联覆盖；理由：审计与梦境回溯）。
+8. **P2 database.md**：补齐 `0017_canvas_documents` 与 `0018_persona_facts_confidence_index` 两节（字段/索引/迁移链）及人格级联删除服务层说明。
+
+**验证**（主 Agent 实跑，命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2816 passed**）。
+- `cd backend && pixi run coverage-gates` → **0**（24 组 ≥80；harness/memory 94.5% / harness/persona 95.2%）。
+- `cd backend && pixi run lint` → **0**（ruff 全通过）；`pixi run typecheck` → **0**（mypy 191 文件零问题）。
+- 根 `pixi run gates` → **0**（注释门 violations=0 hints=30；同步测试棘轮通过；noqa 冻结 0/0/0/7；沙盒漂移 38 项一致；红探针 190/190/3；文档真相通过；断言棘轮 8041 asserts / 594 raises；导出面 102 引用 / 62 登记 / 40 豁免；prose-pin 484 命中，prose=59）。
+- `cd backend && pixi run gen-examples` → **0** 连续两次；三件套 `.env.example` / `config.example.yaml` / `extensions_config.example.json` sha256 两次一致（无 diff，幂等）。
+- `cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto` → **0**（**9 passed**：0018 迁移链升/降/复升、facts/skills/core memory 三条新 1062、既有主键/策展/变体/行锁/混合检索）。
+
+**剩余**：无。
 
 ## 6. 遗留与部署台账（非阻塞）
 

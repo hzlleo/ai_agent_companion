@@ -26,10 +26,12 @@
 
     - **删除守卫**：删除当前主人格直接 ``CONFLICT`` 拒绝；调用方须先
       将另一个人格设为主人格（``set_primary``）再删除（避免「删除即
-      静默掉线为零主人格」的隐式跳变）。删除非主人格时**同事务**清理
-      其 M/S 状态行（SQLite 测试方言默认不启用 FK 强制，服务层显式
-      删除保证跨方言一致；DB 级 ON DELETE CASCADE 仅作直删 SQL 的
-      兜底）。
+      静默掉线为零主人格」的隐式跳变）。删除非主人格时**同事务**级联
+      清理其记忆域与画像域全部行（M/S 状态 / 情景 / 策展 / 梦境运行
+      日志 / 人物事实 / 技能 / 核心记忆块与修订 / 会话与消息），并同步
+      清理回退检索索引行（SQLite 测试方言默认不启用 FK 强制，服务层
+      显式批删保证跨方言一致；DB 级 CASCADE 仅作直删 SQL 的兜底；
+      SeekDB 生产索引提交后经注入 indexer best-effort 清理）。
     - **停用守卫**：停用（``disable`` / ``update(status=disabled)``）
       当前主人格同样 ``CONFLICT`` 拒绝——先另设主人格再停用（主人格
       须恒在位；与删除守卫同一两步模式）。
@@ -66,7 +68,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from packages.harness.core.context import RequestContext, bind_context
 from packages.harness.core.dtos import PageResponse, decode_cursor, encode_cursor
 from packages.harness.core.errors import BusinessException, ErrorCode
+from packages.harness.database.base import PERSONA_FILTER_SKIP_OPTION
+from packages.harness.memory.dreaming_orm import DreamRunRow
+from packages.harness.memory.orm import (
+    ChatMessageRow,
+    ChatSessionRow,
+    CuratedMemoryRow,
+    MemoryEpisodeRow,
+)
+from packages.harness.memory.retrieval import MemoryIndexer
+from packages.harness.memory.retrieval_models import MemoryRefType
+from packages.harness.memory.sqlite_store import MemoryIndexLiteRow
 from packages.harness.persona.chara_card import CharaCardModel
+from packages.harness.persona.core_memory_orm import (
+    CoreMemoryBlockRow,
+    CoreMemoryRevisionRow,
+)
 from packages.harness.persona.dtos import (
     CharaCardPatchDTO,
     PersonaBatchDeleteItemDTO,
@@ -84,6 +101,7 @@ from packages.harness.persona.dtos import (
     PersonaStateUpsertDTO,
     PersonaUpdateDTO,
 )
+from packages.harness.persona.facts_orm import PersonaFactRow
 from packages.harness.persona.models import (
     PersonaImportConflictStrategy,
     PersonaImportReason,
@@ -91,6 +109,7 @@ from packages.harness.persona.models import (
     PersonaStatus,
 )
 from packages.harness.persona.orm import PERSONA_PRIMARY_MARKER, PersonaRow, PersonaStateRow
+from packages.harness.persona.skills_orm import PersonaSkillRow
 from packages.harness.voice.voice_models import VoiceProfileModel
 
 __all__ = ["PersonaService", "bind_persona_context", "canonical_card_hash"]
@@ -153,6 +172,16 @@ def canonical_card_hash(card: CharaCardModel) -> str:
 
 class PersonaService:
     """人格注册表服务（无状态——Session 由调用方注入，事务边界归本层）。"""
+
+    def __init__(self, *, indexer: MemoryIndexer | None = None) -> None:
+        """初始化服务。
+
+        Args:
+            indexer: 记忆检索索引管道（None = 无索引联动——单元测试 /
+                直调面；绑定形态下人格删除提交后按 ref 集合清理检索
+                索引行，进程级装配经 app.state.memory_indexer 注入）。
+        """
+        self._indexer = indexer
 
     # ------------------------------------------------------------------
     # 内部辅助
@@ -463,8 +492,23 @@ class PersonaService:
     async def delete(self, session: AsyncSession, persona_id: int) -> None:
         """删除人格（**主人格守卫：当前主人格禁止删除**——先另设主人格）。
 
-        非主人格删除时同事务清理其 M/S 状态行（跨方言一致——SQLite
-        测试方言默认不启用 FK 强制，DB 级 CASCADE 仅作直删 SQL 兜底）。
+        级联范围（同一事务内按 persona_id 批删——本工程无跨域外键依赖，
+        由服务层显式批删保证 SQLite / MySQL 方言一致）：
+
+            - ``ff_persona_states``（M/S 状态层）；
+            - ``ff_memory_episodes`` / ``ff_curated_memory`` /
+              ``ff_dream_runs``（记忆域情景 / 策展 / 梦境运行日志）；
+            - ``ff_persona_facts`` / ``ff_persona_skills`` /
+              ``ff_core_memory_blocks`` / ``ff_core_memory_revisions``
+              （人物画像 / 技能 / 自我模型）；
+            - ``ff_chat_sessions`` 与其 ``ff_chat_messages``（工作层会话
+              归属人格，消息经 session_id 批量清理）。
+
+        检索索引行同步清理：``ff_memory_index_lite``（SQLite 回退索引表）
+        按收集到的 episode / curated ref 集合在同事务内删除；SeekDB 生产
+        索引（``ff_memory_index``，独立数据面）在提交后经注入的
+        ``indexer.dispatch_delete`` best-effort 清理（失败不翻转删除结果
+        ——与 memory 域既有索引删除面同语义）。
 
         Args:
             session: 注入的异步 Session。
@@ -484,12 +528,148 @@ class PersonaService:
                     "fix": "先调用 set-primary（POST /api/v1/personas/{id}/set-primary）",
                 },
             )
+        skip_filter = {PERSONA_FILTER_SKIP_OPTION: True}
+        episode_ids = list(
+            (
+                await session.execute(
+                    select(MemoryEpisodeRow.id).where(
+                        MemoryEpisodeRow.persona_id == str(persona_id)
+                    ),
+                    execution_options=skip_filter,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        curated_ids = list(
+            (
+                await session.execute(
+                    select(CuratedMemoryRow.id).where(
+                        CuratedMemoryRow.persona_id == str(persona_id)
+                    ),
+                    execution_options=skip_filter,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        session_ids = list(
+            (
+                await session.execute(
+                    select(ChatSessionRow.id).where(ChatSessionRow.persona_id == str(persona_id)),
+                    execution_options=skip_filter,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        # 回退索引表（非 PersonaMixin——显式 persona 谓词 + ref 集合）：
+        # 与业务行删除同事务，避免删除提交后残留 orphan 索引行。
+        if episode_ids:
+            await session.execute(
+                delete(MemoryIndexLiteRow).where(
+                    MemoryIndexLiteRow.persona_id == persona_id,
+                    MemoryIndexLiteRow.ref_type == MemoryRefType.EPISODE.value,
+                    MemoryIndexLiteRow.ref_id.in_(episode_ids),
+                )
+            )
+        if curated_ids:
+            await session.execute(
+                delete(MemoryIndexLiteRow).where(
+                    MemoryIndexLiteRow.persona_id == persona_id,
+                    MemoryIndexLiteRow.ref_type == MemoryRefType.CURATED.value,
+                    MemoryIndexLiteRow.ref_id.in_(curated_ids),
+                )
+            )
+        if session_ids:
+            await session.execute(
+                delete(ChatMessageRow).where(ChatMessageRow.session_id.in_(session_ids))
+            )
+        # 自引用更正链（事实 / 策展）先置空悬挂链接——避免单语句批量删除
+        # 在 MySQL 自引用外键上的删除序歧义（SQLite 测试方言不强制 FK）。
+        await session.execute(
+            update(PersonaFactRow)
+            .where(PersonaFactRow.persona_id == str(persona_id))
+            .values(superseded_by_id=None),
+            execution_options=skip_filter,
+        )
+        await session.execute(
+            update(CuratedMemoryRow)
+            .where(CuratedMemoryRow.persona_id == str(persona_id))
+            .values(superseded_by_id=None),
+            execution_options=skip_filter,
+        )
+        await session.execute(
+            delete(CoreMemoryRevisionRow).where(
+                CoreMemoryRevisionRow.block_id.in_(
+                    select(CoreMemoryBlockRow.id).where(
+                        CoreMemoryBlockRow.persona_id == str(persona_id)
+                    )
+                )
+            )
+        )
+        for model in (
+            PersonaFactRow,
+            PersonaSkillRow,
+            CuratedMemoryRow,
+            MemoryEpisodeRow,
+            DreamRunRow,
+            CoreMemoryBlockRow,
+            ChatSessionRow,
+        ):
+            await session.execute(
+                delete(model).where(model.persona_id == str(persona_id)),
+                execution_options=skip_filter,
+            )
         await session.execute(
             delete(PersonaStateRow).where(PersonaStateRow.persona_id == persona_id)
         )
         await session.delete(row)
         await self._commit(session)
-        logger.info("人格已删除: id={}", persona_id)
+        await self._purge_remote_index(
+            persona_id, episode_ids=episode_ids, curated_ids=curated_ids
+        )
+        logger.info(
+            "人格已删除: id={}, episodes={}, curated={}, sessions={}",
+            persona_id,
+            len(episode_ids),
+            len(curated_ids),
+            len(session_ids),
+        )
+
+    async def _purge_remote_index(
+        self,
+        persona_id: int,
+        *,
+        episode_ids: Sequence[int],
+        curated_ids: Sequence[int],
+    ) -> None:
+        """提交后清理生产检索索引（SeekDB 独立数据面——best-effort）。
+
+        索引行已在业务库回退索引表内同事务删除；生产 SeekDB 索引经注入
+        的 indexer 逐 ref 分发删除（fire-and-forget / 内联由 indexer 的
+        后台管理器配置决定）。未注入 indexer 时零调用。
+
+        Args:
+            persona_id: 人格主键（索引隔离谓词）。
+            episode_ids: 已删除的情景事件主键集合。
+            curated_ids: 已删除的策展记忆主键集合。
+        """
+        if self._indexer is None:
+            return
+        refs: list[tuple[MemoryRefType, int]] = [
+            (MemoryRefType.EPISODE, ref_id) for ref_id in episode_ids
+        ]
+        refs.extend((MemoryRefType.CURATED, ref_id) for ref_id in curated_ids)
+        for ref_type, ref_id in refs:
+            try:
+                await self._indexer.dispatch_delete(ref_type, ref_id, persona_id)
+            except Exception:  # best-effort: 索引清理失败不翻转人格删除结果
+                logger.opt(exception=True).warning(
+                    "人格删除的检索索引清理失败（已吞没）: ref_type={}, ref_id={}",
+                    ref_type.value,
+                    ref_id,
+                )
 
     async def batch_delete(
         self, session: AsyncSession, ids: Sequence[int]

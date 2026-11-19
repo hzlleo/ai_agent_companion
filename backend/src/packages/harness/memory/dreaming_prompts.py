@@ -36,6 +36,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from packages.harness.core.errors import BusinessException, ErrorCode
+from packages.harness.memory.dreaming_models import (
+    DREAM_DIARY_MAX_CHARS,
+    DREAM_DIARY_MAX_EPISODES,
+    DREAM_EVENT_TEXT_MAX_CHARS,
+    DREAM_MERGE_TOPIC_LIMIT,
+)
 from packages.harness.memory.dtos import CuratedRecordDTO, EpisodeRecordDTO
 from packages.harness.memory.retrieval import flatten_episode_content
 from packages.harness.persona.skills_models import SkillRecordDTO
@@ -50,6 +56,10 @@ __all__ = [
     "FACTS_TEMPLATE",
     "SKILLS_TEMPLATE",
     "DIARY_TEMPLATE",
+    "truncate_event_text",
+    "count_truncated_events",
+    "select_prompt_topics",
+    "select_diary_episodes",
     "render_merge_prompt",
     "render_facts_prompt",
     "render_skills_prompt",
@@ -184,13 +194,105 @@ DIARY_TEMPLATE: str = (
 #: 事件 / 主题为空时的占位文本。
 _EMPTY_BLOCK_PLACEHOLDER: str = "（无）"
 
+#: 正文截断的省略标记（保留在截断结果末位——长度计入上限）。
+_TRUNCATION_MARKER: str = "…"
+
+
+def truncate_event_text(text: str) -> str:
+    """按单事件上限截断正文（保留省略标记，按 Unicode 码点切分）。
+
+    Python 字符串切片不会拆开 UTF-8 码点；截断结果长度恒不超过
+    :data:`~packages.harness.memory.dreaming_models.DREAM_EVENT_TEXT_MAX_CHARS`
+    （省略标记计入上限），避免超长事件撑爆梦境 prompt。
+
+    Args:
+        text: 事件载荷文本。
+
+    Returns:
+        不超过上限的正文（未超限时原样返回）。
+    """
+    if len(text) <= DREAM_EVENT_TEXT_MAX_CHARS:
+        return text
+    return text[: DREAM_EVENT_TEXT_MAX_CHARS - 1] + _TRUNCATION_MARKER
+
+
+def count_truncated_events(episodes: Sequence[EpisodeRecordDTO]) -> int:
+    """统计正文超过单事件上限的事件数（debug 观测——不打印原文）。
+
+    Args:
+        episodes: 候选 / 日记事件序列。
+
+    Returns:
+        原始载荷文本长度超过
+        :data:`~packages.harness.memory.dreaming_models.DREAM_EVENT_TEXT_MAX_CHARS`
+        的事件数。
+    """
+    truncated = 0
+    for episode in episodes:
+        try:
+            text = flatten_episode_content(episode.content)
+        except BusinessException:
+            continue
+        if len(text) > DREAM_EVENT_TEXT_MAX_CHARS:
+            truncated += 1
+    return truncated
+
+
+def select_prompt_topics(topics: Sequence[CuratedRecordDTO]) -> list[CuratedRecordDTO]:
+    """合并 prompt 的既有主题取样（上限 + 确定性排序）。
+
+    排序键 ``(updated_at, id)`` 降序——最近更新的主题优先进入 prompt；
+    同刻按 id 降序稳定排列。超出上限的主题不进入本 prompt（不删除数据，
+    只在本次运行的数据面截断）。
+
+    Args:
+        topics: 可参与合并的 active 策展主题（调用方已排除冻结行）。
+
+    Returns:
+        至多
+        :data:`~packages.harness.memory.dreaming_models.DREAM_MERGE_TOPIC_LIMIT`
+        条主题（确定性顺序）。
+    """
+    ordered = sorted(topics, key=lambda topic: (-topic.updated_at, -topic.id))
+    return ordered[:DREAM_MERGE_TOPIC_LIMIT]
+
+
+def select_diary_episodes(
+    episodes: Sequence[EpisodeRecordDTO],
+) -> tuple[list[EpisodeRecordDTO], int]:
+    """日记输入取样（条数 + 正文总字符双帽——按调用方给定顺序累加）。
+
+    条数达到 :data:`~packages.harness.memory.dreaming_models.DREAM_DIARY_MAX_EPISODES`
+    或正文累计达到
+    :data:`~packages.harness.memory.dreaming_models.DREAM_DIARY_MAX_CHARS`
+    时截止，剩余事件返回为 dropped 计数（用于 debug 观测，不打印原文）。
+
+    Args:
+        episodes: 当日可信事件（调用方保证时间升序）。
+
+    Returns:
+        ``(selected, dropped)``——入选事件与因双帽丢弃的事件数。
+    """
+    selected: list[EpisodeRecordDTO] = []
+    total_chars = 0
+    for episode in episodes:
+        if len(selected) >= DREAM_DIARY_MAX_EPISODES:
+            break
+        text_length = len(_episode_text(episode))
+        if total_chars + text_length > DREAM_DIARY_MAX_CHARS:
+            break
+        selected.append(episode)
+        total_chars += text_length
+    return selected, len(episodes) - len(selected)
+
 
 def _episode_text(record: EpisodeRecordDTO) -> str:
     """事件载荷 → prompt 文本行（按 kind 取文本字段，与检索层同一规则）。
 
     复用 :func:`flatten_episode_content` 的取段规则（单一真源）；载荷
     无文本（全部文本段为空）时返回占位文本——梦境门控不因无文本剔除
-    事件（分数轴只看 importance / 时间 / 相关度，文档化决策）。
+    事件（分数轴只看 importance / 时间 / 相关度，文档化决策）。正文经
+    :func:`truncate_event_text` 按单事件上限截断。
 
     Args:
         record: 情景事件记录 DTO。
@@ -199,7 +301,7 @@ def _episode_text(record: EpisodeRecordDTO) -> str:
         载荷文本（无文本载荷返回占位文本）。
     """
     try:
-        return flatten_episode_content(record.content)
+        return truncate_event_text(flatten_episode_content(record.content))
     except BusinessException:
         return _EMPTY_BLOCK_PLACEHOLDER
 
@@ -282,6 +384,9 @@ def render_merge_prompt(
 ) -> str:
     """渲染巩固合并 prompt（人格中立——输入只有事件与主题，无人格字段）。
 
+    渲染时会按上限对既有主题做确定性取样（最近更新优先）；候选事件
+    正文超过单事件上限时截断并附省略标记。
+
     Args:
         candidates: 过门候选事件（分数降序——门控输出）。
         active_topics: 既有 active 策展记忆。
@@ -294,7 +399,7 @@ def render_merge_prompt(
     template = template_override if template_override is not None else MERGE_TEMPLATE
     return template.format(
         episodes_block=_format_merge_episodes(candidates),
-        topics_block=_format_topics(active_topics),
+        topics_block=_format_topics(select_prompt_topics(active_topics)),
     )
 
 
@@ -352,6 +457,9 @@ def render_diary_prompt(
 ) -> str:
     """渲染日记 prompt（人格声线仅经 ``persona_name`` 渲染变量进入）。
 
+    渲染时会按条数 / 正文总字符双帽对当日事件做时间序取样；单条正文
+    超过单事件上限时截断并附省略标记。
+
     Args:
         persona_name: 人格展示名（调用方解析目标人格后替换——模板本身
             不携带任何人格字段，无 persona 泄漏面）。
@@ -373,7 +481,8 @@ def render_diary_prompt(
             details={"persona_name": persona_name},
         )
     template = template_override if template_override is not None else DIARY_TEMPLATE
+    selected, _ = select_diary_episodes(day_episodes)
     return template.format(
         persona_name=persona_name,
-        episodes_block=_format_diary_episodes(day_episodes),
+        episodes_block=_format_diary_episodes(selected),
     )

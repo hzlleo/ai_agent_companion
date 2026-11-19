@@ -298,6 +298,10 @@ should_archive ⇔ status=active ∧ ¬pinned ∧ ¬frozen ∧ age_days > min_ag
 跳过，归档统计与 archived 决策只按实际归档集合生成。归档行上的置顶 / 冻结切换是无害
 的幂等操作，不产生生命周期效果（行已不在生命周期候选面）。
 
+### 保留期决策（append-only 无限期）
+
+记忆域的 append-only 行（情景事件 / 策展历史 / 事实更正链 / 核心记忆修订 / 梦境运行日志）**默认无限期保留**，不设 TTL 自动清理。删除权由两档显式操作覆盖：管理面单条删除（episode / curated / fact 等，见各管理 API 的 delete 面）与人格级联删除（`PersonaService.delete` 单事务批删该人格全部记忆域与画像域行，范围见 [persona.md](persona.md#删除级联范围personaservicedelete)）。理由：审计与梦境回溯——`ff_dream_runs.decisions` 需要既往运行全量可复算，事实 / 核心记忆的更正链需要逐代全文可回溯；生命周期归档只改变 `status` / `active_marker`，不删除行。
+
 ## 记忆管道（索引 / 情景 sink / 强化 / 梦境装配）
 
 `app/main.py` 的 `_assemble_memory_services` 在存储 / 网关装配后构建单一长寿服务组：
@@ -343,7 +347,7 @@ chat 回合（reply / stream_reply）
   `test_chat_swipe_api.py`（变体端点 + include_variants 读侧）、
   `test_migration_chat_message_variants.py`（迁移 0010 SQLite round-trip + 唯一键语义）；
 - 检索层五件：`test_memory_retrieval_sql.py`（构建器精确字符串断言 + hybrid 执行面形态异常含多列 fail loud）/ `test_memory_seekdb_store.py`（假 aiomysql 池）/ `test_memory_sqlite_store.py`（共享引擎回退往返）/ `test_memory_indexer.py`（索引管道 + 服务联动）/ `test_memory_search_api.py`（POST /search 全模式）+ `test_pools_seekdb.py`（池生命周期）；
-- 梦境三件：`test_dreaming_prompts.py`（byte-lock + 渲染契约）/ `test_dreaming.py`（纯函数数学 + 门矩阵 + fail-closed 全链 + 孤儿 running 收敛 / 已晋升回溯窗 / 事件上限截断 / 合并中断决策补齐 + **人物事实阶段**（提案解析 / 落库与元数据刷新 / 逐条丢弃 / 单次上限 / 结构失败前置终止 / 人格隔离））/ `test_dream_api.py`（trigger + runs 端点）；
+- 梦境三件：`test_dreaming_prompts.py`（byte-lock + 渲染契约）/ `test_dreaming.py`（纯函数数学 + 门矩阵 + fail-closed 全链 + 孤儿 running 收敛 / 已晋升回溯窗 / 事件上限截断 / 合并中断决策补齐 / **重入闸（窗内 running 行直接返回）** / 注入时钟终态时间轴 + **人物事实阶段**（提案解析 / 落库与元数据刷新 / 逐条丢弃 / 单次上限 / 结构失败前置终止 / 人格隔离））/ `test_dream_api.py`（trigger + runs 端点）；
 - 生命周期五件：`test_memory_lifecycle.py`（衰减 / 强化 / 归档判定精确数学）/ `test_memory_dream_lifecycle.py`（归档阶段 + 冻结 / 置顶语义）/ `test_memory_curated_lifecycle.py`（pin / freeze 端点 + 排序 / 归档过滤 + 索引收口）/ `test_memory_episode_sink.py`（对话回合 → 情景层管道 + 失败吞没）/ `test_memory_reinforcement.py`（写读强化调度与落库）+ `test_migration_curated_lifecycle.py`（迁移 0012 SQLite round-trip）；
 - SeekDB 真引擎强制套件：`src/tests/integration_seekdb/`（迁移链 round-trip / 并发不变式 / 混合检索往返——缺 env 即 fail，不跳过；见 docs/test-strategy/README.md「SeekDB 真引擎强制套件」）；
 - 共享 SQLite fixture（StaticPool 单连接）+ PersonaMixin contextvars 隔离驱动；零真实网络 / 零真实配置；
@@ -532,6 +536,9 @@ POST /api/v1/memories/search          检索（body: query / mode / kinds / prov
 DreamService.run_dream(db, gateway=…, persona_name=…, store=?, now_ms=?, cfg=?)
     ↓ ⓪ 孤儿 running 行收敛        stale_running_threshold_ms 阈值内的崩溃遗留行
     │                               批量置 failed（error=「进程崩溃遗留，由调度收敛」）
+    ↓ ⓪.5 重入闸                   本人格存在 started_ms ≥ now − DREAM_REENTRY_WINDOW_MS
+    │                               且无终态的 running 行 → 直接返回该运行记录
+    │                               （不新建行、不再跑阶段——单飞语义）
     ↓ ① DreamRunRow 落库（status=running——运行日志面，先落库可追溯）
     ↓ ② fetch_day_episodes          窗口事件取回（[now-window_hours, now) 左闭右开；
     │                               超出 max_episodes 按时间序截断并告警）
@@ -620,6 +627,18 @@ dream_score(episode, now, cfg, topic_hits)
 
 旋钮经构造函数 / 触发请求体 `cfg` 嵌套覆写注入（Settings env 面迁移为已文档化的演进方向）。
 
+## 梦境输入上限（常量——dreaming_models）
+
+| 项 | 上限 | 行为 |
+|---|---|---|
+| 单条事件正文 | `DREAM_EVENT_TEXT_MAX_CHARS` = 500 字符 | 按码点截断并附省略标记（不破 UTF-8）；合并 / 事实 / 技能 / 日记 prompt 统一生效 |
+| 日记事件条数 | `DREAM_DIARY_MAX_EPISODES` = 200 条 | 按时间序取样，超出部分丢弃并记 debug 计数（不打印原文） |
+| 日记正文总字符 | `DREAM_DIARY_MAX_CHARS` = 60000 字符 | 按时间序累加，达到上限即截止并记 debug 计数（不打印原文） |
+| 合并 prompt 既有主题 | `DREAM_MERGE_TOPIC_LIMIT` = 50 条 | 按 `updated_at` 降序、同刻 `id` 降序确定性取样（冻结主题先排除） |
+| 重入窗 | `DREAM_REENTRY_WINDOW_MS` = 3600000 毫秒 | 入口发现窗内 running 行即返回该运行记录（单飞闸门） |
+
+上限是模块常量而非 env 键（不新增运行期配置面）；超限只影响本次 prompt / 日记输入，不修改已落库事件。`finished_ms` 与 `started_ms` 同用注入时钟（`run_now`），不读系统时钟。
+
 ## LLM 契约（dreaming_prompts.py——Unit 文件）
 
 - **合并模板**（`MERGE_TEMPLATE`，byte-lock）：输入 = 编号候选事件（编号 = 事件主键；kind/source/importance/ts + 载荷文本）+ 既有 active 主题列表；输出 = 严格 JSON 数组 `[{topic, kind: memory|user_note|relationship, content, importance 1-10, merged_from: [事件编号]}]`。**人格中立**——人格卡片不进入本 prompt（合并是记忆层蒸馏，与人格声线无关）；
@@ -646,7 +665,7 @@ dream_score(episode, now, cfg, topic_hits)
 | `id` | BIGINT 自增 | 主键 |
 | `persona_id` | String(64)，索引 | 人格 ID（PersonaMixin 自动注入 / 过滤） |
 | `status` | String(16)，索引 | running / success / failed（行创建即落 running——进程崩溃可能遗留孤儿 running 行，由 run_dream 入口按 `stale_running_threshold_ms` 收敛为 failed） |
-| `started_ms` / `finished_ms` | BigInteger | 开始（注入时钟口径）/ 结束时间（epoch 毫秒；运行中 finished 为 NULL） |
+| `started_ms` / `finished_ms` | BigInteger | 开始 / 结束时间（均取注入时钟 `run_now`——epoch 毫秒；运行中 finished 为 NULL） |
 | `stats` | JSON | DreamRunStatsModel 序列化（candidates / gated / promoted / superseded / skipped_untrusted / skipped_peer / failed / **archived** / **facts_created / facts_merged / facts_dropped**——事实提取阶段三计数 / **skills_created / skills_merged / skills_dropped**——技能挖矿阶段三计数） |
 | `decisions` | JSON | 逐事件决策列表（DreamDecisionModel 序列化；episode_id / topic / kind / action: promoted\|skipped\|merged\|**archived** / reason / **curated_id**——归档决策主体是策展行，episode_id=0、curated_id=行主键、reason=strength_below_threshold） |
 | `diary_episode_id` | BIGINT，FK ff_memory_episodes.id（SET NULL） | 日记事件主键（未生成 / 失败为 NULL） |
@@ -742,7 +761,7 @@ GET  /api/v1/memories/dream/runs/{id}   query: persona_id?
 
 ## 测试与门禁（梦境面增量）
 
-- `tests/unit/test_dreaming_prompts.py`——byte-lock + 渲染契约（人格中立 / persona_name 替换 / 覆写语义 / 空块占位）；
+- `tests/unit/test_dreaming_prompts.py`——byte-lock + 渲染契约（人格中立 / persona_name 替换 / 覆写语义 / 空块占位 / 单事件截断 / 日记条数与总字符双帽 / 主题上限与确定性取样）；
 - `tests/unit/test_dreaming.py`——纯函数精确数学（半衰期边界 0.5 / 单调 / 加成）/ 规则门矩阵（untrusted / peer 硬排除含 prompt 缺席 / 分数门 / 上限 / 既往晋升）/ run_dream 全链（happy path 晋升 + supersede 链 / fail-closed 零晋升 / 提案丢弃 / 日记失败保留晋升 / 存储命中与降级 / 生命周期行态 / 读面 + 隔离）；
 - `tests/unit/test_dreaming_skills.py`——技能挖矿阶段：提案解析（围栏 / 逐条校验 / 结构失败）/ mined 落库与统计 / 同 slug 元数据合并（置信度最大值 + 触发短语并集、版本与状态不变）/ 逐条丢弃（置信度下限 / 未知证据 / 单次上限）/ 结构失败零合并零日记 + 决策补齐（技能提取中断）/ 阶段序与人格中立 / 人格隔离；
 - `tests/unit/test_dream_api.py`——ASGITransport 触发 + 运行日志分页 / 详情 / 人格解析 / 处理器直调契约面；

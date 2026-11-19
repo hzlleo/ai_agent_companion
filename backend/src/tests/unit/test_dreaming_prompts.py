@@ -13,11 +13,19 @@ import pytest
 
 from packages.harness.core.errors import BusinessException
 from packages.harness.memory import dreaming_prompts
+from packages.harness.memory.dreaming_models import (
+    DREAM_DIARY_MAX_CHARS,
+    DREAM_DIARY_MAX_EPISODES,
+    DREAM_EVENT_TEXT_MAX_CHARS,
+    DREAM_MERGE_TOPIC_LIMIT,
+)
 from packages.harness.memory.dreaming_prompts import (
     render_diary_prompt,
     render_facts_prompt,
     render_merge_prompt,
     render_skills_prompt,
+    select_diary_episodes,
+    select_prompt_topics,
 )
 from packages.harness.memory.dtos import CuratedRecordDTO, EpisodeRecordDTO
 from packages.harness.memory.models import (
@@ -53,6 +61,8 @@ def _episode(
     ts_ms: int = 1_000,
     importance: int = 6,
     provenance: MemoryProvenance = MemoryProvenance.OWNER,
+    user_content: str | None = None,
+    assistant_content: str | None = None,
 ) -> EpisodeRecordDTO:
     """构造最小情景事件记录（prompt 渲染测试铺底）。"""
     return EpisodeRecordDTO(
@@ -61,7 +71,14 @@ def _episode(
         kind=EpisodeKind.CHAT,
         source="chat",
         content=ChatTurnPayloadModel(
-            user_content=f"第{episode_id}条用户消息", assistant_content=f"第{episode_id}条回复"
+            user_content=(
+                user_content if user_content is not None else f"第{episode_id}条用户消息"
+            ),
+            assistant_content=(
+                assistant_content
+                if assistant_content is not None
+                else f"第{episode_id}条回复"
+            ),
         ),
         importance=importance,
         provenance=provenance,
@@ -97,10 +114,16 @@ def _skill(
     )
 
 
-def _topic(topic: str, *, content: str = "主人喜欢小鱼干") -> CuratedRecordDTO:
+def _topic(
+    topic: str,
+    *,
+    content: str = "主人喜欢小鱼干",
+    topic_id: int = 1,
+    updated_at: int = 0,
+) -> CuratedRecordDTO:
     """构造最小 active 策展记录（prompt 渲染测试铺底）。"""
     return CuratedRecordDTO(
-        id=1,
+        id=topic_id,
         persona_id="dream-prompt",
         kind=CuratedKind.MEMORY,
         topic=topic,
@@ -111,7 +134,7 @@ def _topic(topic: str, *, content: str = "主人喜欢小鱼干") -> CuratedReco
         superseded_by_id=None,
         version=1,
         created_at=0,
-        updated_at=0,
+        updated_at=updated_at,
     )
 
 
@@ -140,6 +163,63 @@ async def test_dream_prompt_version_constants_semver_like() -> None:
         assert len(parts) == 3 and all(part.isdigit() for part in parts), (
             f"版本常量 {name}={value!r} 应为 X.Y.Z 形态"
         )
+
+
+async def test_render_merge_prompt_truncates_long_event_text() -> None:
+    """单事件正文超限：按码点截断并附省略标记（不破 UTF-8）。"""
+    long_text = "测" * (DREAM_EVENT_TEXT_MAX_CHARS + 200)
+    text = render_merge_prompt([_episode(71, user_content=long_text)], [])
+    expected = ("用户：" + long_text)[: DREAM_EVENT_TEXT_MAX_CHARS - 1] + "…"
+    assert expected in text
+    assert long_text[:DREAM_EVENT_TEXT_MAX_CHARS] not in text
+    assert "…" in text
+
+
+async def test_render_merge_prompt_topic_limit_deterministic() -> None:
+    """主题上限：按 updated_at / id 降序确定性取样，旧主题不进入 prompt。"""
+    topics = [
+        _topic(f"主题{index}", topic_id=index, updated_at=1_000 + index)
+        for index in range(1, DREAM_MERGE_TOPIC_LIMIT + 11)
+    ]
+    selected = select_prompt_topics(topics)
+    expected_ids = list(range(DREAM_MERGE_TOPIC_LIMIT + 10, 10, -1))
+    assert [item.id for item in selected] == expected_ids
+    assert [item.id for item in select_prompt_topics(list(reversed(topics)))] == expected_ids
+    text = render_merge_prompt([], topics)
+    assert f"- 主题{DREAM_MERGE_TOPIC_LIMIT + 10}（" in text
+    assert "- 主题10（" not in text
+
+
+async def test_render_merge_prompt_topic_limit_tie_break_by_id() -> None:
+    """同 updated_at 的主题按 id 降序取样（确定性链式排序）。"""
+    topics = [
+        _topic(f"同刻{index}", topic_id=index, updated_at=5_000)
+        for index in range(1, DREAM_MERGE_TOPIC_LIMIT + 6)
+    ]
+    selected = select_prompt_topics(topics)
+    assert [item.id for item in selected] == list(
+        range(DREAM_MERGE_TOPIC_LIMIT + 5, 5, -1)
+    )
+
+
+async def test_select_diary_episodes_count_and_char_caps() -> None:
+    """日记双帽：条数 200 与正文总字符 60000 分别截止并统计 dropped。"""
+    many = [_episode(index) for index in range(1, DREAM_DIARY_MAX_EPISODES + 6)]
+    selected, dropped = select_diary_episodes(many)
+    assert len(selected) == DREAM_DIARY_MAX_EPISODES
+    assert dropped == 5
+
+    long_text = "字" * 1_000
+    long_episodes = [
+        _episode(index, user_content=long_text, assistant_content="")
+        for index in range(1, 131)
+    ]
+    selected_long, dropped_long = select_diary_episodes(long_episodes)
+    expected_count = DREAM_DIARY_MAX_CHARS // DREAM_EVENT_TEXT_MAX_CHARS
+    assert len(selected_long) == expected_count
+    assert dropped_long == len(long_episodes) - expected_count
+    text = render_diary_prompt("大肥鱼", long_episodes)
+    assert text.count("- [kind=chat") == len(selected_long)
 
 
 # ---------------------------------------------------------------------------

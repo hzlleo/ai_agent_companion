@@ -64,7 +64,26 @@ __all__ = [
     "DreamRunQueryDTO",
     "DreamTriggerRequestDTO",
     "DreamTriggerResultDTO",
+    "DREAM_EVENT_TEXT_MAX_CHARS",
+    "DREAM_DIARY_MAX_EPISODES",
+    "DREAM_DIARY_MAX_CHARS",
+    "DREAM_MERGE_TOPIC_LIMIT",
+    "DREAM_REENTRY_WINDOW_MS",
 ]
+
+#: 单条事件正文进入梦境 prompt 的字符上限（超出截断并附省略标记——
+#: 防止单条超长事件把合并 / 事实 / 技能 / 日记 prompt 撑爆）。
+DREAM_EVENT_TEXT_MAX_CHARS: int = 500
+#: 日记阶段的当日事件条数上限（按时间序取样——超出部分丢弃并计数）。
+DREAM_DIARY_MAX_EPISODES: int = 200
+#: 日记阶段的当日事件正文总字符上限（按时间序累加——超出截止并计数）。
+DREAM_DIARY_MAX_CHARS: int = 60_000
+#: 合并 prompt 的既有 active 主题上限（按 updated_at 降序确定性取样）。
+DREAM_MERGE_TOPIC_LIMIT: int = 50
+#: 梦境重入窗（epoch 毫秒）——run_dream 入口发现本人格在该窗内已有
+#: running 行时直接返回该行（单飞语义：不新建运行、不再跑阶段）。
+DREAM_REENTRY_WINDOW_MS: int = 3_600_000
+
 
 
 class DreamRunStatus(StrEnum):
