@@ -27,6 +27,7 @@ from packages.harness.chat.flow_models import (
     FlowReason,
     FlowVerdict,
 )
+from packages.harness.chat.persona_rotation_models import GroupPersonaSettings
 from packages.harness.persona.relationship_models import (
     RelationshipStage,
     RelationshipSummaryModel,
@@ -74,6 +75,21 @@ def _input(
             backlog_count=backlog,
         ),
     )
+
+
+async def test_settings_env_surface_is_hard_overridden() -> None:
+    """裸构造读到的门控与群聊配置恒为测试硬覆盖值（本地 .env 不得泄入）。"""
+    flow = FlowGateSettings()
+    assert flow.enabled is False
+    assert flow.burst_window_ms == 4000
+    assert flow.burst_count == 3
+    assert flow.merge_quiet_ms == 2500
+    assert flow.min_reply_gap_ms == 1200
+    assert flow.pending_grace_ms == 60000
+    group = GroupPersonaSettings()
+    assert group.enabled is False
+    assert group.max_responders == 1
+    assert group.cooldown_ms == 60000
 
 
 async def test_disabled_gate_always_replies() -> None:
@@ -127,7 +143,19 @@ async def test_burst_outside_window_does_not_merge() -> None:
 
 
 async def test_density_pacing_defers_short_gap_follow_up() -> None:
-    """两条连续消息间隔过短：按最小回复间隔补齐延迟。"""
+    """生产形态追发（当前消息已入历史）：以上一条入站为锚补齐最小间隔。"""
+    arrivals = [_BASE_MS - 300, _BASE_MS]
+    decision = evaluate_flow_gate(
+        _input(arrivals=arrivals),
+        _settings(burst_count=3, min_reply_gap_ms=1200),
+    )
+    assert decision.verdict == FlowVerdict.DEFER
+    assert decision.delay_ms == 900
+    assert decision.reason == FlowReason.DENSITY_PACING
+
+
+async def test_density_pacing_anchor_without_current_entry_is_equivalent() -> None:
+    """未含当前条目的历史形态与生产形态等价：末条即上一条入站，补齐同额延迟。"""
     arrivals = [_BASE_MS - 600, _BASE_MS - 300]
     decision = evaluate_flow_gate(
         _input(arrivals=arrivals),
@@ -136,6 +164,18 @@ async def test_density_pacing_defers_short_gap_follow_up() -> None:
     assert decision.verdict == FlowVerdict.DEFER
     assert decision.delay_ms == 900
     assert decision.reason == FlowReason.DENSITY_PACING
+
+
+async def test_density_pacing_replies_when_gap_reaches_minimum() -> None:
+    """追发间隔达到最小回复间隔：不延迟，落入正常立即回复。"""
+    arrivals = [_BASE_MS - 3500, _BASE_MS]
+    decision = evaluate_flow_gate(
+        _input(arrivals=arrivals),
+        _settings(burst_count=3, min_reply_gap_ms=1200),
+    )
+    assert decision.verdict == FlowVerdict.REPLY
+    assert decision.delay_ms == 0
+    assert decision.reason == FlowReason.NORMAL
 
 
 async def test_backlog_defers_with_step_and_cap() -> None:

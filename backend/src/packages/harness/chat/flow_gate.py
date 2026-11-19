@@ -108,9 +108,14 @@ def evaluate_flow_gate(
     grouped = len(recent) >= 2
     density_wait = 0
     if grouped and settings.min_reply_gap_ms > 0:
-        density_wait = max(
-            0, settings.min_reply_gap_ms - (request.now_ms - recent[-1])
-        )
+        # 密度判定的锚点是「当前消息之前最近一条入站」：生产形态下当前消息
+        # 已由 record_inbound 追加（recent[-1] == now_ms），此时取 recent[-2]；
+        # 非生产形态（判定时刻未含当前条目）取 recent[-1]。间隔不足最小回复
+        # 间隔才补齐剩余毫秒，达到或超过则立即落入后续规则。
+        anchor = recent[-2] if recent[-1] == request.now_ms else recent[-1]
+        elapsed = request.now_ms - anchor
+        if elapsed < settings.min_reply_gap_ms:
+            density_wait = settings.min_reply_gap_ms - elapsed
     backlog_wait = 0
     if request.state.backlog_count >= settings.backlog_defer_threshold:
         overflow = request.state.backlog_count - settings.backlog_defer_threshold + 1

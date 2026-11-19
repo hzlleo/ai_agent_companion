@@ -1,8 +1,8 @@
 """并发不变式真引擎验证（DB 级约束 + 行锁——服务层重试收敛的强制面）。
 
-七个不变式（迁移 0007/0008/0013/0014/0015 落地的 DB 级守卫 + InnoDB
-行锁语义，全部经 raw SQL 直击真引擎——SQLite 单测面无法验证的并发拒绝
-行为）：
+九个不变式（迁移 0007/0008/0013/0014/0015/0016 落地的 DB 级守卫 +
+InnoDB 行锁语义，全部经 raw SQL 直击真引擎——SQLite 单测面无法验证的
+并发拒绝行为）：
 
     - (a) ``ff_personas``：``is_primary_marker`` 唯一键
       ``uq_ff_personas_primary``——NULL 标记行多行共存（唯一键忽略
@@ -23,7 +23,14 @@
     - (f) ``ff_persona_skills``：唯一键 ``uq_ff_persona_skills_slug``
       (persona_id, slug)——同人格同 slug 第二条写入被 1062 拒绝；
     - (g) ``ff_core_memory_blocks``：唯一键 ``uq_ff_core_memory_blocks_key``
-      (persona_id, block_key)——同人格同块第二条写入被 1062 拒绝。
+      (persona_id, block_key)——同人格同块第二条写入被 1062 拒绝；
+    - (h) ``ff_stickers``：唯一键 ``uq_ff_stickers_persona_sha``
+      (persona_id, sha256)——同人格同文件哈希第二条写入被 1062 拒绝，
+      不同人格同哈希可共存（人格隔离轴）；
+    - (i) ``ff_voiceprint_samples``：唯一键
+      ``uq_ff_voiceprint_samples_persona_sender_sha``
+      (persona_id, sender_id, sample_sha256)——同人格同发送者同样本哈希
+      第二条写入被 1062 拒绝。
 
 引擎方言事实（live 实测 v1.4.0，锁定进断言）：唯一键冲突 =
 pymysql ``IntegrityError``（1062，消息携带约束名）；行锁等待上限的
@@ -518,6 +525,107 @@ async def test_core_memory_block_key_unique(migrated_scratch: SeekDbTestTarget) 
                 "SELECT COUNT(*) FROM ff_core_memory_blocks"
                 " WHERE persona_id = %s AND block_key = %s",
                 ("900001", "self_identity"),
+            )
+            count_row = await cur.fetchone()
+            assert count_row is not None
+            assert int(count_row[0]) == 1
+    finally:
+        conn.close()
+
+
+async def test_sticker_persona_sha_unique(migrated_scratch: SeekDbTestTarget) -> None:
+    """ff_stickers 同人格同哈希守卫：第二条写入被 1062 拒绝且点名约束。
+
+    Args:
+        migrated_scratch: 已升级 head 的 scratch 库目标。
+    """
+    insert_sql = (
+        "INSERT INTO ff_stickers"
+        " (persona_id, sha256, content_type, storage_path, size_bytes, tags,"
+        " description, source_note, annotation_status, annotation_error,"
+        " annotation_model_entry, annotated_at_ms, created_at, updated_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+    )
+    values = (
+        "900001",
+        "sha-sticker-guard",
+        "image/png",
+        "data/stickers/aa/sha-sticker-guard.png",
+        7,
+        "[]",
+        "",
+        "自绘素材",
+        "pending",
+        None,
+        None,
+        None,
+        1,
+        1,
+    )
+    conn = await support.connect_scratch(migrated_scratch)
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute(insert_sql, values)
+            with pytest.raises(aiomysql.IntegrityError) as exc_info:
+                await cur.execute(insert_sql, values)
+            assert exc_info.value.args[0] == 1062
+            assert "uq_ff_stickers_persona_sha" in str(exc_info.value)
+
+            # 人格隔离正控：同哈希在另一人格下可共存。
+            await cur.execute(insert_sql, ("900002", *values[1:]))
+            await cur.execute(
+                "SELECT COUNT(*) FROM ff_stickers"
+                " WHERE persona_id = %s AND sha256 = %s",
+                ("900001", "sha-sticker-guard"),
+            )
+            count_row = await cur.fetchone()
+            assert count_row is not None
+            assert int(count_row[0]) == 1
+    finally:
+        conn.close()
+
+
+async def test_voiceprint_sample_persona_sender_sha_unique(
+    migrated_scratch: SeekDbTestTarget,
+) -> None:
+    """ff_voiceprint_samples 同人格同发送者同样本哈希守卫：1062 且点名约束。
+
+    Args:
+        migrated_scratch: 已升级 head 的 scratch 库目标。
+    """
+    insert_sql = (
+        "INSERT INTO ff_voiceprint_samples"
+        " (persona_id, sender_id, sample_path, sample_sha256, duration_ms,"
+        " sample_rate_hz, embedding, embedding_dim, created_at, updated_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+    )
+    values = (
+        "900001",
+        "user-1",
+        "data/voiceprints/aa/sha-voiceprint-guard.wav",
+        "sha-voiceprint-guard",
+        2000,
+        16000,
+        "[1.0, 0.0]",
+        2,
+        1,
+        1,
+    )
+    conn = await support.connect_scratch(migrated_scratch)
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute(insert_sql, values)
+            with pytest.raises(aiomysql.IntegrityError) as exc_info:
+                await cur.execute(insert_sql, values)
+            assert exc_info.value.args[0] == 1062
+            assert "uq_ff_voiceprint_samples_persona_sender_sha" in str(exc_info.value)
+
+            # 发送者隔离正控：同哈希在另一发送者下可共存。
+            await cur.execute(insert_sql, (values[0], "user-2", *values[2:]))
+            await cur.execute(
+                "SELECT COUNT(*) FROM ff_voiceprint_samples"
+                " WHERE persona_id = %s AND sender_id = %s AND sample_sha256 = %s",
+                ("900001", "user-1", "sha-voiceprint-guard"),
             )
             count_row = await cur.fetchone()
             assert count_row is not None

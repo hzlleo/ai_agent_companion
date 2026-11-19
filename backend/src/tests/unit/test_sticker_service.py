@@ -13,6 +13,7 @@ import base64
 import json
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +33,7 @@ from packages.harness.multimodal.sticker_models import (
     StickerUpdateModel,
     StickerUploadItemModel,
 )
+from packages.harness.multimodal.sticker_orm import StickerRow
 from packages.harness.multimodal.sticker_service import StickerService
 from packages.harness.persona.service import bind_persona_context
 
@@ -63,6 +65,38 @@ class FakeGateway:
         if self.failure is not None:
             raise self.failure
         return ChatResponseModel(content=self.content)
+
+
+class _RacingStickerService(StickerService):
+    """首个文件落盘后插入并发胜者行（模拟预检窗口外的唯一键竞态）。"""
+
+    def __init__(self, race_session: AsyncSession, **kwargs: Any) -> None:
+        """初始化并保存竞态会话。"""
+        super().__init__(**kwargs)
+        self._race_session = race_session
+        self._raced = False
+
+    async def _write_file(self, digest: str, extension: str, payload: bytes) -> Path:
+        """落盘后在首个条目上补一条同哈希竞争行（保存点建立前的 flush 落库）。"""
+        path = await super()._write_file(digest, extension, payload)
+        if not self._raced:
+            self._raced = True
+            self._race_session.add(
+                StickerRow(
+                    sha256=digest,
+                    content_type="image/png",
+                    storage_path=str(path),
+                    size_bytes=len(payload),
+                    tags="[]",
+                    description="并发胜者",
+                    source_note="并发来源",
+                    annotation_status=StickerAnnotationStatus.PENDING.value,
+                    annotation_error=None,
+                    annotation_model_entry=None,
+                    annotated_at_ms=None,
+                )
+            )
+        return path
 
 
 def _settings(**overrides: object) -> StickerSettings:
@@ -127,6 +161,9 @@ async def test_settings_default_disabled() -> None:
     assert settings.enabled is False
     assert settings.storage_dir == "data/stickers"
     assert settings.channel_reply_enabled is True
+    assert settings.max_upload_bytes == 5242880
+    assert settings.max_tags == 8
+    assert settings.max_batch_items == 20
 
 
 async def test_disabled_feature_conflict(db_session: AsyncSession) -> None:
@@ -232,6 +269,30 @@ async def test_upload_deduplicates_same_hash(
     assert first.rejected[0].reason is StickerRejectReason.DUPLICATE
     assert len(second.created) == 1
     assert second.rejected[0].reason is StickerRejectReason.DUPLICATE
+
+
+async def test_upload_concurrent_conflict_isolated_to_duplicate_item(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """预检后撞唯一键：仅该条目回滚并计 duplicate，同批其余文件照常入库。"""
+    service = _RacingStickerService(
+        db_session,
+        settings=_settings(),
+        gateway=FakeGateway(),
+        resolver=_resolver(),
+        storage_root=tmp_path,
+    )
+    async with bind_persona_context(PERSONA_A):
+        result = await service.upload_batch(
+            db_session, StickerBatchUploadDTO(items=[_item(PNG), _item(b"second")])
+        )
+        listed = await service.list_stickers(db_session, StickerQueryDTO())
+    assert [record.description for record in result.created] == [""]
+    assert len(result.rejected) == 1
+    assert result.rejected[0].index == 0
+    assert result.rejected[0].reason is StickerRejectReason.DUPLICATE
+    assert {record.description for record in listed} == {"并发胜者", ""}
+    assert len(list(tmp_path.rglob("*.png"))) == 2
 
 
 async def test_list_filters_tags_and_annotation_status(

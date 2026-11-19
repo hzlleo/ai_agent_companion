@@ -317,6 +317,29 @@ async def test_burst_batch_reschedules_until_quiet_then_merges() -> None:
     assert adapter.sent[-1].text == "echo:第二条\n第三条"
 
 
+async def test_density_gap_reached_replies_without_scheduling() -> None:
+    """追发间隔超过最小回复间隔：立即回复且不排程延迟批次。"""
+    service = FakeChatService()
+    adapter = FakeAdapter()
+    scheduler = FakeScheduler()
+    clock = FakeClock()
+    router = _router(
+        service=service,
+        adapter=adapter,
+        clock=clock,
+        rhythm=FakeRhythm(),
+        scheduler=scheduler,
+        settings=_flow_settings(burst_count=3, min_reply_gap_ms=1200),
+    )
+    await router.handle_inbound(_inbound("第一条", message_id="1"))
+    assert service.reply_calls[-1]["text"] == "第一条"
+    clock.now += 3500
+    result = await router.handle_inbound(_inbound("第二条", message_id="2"))
+    assert result.message_ids == ["out:10086:2"]
+    assert scheduler.jobs == []
+    assert service.reply_calls[-1]["text"] == "第二条"
+
+
 async def test_scheduler_missing_degrades_to_immediate_reply() -> None:
     """调度器不可用：延迟裁决降级立即回复（fail-safe）。"""
     service = FakeChatService()
