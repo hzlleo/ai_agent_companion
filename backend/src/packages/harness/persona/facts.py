@@ -354,6 +354,14 @@ class FactsService:
                 category.value,
             )
             row = await self._require_fact(session, fact_id)  # 回滚已使行对象过期，重读
+        else:
+            logger.info(
+                "人物事实已更正: old_id={}, new_id={}, version={}",
+                fact_id,
+                result.record.id,
+                result.record.version,
+            )
+            return result.record
         try:
             result = await self._upsert_once(
                 session,

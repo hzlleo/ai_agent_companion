@@ -550,3 +550,25 @@ async def test_active_marker_invariant_enforced(db_session: AsyncSession) -> Non
         ).scalar_one()
     assert row.active_marker == FACT_ACTIVE_MARKER
     assert row.normalized_hash == fact_content_hash(normalize_fact_content("主人喜欢喝无糖乌龙茶"))
+
+
+async def test_correct_happy_path_commits_once(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """更正成功路径只提交一次：重试编排不得在无冲突时重复执行写入。"""
+    commits = 0
+    real_commit = FactsService._commit
+
+    async def counting_commit(session: AsyncSession) -> None:
+        nonlocal commits
+        commits += 1
+        await real_commit(session)
+
+    async with bind_persona_context(PERSONA_A):
+        created = await facts_service.upsert_fact(db_session, _create())
+        monkeypatch.setattr(FactsService, "_commit", staticmethod(counting_commit))
+        corrected = await facts_service.correct_fact(
+            db_session, created.record.id, FactCorrectDTO(content="主人其实更喜欢无糖绿茶")
+        )
+    assert commits == 1
+    assert corrected.version == 2
