@@ -371,10 +371,10 @@ class TestCommandBuilding:
         assert payload == {"cmd": WECOM_CMD_PING, "headers": {"req_id": "r2"}}
 
     async def test_markdown_reply_uses_callback_req_id(self) -> None:
-        """回复命令透传回调 req_id（官方要求与触发回调同一标识）。"""
+        """回复命令无需请求号，帧头为 callback req_id（平台按该标识归位）。"""
         payload = json.loads(
             build_markdown_reply_command(
-                req_id="ignored", callback_req_id="cb-1", content="好的"
+                callback_req_id="cb-1", content="好的"
             ).model_dump_json(by_alias=True, exclude_none=True)
         )
         assert payload["cmd"] == WECOM_CMD_RESPOND_MSG

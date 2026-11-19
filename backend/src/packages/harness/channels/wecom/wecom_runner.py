@@ -97,7 +97,7 @@ __all__ = [
 
 #: msgid 去重窗口容量（官方文档：msgid 用于事件排重；窗口超容按 FIFO 淘汰）。
 WECOM_DEDUP_WINDOW_SIZE: Final[int] = 1024
-#: 入站待处理队列容量（过载即丢弃并告警——平台重投由去重兜底）。
+#: 入站待处理队列容量（过载即丢弃并告警——丢弃不登记去重，平台重投可重新消费）。
 WECOM_INBOUND_QUEUE_SIZE: Final[int] = 64
 #: 入站 worker 数（同聊天由路由器 per-chat 锁串行；多 worker 只提升跨聊天并行度）。
 WECOM_INBOUND_WORKER_COUNT: Final[int] = 2
@@ -121,6 +121,17 @@ class WeComMessageDedupWindow:
         self._capacity = max(1, capacity)
         self._seen: set[str] = set()
         self._order: deque[str] = deque()
+
+    def contains(self, msgid: str) -> bool:
+        """判断 msgid 是否已在窗口内（只读——不登记）。
+
+        Args:
+            msgid: 回调唯一标志。
+
+        Returns:
+            窗口内已登记返回 True。
+        """
+        return msgid in self._seen
 
     def remember(self, msgid: str) -> bool:
         """登记 msgid（首见 True / 重复 False；超容淘汰最旧）。
@@ -296,7 +307,7 @@ class WeComChannelRunner:
             self._log_event_frame(frame)
             return
         body = frame.body
-        if body.msgid and not self._dedup.remember(body.msgid):
+        if body.msgid and self._dedup.contains(body.msgid):
             logger.debug("企微回调重复投递（msgid 去重跳过）: {}", body.msgid)
             return
         chat_id = self._chat_id_for_body(body)
@@ -318,12 +329,15 @@ class WeComChannelRunner:
         except asyncio.QueueFull:
             self._dropped_inbound += 1
             logger.error(
-                "企微入站队列已满（丢弃该消息——平台重投由 msgid 去重兜底）: "
+                "企微入站队列已满（丢弃该消息——未登记去重，平台重投可重新消费）: "
                 "chat_id={}, msgid={}, dropped={}",
                 inbound.chat_id,
                 inbound.message_id,
                 self._dropped_inbound,
             )
+            return
+        if body.msgid:
+            self._dedup.remember(body.msgid)
 
     @staticmethod
     def _log_event_frame(frame: WeComCallbackFrameModel) -> None:

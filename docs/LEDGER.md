@@ -133,7 +133,7 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2835 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 2837 passed）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
 cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift；当前 mypy 191 文件零问题）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 11 用例（迁移链/并发唯一键/行锁/混合检索）
@@ -454,6 +454,26 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 - `cd backend && pixi run gen-examples` → **0**；三件套 `.env.example` / `config.example.yaml` / `extensions_config.example.json` sha256 前后一致（幂等）。
 - `cd backend && pixi run tests-seekdb` → **0**（**11 passed**：9 条并发不变式 + 混合检索 + 迁移链；含本批两条 1062 用例）。
 - **P1 路由器级反向实证**：临时把密度计算还原为旧式 `min_reply_gap_ms - (now - recent[-1])`，`test_density_gap_reached_replies_without_scheduling` 单跑 **1 failed**（裁决 `defer` / `density_pacing` / 1200ms、`message_ids=[]`、产生 1 个排程作业）；复原后该用例通过。
+
+**剩余**：无。
+
+### 已完成切片：R2e 复审 P2×3 闭环（Canvas 预览子资源 / 企微回复请求号 / 过载丢弃语义）
+
+**已完成**（逐条闭环）：
+
+1. **P2 Canvas 预览外部子资源**：`CanvasPage` 预览 iframe 在 `sandbox=""` 之外增加 `csp="default-src 'none'; style-src 'unsafe-inline'; img-src data:"`——沙箱无脚本之上再阻断外部子资源（仅放行内联样式与 `data:` 图）；不支持该属性的浏览器按规范忽略并退回纯沙箱行为。canvas.md 锁定决策行与「安全边界」同步写明「沙箱无脚本 + CSP 阻断外部子资源（样式/内联数据图除外），跟踪信标不再外发」。前端既有预览用例把 `csp` 与 `sandbox` 一并断言为机器可消费契约（`getAttribute` 精确值）。反向实证：临时去掉 `csp` 属性，该用例 **1 failed**（`expected null to be 'default-src ...'`）；复原后 12 passed。
+2. **P2 企微回复死参 / 键覆盖**：`build_markdown_reply_command` 删除未使用的 `req_id` 形参（docstring 改为「响应帧头携带 callback req_id 供平台归位，命令自身不再生成请求号」），客户端调用同步；`_execute` 在登记 pending 前检查同键在途，命中即抛 `CHANNEL_API_ERROR`（message=`请求号在途重复，拒绝覆盖在途应答`、`details={"req_id": ...}`）且不覆盖原 future；客户端模块 docstring 改为「订阅/心跳/推送等主动命令自生成 req_id；aibot_respond_msg 的帧头 req_id 必须回抄 callback req_id，在途表亦以该键登记」。用例：`test_markdown_reply_uses_callback_req_id` 断言构造不再需要请求号且帧头为 callback req_id；`test_duplicate_pending_req_id_rejected` 在首帧在途后同键再发送 → 受控抛错、出站帧仍为 1、原 future 未被替换且平台应答到达后正常归位（成功完成）。
+3. **P2 过载丢弃语义**：`WeComChannelRunner._handle_callback` 的去重登记移到 `put_nowait` 成功之后——`WeComMessageDedupWindow.contains` 只读判重，入队成功后 `remember` 登记；队列满丢弃不留 msgid，平台重投可在队列排空后真正恢复；不可路由回调不登记。constants 注释与 channels.md ② / ⑤ 改为「过载丢弃为终态策略：不入队即不登记去重，平台重投可在队列恢复后重新消费；已入队消息的重投由 msgid 去重保证不二次消费」。用例 `test_queue_overflow_does_not_register_dropped_msgid`：单 worker 被闸门占住 + 容量 1 构造确定性丢弃，断言丢弃计数 1、ERROR 日志含「未登记去重 / msgid=q3 / dropped=1」，队列排空后同 msgid 重投成功投递且终序 `[q1, q2, q3]`、丢弃计数不再增长。反向实证：把登记还原到入队前，该用例 **1 failed**（受帧日志「企微回调重复投递（msgid 去重跳过）: q3」）；复原后 32 passed。
+
+**验证**（主 Agent 实跑，命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2837 passed**；新增 2 例 + 1 例签名同步）。
+- `cd backend && pixi run coverage-gates` → **0**（24 组 ≥80%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**（191 源文件零问题）。
+- 根 `pixi run gates` → **0**（注释门 / 同步测试棘轮 / noqa 冻结 / 沙盒漂移 / 红探针 / 文档真相 / 断言棘轮 / 导出面 / prose-pin 全过）。
+- `cd backend && pixi run gen-examples` → **0** 连续两次；三件套 sha256 两次完全一致（幂等，无 env 键新增）。
+- `cd frontend && pixi run test` → **0**（**666 passed** / 85 文件）；`pixi run lint` → **0**；`pixi run build` → **0**（仅既有 chunk>500kB 提示）。
+- sidecar 树未改动，按任务书略过。
 
 **剩余**：无。
 
