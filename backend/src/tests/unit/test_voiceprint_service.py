@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlalchemy import select
@@ -29,7 +31,7 @@ from packages.harness.voice.voiceprint_models import (
     VoiceprintVerifyReason,
     VoiceprintVerifyRequestDTO,
 )
-from packages.harness.voice.voiceprint_orm import VoiceprintConsentRow
+from packages.harness.voice.voiceprint_orm import VoiceprintConsentRow, VoiceprintSampleRow
 from packages.harness.voice.voiceprint_service import VoiceprintService
 
 #: 测试人格上下文轴（PersonaMixin 无外键——任意字符串 ID 即隔离轴）。
@@ -52,6 +54,36 @@ class FakeEmbedding:
         if self.failure is not None:
             raise self.failure
         return list(self.vectors.get(audio, [1.0, 0.0]))
+
+
+class _RacingVoiceprintService(VoiceprintService):
+    """首个样本落盘后插入并发胜者行（模拟预检窗口外的唯一键竞态）。"""
+
+    def __init__(self, race_session: AsyncSession, **kwargs: Any) -> None:
+        """初始化并保存竞态会话。"""
+        super().__init__(**kwargs)
+        self._race_session = race_session
+        self._raced = False
+
+    async def _write_sample_file(
+        self, sender_id: str, digest: str, extension: str, audio: bytes
+    ) -> Path:
+        """落盘后在首个样本上补一条同哈希竞争行（提交时同批 flush 撞唯一键）。"""
+        path = await super()._write_sample_file(sender_id, digest, extension, audio)
+        if not self._raced:
+            self._raced = True
+            self._race_session.add(
+                VoiceprintSampleRow(
+                    sender_id=sender_id,
+                    sample_path=str(path),
+                    sample_sha256=digest,
+                    duration_ms=2000,
+                    sample_rate_hz=16000,
+                    embedding=json.dumps([1.0, 0.0], ensure_ascii=False),
+                    embedding_dim=2,
+                )
+            )
+        return path
 
 
 def _settings(**overrides: object) -> VoiceprintSettings:
@@ -102,6 +134,10 @@ async def test_settings_default_disabled_and_provider_closed() -> None:
     assert settings.embedding_base_url == ""
     assert settings.min_samples >= 1
     assert settings.similarity_threshold == pytest.approx(0.75)
+    assert settings.min_sample_duration_ms == 1500
+    assert settings.min_verify_duration_ms == 1000
+    assert settings.max_upload_bytes == 10485760
+    assert settings.storage_dir == "data/voiceprints"
 
 
 async def test_settings_rejects_inconsistent_sample_bounds() -> None:
@@ -206,6 +242,28 @@ async def test_enroll_writes_samples_files_and_profile(
     assert len(files) == 2
     assert all(path.read_bytes() in {b"sample-one", b"sample-two"} for path in files)
     assert len(embedding.calls) == 2
+
+
+async def test_enroll_concurrent_conflict_converges_to_duplicate(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """预检后撞唯一键：整体回滚、清理本批文件，并按 duplicate 语义抛 409。"""
+    service = _RacingVoiceprintService(
+        db_session, settings=_settings(), embedding=FakeEmbedding(), storage_root=tmp_path
+    )
+    async with bind_persona_context(PERSONA_A):
+        await _grant(service, db_session)
+        with pytest.raises(BusinessException) as exc_info:
+            await service.enroll(
+                db_session,
+                SENDER,
+                VoiceprintEnrollRequestDTO(samples=[_sample(b"winner"), _sample(b"loser")]),
+            )
+        profile = await service.get_profile(db_session, SENDER)
+    assert exc_info.value.code == ErrorCode.CONFLICT
+    assert exc_info.value.details["reason"] == VoiceprintRejectReason.DUPLICATE.value
+    assert profile.sample_count == 0
+    assert list(tmp_path.rglob("*.wav")) == []
 
 
 async def test_enroll_below_min_samples_rejected(db_session: AsyncSession) -> None:
@@ -383,6 +441,33 @@ async def test_verify_short_audio_rejected_without_embedding(
     assert result.matched is False
     assert result.reason is VoiceprintVerifyReason.AUDIO_TOO_SHORT
     assert len(embedding.calls) == calls_before
+
+
+async def test_verify_uses_verify_duration_band_not_enroll_threshold(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """校验时长落在 [校验门槛, 注册门槛) 区间：正常比对，不套注册门槛报 422。"""
+    embedding = FakeEmbedding()
+    embedding.vectors[b"enroll"] = [1.0, 0.0]
+    service = VoiceprintService(
+        settings=_settings(min_sample_duration_ms=1000, min_verify_duration_ms=800),
+        embedding=embedding,
+        storage_root=tmp_path,
+    )
+    async with bind_persona_context(PERSONA_A):
+        await _grant(service, db_session)
+        await service.enroll(
+            db_session,
+            SENDER,
+            VoiceprintEnrollRequestDTO(samples=[_sample(b"enroll"), _sample(b"enroll-2")]),
+        )
+        result = await service.verify(
+            db_session,
+            SENDER,
+            VoiceprintVerifyRequestDTO(sample=_sample(b"query-band", duration_ms=900)),
+        )
+    assert result.matched is True
+    assert result.reason is VoiceprintVerifyReason.MATCHED
 
 
 async def test_verify_without_samples(db_session: AsyncSession, tmp_path: Path) -> None:

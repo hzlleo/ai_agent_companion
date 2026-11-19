@@ -133,10 +133,10 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2827 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 2835 passed）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
 cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift；当前 mypy 191 文件零问题）
-cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 9 用例（迁移链/并发唯一键/行锁/混合检索）
+cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 11 用例（迁移链/并发唯一键/行锁/混合检索）
 cd frontend && pixi run test / coverage / lint / build   # 666 passed（高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
 根级：pixi run gen-examples（三件套再生成）、pixi run gates
@@ -433,6 +433,29 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 - `correct_fact` 成功路径改为 `else` 分支记录日志并直接返回，第二个 `_upsert_once` 仅作冲突后的重试路径；此前 try 体为赋值导致每次成功更正都重复执行一次写入（终态依赖合并分支的偶然幂等）。
 - 用例 `test_correct_happy_path_commits_once` 以计数 `_commit` 钉死「无冲突时恰好一次提交」（反向：去掉 `else` 短路即红）。
 - 验证：`cd backend && pixi run verify-slice -- --slice memory-review`（见当前 canonical 证据文件）；`test_facts_service.py` + `test_skills_service.py` 47 passed。
+
+### 已完成切片：R2d 声纹 / 表情 / 门控复审闭环（P1×1 + P2×5）
+
+**已完成**（逐条闭环）：
+
+1. **P1 密度节流语义**：`evaluate_flow_gate` 的密度锚点改为「当前消息之前最近一条入站」——判定历史含当前条目时取 `recent[-2]`，否则取 `recent[-1]`；仅 `elapsed < min_reply_gap_ms` 时才置 `density_wait`，达到或超过即落入后续规则（连发合并仍按含当前消息的窗口计数）。单测改为生产形态（`[now-300, now]` → 900ms），保留未含当前条目的历史形态用例并注明其与生产形态等价，新增「间隔 3500ms ≥ gap → `reply/normal` 不延迟」用例；路由器级 `test_density_gap_reached_replies_without_scheduling` 断言追发 3500ms 后立即回复且 `scheduler.jobs == []`。chat.md ⑤ 行同步为「以上一条入站为锚，间隔 < 阈值才延迟并补齐剩余毫秒；间隔 ≥ 阈值立即回复」。
+2. **P2 声纹校验时长带**：`_validate_sample` 增加必填 `min_duration_ms` 参数；注册传 `min_sample_duration_ms`，校验传 `min_verify_duration_ms`——校验不再套注册门槛，`[min_verify, min_sample)` 区间正常进入相似度比对而非 422；低于校验门槛仍返回 `matched=false` / `audio_too_short`。新增该区间用例（900ms 落在 800-1000ms 带内 → `matched=true`，不抛异常）。voice.md 链路节写明两条阈值的独立关系与裁决形态。
+3. **P2 并发唯一键收敛**：表情包批量上传逐文件经 `begin_nested()` 保存点隔离，撞 `uq_ff_stickers_persona_sha` 时只回滚该条目、计入 duplicate 拒收并清理无引用文件，同批其余条目照常入库；声纹注册撞 `uq_ff_voiceprint_samples_persona_sender_sha` 时整体回滚、清理本批孤儿文件并按 duplicate 语义抛 `CONFLICT`（details.reason=duplicate）。新增两个确定性竞态单测（预检窗口外注入同哈希行）分别验证保存点隔离与异常收敛。真引擎套件补 `ff_stickers` 同人格同哈希、`ff_voiceprint_samples` 同人格同发送者同样本哈希两条 1062 + 约束点名用例，并保留跨人格 / 跨发送者正控。
+4. **P2 conftest 硬覆盖**：`backend/src/conftest.py` 按生成器清单硬赋值 `FLOW_*`（10）/ `GROUP_PERSONA_*`（3）/ `VOICEPRINT_*`（15）/ `STICKER_*`（9）共 37 键（S3 硬覆盖口径）；裸构造 `FlowGateSettings()` / `GroupPersonaSettings()` / `VoiceprintSettings()` / `StickerSettings()` 与 app 级 Settings 在开发者本地 `.env` 存在同名键时仍取测试值。默认值用例同步断言四组关键值作为 hermetic 守卫。
+5. **P2 实时语音边界声明**：chat.md 心流门控节与 realtime-voice.md 边界节均明示「心流门控仅作用于通道入站；实时语音直连 `ChatService.stream_reply`，不经门控裁决」。
+6. **P2 排序 docstring**：`persona_rotation.py` 规则④补「主人格（`is_primary`）优先于主键次序」，与排序键 `(上一轮未发言, is_primary, id)` 一致；channels.md 选人流程与规则说明同步。
+
+**验证**（命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2835 passed**；新增 7 例）。
+- `cd backend && pixi run coverage-gates` → **0**（24 组 ≥80%；harness/chat 96.3% / harness/voice 95.3% / harness/multimodal 93.4%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**（191 源文件零问题）。
+- 根 `pixi run gates` → **0**（注释门 / 同步测试棘轮 / noqa 冻结 / 沙盒漂移 / 红探针 / 文档真相 / 断言棘轮 / 导出面 / prose-pin 全过）。
+- `cd backend && pixi run gen-examples` → **0**；三件套 `.env.example` / `config.example.yaml` / `extensions_config.example.json` sha256 前后一致（幂等）。
+- `cd backend && pixi run tests-seekdb` → **0**（**11 passed**：9 条并发不变式 + 混合检索 + 迁移链；含本批两条 1062 用例）。
+- **P1 路由器级反向实证**：临时把密度计算还原为旧式 `min_reply_gap_ms - (now - recent[-1])`，`test_density_gap_reached_replies_without_scheduling` 单跑 **1 failed**（裁决 `defer` / `density_pacing` / 1200ms、`message_ids=[]`、产生 1 个排程作业）；复原后该用例通过。
+
+**剩余**：无。
 
 ## 6. 遗留与部署台账（非阻塞）
 

@@ -36,6 +36,7 @@ from typing import Any, Final
 
 from loguru import logger
 from sqlalchemy import desc, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.harness.config.model_entry import ModelRole
@@ -139,6 +140,10 @@ class StickerService:
     ) -> StickerBatchUploadResultModel:
         """批量上传表情包（逐条目部分成功；哈希去重；来源备注强制）。
 
+        并发去重收敛：逐条目经保存点隔离插入，撞
+        ``uq_ff_stickers_persona_sha`` 时只回滚该条目（计入 duplicate
+        拒收），同批其余条目照常入库。
+
         Args:
             session: 注入的异步 Session（人格上下文已绑定）。
             dto: 批量上传入参。
@@ -199,8 +204,34 @@ class StickerService:
                     annotation_model_entry=None,
                     annotated_at_ms=None,
                 )
-                session.add(row)
-                await session.flush()
+                try:
+                    async with session.begin_nested():
+                        session.add(row)
+                        await session.flush()
+                except IntegrityError:
+                    rejected.append(
+                        StickerRejectedItemModel(
+                            index=index,
+                            reason=StickerRejectReason.DUPLICATE,
+                            message="同一人格下已存在相同文件（并发写入按唯一键收敛）",
+                        )
+                    )
+                    written_paths.remove(path)
+                    existing_hashes.add(digest)
+                    winner_path = (
+                        (
+                            await session.execute(
+                                select(StickerRow.storage_path).where(
+                                    StickerRow.sha256 == digest
+                                )
+                            )
+                        )
+                        .scalars()
+                        .first()
+                    )
+                    if winner_path != str(path):
+                        await self._remove_files([path])
+                    continue
                 existing_hashes.add(digest)
                 created.append(self._record(row))
             await self._commit(session)

@@ -309,6 +309,60 @@ os.environ["RHYTHM_TYPING_SPEED_MS_PER_CHAR"] = "45"
 os.environ["RHYTHM_TYPING_BASE_MS"] = "800"
 os.environ["RHYTHM_BURST_PROBABILITY"] = "0.12"
 
+# --- 心流门控（FLOW_ 前缀 → FlowGateSettings；默认关闭 → 测试零延迟排程
+#     副作用；S3 硬覆盖模式——开发者 shell / 本地 .env 导出的同名真实配置
+#     不得泄入测试。判定矩阵用例全部显式注入时刻与状态，不依赖本全局值） ---
+os.environ["FLOW_ENABLED"] = "false"
+os.environ["FLOW_BURST_WINDOW_MS"] = "4000"
+os.environ["FLOW_BURST_COUNT"] = "3"
+os.environ["FLOW_MERGE_QUIET_MS"] = "2500"
+os.environ["FLOW_MERGE_MAX_MESSAGES"] = "5"
+os.environ["FLOW_MIN_REPLY_GAP_MS"] = "1200"
+os.environ["FLOW_BACKLOG_DEFER_THRESHOLD"] = "6"
+os.environ["FLOW_BACKLOG_DEFER_STEP_MS"] = "8000"
+os.environ["FLOW_BACKLOG_DEFER_MAX_MS"] = "90000"
+os.environ["FLOW_PENDING_GRACE_MS"] = "60000"
+
+# --- 群聊多人格（GROUP_PERSONA_ 前缀 → GroupPersonaSettings；默认关闭 →
+#     测试零轮转副作用；S3 硬覆盖模式——本地 .env 同名键不得泄入测试） ---
+os.environ["GROUP_PERSONA_ENABLED"] = "false"
+os.environ["GROUP_PERSONA_MAX_RESPONDERS"] = "1"
+os.environ["GROUP_PERSONA_COOLDOWN_MS"] = "60000"
+
+# --- 声纹档案（VOICEPRINT_ 前缀 → VoiceprintSettings；默认关闭 + 提供方
+#     空串 → 测试零真实向量服务连接；S3 硬覆盖模式——裸构造
+#     VoiceprintSettings() 与 app 级 Settings 在开发者本地 .env 存在同名键
+#     时仍取测试值。上传上限与生产默认同值（字节边界用例经构造注入隔离） ---
+os.environ["VOICEPRINT_ENABLED"] = "false"
+os.environ["VOICEPRINT_EMBEDDING_BASE_URL"] = ""
+os.environ["VOICEPRINT_EMBEDDING_PATH"] = "/embedding"
+os.environ["VOICEPRINT_EMBEDDING_MODEL"] = "voiceprint-embedding"
+os.environ["VOICEPRINT_REQUEST_TIMEOUT_SECONDS"] = "30.0"
+os.environ["VOICEPRINT_SIMILARITY_THRESHOLD"] = "0.75"
+os.environ["VOICEPRINT_MIN_SAMPLES"] = "3"
+os.environ["VOICEPRINT_MAX_SAMPLES"] = "20"
+os.environ["VOICEPRINT_MIN_SAMPLE_DURATION_MS"] = "1500"
+os.environ["VOICEPRINT_MIN_VERIFY_DURATION_MS"] = "1000"
+os.environ["VOICEPRINT_MIN_SAMPLE_RATE_HZ"] = "8000"
+os.environ["VOICEPRINT_MAX_UPLOAD_BYTES"] = "10485760"
+os.environ["VOICEPRINT_MAX_BATCH_SAMPLES"] = "20"
+os.environ["VOICEPRINT_RETENTION_DAYS"] = "365"
+os.environ["VOICEPRINT_STORAGE_DIR"] = "data/voiceprints"
+
+# --- 表情包库（STICKER_ 前缀 → StickerSettings；默认关闭 → 测试零文件落盘
+#     / 零通道桥副作用；S3 硬覆盖模式——裸构造 StickerSettings() 与 app 级
+#     Settings 在开发者本地 .env 存在同名键时仍取测试值。通道回表情开关保持
+#     生产默认（仅 STICKER_ENABLED=true 时生效） ---
+os.environ["STICKER_ENABLED"] = "false"
+os.environ["STICKER_STORAGE_DIR"] = "data/stickers"
+os.environ["STICKER_MAX_UPLOAD_BYTES"] = "5242880"
+os.environ["STICKER_MAX_TAGS"] = "8"
+os.environ["STICKER_TAG_MAX_LENGTH"] = "24"
+os.environ["STICKER_DESCRIPTION_MAX_LENGTH"] = "500"
+os.environ["STICKER_SOURCE_NOTE_MAX_LENGTH"] = "512"
+os.environ["STICKER_MAX_BATCH_ITEMS"] = "20"
+os.environ["STICKER_CHANNEL_REPLY_ENABLED"] = "true"
+
 # --- 意图快径（INTENT_ 前缀 → IntentSettings；默认开启（纯本地零成本——
 #     与 search 等外部成本面开关相反）；S3 硬覆盖模式。快径仅在通道路径
 #     注入（CLI / duty 不注入）——既有测试面构造 ChatService 时不带快径

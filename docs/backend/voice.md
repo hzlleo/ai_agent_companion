@@ -237,6 +237,12 @@ POST /api/v1/voiceprints/{sender_id}/verify
     ↓ ⑦ matched = similarity ≥ VOICEPRINT_SIMILARITY_THRESHOLD
 ```
 
+时长门槛是两条独立路径：注册按 `VOICEPRINT_MIN_SAMPLE_DURATION_MS` 校验
+样本，校验按 `VOICEPRINT_MIN_VERIFY_DURATION_MS` 判定。低于校验门槛的
+音频返回 `matched=false` / `audio_too_short`（不抛 422）；位于
+`[VOICEPRINT_MIN_VERIFY_DURATION_MS, VOICEPRINT_MIN_SAMPLE_DURATION_MS)`
+区间的音频正常进入相似度比对，不套用注册门槛。
+
 ### API（app/api/voiceprints.py）
 
 ```

@@ -53,6 +53,7 @@ from typing import Final
 
 from loguru import logger
 from sqlalchemy import desc, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.harness.config.models import settings as global_settings
@@ -238,7 +239,9 @@ class VoiceprintService:
 
         部分成功语义：单条样本的载荷 / 类型 / 时长 / 采样率 / 重复 / 向量
         维度问题进入 ``rejected``（其余照常接收）；提供方调用失败整体上抛
-        ``LLM_CALL_FAILED``（已写入的文件回滚清理）。
+        ``LLM_CALL_FAILED``（已写入的文件回滚清理）。并发注册撞
+        ``uq_ff_voiceprint_samples_persona_sender_sha`` 时整体回滚并清理
+        本次文件，按 duplicate 语义上抛 ``CONFLICT``。
 
         Args:
             session: 注入的异步 Session（人格上下文已绑定）。
@@ -290,7 +293,9 @@ class VoiceprintService:
         written_paths: list[Path] = []
         try:
             for index, sample in enumerate(dto.samples):
-                audio, reason, message = self._validate_sample(sample, settings)
+                audio, reason, message = self._validate_sample(
+                    sample, settings, min_duration_ms=settings.min_sample_duration_ms
+                )
                 if audio is None:
                     rejected.append(
                         VoiceprintRejectedSampleModel(
@@ -346,6 +351,30 @@ class VoiceprintService:
                 existing_hashes.add(digest)
                 accepted += 1
             await self._commit(session)
+        except IntegrityError as exc:
+            await self._rollback_quietly(session)
+            existing_paths = set(
+                (
+                    await session.execute(
+                        select(VoiceprintSampleRow.sample_path).where(
+                            VoiceprintSampleRow.sender_id == sender_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            await self._remove_files(
+                [path for path in written_paths if str(path) not in existing_paths]
+            )
+            raise BusinessException(
+                code=ErrorCode.CONFLICT,
+                message="声纹样本已存在（并发注册按唯一键收敛）",
+                details={
+                    "reason": VoiceprintRejectReason.DUPLICATE.value,
+                    "sender_id": sender_id,
+                },
+            ) from exc
         except Exception:
             await self._rollback_quietly(session)
             await self._remove_files(written_paths)
@@ -393,7 +422,9 @@ class VoiceprintService:
                 threshold=settings.similarity_threshold,
                 reason=VoiceprintVerifyReason.AUDIO_TOO_SHORT,
             )
-        audio, reason, message = self._validate_sample(dto.sample, settings)
+        audio, reason, message = self._validate_sample(
+            dto.sample, settings, min_duration_ms=settings.min_verify_duration_ms
+        )
         if audio is None:
             reject_reason = (
                 reason if reason is not None else VoiceprintRejectReason.PAYLOAD_INVALID
@@ -631,13 +662,19 @@ class VoiceprintService:
         )
 
     def _validate_sample(
-        self, sample: VoiceprintSampleUploadModel, settings: VoiceprintSettings
+        self,
+        sample: VoiceprintSampleUploadModel,
+        settings: VoiceprintSettings,
+        *,
+        min_duration_ms: int,
     ) -> tuple[bytes | None, VoiceprintRejectReason | None, str]:
         """校验单条样本（载荷 / 类型 / 字节 / 时长 / 采样率）。
 
         Args:
             sample: 待校验样本。
-            settings: 生效配置（门槛来源）。
+            settings: 生效配置（类型 / 字节 / 采样率门槛来源）。
+            min_duration_ms: 本次处理路径的最短时长门槛（注册用注册门槛，
+                校验用校验门槛——两条路径独立，互不套用）。
 
         Returns:
             ``(音频字节 | None, 拒收原因 | None, 中文说明)`` 三元组；通过时
@@ -670,11 +707,11 @@ class VoiceprintService:
                 VoiceprintRejectReason.PAYLOAD_TOO_LARGE,
                 f"音频字节数 {len(audio)} 超过上限 {settings.max_upload_bytes}",
             )
-        if sample.duration_ms < settings.min_sample_duration_ms:
+        if sample.duration_ms < min_duration_ms:
             return (
                 None,
                 VoiceprintRejectReason.AUDIO_TOO_SHORT,
-                f"音频时长 {sample.duration_ms}ms 低于下限 {settings.min_sample_duration_ms}ms",
+                f"音频时长 {sample.duration_ms}ms 低于下限 {min_duration_ms}ms",
             )
         if sample.sample_rate_hz < settings.min_sample_rate_hz:
             return (

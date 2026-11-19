@@ -468,6 +468,9 @@ COMPLIANCE_MAX_RETRIES=1
 `flow_gate.py` 为纯函数），时间由调用方注入 `now_ms`（epoch 毫秒）。
 门控关闭（`FLOW_ENABLED=false`，缺省）时回复链路与引入前完全一致。
 
+边界（锁定）：心流门控仅作用于通道入站（`ChannelRouter` 的入站处理链）；
+实时语音直连 `ChatService.stream_reply`，不经过门控裁决。
+
 ### 判定矩阵（顺序锁定）
 
 | 序 | 输入信号 | 裁决 | 理由枚举 | 延迟 |
@@ -476,7 +479,7 @@ COMPLIANCE_MAX_RETRIES=1
 | ② | 入站 `synthetic=true`（机器事件） | `skip` | `synthetic_event` | 0 |
 | ③ | 节律门不允许（睡眠窗口） | `defer` | `sleep_window` | 节律门给出的距醒来毫秒 |
 | ④ | 连发窗口内条数 ≥ `FLOW_BURST_COUNT` | `merge` | `burst_merge` | 静默窗口剩余毫秒 |
-| ⑤ | 连续两条消息间隔 < `FLOW_MIN_REPLY_GAP_MS`，且关系非亲近 / 亲密 | `defer` | `density_pacing` | 补齐最小间隔毫秒 |
+| ⑤ | 以上一条入站为锚，间隔 < `FLOW_MIN_REPLY_GAP_MS`，且关系非亲近 / 亲密 | `defer` | `density_pacing` | 补齐最小间隔毫秒；间隔 ≥ 阈值立即回复 |
 | ⑥ | 未读积压 ≥ `FLOW_BACKLOG_DEFER_THRESHOLD`，且关系非亲近 / 亲密 | `defer` | `backlog_defer` | `step × 超出条数`，封顶 `FLOW_BACKLOG_DEFER_MAX_MS` |
 | ⑦ | 关系阶段为 `close` / `intimate`，且本应触发 ⑤ 或 ⑥ | `reply` | `relationship_priority` | 0 |
 | ⑧ | 节律允许但拟人延迟 > 0 | `defer` | `rhythm_delay` | 节律门延迟 |
