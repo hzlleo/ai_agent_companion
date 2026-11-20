@@ -34,9 +34,9 @@
 缺失 / 路由器内部异常）只进日志，向 HTTP 层返回确认语义（调用方
 据此恒 200；OneBot 上报方对非 200 会重试，确认即防重投）。
 
-去重状态：进程内模块级单例（QQ 通道无 runner 对象可挂载——与
-tg_runner 实例态去重的差异点）；测试经 ``reset_qq_webhook_state``
-逐测试复位。
+去重状态：直调路径与 runner 共享解析面与去重窗口类型，但窗口各自独立
+（直调路径用模块级窗口，runner 持独立窗口）；测试经
+``reset_qq_webhook_state`` 逐测试复位模块级窗口。
 """
 
 from __future__ import annotations
@@ -388,7 +388,8 @@ async def process_webhook_event(payload: dict[str, Any], router: ChannelRouter) 
     单事件直调路径（测试 / 嵌入式调用面）：生产端点经
     :class:`~packages.harness.channels.qq.qq_runner.QqWebhookRunner` 的
     有界队列消纳，不在 HTTP 请求内等待路由；本函数保留「一次调用完成
-    一条事件」的语义，与 runner 共享解析面与去重窗口。
+    一条事件」的语义，与 runner 共享解析面与去重窗口类型（各自实例：
+    直调路径用模块级窗口，runner 持独立窗口）。
 
     Args:
         payload: OneBot v11 事件上报载荷（JSON 对象——HTTP 层已保证形态）。

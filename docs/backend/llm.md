@@ -18,8 +18,8 @@
 
 ```
 chat_by_role(role, messages, params)
-    ↓ ⓪ LLM_DAILY_BUDGET_* 日预算闸                 超限 → RATE_LIMITED（不落用量）
     ↓ ① config.model_resolver.resolve(role)           角色解析（未绑定 → MODEL_NOT_FOUND）
+    ↓ ⓪ LLM_DAILY_BUDGET_* 日预算闸                 超限 → RATE_LIMITED（不落用量）
     ↓ ② config.llm_wire.build_llm_wire_config(entry)  wire 构建（密钥解析收口：api_key_env → LLM_API_KEY 兜底 → 空串）
     ↓ ③ pools.entry_gate(entry)                        熔断预检（open → LLM_REQUEST_FAILED）+ per-entry 信号量
     ↓ ④ llm.client.chat / stream                      传输（tenacity 幂等安全集重试；超时 = POOLS_LLM_REQUEST_TIMEOUT_SECONDS）
@@ -27,9 +27,12 @@ chat_by_role(role, messages, params)
 
 chat_for_entry(entry, ...)        条目直连（跳过 ①；look_at 回退链 / 显式条目调用面）
 stream_by_role / _stream_for_entry  流式同构（异步生成器；角色解析在首个迭代步发生）
-embed_by_role(texts, ...)         向量化（①角色解析恒 embed → ③门控 → POST /embeddings → ⑤purpose="embed" 用量发射）
+embed_by_role(texts, ...)         向量化（⓪预算闸在 ①角色解析之前 → ①角色解析恒 embed → ③门控 → POST /embeddings → ⑤purpose="embed" 用量发射）
 chat_by_role(..., intimacy_level=N)  亲密通道路由（裁决见「亲密通道」节；未命中走上面的角色链）
 ```
+
+预算闸位置（与实码一致）：chat / stream 在角色解析之后、条目门控 / 传输之前；
+embed 在角色解析之前。
 
 熔断结果上报（pools llm_pool 文档化契约）：④ 成功 → `breaker.record_success()`；失败 → `breaker.record_failure()`。流式消费方提前终止（GeneratorExit）不落用量（无终态结果——文档化决策）。角色未绑定（含 embed 角色未绑定）在传输前失败——`MODEL_NOT_FOUND`，无条目可归属不落用量行（与 chat_by_role 同语义）。
 
@@ -451,11 +454,15 @@ prompt_logprobs；端点未回传 / 旧端点缺失时对应字段为 ``None``�
 ## 日预算闸与慢调用观测
 
 **日预算（`LLM_DAILY_BUDGET_GLOBAL` / `LLM_DAILY_BUDGET_PERSONA`，默认 0 = 不限）**：
-调用前（角色解析 / 条目门控 / 传输之前）按 persona 档先行、global 档其后判定；
+调用前按 persona 档先行、global 档其后判定（位置：chat / stream 在角色解析之后、
+条目门控 / 传输之前；embed 在角色解析之前）；
 超限抛既有 `RATE_LIMITED`（429），`details` 含 `scope` / `used` / `limit`（persona
 档另含 `persona_id`），且**不落用量行**（被预算拒绝的调用不计入预算，避免自我
 强化耗尽）。计数口径为当日 UTC 日桶内的 usage 行（全 purpose，含失败行）——本闸
 是模型调用总量闸；`persona_id` 缺失（系统调用）只受 global 档约束。
+
+**有效上限 10,000**（两档同）：计数走 usage 游标分页，页帽 50 × 每页 200 = 10,000 行
+封顶——配置层以 `le=10_000` 拒绝更大值，避免「预算永远不会触发」的静默失效。
 
 **软竞态（锁定决策）**：计数经 usage 表查询（DB 口径），跨 worker 各自查询同一张
 表，结果**近似**全局一致——并发请求可能同时读到同一剩余额度并同时放行（最多

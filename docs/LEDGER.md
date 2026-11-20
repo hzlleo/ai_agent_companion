@@ -654,6 +654,24 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **剩余**：无（本切片范围）；复审由主 Agent 后续执行。
 
+**复审修复（Oracle 深审本切片后 6×P2 逐条闭环；复审结论由主 Agent 执行）**：
+
+1. **P2 预算 >10,000 静默失效**：`LlmEndpointConfig.daily_budget_global` / `daily_budget_persona` 增 `le=10_000`（计数页帽 50×200 为有效上限，超出则预算永远无法触发）；字段说明与 `docs/backend/llm.md`、`docs/backend/config.md` 注明「有效上限 10,000（计数页帽 50×200）」，`.env.example` 经生成器重出。测试：`test_config_settings.py` 新增上限校验（10,000 通过 / 10,001 双档拒绝）。
+2. **P2 计数器分页零测试**：`test_llm_gateway.py` 新增 `wire_default_usage_counter` 分页用例 4 例（共享 SQLite + ORM 批量灌行）：201 行跨页累计 = 201（200+1 且尾页终止）、恰好 200 行 = 200、空库 = 0、10,200 行按页帽截断 = 10,000。
+3. **P2 embed 预算零测试**：`test_llm_embeddings.py` 新增 embed 预算耗尽用例——`RATE_LIMITED`、details 形状与 persona 档一致（scope/used/limit/persona_id）、零出站、零用量事件。
+4. **P2 qq_webhook docstring 虚构共享窗口**：模块与 `process_webhook_event` docstring 改为「共享解析面与去重窗口类型（各自实例：直调路径用模块级窗口，runner 持独立窗口）」；`docs/backend/channels.md` 无同型失真句，未改。
+5. **P2 llm.md 流程 ⓪/① 顺序失真**：调用链图按实码重排（chat/stream 先角色解析后预算闸），并补图注「chat/stream：角色解析后、条目门控/传输前；embed：解析前」；日预算节同步位置描述与有效上限。
+6. **P2 qq runner worker 异常隔离零覆盖**：`test_qq_runner.py` 新增用例——首条抛 `RuntimeError` 后 worker 记录 ERROR 并继续消费第二条；断言两条均进入 router、第二条正常处理、runner 未停机（事件门等待，无固定 sleep）。
+
+**验证**（命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2957 passed**；基线 2950 + 7 例）。
+- `cd backend && pixi run coverage-gates` → **0**（2957 passed；24 组 ≥80%，harness/llm 99.0% / harness/channels 97.3% / harness/config 96.5% / app/api 83.5% / app/main.py 94.1%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**（`Success: no issues found in 195 source files`）。
+- 根 `pixi run gates` → **0**（注释门 violations=0；同步测试棘轮通过；noqa/type:ignore 基线 0；conftest env 200/200、豁免 0；沙盒漂移 38 项一致；红探针门 194 源文件 / 探针 7 条；文档真相；断言棘轮；导出面 102 引用·62 登记·40 豁免 + env 键面 701 行；prose-pin 报告）。
+- `cd backend && pixi run conftest-env` → **0**（登记表 200 / 硬覆盖 200 / 豁免 0）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 两次均 **0**；三件套 sha256 运行前 / 第一次 / 第二次完全一致（幂等，无 env 键新增）。
+
 ### 5.1 死代码处置（审计 B 抽样：5 个零引用公共符号）
 
 复核口径：对五个符号逐一执行 `grep -rIn` 覆盖仓库全树（backend / frontend /

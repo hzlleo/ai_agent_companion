@@ -56,6 +56,25 @@ class RecordingRouter:
         )
 
 
+class _FailOnceRouter:
+    """fake 路由器（首条抛异常、后续正常处理——worker 隔离验证）。"""
+
+    def __init__(self) -> None:
+        self.attempted: list[str] = []
+        self.handled: list[str] = []
+        self.second_handled = asyncio.Event()
+
+    async def handle_inbound(self, message: InboundMessageModel) -> ChannelDeliveryResultModel:
+        self.attempted.append(message.message_id)
+        if len(self.attempted) == 1:
+            raise RuntimeError("首条处理失败")
+        self.handled.append(message.message_id)
+        self.second_handled.set()
+        return ChannelDeliveryResultModel(
+            channel=ChannelType.QQ, chat_id=message.chat_id, message_ids=["1"]
+        )
+
+
 def _message_event(
     message_id: int = 1001,
     *,
@@ -167,6 +186,30 @@ class TestLifecycle:
         assert runner.pending_inbound == 0
         assert runner.stopping is True
         assert runner.submit(_message_event(41)) is False
+
+    async def test_worker_isolates_handler_exception_and_continues(self) -> None:
+        """worker 记录首条异常后继续消费第二条，runner 不停机。"""
+        router = _FailOnceRouter()
+        runner = _runner(router=router, clock=_Clock(), inbound_queue_size=4)
+        captured: list[str] = []
+        handler_id = logger.add(lambda message: captured.append(str(message)), level="ERROR")
+        task = asyncio.create_task(runner.run())
+        try:
+            assert runner.submit(_message_event(70)) is True
+            assert runner.submit(_message_event(71)) is True
+            await asyncio.wait_for(router.second_handled.wait(), timeout=_WAIT_TIMEOUT)
+            assert router.attempted == ["70", "71"]
+            assert router.handled == ["71"]
+            assert any(
+                "QQ 入站消息处理异常" in message and "message_id=70" in message
+                for message in captured
+            )
+            assert runner.stopping is False
+            assert task.done() is False
+        finally:
+            logger.remove(handler_id)
+            runner.request_stop()
+            await asyncio.wait_for(task, timeout=_WAIT_TIMEOUT)
 
     async def test_stop_cancels_inflight_worker_and_clears_queue(self) -> None:
         """停机取消在途 worker 并清空待处理队列（零残留）。"""

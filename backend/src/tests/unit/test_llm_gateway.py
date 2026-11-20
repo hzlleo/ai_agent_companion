@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from packages.harness.config.model_entry import parse_model_entry
 from packages.harness.config.model_resolver import ModelResolver
@@ -23,7 +23,12 @@ from packages.harness.config.settings import build_isolated_settings
 from packages.harness.core.context import bind_context
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.database.engine import db_engine_holder
-from packages.harness.llm.gateway import LlmGateway, wire_default_usage_recorder
+from packages.harness.llm.gateway import (
+    LlmGateway,
+    UsageCounter,
+    wire_default_usage_counter,
+    wire_default_usage_recorder,
+)
 from packages.harness.llm.llm_models import (
     ChatMessageModel,
     ChatMessageRole,
@@ -31,8 +36,8 @@ from packages.harness.llm.llm_models import (
 )
 from packages.harness.pools.manager import PoolManager
 from packages.harness.usage.dtos import UsageQueryDTO
-from packages.harness.usage.models import UsagePurpose
-from packages.harness.usage.orm import UsageRecordRow  # noqa: F401  模型注册副作用导入（共享建表）
+from packages.harness.usage.models import UsagePurpose, UsageStatus
+from packages.harness.usage.orm import UsageRecordRow  # 模型注册副作用导入（共享建表）
 from packages.harness.usage.service import UsageService
 
 #: MockTransport handler 类型。
@@ -752,6 +757,101 @@ async def test_default_usage_recorder_full_chain(shared_db_engine: AsyncEngine) 
         assert record.error_code is None
     finally:
         db_engine_holder.reset()
+
+
+# ---------------------------------------------------------------------------
+# 默认接线全链：wire_default_usage_counter → usage 服务 → SQLite（分页计数）
+# ---------------------------------------------------------------------------
+
+#: 测试日桶起点（UTC 零点——与网关预算日桶同口径）。
+_DAY_START_MS: int = 1_731_000_000_000 // 86_400_000 * 86_400_000
+
+
+@pytest.fixture
+async def default_usage_counter(
+    shared_db_engine: AsyncEngine,
+) -> AsyncIterator[UsageCounter]:
+    """默认预算计数面（engine holder 外部安装到共享引擎；用后复位槽位）。
+
+    Args:
+        shared_db_engine: 会话级共享 SQLite 引擎（conftest 提供）。
+
+    Yields:
+        绑定共享引擎的 :func:`wire_default_usage_counter` 计数器。
+    """
+    db_engine_holder.async_engine = shared_db_engine
+    db_engine_holder.session_factory = async_sessionmaker(
+        bind=shared_db_engine, expire_on_commit=False
+    )
+    db_engine_holder.owner_token = None  # 外部安装——生命周期归共享 fixture
+    try:
+        yield wire_default_usage_counter()
+    finally:
+        db_engine_holder.reset()
+
+
+async def _seed_usage_rows(
+    session: AsyncSession, count: int, *, persona_id: str, ts_ms: int
+) -> None:
+    """批量灌入当日 usage 行（单事务——分页计数输入面）。
+
+    Args:
+        session: 绑定共享引擎的测试会话。
+        count: 行数。
+        persona_id: 归属人格 ID。
+        ts_ms: 行时间戳（epoch 毫秒）。
+    """
+    session.add_all(
+        [
+            UsageRecordRow(
+                persona_id=persona_id,
+                ts_ms=ts_ms,
+                model_entry="main-chat",
+                provider="openai_compatible",
+                purpose=UsagePurpose.CHAT.value,
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+                latency_ms=0,
+                status=UsageStatus.SUCCESS.value,
+                request_id=None,
+                error_code=None,
+            )
+            for _ in range(count)
+        ]
+    )
+    await session.commit()
+
+
+async def test_default_usage_counter_spans_pages_and_terminates(
+    db_session: AsyncSession, default_usage_counter: UsageCounter
+) -> None:
+    """201 行：首页 200 + 次页 1，累计 201 且尾页正常终止。"""
+    await _seed_usage_rows(db_session, 201, persona_id="p-cap", ts_ms=_DAY_START_MS + 1)
+    assert await default_usage_counter("p-cap", _DAY_START_MS) == 201
+
+
+async def test_default_usage_counter_exact_page_boundary(
+    db_session: AsyncSession, default_usage_counter: UsageCounter
+) -> None:
+    """恰好 200 行：首页满且无 next_cursor，计数 = 200。"""
+    await _seed_usage_rows(db_session, 200, persona_id="p-cap", ts_ms=_DAY_START_MS + 1)
+    assert await default_usage_counter("p-cap", _DAY_START_MS) == 200
+
+
+async def test_default_usage_counter_empty_day_is_zero(
+    default_usage_counter: UsageCounter,
+) -> None:
+    """空库（当日无行）：计数 = 0。"""
+    assert await default_usage_counter("p-cap", _DAY_START_MS) == 0
+
+
+async def test_default_usage_counter_stops_at_page_cap(
+    db_session: AsyncSession, default_usage_counter: UsageCounter
+) -> None:
+    """10,200 行：50 页帽截断，计数 = 10,000（不再请求第 51 页）。"""
+    await _seed_usage_rows(db_session, 10_200, persona_id="p-cap", ts_ms=_DAY_START_MS + 1)
+    assert await default_usage_counter("p-cap", _DAY_START_MS) == 10_000
 
 
 # ---------------------------------------------------------------------------
