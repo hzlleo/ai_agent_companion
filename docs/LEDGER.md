@@ -711,6 +711,53 @@ scripts / docs / docker / models；排 `__pycache__` / `.pixi` / `node_modules` 
 | `skills.match_for_compose` 在 500 行扫描帽前排序（`use_count DESC, id ASC`） | 复审必修（R2c 补审：扫描确定性） | **否——随复审即时落地** | 影响：扫描帽只裁剪低强化候选，高强化技能不再被插入顺序挤出命中面；观察：命中分布、`EXPLAIN` 计划稳定性、扫描上限是否需要随技能库规模调整 |
 | `ff_persona_facts` 复合索引 0018（`persona_id, status, confidence`） | 复审必修（R2c 深审：事实查询性能） | **否——随复审即时落地** | 影响：按人格 / 状态 / 置信度的现行事实查询；观察：迁移链升 / 降 / 复升、慢查询日志、写入放大（插入与更正路径的索引维护成本） |
 | 前端维持单 chunk（minified 717.44 KB / gzip 213.91 KB） | R3-2 构建体积基线实测 | **否——维持现状** | 影响：管理台首屏加载单文件；观察：单 chunk >1 MB 或部署机 LCP 明显退化时再引入路由级 `lazy()`（先拆 realtime / memories，保留共享 vendor chunk）。基线见 frontend/README.md「构建体积基线」 |
+| 核心纯函数 + ASGI 进程内只读端点的性能基线（`bench_core.py` / `api_smoke.py`，10× 环境容忍） | R3-3 性能基线交付 | **否——本切片建档** | 影响：门控 / 关系摘要 / 句切 / VAD / 关系块渲染与 health / models / personas / canvas 只读面有可复跑基线；观察：同机 median / p95 漂移、门禁误报率、后续热点函数是否入表。基线见 [backend/performance.md](backend/performance.md) |
+
+### 5.3 性能基线回归面（本切片交付）
+
+新增两条无新依赖、无新 env 键、无迁移的性能回归面（完整说明与阈值策略见
+[backend/performance.md](backend/performance.md)）：
+
+- `scripts/bench_core.py`：6 项纯本地微基准（`flow_gate.evaluate_flow_gate` /
+  `build_relationship_summary` 200 事实与空事实 / 长文本句切 / VAD 60 帧喂入 /
+  关系块渲染），`perf_counter_ns` 预热 + 15 轮取样，报告 median / p95 微秒；
+  基线 `scripts/.bench_baseline.json`（median / p95 上限 + `max_ratio=10.0`）；
+- `scripts/api_smoke.py`：ASGI 进程内 4 个只读端点（health / models entries /
+  personas / canvas）各预热 3 次、取样 20 次，报告 p50 / p95 毫秒；隔离
+  Settings + 一次性临时 SQLite，不读开发者 `.env`；基线
+  `scripts/.api_smoke_baseline.json`（p50 / p95 上限 + `max_ratio=10.0`）。
+
+**本机建库实测（基线值；同机复跑为准）**：
+
+| 用例 / 端点 | 基线 median / p95 | 单位 |
+|---|---|---|
+| `flow_gate.evaluate_flow_gate` | 1.659 / 2.163 | µs |
+| `persona.build_relationship_summary.200_facts` | 356.228 / 383.772 | µs |
+| `persona.build_relationship_summary.empty_facts` | 2.943 / 3.360 | µs |
+| `voice.split_assistant_sentences.long_text` | 221.407 / 263.124 | µs |
+| `voice.energy_vad.feed_60_frames` | 720.510 / 751.046 | µs |
+| `chat.render_relationship_block.synthetic` | 3.482 / 3.942 | µs |
+| `GET /api/v1/health` | 0.534 / 0.651 | ms |
+| `GET /api/v1/models/entries` | 0.578 / 0.648 | ms |
+| `GET /api/v1/personas` | 3.098 / 3.587 | ms |
+| `GET /api/v1/canvas?persona_id` | 3.596 / 5.184 | ms |
+
+**验证**（本机实跑，命令与退出码）：
+
+- `cd backend && pixi run bench-core --gate` → **0**，连续 2 次 PASS（6 项
+  median 均在基线 ×10 内）；
+- `cd backend && pixi run api-smoke --gate` → **0**，连续 2 次 PASS
+  （4 端点均 200；p95 均在基线 ×10 内）；
+- 人为从基线删除一条用例键后 `bench-core --self-check` → **1**（打印
+  「注册表有、基线缺: flow_gate.evaluate_flow_gate」）；恢复后 → **0**；
+  端点基线同理（删 `GET /api/v1/health` → **1**，恢复 → **0**）；
+- 两脚本各执行 `--update` 后 `--gate` → **0**（更新后的基线仍可过门禁）。
+
+门禁链落位：根 `pixi run gates` 在 prose-pin 之前加入
+`bench-core --self-check`、`bench-core --gate`、`api-smoke --self-check`；
+`api-smoke --gate` 需建临时库真实取样，对同机负载敏感，**不入链**，在
+部署机 / 负载可控环境手动执行。**基线随硬件漂移，以同机复跑为准；跨机
+绝对耗时不可比。**
 
 ### 已完成切片：全约束审计 B 修复（P1×1 + P2×4，本分支工作区）
 

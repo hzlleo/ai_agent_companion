@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "max_ratio": 10.0,
+  "note": "纯本地微基准基线——median/p95 上限微秒；门禁只按 median × max_ratio 判定；再生成: cd backend && pixi run bench-core --update",
+  "cases": {
+    "flow_gate.evaluate_flow_gate": {
+      "median_us": 1.659,
+      "p95_us": 2.163
+    },
+    "persona.build_relationship_summary.200_facts": {
+      "median_us": 356.228,
+      "p95_us": 383.772
+    },
+    "persona.build_relationship_summary.empty_facts": {
+      "median_us": 2.943,
+      "p95_us": 3.36
+    },
+    "voice.split_assistant_sentences.long_text": {
+      "median_us": 221.407,
+      "p95_us": 263.124
+    },
+    "voice.energy_vad.feed_60_frames": {
+      "median_us": 720.51,
+      "p95_us": 751.046
+    },
+    "chat.render_relationship_block.synthetic": {
+      "median_us": 3.482,
+      "p95_us": 3.942
+    }
+  }
+}

@@ -30,6 +30,7 @@
 | 工具层与辅助模型客户端（工具注册表 / docker 沙盒 / docker 浏览器 sidecar / 语音 / 多模态） | 聚合说明（无独立文档）：工具注册表见 [duty.md](duty.md)，docker 沙盒见 [tools-sandbox.md](tools-sandbox.md)，docker 浏览器 sidecar 见 [tools-browser.md](tools-browser.md)，语音见 [voice.md](voice.md)，多模态见 [multimodal.md](multimodal.md) | 已交付（分域建档） |
 | channels（平台通道：通道中立路由器 + Telegram 适配器 / 长轮询 runner / offset 持久化 / 4096 分段 + QQ 适配器 / NapCat OneBot v11 webhook 推送入站 / 消息展平 / message_id 去重 + 企业微信智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 素材分片上传 / markdown 分段）+ 抖音 web 通道（浏览器 sidecar 底座上的会话页轮询采集 / 发送、去重、系统消息 synthetic、图片附件、指数退避）+ 心流门控接线（延迟 / 合并批次经中央调度器）+ 群聊多人格应答（逐人格会话归属）） | [channels.md](channels.md) | 已交付（Telegram；QQ / NapCat——推送式入站无 runner，warn-and-continue 启动校验；企微长连接——`WECOM_ENABLED` 默认关闭，装配期凭据失败仅跳过该通道；抖音 web——`DOUYIN_ENABLED` 默认关闭，依赖浏览器 sidecar 底座（底座未就绪只跳过该通道），出站仅文本；duty 报告出站经既有路由器消费；心流门控 / 群聊多人格默认关闭，单聊语义零变化；B站通道 / safety 审批红线规划中） |
 | canvas（渲染产物：人格作用域的 HTML / SVG / Markdown 自包含产物持久化（迁移 0017）+ 管理 API（列表 / 创建 / 修订 / 删除 / 导出）+ 沙箱预览面板 + 单文件导出） | [canvas.md](canvas.md) | 已交付（类型创建后固定、修订号递增、预览不带 allow-scripts；导出 MIME / 扩展名按类型固定，CORS 暴露 Content-Disposition；未接 chat 工具——对话内产出属后续交付面） |
+| performance（性能基线：纯本地微基准 `bench_core.py`（门控 / 关系摘要 / 句切 / VAD / 关系块渲染）+ ASGI 进程内只读端点冒烟 `api_smoke.py`；基线文件与 10× 环境容忍策略） | [performance.md](performance.md) | 已交付（无新依赖 / 新 env 键 / 迁移；`bench-core --self-check/--gate` 与 `api-smoke --self-check` 入门禁链，`api-smoke --gate` 部署机手动执行） |
 
 ## 认证（管理面 owner-token 鉴权）
 

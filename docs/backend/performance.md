@@ -1,0 +1,123 @@
+# performance — 性能基线（纯本地微基准 + ASGI 进程内冒烟）
+
+本页记录两条**无新依赖、可回归、失败可解释**的性能基线面：
+
+- `scripts/bench_core.py`：核心纯函数的本地微基准（聊天门控 / 关系摘要 /
+  语音句切 / VAD / 关系块渲染）；
+- `scripts/api_smoke.py`：FastAPI 应用栈的进程内只读端点冒烟（health /
+  模型注册表 / 人格列表 / 画布列表）。
+
+两条基线都只用于**同机复跑对照**：绝对耗时随 CPU 型号、频率、容器配额、
+同机负载漂移，跨机比较没有意义。基线文件随仓库提交，但任何结论都必须以
+同一台机器上重新测量的结果为准。
+
+## 测量边界
+
+| 面 | 覆盖 | 明确不覆盖 |
+|---|---|---|
+| `bench_core.py` | 纯函数 CPU 路径（无 I/O / 无等待 / 无网络 / 无数据库） | 真实 LLM 调用、磁盘、网络、进程间调度 |
+| `api_smoke.py` | FastAPI 路由 → 服务层 → 临时 SQLite 的进程内调用链（httpx `ASGITransport`） | 真实端口监听、真实 MySQL/SeekDB、TLS、反向代理、真实 `.env` |
+
+`api_smoke.py` 显式构造隔离 Settings（`_env_file=None`；数据库固定为一次性
+临时 SQLite，鉴权令牌取自脚本专用变量），应用实例不依赖开发者 `.env` /
+`config.yaml` 的内容；脚本结束删除临时目录并关闭引擎。
+
+## 基线表（本次建库实测，同一台机器）
+
+### 纯函数微基准（`bench_core.py`，单位微秒）
+
+门禁判定：median > 基线 median × `max_ratio`（10.0）即红。p95 仅报告，
+用于观察抖动。
+
+| 用例 | 基线 median | 基线 p95 | 本次实测 median / p95 |
+|---|---:|---:|---:|
+| `flow_gate.evaluate_flow_gate` | 1.659 | 2.163 | 1.659 / 2.163 |
+| `persona.build_relationship_summary.200_facts` | 356.228 | 383.772 | 356.228 / 383.772 |
+| `persona.build_relationship_summary.empty_facts` | 2.943 | 3.360 | 2.943 / 3.360 |
+| `voice.split_assistant_sentences.long_text` | 221.407 | 263.124 | 221.407 / 263.124 |
+| `voice.energy_vad.feed_60_frames` | 720.510 | 751.046 | 720.510 / 751.046 |
+| `chat.render_relationship_block.synthetic` | 3.482 | 3.942 | 3.482 / 3.942 |
+
+用例输入规模：关系摘要 200 条合成关系事实、固定 `now_ms`；句切 60 句中文
+长文本、单句上限 80 字符；VAD 为起说 + 语音 + 静音切段的 60 帧合成 PCM
+序列整体；关系块为含 5 条事件与 2 条边界约定的合成摘要。
+
+### ASGI 进程内冒烟（`api_smoke.py`，单位毫秒）
+
+门禁判定：p95 > 基线 p95 × `max_ratio`（10.0）即红。
+
+| 端点 | 基线 p50 | 基线 p95 | 本次实测 p50 / p95 |
+|---|---:|---:|---:|
+| `GET /api/v1/health` | 0.534 | 0.651 | 0.534 / 0.651 |
+| `GET /api/v1/models/entries` | 0.578 | 0.648 | 0.578 / 0.648 |
+| `GET /api/v1/personas` | 3.098 | 3.587 | 3.098 / 3.587 |
+| `GET /api/v1/canvas?persona_id` | 3.596 | 5.184 | 3.596 / 5.184 |
+
+每端点预热 3 次后取样 20 次；全部响应必须为 200，否则报告与门禁都直接
+失败（冒烟首先验证可用性，其次才是延迟）。
+
+## 运行与更新
+
+```bash
+cd backend && pixi run bench-core                  # 报告（恒 exit 0）
+cd backend && pixi run bench-core --self-check     # 注册表 / 基线键集双向一致（不跑计时）
+cd backend && pixi run bench-core --gate           # 门禁（median 超基线 × 10 即红）
+cd backend && pixi run bench-core --update         # 重建基线（评审后提交）
+
+cd backend && pixi run api-smoke                   # 报告（响应非 200 即 exit 1）
+cd backend && pixi run api-smoke --self-check      # 端点 / 基线键集双向一致（不建库）
+cd backend && pixi run api-smoke --gate            # 门禁（p95 超基线 × 10 即红）
+cd backend && pixi run api-smoke --update          # 重建基线（评审后提交）
+```
+
+根门禁链 `pixi run gates` 已包含 `bench-core --self-check`、
+`bench-core --gate` 与 `api-smoke --self-check`，位于 prose-pin 之前
+（prose-pin 保持链尾）。`api-smoke --gate` 需要建临时库并真实取样，对
+同机负载敏感，**不入链**；在部署机或负载可控环境手动执行。
+
+## 阈值策略与 10× 环境容忍
+
+`max_ratio = 10.0` 是环境容忍倍率，不是性能目标。选择理由：
+
+1. 绝对耗时对硬件与调度极敏感，同一份源码在共享 CI、容器 CPU 限流、
+   省电模式下的中位数可以相差数倍；
+2. 基线的作用是发现**数量级回归**（例如误引入 O(n²) 聚合、循环内 I/O、
+   重复 Pydantic 校验），而不是卡住几微秒的抖动；
+3. 倍数内只报告比值，倍数外才判红——门禁失败可以直接解释为「实测相对
+   基线超过 10 倍」，不会因一次 GC 或邻居任务误报。
+
+p95 在 `bench_core` 中只报告不判定；`api_smoke` 用 p95 判定（请求延迟的
+尾部比中位数更能反映路由 / 序列化层的退化），但同样套用 10 倍容忍。
+
+## 何时上调或下调基线
+
+- **上调基线**：确认是环境变化（换机器、容器配额调整、同机长期负载）
+  而非代码退化；先在同机复跑至少两次，确认新中位数稳定，再评审后
+  `--update` 并提交基线文件。
+- **下调基线**：只在确认性能优化真实生效、且同机复跑稳定后执行；下调
+  会收紧门禁，必须与优化同批评审。
+- **禁止**为了让门禁变绿而静默上调；基线与允许清单一样，只允许在评审后
+  调整，不允许绕过。
+- 新增用例：先在 `bench_core.py` / `api_smoke.py` 注册表登记，再
+  `--update`；`--self-check` 会双向校验键集，遗漏任一侧都会红。
+
+## 与 pools.md 的关系
+
+`docs/backend/pools.md` 记录的是**长生命周期资源池**（线程池 / 共享 HTTP /
+LLM 信号量与熔断 / SeekDB 连接池）的装配与限值；本页记录的是这些池**之外**
+的纯函数 CPU 路径与进程内路由延迟。两者互补：
+
+- 池配置变化（限值、超时、多 worker 放大）不会改变 `bench_core` 的纯函数
+  测量，但会反映在 `api_smoke` 的端到端进程内延迟与真实部署延迟上；
+- 池相关的真实网络 / 数据库耗时不在本页范围内（`api_smoke` 用临时 SQLite
+  替代真实存储，`bench_core` 完全不触 I/O）；
+- 语音实时链路的 VAD / 句切与共享线程池、LLM 并发共享同一进程 CPU，池
+  限值调整后建议同时复跑 `bench_core --gate` 与 `api-smoke --gate`。
+
+## 与其它门禁的边界
+
+- `bench_core --self-check` / `api-smoke --self-check` 只校验注册表与基线
+  键集合，不跑计时、不建库，适合每次门禁链执行；
+- `--gate` 只判定数量级回归，不替代 `tests-all` / `coverage-gates` 的正确性
+  门禁；
+- 基线文件是纯数据（JSON），不引入新依赖、新 env 键或数据库迁移。

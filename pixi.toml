@@ -55,9 +55,14 @@ typecheck = { cmd = "cd backend && pixi run typecheck", description = "后端 my
 coverage-gates = { cmd = "cd backend && pixi run coverage-gates", description = "按模块覆盖率门禁（≥80% enforce）" }
 # 工程门禁集：中文注释门（backend + 沙盒树）+ 同步测试棘轮（双树）+ noqa/type:ignore
 # 冻结（双树）+ conftest env 硬覆盖完整性 + 沙盒契约漂移门 + 红探针 / 文档真相 /
-# 断言棘轮 / 导出面 / prose-pin（脚本在根 scripts/，经 backend pixi 环境执行）。
+# 断言棘轮 / 导出面 / 性能基线自检与门禁 / prose-pin（脚本在根 scripts/，经 backend
+# pixi 环境执行）。
+# 性能基线两步：bench-core --self-check 只校验注册表与基线键集（不跑计时），
+# bench-core --gate 实测 median 并对照基线 × max_ratio；api-smoke --self-check
+# 只校验端点与基线键集（不建库）。api-smoke --gate 需建临时库取样，负载敏感，
+# 不入链——部署机 / 负载可控环境手动执行。
 # prose-pin 必须保持在链尾：scripts/verify_slice.py 以它的完成标记作为 gates 步骤的尾摘要。
-gates = { cmd = "cd backend && pixi run comment-gates && pixi run sync-test-ratchet && pixi run noqa-freeze && pixi run conftest-env && pixi run sandbox-drift && pixi run red-probe-gate && pixi run docs-truth && pixi run assertion-freeze && pixi run surface-check && pixi run prose-pin", description = "工程门禁集（注释门 / 同步测试棘轮 / noqa 冻结 / conftest env 硬覆盖 / 沙盒契约漂移 / 红探针 / 文档真相 / 断言棘轮 / 导出面 / prose-pin 报告）" }
+gates = { cmd = "cd backend && pixi run comment-gates && pixi run sync-test-ratchet && pixi run noqa-freeze && pixi run conftest-env && pixi run sandbox-drift && pixi run red-probe-gate && pixi run docs-truth && pixi run assertion-freeze && pixi run surface-check && pixi run bench-core --self-check && pixi run bench-core --gate && pixi run api-smoke --self-check && pixi run prose-pin", description = "工程门禁集（注释门 / 同步测试棘轮 / noqa 冻结 / conftest env 硬覆盖 / 沙盒契约漂移 / 红探针 / 文档真相 / 断言棘轮 / 导出面 / 性能基线自检与门禁 / prose-pin 报告）" }
 # ── 前端委托任务（frontend 独立 pixi 工程） ──────────────────────────────────
 # 前端全量测试（vitest run，msw 全模拟零真实网络）
 test-frontend = { cmd = "cd frontend && pixi run test", description = "前端全量测试（vitest）" }

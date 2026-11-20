@@ -144,6 +144,15 @@ assertion-freeze = { cmd = "python ../scripts/assertion_freeze.py --enforce", de
 surface-check = { cmd = "python ../scripts/surface_check.py --enforce", description = "HTTP wire 模型导出面完整性门（含豁免规模棘轮与 .env.example 键面复核）" }
 # prose-pin 启发式报告（恒 exit 0；门禁链尾标记由此输出）。
 prose-pin = { cmd = "python ../scripts/prose_pin_check.py", description = "prose-pin 启发式报告（Top-N + 结构断言占比；不阻断）" }
+# 纯本地微基准（核心纯函数耗时基线）：默认报告恒 exit 0；--gate 在 median
+# 超过基线 × max_ratio 时红；--update 重建基线；--self-check 只校验注册表
+# 与基线键集一致（门禁链用，不跑计时）。
+bench-core = { cmd = "python ../scripts/bench_core.py", description = "纯本地微基准（默认报告；--gate 门禁 / --update 重建基线 / --self-check 键集自检）" }
+# ASGI 进程内只读端点冒烟（临时 SQLite + 隔离 Settings）：默认报告要求
+# 全部响应 200；--gate 在 p95 超过基线 × max_ratio 时红；--update 重建基线；
+# --self-check 只校验端点注册表与基线键集一致（门禁链用，不建库不跑请求）。
+# --gate 建议在部署机 / 负载可控环境手动执行，避免共享 CI 抖动误报。
+api-smoke = { cmd = "python ../scripts/api_smoke.py", description = "ASGI 进程内只读端点冒烟（默认报告；--gate 门禁 / --update 重建基线 / --self-check 键集自检）" }
 # 切片验收证据包：全链逐步校验 + docs/evidence 落盘。
 verify-slice = { cmd = "python ../scripts/verify_slice.py", description = "切片验收证据包（全链退出码 + 摘要校验；--with-seekdb / --with-frontend）" }
 # 配置模板再生成（从 Pydantic 配置类内省生成三件套 .example——幂等
