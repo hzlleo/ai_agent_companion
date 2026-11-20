@@ -36,14 +36,16 @@
 设计审计放行条件：管理 API（含成本驱动与账号驱动能力）不得以无鉴权面扩张。
 实现为 **单一 owner token 的 Bearer 校验**（`app/middleware/admin_auth.py` 的
 `require_admin_token` 依赖，经 `app/main.py` 的 `APIRouter(dependencies=[...])`
-包装路由对全部管理路由**单点挂接**）。
+包装路由对全部管理路由**单点挂接**）。保护面清单以 `app/main.py`
+`_include_routers` 为唯一权威（当前 15 个路由集），下表为可读镜像——增删路由
+须同步本表（`tests/unit/test_auth_surface_docs.py` 逐项比对，漂移即红）。
 
 ### 配置（env 间接——token 本值永不落 yaml / 配置树）
 
 | 字段 | 位置 | 默认 | 说明 |
 |---|---|---|---|
 | `admin_token_env` | `ServerConfig`（`packages/harness/config/models.py`） | `ADMIN_AUTH_TOKEN` | owner token 的**环境变量名**（间接引用）；实际 token 从该变量按请求读取 |
-| `ADMIN_AUTH_TOKEN` | 进程环境变量 / `.env` | （空） | owner token 本值——**运维设置项**；非空 = 鉴权启用，空 / 未设置 = 鉴权关闭 |
+| `ADMIN_AUTH_TOKEN` | 进程环境变量 / `.env` | （空） | owner token 本值——**运维设置项**；非空 = 鉴权启用，空 / 未设置 = 开发 / 测试形态鉴权关闭（`ENV=prod` 强制非空，见下） |
 
 链路顺序（每请求）::
 
@@ -67,14 +69,26 @@
 
 | 路由集 | 挂载 | 豁免理由 |
 |---|---|---|
-| personas / memories / usage / voice / voiceprints / look_at / stickers / models / search / reminders / directives / facts / skills / core-memory | **受保护**（统一挂 `require_admin_token`） | 管理面全操作集（含模型注册表 / 搜索 provider 注册表与沙盒消费的成本 / 账号驱动能力；声纹 / 表情包 / 提醒 / 长期指令 / 人物事实 / 程序性技能 / 核心记忆为人格作用域数据面） |
+| personas / memories / usage / voice / voiceprints / look_at / stickers / models / search / reminders / directives / facts / skills / core-memory / canvas | **受保护**（统一挂 `require_admin_token`） | 管理面全操作集（含模型注册表 / 搜索 provider 注册表与沙盒消费的成本 / 账号驱动能力；声纹 / 表情包 / 提醒 / 长期指令 / 人物事实 / 程序性技能 / 核心记忆 / 渲染产物为人格作用域数据面） |
 | `GET /api/v1/health` | **豁免** | 零依赖存活面（health.py docstring 契约：liveness 探针不触 DB / 池 / LLM，同理不得因鉴权配置拒答） |
 | `GET /api/v1/realtime/voice/ws` | **豁免**（自鉴权） | 浏览器 WebSocket 无法设置自定义头：token 经查询参数 `token` 传递，端点内以 `verify_admin_token` 恒时比较（见 [realtime-voice.md](realtime-voice.md)） |
 | `POST /api/v1/channels/qq/webhook` | **豁免** | 自鉴权面：NapCat 事件上报经自身 `webhook_token_env` Bearer 校验（见 [channels.md](channels.md)）；再叠 admin token 会要求部署机持有管理凭据——双重鉴权破坏上报链路 |
 
-### 关闭形态与 R3 加固指引
+### 关闭形态与生产强制（`ENV=prod` fail-closed）
 
-`ADMIN_AUTH_TOKEN` 为空 / 未设置 = 鉴权关闭（全部管理路由放行）——仅适合本机开发 /
-可信内网形态；启动期落**一条** info 日志通告关闭态（含 R3 指针，不逐请求刷屏）。
-公网暴露**必须**配置非空 token。R3 计划补齐强制启用（生产 env 下空 token 拒绝启动 /
-启动向导强制写入），本节随 R3 落地同步更新。
+开发 / 测试环境（`ENV=local` / `dev` / `test`，默认 `local`）保持既有形态：
+`ADMIN_AUTH_TOKEN` 为空 / 未设置 = 鉴权关闭（全部管理路由放行），启动期落
+**一条** info 日志通告关闭态（不逐请求刷屏）。
+
+生产环境（`ENV=prod`）**R3 起强制**：
+
+- `ADMIN_AUTH_TOKEN` 解析为空 → `startup_app_state` 抛
+  `BusinessException(CONFIG_INVALID)`，文案「生产环境必须设置 ADMIN_AUTH_TOKEN」，
+  app 拒绝启动；
+- QQ 通道启用（`QQ_ENABLED=true`）且 `QQ_WEBHOOK_TOKEN` 解析为空 → 同样拒绝
+  启动（文案「生产环境启用 QQ 通道时必须设置 QQ_WEBHOOK_TOKEN」）；
+- 策略实现为
+  `packages/harness/config/auth_policy.py::ensure_auth_policy`（纯函数，
+  启动链在组件装配前调用；仅在 `ENV=prod` 生效）。
+
+公网暴露**必须**配置非空 token；开发 / 测试环境的关闭态不会带入生产。

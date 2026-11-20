@@ -8,6 +8,9 @@
 
 from __future__ import annotations
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+import packages.harness.memory.orm as memory_orm  # noqa: F401  模型注册副作用导入（共享建表）
 from packages.harness.intent.intent_models import IntentKind, PersonaNaming
 from packages.harness.intent.intent_texts import (
     DIRECTIVE_ACK_TEXT,
@@ -15,9 +18,16 @@ from packages.harness.intent.intent_texts import (
 )
 from packages.harness.intent.matcher import DIRECTIVE_PREFIXES, match_intent
 from packages.harness.intent.service import IntentShortcutService
+from packages.harness.memory.models import MemoryProvenance
+from packages.harness.persona.directives import DirectivesService
+from packages.harness.persona.directives_models import DirectiveCreateDTO
+from packages.harness.persona.service import bind_persona_context
 
 #: 分钟级固定时钟（epoch 毫秒——确定性轴）。
 NOW_MS = 1_000
+
+#: 指令捕获测试的人格上下文轴（PersonaMixin 无外键——任意字符串即隔离轴）。
+PERSONA_CONTEXT = "intent-directive-persona"
 
 
 class _Naming:
@@ -135,3 +145,58 @@ async def test_service_unmatched_text_unchanged() -> None:
     match = await service.try_shortcut("今天的工作有点难", _naming(), NOW_MS)
     assert match.handled is False
     assert match.directive_text is None
+
+
+async def _sink_via_directives_service(db_session: AsyncSession, text: str) -> bool:
+    """把指令正文经真实长期指令服务落库（装配闭包同构形态）。
+
+    Args:
+        db_session: 共享测试 Session（人格上下文由调用路径绑定）。
+        text: 指令正文（matcher 前缀剥离后的内容）。
+
+    Returns:
+        True 表示已落库。
+    """
+    async with bind_persona_context(PERSONA_CONTEXT):
+        await DirectivesService().create(db_session, DirectiveCreateDTO(content=text))
+    return True
+
+
+async def test_peer_shortcut_skips_directive_creation_and_still_replies(
+    db_session: AsyncSession,
+) -> None:
+    """群聊 peer「记住…」：不创建长期指令，仍以快径附和文案回复。"""
+    service = IntentShortcutService(
+        directive_sink=lambda text: _sink_via_directives_service(db_session, text)
+    )
+    match = await service.try_shortcut(
+        "记住：以后都用简体中文",
+        _naming(),
+        NOW_MS,
+        sender_provenance=MemoryProvenance.PEER,
+    )
+    assert match.handled is True
+    assert match.kind is IntentKind.DIRECTIVE
+    assert match.response_text == DIRECTIVE_ACK_TEXT
+    async with bind_persona_context(PERSONA_CONTEXT):
+        assert await DirectivesService().list_active(db_session) == []
+
+
+async def test_dm_owner_shortcut_creates_directive(
+    db_session: AsyncSession,
+) -> None:
+    """私聊 owner「记住…」：长期指令成功落库并回「已记住」确认。"""
+    service = IntentShortcutService(
+        directive_sink=lambda text: _sink_via_directives_service(db_session, text)
+    )
+    match = await service.try_shortcut(
+        "记住：以后都用简体中文",
+        _naming(),
+        NOW_MS,
+        sender_provenance=MemoryProvenance.OWNER,
+    )
+    assert match.handled is True
+    assert match.response_text == DIRECTIVE_CONFIRMED_TEXT.format(directive="以后都用简体中文")
+    async with bind_persona_context(PERSONA_CONTEXT):
+        active = await DirectivesService().list_active(db_session)
+    assert [record.content for record in active] == ["以后都用简体中文"]

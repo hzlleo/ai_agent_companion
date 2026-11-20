@@ -58,6 +58,22 @@ class TestMaskSensitive:
         """已知敏感 key 形态逐例脱敏。"""
         assert mask_sensitive(raw) == expected
 
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("X-Api-Key: abcdefgh123456", "X-Api-Key: ***"),
+            ("x-api-key=abcdefgh123456", "x-api-key=***"),
+            ("access-token=longtokenvalue12345", "access-token=***"),
+            ("refresh-token: 'longtokenvalue12345'", "refresh-token: '***'"),
+            ("Authorization: Bearer abcdef123456", "Authorization: Bearer ***"),
+            ("api_key=sk-1234567890abcdef", "api_key=***"),
+            ("content=abcdefgh123456", "content=abcdefgh123456"),
+        ],
+    )
+    async def test_redacts_hyphenated_separator_forms(self, raw: str, expected: str) -> None:
+        """连字符形态与既有敏感 key / Bearer / sk- 形态同面脱敏；普通键不动。"""
+        assert mask_sensitive(raw) == expected
+
     async def test_redacts_sk_prefixed_keys(self) -> None:
         """sk- 前缀长密钥脱敏（OpenAI 兼容端点 API Key 前缀）。"""
         raw = "Found key: sk-proj-abc123def456ghi789"

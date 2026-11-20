@@ -29,7 +29,10 @@ from packages.harness.config.model_resolver import ModelResolver
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.database.engine import db_engine_holder
 from packages.harness.llm.llm_models import ChatMessageModel, ChatResponseModel
-from packages.harness.multimodal.sticker_models import StickerSettings
+from packages.harness.multimodal.sticker_models import (
+    STICKER_IMAGE_BASE64_MAX_LENGTH,
+    StickerSettings,
+)
 from packages.harness.multimodal.sticker_service import StickerService
 from packages.harness.persona.dtos import PersonaCreateDTO
 from packages.harness.persona.service import PersonaService
@@ -262,3 +265,11 @@ async def test_sticker_disabled_conflict(
     """功能关闭 → 409。"""
     response = await client.get("/api/v1/stickers")
     assert response.status_code == 409
+
+
+async def test_image_base64_over_dto_cap_422(client: AsyncClient) -> None:
+    """表情包 base64 超 DTO 长度帽：请求体校验层拒绝（共享处理器归一 400，不进服务层）。"""
+    item = _item()
+    item["image_base64"] = "A" * (STICKER_IMAGE_BASE64_MAX_LENGTH + 1)
+    response = await client.post("/api/v1/stickers", json={"items": [item]})
+    assert response.status_code == 400

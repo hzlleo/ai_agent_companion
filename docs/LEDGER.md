@@ -588,6 +588,36 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **剩余**：无（本切片范围）；复审由主 Agent 后续执行。
 
+### 已完成切片：R3-1 安全修复（P1×2 + P2×5，本分支工作区）
+
+**已完成**（逐条闭环，分支 `feat/r3-security`；复审由主 Agent 后续执行）：
+
+1. **P1 群聊 peer 写入长期指令污染受信层**：`IntentShortcutService.try_shortcut` 新增仅关键字 `sender_provenance`（默认 `owner`，既有直调不变），`ChatService.reply` 透传真实来源；DIRECTIVE 捕获副作用改为仅 `owner` 执行，群聊统一按 `peer` 处理（群内主人发言同样不写指令，只回附和文案）。`chat/service.py` 的 `IntentShortcutFace` 协议与 docstring 同步。docs：`persona.md` 长期指令来源收口、`defense.md` 受信层表与攻击面矩阵、`intent.md` DIRECTIVE 行、`chat.md` 意图快径节。测试：`test_intent_directive.py` 新增 peer 不建指令仍回复 / owner 经真实 `DirectivesService` 建指令两例；`test_intent_shortcut_wiring.py` 新增 peer 来源透传一例。
+2. **P1 生产 fail-closed 鉴权**：新增 `RuntimeEnv` 枚举（`local`/`dev`/`test`/`prod`）与独立纯函数 `packages/harness/config/auth_policy.py::ensure_auth_policy`（`ENV=prod` 时空管理面 token 拒绝启动；QQ 通道启用时空入站 token 拒绝启动）；`app/middleware/admin_auth` 的 `resolve_admin_token` 迁入该模块并保持导出面；`startup_app_state` 在组件装配前调用。docs：`README.md` 认证节改写为「R3 起生产强制」、`config.md` ENV 枚举说明、`channels.md` QQ token 行与部署要点、`.env.example` 经生成器同步（无新增 env 键）。测试：`test_auth_policy.py` prod+空拒绝 / prod+非空通过 / dev+空通过 / prod+QQ 启用+空 webhook 拒绝 / startup 接线五例。
+3. **P2 企微出站附件守卫**：新增 `packages/harness/channels/outbound_guard.py`（`validate_http_url`：协议白名单 + 私网 IP 字面量拒绝；`is_private_ip_literal`；`validate_attachment_size`：8MB 帽）；`wecom_runner._fetch_url` 改为流式累积并在超帽时受控失败，`_read_local_file` 以 `read(帽+1)` 限定并注明 path 源仅内部生产者。测试：`test_outbound_guard.py` 协议 / 私网矩阵 / 大小边界；`test_wecom_runner.py` 新增 url 超帽 / 本地超帽 / 私网字面量三例（既有 32 例全绿）。
+4. **P2 http_fetch 私网对称**：沙盒树 `tool_sandbox/http_fetch.py` 移植私网判定（`ip_literal_host_is_private` / `ip_text_is_private`），允许清单命中后仍拒绝私网字面量；首跳 / 重定向 / 终态均经 `socket.getaddrinfo` 解析复检（全部地址须公网，解析失败 fail-closed；解析面可注入）。`tools-sandbox.md` 边界表与测试矩阵同步。测试：`test_http_fetch.py` 新增私网字面量矩阵、解析到私网 / 混合解析 fail-closed / 公网通过；为保 hermetic，既有 opener 测试辅助与重定向透传用例注入固定公网解析面。
+5. **P2 base64 DTO 请求体上限**：声纹 / 表情包模型新增模块常量 `VOICEPRINT_MAX_UPLOAD_BYTES` / `VOICEPRINT_AUDIO_BASE64_MAX_LENGTH` 与 `STICKER_MAX_UPLOAD_BYTES` / `STICKER_IMAGE_BASE64_MAX_LENGTH`（按字节帽 4/3 精确推导，设置默认与 DTO 上限同源）；`audio_base64` / `image_base64` 增加 `max_length`，服务层既有精确字节校验未动。测试：`test_base64_payload_bounds.py` 上限通过 / 超一字符拒绝 / 编码增量拒绝 / 常量同源五例；`test_voiceprint_api.py` / `test_sticker_api.py` 各新增超帽请求体被共享校验处理器拒绝一例。DTO schema fixture 已重生成。
+6. **P2 鉴权契约文档漂移**：`docs/backend/README.md` 保护面表补 canvas 行；`admin_auth.py` docstring 改为保护面清单以 `app/main.py` `_include_routers` 为唯一权威（当前 15 个路由集）。测试：`test_auth_surface_docs.py` 解析 README 保护行与装配层 AST 逐项比对（归一化分隔符），数量 15 且含 canvas。
+7. **P2 日志掩码连字符形态**：`core/logging.py` 的敏感 key 模式将关键词内 `_` 展开为 `[-_]`（覆盖 `X-Api-Key` / `access-token`），值长度阈值与 Bearer / sk- 规则不变。测试：`test_core_logging.py` 新增连字符形态矩阵（含 Bearer / sk- 不回归与普通键不动）。
+
+**验证**（命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2927 passed**；基线 2875 + 52 例）。
+- `cd backend && pixi run coverage-gates` → **0**（2927 passed；24 组 ≥80%，harness/intent 100.0% / harness/config 96.5% / harness/channels 97.3%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**（`Success: no issues found in 194 source files`）。
+- 根 `pixi run gates` → **0**（注释门 / 同步测试棘轮 / noqa 冻结 / conftest env 196/196、豁免 0 / 沙盒漂移 38 项 / 红探针门 193 源文件·6 探针 / 文档真相 / 断言棘轮 / 导出面 102 引用·62 登记·40 豁免 + env 键面 689 行 / prose-pin）。
+- `cd backend && pixi run conftest-env` → **0**（登记表 196 / 硬覆盖 196 / 豁免 0）。
+- `cd backend && pixi run red-probe -- --all` → **0**（6 条探针全部 RED：含新增 auth-policy-removal failed=2、outbound-guard-removal failed=1）。
+- `cd backend && pixi run export-dto-schemas` → **0**（94 组；base64 长度帽进入 schema）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 两次均 **0**；三件套 sha256 运行前 / 第一次 / 第二次完全一致（幂等，无 env 键新增）。
+- `cd docker/tool-sandbox-agent && pixi run tests-unit` → **0**（128 passed；总覆盖率 96.71%，http_fetch 90%）；`pixi run lint` / `pixi run typecheck` → **0**（6 源文件零问题）。
+
+**既有测试同步（列明）**：`test_intent_shortcut_wiring.py::FakeIntentFace.try_shortcut` 增加 `sender_provenance` 形参并记录（协议签名同步，断言不变）；沙盒 `test_http_fetch.py` 的 `_patch_opener` 与重定向透传用例注入固定公网解析面（DNS 复检引入后的 hermetic 同步，断言不变）；`test_voiceprint_api.py` / `test_sticker_api.py` / `test_core_logging.py` 仅新增用例。无断言弱化、无既有用例删除。
+
+**偏离与决策**：共享异常处理器把 pydantic `RequestValidationError` 归一为 HTTP **400**（既有契约），新增 base64 超帽 API 用例按 400 断言而非 FastAPI 默认 422；DTO 长度帽按代码默认字节帽精确推导（未加 padding），运行期把 `max_upload_bytes` 调到默认以上不会扩展 wire 上限（docstring 已注明），服务层精确字节校验保持；`ENV` 收紧为 `RuntimeEnv` 枚举后，`local`/`dev`/`test`/`prod` 之外的值在配置解析期被拒绝。
+
+**剩余**：无（本切片范围）；复审由主 Agent 后续执行。
+
 ### 5.1 死代码处置（审计 B 抽样：5 个零引用公共符号）
 
 复核口径：对五个符号逐一执行 `grep -rIn` 覆盖仓库全树（backend / frontend /

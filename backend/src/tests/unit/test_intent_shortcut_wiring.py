@@ -44,6 +44,7 @@ from packages.harness.llm.llm_models import (
     ChatResponseModel,
     ChatStreamChunkModel,
 )
+from packages.harness.memory.models import MemoryProvenance
 from packages.harness.memory.orm import ChatMessageRow, ChatSessionRow
 from packages.harness.memory.service import ChatSessionService
 from packages.harness.persona.chara_card import CharaCardModel
@@ -133,10 +134,17 @@ class FakeIntentFace:
         self.delay_calls: int = 0
 
     async def try_shortcut(
-        self, text: str, persona: Any, now_ms: int | None = None
+        self,
+        text: str,
+        persona: Any,
+        now_ms: int | None = None,
+        *,
+        sender_provenance: Any = None,
     ) -> IntentMatchModel:
-        """fake 快径尝试（记录文本与人格对象）。"""
-        self.try_calls.append({"text": text, "persona": persona})
+        """fake 快径尝试（记录文本 / 人格对象 / 来源分级）。"""
+        self.try_calls.append(
+            {"text": text, "persona": persona, "sender_provenance": sender_provenance}
+        )
         if self.match is None:
             return IntentMatchModel()
         return self.match
@@ -252,6 +260,16 @@ class TestReplyFrontHook:
         await service.reply(state, "现在几点")
 
         assert face.try_calls[0]["persona"] is state
+
+    async def test_group_peer_provenance_forwarded_to_shortcut(self) -> None:
+        """群聊来源分级透传快径面：peer 回合携带 peer（指令副作用收口原料）。"""
+        face = FakeIntentFace(_hit())
+        service = ChatService(gateway=FakeGateway(), intent_shortcut=face)
+        state = _state()
+
+        await service.reply(state, "现在几点", sender_provenance=MemoryProvenance.PEER)
+
+        assert face.try_calls[0]["sender_provenance"] is MemoryProvenance.PEER
 
     async def test_miss_falls_through_to_gateway(self) -> None:
         """未命中：照常走网关（既有行为零变化）。"""

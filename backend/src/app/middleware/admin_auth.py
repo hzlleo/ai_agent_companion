@@ -1,9 +1,8 @@
 """管理面 owner-token 鉴权依赖——admin API 路由的统一准入守卫。
 
-设计审计放行条件（新端点不得扩张无鉴权面）：personas / memories /
-usage / voice / look_at / models 六个管理路由集共享本依赖；豁免面
-（health / channels-qq webhook）与挂载契约见 ``app/main.py`` 装配注释
-及 docs/backend/README.md 认证一节。
+保护面清单以 ``app/main.py`` 的 ``_include_routers`` 为**唯一权威**
+（当前 15 个管理路由集经单一 ``APIRouter(dependencies=[...])`` 挂接）；
+本模块只承载依赖本体与豁免面的判定语义，不复制路由清单。
 
 鉴权语义（与 ``app/api/channels_qq`` webhook 入站鉴权同模式）：
 
@@ -11,10 +10,10 @@ usage / voice / look_at / models 六个管理路由集共享本依赖；豁免�
       admin_token_env`` 只持有环境变量名（默认 ``ADMIN_AUTH_TOKEN``），
       本模块按请求从该变量读取实际 token（与 telegram ``bot_token_env``
       / 沙盒 ``token_env`` 同约定）；
-    - **空 = 鉴权关闭**：变量未设置 / 为空时依赖直接放行（开发 / 内网
-      形态）。关闭态只在**启动期**经 :func:`log_admin_auth_startup_notice`
-      落一条 info 日志（不逐请求刷屏）；公网暴露必须配置 token，R3 将
-      补齐强制启用（见 docs/backend/README.md 认证一节）；
+    - **空 = 鉴权关闭（仅开发 / 测试）**：变量未设置 / 为空时依赖直接
+      放行。``ENV=prod`` 时启动期经
+      :func:`packages.harness.config.auth_policy.ensure_auth_policy`
+      fail-closed（空 token 拒绝启动），关闭态不会带入生产；
     - **恒时比较**：token 配置时要求 ``Authorization: Bearer <token>``
       头（scheme 前缀解析 + ``secrets.compare_digest``——防时序侧信道）；
     - **失败 → 401**：``BusinessException(UNAUTHORIZED)`` 经共享异常
@@ -28,13 +27,13 @@ Settings 解析次序（与 channels_qq / main.lifespan 同回退次序）：
 
 from __future__ import annotations
 
-import os
 import secrets
 from typing import cast
 
 from fastapi import Request
 from loguru import logger
 
+from packages.harness.config.auth_policy import resolve_admin_token
 from packages.harness.config.models import Settings
 from packages.harness.config.models import settings as global_settings
 from packages.harness.core.errors import BusinessException, ErrorCode
@@ -45,19 +44,6 @@ __all__ = [
     "resolve_admin_token",
     "verify_admin_token",
 ]
-
-
-def resolve_admin_token(settings: Settings) -> str:
-    """解析管理面 owner token（``admin_token_env`` 间接读取）。
-
-    Args:
-        settings: 生效 Settings（``settings.server.admin_token_env`` 持有
-            环境变量名）。
-
-    Returns:
-        token 本值（strip 后）；变量未设置 / 为空返回空串（= 鉴权关闭）。
-    """
-    return os.environ.get(settings.server.admin_token_env, "").strip()
 
 
 def _bearer_token(authorization: str) -> str | None:
@@ -146,6 +132,6 @@ def log_admin_auth_startup_notice(settings: Settings) -> None:
         return
     logger.info(
         "管理面 owner-token 鉴权未启用（环境变量 {} 为空——放行全部管理路由；"
-        "公网暴露必须配置，R3 将补齐强制启用）",
+        "R3 起生产环境 ENV=prod 强制启用，开发 / 测试形态保持关闭）",
         settings.server.admin_token_env,
     )

@@ -500,7 +500,7 @@ OneBot v11 `message` 字段双形态：段数组（`[{"type": "text", "data": {.
 
 | | Telegram | QQ |
 |---|---|---|
-| token 缺失（构造期） | fail loud（app 拒绝启动） | 不 fail（NapCat 未开启鉴权是合法形态） |
+| token 缺失（构造期） | fail loud（app 拒绝启动） | 不 fail（NapCat 未开启鉴权是合法形态；**`ENV=prod` 且通道启用时**入站 `QQ_WEBHOOK_TOKEN` 为空 → 拒绝启动） |
 | 启动校验失败（getMe / get_login_info） | token 无效 → fail fast 终止 runner 任务；暂态失败 → 告警进退避循环 | **一律 warn-and-continue**——适配器仍注册，出站失败逐消息经路由器兜底隔离 |
 | 理由 | 长驻轮询任务——token 无效时任务无意义 | 推送式入站 + 无长驻任务；NapCat 常晚于后端就绪（部署时序），fail fast 只会因部署顺序杀掉整个 app |
 
@@ -508,7 +508,7 @@ OneBot v11 `message` 字段双形态：段数组（`[{"type": "text", "data": {.
 
 1. **NapCat 服务**：部署机安装并登录 QQ 账号（NapCat 为独立进程，暴露 OneBot v11 HTTP API——默认 `http://127.0.0.1:3000`，即 `QQ_HTTP_API_BASE_URL` 指向目标）；
 2. **HTTP POST 上报配置**：NapCat 侧配置事件上报 URL 指向本后端 `POST /api/v1/channels/qq/webhook`（公网部署经反代暴露该端点；上报携带 access token 时走 `Authorization: Bearer` 头）；
-3. **token 双侧配置**：NapCat 侧开启 access token 鉴权时，本后端设 `QQ_ACCESS_TOKEN`（出站 Bearer）；上报校验 token 设 `QQ_WEBHOOK_TOKEN`（入站恒时比较——**空 = 鉴权关闭，仅限同机 / 可信内网部署**，公网暴露必须配置否则任何人可注入伪造事件）；
+3. **token 双侧配置**：NapCat 侧开启 access token 鉴权时，本后端设 `QQ_ACCESS_TOKEN`（出站 Bearer）；上报校验 token 设 `QQ_WEBHOOK_TOKEN`（入站恒时比较——为空 = 开发 / 测试形态鉴权关闭，仅限同机 / 可信内网部署；**`ENV=prod` 且通道启用时启动期 fail-closed**，空 token 拒绝启动——见 [README.md](README.md#认证管理面-owner-token-鉴权)）；
 4. **群 vs 私聊语义**：私聊会话身份 `private:<user_id>`（一人一会话）；群聊 `group:<group_id>`（一群一会话，群内所有成员共享同一人格会话——发送者 ID 经 `sender_id` 承载）。
 
 ### 错误码映射（QQ 面——复用 channels 域既有码表）
@@ -531,7 +531,7 @@ env 面（`env_prefix=QQ_`；嵌套覆写 `CHANNELS__QQ__*` 亦可用）：
 | `enabled` | `QQ_ENABLED` | `false` | 是否装配 QQ 通道适配器（false = 零通道对象构造） |
 | `http_api_base_url` | `QQ_HTTP_API_BASE_URL` | `http://127.0.0.1:3000` | NapCat HTTP API 基础 URL（单一动作对象包裹 POST 目标） |
 | `access_token_env` | `QQ_ACCESS_TOKEN_ENV` | `QQ_ACCESS_TOKEN` | **出站** access token 环境变量名（间接——本值以 `Authorization: Bearer` 头携带；空 = NapCat 未开启鉴权形态） |
-| `webhook_token_env` | `QQ_WEBHOOK_TOKEN_ENV` | `QQ_WEBHOOK_TOKEN` | **入站**校验 token 环境变量名（间接——恒时比较；**空 = 鉴权关闭**，见部署要点 3） |
+| `webhook_token_env` | `QQ_WEBHOOK_TOKEN_ENV` | `QQ_WEBHOOK_TOKEN` | **入站**校验 token 环境变量名（间接——恒时比较；为空 = 开发/测试鉴权关闭；生产 `ENV=prod` 且通道启用时强制非空，见部署要点 3） |
 | `request_timeout_seconds` | `QQ_REQUEST_TIMEOUT_SECONDS` | `15` | 单次动作请求超时秒数（> 0） |
 
 ```bash

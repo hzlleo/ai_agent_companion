@@ -501,7 +501,7 @@ active + 历史链 + 唯一键强制）与删除语义直接继承策展层，�
 | `kind` | `user_note` | 固定（策展类型值域既有成员） |
 | `topic` | `directive:<slug>` | 前缀强制（`DIRECTIVE_TOPIC_PREFIX`）；缺省 slug = 正文 sha256 前 12 hex（同文重复创建收敛同链——天然去重）；显式 topic 用于编辑（同 topic 覆盖 supersede，`version` 递增） |
 | `content` | 1-500 字符 | 首尾空白裁剪；超长 / 空白拒绝（`VALIDATION_ERROR`） |
-| `provenance` | `owner` | 固定（长期指令恒源自主人——对话捕获与面板创建同轴） |
+| `provenance` | `owner` | 固定（长期指令恒属主人受信层——管理面创建恒 owner；对话捕获只接受 owner 来源，群聊统一按 peer 处理） |
 | 注入帽 | 20 条 / 2000 字符 | chat compose 渲染帽（超帽追加截断说明行） |
 
 `DirectivesService` API（人格作用域——调用方先 `bind_persona_context`）：
@@ -537,6 +537,11 @@ await service.delete(session, directive_id)                       # 删除（策
 `DirectiveSinkFace` 落库为长期指令（`provenance=owner`），**落库成功才**回复
 「已记住：正文」；落库失败 / 未接线时退化为普通附和（不承诺记住——避免下一轮
 compose 读不到指令时自相矛盾）。副作用恒不阻断回复链路。
+
+**来源收口（群聊不写指令）**：捕获副作用只在 `sender_provenance=owner`（私聊
+主人回合）时执行。群聊统一按 `peer` 处理——**群内的主人发言同样不写长期指令**，
+只回附和文案；群聊消息无权改写受信指令层。管理面 `/api/v1/directives` 的
+创建 / 编辑不受此限（运维显式写入）。
 
 前端消费面（`frontend/src/pages/personas/DirectivesPanel.tsx`）：人格编辑页
 「常备指令」卡片——列表 / 新建 / 编辑（supersede）/ 删除（确认）。

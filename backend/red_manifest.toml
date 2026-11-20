@@ -228,3 +228,18 @@ tests = [
     "tests/unit/test_sticker_bridge.py::test_decode_inbound_stickers_keeps_inline_base64_and_caption",
     "tests/unit/test_sticker_bridge.py::test_decode_inbound_stickers_skips_invalid_and_reference_sources",
 ]
+
+[[probes]]
+name = "auth-policy-removal"
+symbol = "packages.harness.config.auth_policy:ensure_auth_policy"
+tests = [
+    "tests/unit/test_auth_policy.py::test_prod_with_empty_admin_token_rejects_startup",
+    "tests/unit/test_auth_policy.py::test_prod_with_qq_enabled_and_empty_webhook_token_rejects",
+]
+
+[[probes]]
+name = "outbound-guard-removal"
+symbol = "packages.harness.channels.outbound_guard:validate_http_url"
+tests = [
+    "tests/unit/test_outbound_guard.py::test_missing_host_rejected",
+]

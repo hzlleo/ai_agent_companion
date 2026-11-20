@@ -60,6 +60,7 @@
 from __future__ import annotations
 
 import re
+from enum import StrEnum
 from typing import Any, Literal
 from urllib.parse import quote_plus
 
@@ -77,6 +78,7 @@ from packages.harness.voice.realtime_models import RealtimeVoiceSettings
 from packages.harness.voice.voiceprint_models import VoiceprintSettings
 
 __all__ = [
+    "RuntimeEnv",
     "ServerConfig",
     "DatabaseConfig",
     "LogConfig",
@@ -115,6 +117,21 @@ __all__ = [
 _DAILY_AT_RE = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 
 
+class RuntimeEnv(StrEnum):
+    """运行环境标识值域（``ENV``——生产策略判定面）。
+
+    ``ENV=prod`` 表示生产语义：管理面鉴权与 QQ 入站 webhook 鉴权必须
+    显式配置（启动期 fail-closed，见
+    :func:`packages.harness.config.auth_policy.ensure_auth_policy`）。
+    ``local`` / ``dev`` / ``test`` 保持「空 token = 鉴权关闭」的开发形态。
+    """
+
+    LOCAL = "local"
+    DEV = "dev"
+    TEST = "test"
+    PROD = "prod"
+
+
 def _validate_daily_at_shape(value: str) -> str:
     """校验每日时刻形态（``HH:MM`` 24 小时制——strip 后 fullmatch）。
 
@@ -141,9 +158,10 @@ class ServerConfig(BaseSettings):
     / 沙盒 ``token_env`` 同模式——**token 本值永不落 yaml / 配置树**），
     本配置只持有变量名；实际 token 由 ``app/middleware/admin_auth``
     鉴权依赖按请求从该变量读取。变量非空 = 管理路由要求
-    ``Authorization: Bearer <token>``；为空 = 鉴权关闭（开发 / 内网形
-    态——公网暴露必须配置；R3 将补齐强制启用，见 docs/backend/README.md
-    认证一节）。
+    ``Authorization: Bearer <token>``；为空 = 开发 / 测试形态鉴权关闭。
+    **``ENV=prod`` 时启动期 fail-closed**（空 token 拒绝启动，见
+    :func:`packages.harness.config.auth_policy.ensure_auth_policy` 与
+    docs/backend/README.md 认证一节）。
 
     Attributes:
         host: 服务监听地址（默认仅绑定回环——本机开发安全默认；容器部署
@@ -172,7 +190,7 @@ class ServerConfig(BaseSettings):
     admin_token_env: str = Field(
         default="ADMIN_AUTH_TOKEN",
         min_length=1,
-        description="管理面 owner-token 鉴权环境变量名（空 = 鉴权关闭；公网暴露必须配置）",
+        description="管理面 owner-token 鉴权环境变量名（空 = 开发/测试鉴权关闭；生产 ENV=prod 强制非空）",
     )
 
     model_config = SettingsConfigDict(
@@ -785,9 +803,10 @@ class QqChannelSettings(BaseSettings):
           ``CHANNEL_TOKEN_MISSING``（逐消息隔离，不阻断启动）；
         - ``webhook_token_env``——**入站**校验（NapCat 事件上报侧配置
           的 access token；webhook 端点按 ``Authorization: Bearer`` 恒时
-          比较）。**空 = 鉴权关闭**（文档化取舍：仅适合 NapCat 与后端
-          同机 / 可信内网部署；公网暴露必须配置，否则任何人可向
-          webhook 注入伪造事件）。
+          比较）。**空 = 鉴权关闭**（仅适合 NapCat 与后端同机 / 可信
+          内网部署）；``ENV=prod`` 且本通道启用时启动期 fail-closed
+          （空 token 拒绝启动，见
+          :func:`packages.harness.config.auth_policy.ensure_auth_policy`）。
 
     Attributes:
         enabled: 是否启用 QQ 通道（False = 不装配适配器 / webhook 直传忽略）。
@@ -796,7 +815,8 @@ class QqChannelSettings(BaseSettings):
         access_token_env: 出站 access token 环境变量名（实际 token 从该
             变量读取；空 = NapCat 未开启鉴权形态）。
         webhook_token_env: 入站 webhook 校验 token 环境变量名（实际
-            token 从该变量读取；空 = 入站鉴权关闭——见类 docstring 取舍）。
+            token 从该变量读取；空 = 开发/测试入站鉴权关闭——生产
+            ``ENV=prod`` 且通道启用时强制非空）。
         request_timeout_seconds: 单次动作请求超时秒数。
     """
 
@@ -808,7 +828,9 @@ class QqChannelSettings(BaseSettings):
         default="QQ_ACCESS_TOKEN", min_length=1, description="出站 access token 环境变量名"
     )
     webhook_token_env: str = Field(
-        default="QQ_WEBHOOK_TOKEN", min_length=1, description="入站 webhook 校验 token 环境变量名"
+        default="QQ_WEBHOOK_TOKEN",
+        min_length=1,
+        description="入站 webhook 校验 token 环境变量名（生产环境通道启用时强制非空）",
     )
     request_timeout_seconds: float = Field(default=15.0, gt=0, description="单次动作请求超时（秒）")
 
@@ -1266,7 +1288,8 @@ class Settings(BaseSettings):
         intent: 意图快径配置（默认开启——INTENT_ env 面；物理定义在
             :class:`packages.harness.intent.intent_models.IntentSettings`，
             此处聚合引用）。
-        env: 运行环境标识（local / dev / prod）。
+        env: 运行环境标识（local / dev / test / prod——prod 触发生产
+            鉴权 fail-closed 策略）。
     """
 
     server: ServerConfig = ServerConfig()
@@ -1290,7 +1313,10 @@ class Settings(BaseSettings):
     flow: FlowGateSettings = FlowGateSettings()
     group_persona: GroupPersonaSettings = GroupPersonaSettings()
     intent: IntentSettings = IntentSettings()
-    env: str = Field(default="local", description="运行环境标识（local / dev / prod）")
+    env: RuntimeEnv = Field(
+        default=RuntimeEnv.LOCAL,
+        description="运行环境标识（local / dev / test / prod）",
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
