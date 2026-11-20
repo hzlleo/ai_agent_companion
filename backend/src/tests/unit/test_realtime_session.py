@@ -972,3 +972,50 @@ async def test_end_drain_is_preempted_by_close_event() -> None:
     assert harness.session.metrics.closed_reason is RealtimeCloseReason.MAX_DURATION
     assert harness.session.active_task_count == 0
     await _assert_no_leaked_tasks(baseline)
+
+
+# ---------------------------------------------------------------------------
+# 逐句 TTS 队列背压
+# ---------------------------------------------------------------------------
+
+
+async def test_tts_queue_backpressure_drops_oldest_and_counts() -> None:
+    """TTS 队列满：丢最旧句并计数；关闭时队列清空且零任务残留。"""
+    from loguru import logger
+
+    harness = SessionHarness(tts_queue_max=2)
+    await harness.boot()
+    session = harness.session
+    assert session is not None
+    session._current_turn_id = "turn-1"
+    gate = asyncio.Event()
+    harness.voice.tts_gate = gate
+    session._enqueue_sentence("turn-1", "一")
+    session._enqueue_sentence("turn-1", "二")
+    session._enqueue_sentence("turn-1", "三")
+    session._enqueue_sentence("turn-1", "四")
+    assert session.metrics.tts_chunks_dropped == 2
+    jobs = []
+    while not session._tts_queue.empty():
+        jobs.append(session._tts_queue.get_nowait())
+    assert [job.text for job in jobs] == ["三", "四"]
+    for job in jobs:
+        session._tts_queue.put_nowait(job)
+    captured: list[str] = []
+    handler_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+    try:
+        await asyncio.wait_for(harness.voice.tts_started.wait(), timeout=_WAIT_TIMEOUT)
+        gate.set()
+        await harness.request_end()
+    finally:
+        logger.remove(handler_id)
+    assert session.metrics.tts_chunks_dropped == 2
+    assert session._tts_queue.qsize() == 0
+    assert session.active_task_count == 0
+    assert any("tts_dropped=2" in message for message in captured)
+
+
+async def test_tts_queue_max_rejects_zero() -> None:
+    """配置边界：tts_queue_max 必须 ≥ 1（加载期拒绝）。"""
+    with pytest.raises(ValidationError):
+        realtime_settings(tts_queue_max=0)

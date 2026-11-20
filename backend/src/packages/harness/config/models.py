@@ -384,6 +384,12 @@ class LlmEndpointConfig(BaseSettings):
             该字段——旧端点兼容）。
         prompt_logprobs: 提示词 token logprobs 数（≥1；None = 省略该
             字段；流式请求恒省略——见 llm 域传输客户端约束）。
+        daily_budget_global: 全局每日模型调用行数上限（0 = 不限；
+            有效上限 10,000——计数页帽 50 页 × 每页 200 行；计数按
+            usage 记录，跨 worker 近似一致——软竞态）。
+        daily_budget_persona: 单人格每日模型调用行数上限（0 = 不限；
+            有效上限 10,000——计数页帽 50 页 × 每页 200 行；仅人格
+            上下文调用受此档约束）。
     """
 
     base_url: str = Field(default="", description="默认端点 API 基础 URL")
@@ -398,6 +404,24 @@ class LlmEndpointConfig(BaseSettings):
         default=20,
         ge=1,
         description="提示词 token logprobs 数（≥1；空值 = 省略该字段；流式请求恒省略）",
+    )
+    daily_budget_global: int = Field(
+        default=0,
+        ge=0,
+        le=10_000,
+        description=(
+            "全局每日模型调用行数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"
+            "按 usage 记录计数，跨 worker 近似一致）"
+        ),
+    )
+    daily_budget_persona: int = Field(
+        default=0,
+        ge=0,
+        le=10_000,
+        description=(
+            "单人格每日模型调用行数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"
+            "仅人格上下文调用受约束）"
+        ),
     )
 
     @field_validator("top_logprobs", "prompt_logprobs", mode="before")

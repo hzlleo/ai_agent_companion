@@ -11,6 +11,9 @@
       失败下行 error(UNAUTHORIZED) 后以 1008 关闭；
     - **能力门控**：``REALTIME_VOICE_ENABLED=false`` 时下行
       error(CONFLICT) 后以 1013（稍后重试）关闭——客户端据此展示配置指引；
+    - **并发帽**：``REALTIME_VOICE_MAX_SESSIONS``（默认 2）为进程内并发
+      会话上限；超限下行 error(RATE_LIMITED) 后以 1013 拒绝（多个 worker
+      部署时各进程独立计数——见 docs/backend/config.md 的 workers 语义）；
     - **人格**：显式 ``persona_id`` 缺失 → 当前激活人格；无主人格 →
       error(NOT_FOUND) + 关闭（会话需要人格正典做 compose 与 TTS 绑定）。
 
@@ -260,27 +263,52 @@ async def realtime_voice_websocket(websocket: WebSocket) -> None:
         )
         await websocket.close(code=_WS_CLOSE_TRY_AGAIN, reason="realtime voice disabled")
         return
-    try:
-        persona = await _resolve_persona(websocket)
-        chat = await _build_chat(websocket, persona)
-    except BusinessException as exc:
-        await _send_bootstrap_error(
-            websocket, code=str(exc.code), message=exc.message
+    app_state = websocket.app.state
+    active_sessions = cast("int", getattr(app_state, "realtime_voice_active_sessions", 0))
+    if active_sessions >= realtime_settings.max_sessions:
+        logger.warning(
+            "实时语音并发会话已达上限（1013 拒绝）: active={}, limit={}",
+            active_sessions,
+            realtime_settings.max_sessions,
         )
-        await websocket.close(code=_WS_CLOSE_POLICY_VIOLATION, reason=str(exc.code))
+        await _send_bootstrap_error(
+            websocket,
+            code=str(ErrorCode.RATE_LIMITED),
+            message=(
+                "实时语音并发会话已达上限"
+                f"（REALTIME_VOICE_MAX_SESSIONS={realtime_settings.max_sessions}），请稍后重试"
+            ),
+        )
+        await websocket.close(code=_WS_CLOSE_TRY_AGAIN, reason="realtime voice busy")
         return
-    logger.info(
-        "实时语音连接已接入: persona_id={}, tts_enabled={}, asr_enabled={}",
-        persona.id,
-        settings.voice.tts.enabled,
-        settings.voice.asr.enabled,
-    )
-    session = RealtimeVoiceSession(
-        transport=StarletteRealtimeTransport(websocket),
-        realtime_settings=realtime_settings,
-        voice_settings=settings.voice,
-        chat=chat,
-        voice_service=VoiceService(usage_recorder=wire_default_voice_usage_recorder()),
-        persona=persona,
-    )
-    await session.run()
+    app_state.realtime_voice_active_sessions = active_sessions + 1
+    try:
+        try:
+            persona = await _resolve_persona(websocket)
+            chat = await _build_chat(websocket, persona)
+        except BusinessException as exc:
+            await _send_bootstrap_error(
+                websocket, code=str(exc.code), message=exc.message
+            )
+            await websocket.close(code=_WS_CLOSE_POLICY_VIOLATION, reason=str(exc.code))
+            return
+        logger.info(
+            "实时语音连接已接入: persona_id={}, tts_enabled={}, asr_enabled={}",
+            persona.id,
+            settings.voice.tts.enabled,
+            settings.voice.asr.enabled,
+        )
+        session = RealtimeVoiceSession(
+            transport=StarletteRealtimeTransport(websocket),
+            realtime_settings=realtime_settings,
+            voice_settings=settings.voice,
+            chat=chat,
+            voice_service=VoiceService(usage_recorder=wire_default_voice_usage_recorder()),
+            persona=persona,
+        )
+        await session.run()
+    finally:
+        current = cast(
+            "int", getattr(app_state, "realtime_voice_active_sessions", active_sessions + 1)
+        )
+        app_state.realtime_voice_active_sessions = max(0, current - 1)

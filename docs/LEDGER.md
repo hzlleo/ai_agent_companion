@@ -163,9 +163,9 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2871 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 2950 passed）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
-cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖/sandbox-drift；当前 mypy 192 文件零问题）
+cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖/sandbox-drift；当前 mypy 195 文件零问题）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 11 用例（迁移链/并发唯一键/行锁/混合检索）
 cd frontend && pixi run test / coverage / lint / build   # 666 passed（高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
@@ -618,6 +618,60 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **剩余**：无（本切片范围）；复审由主 Agent 后续执行。
 
+### 已完成切片：R3-2 限流/背压修复（P1×1 + P2×7，本分支工作区）
+
+**已完成**（逐条闭环，分支 `feat/r3-security`；复审由主 Agent 后续执行）：
+
+1. **P1 QQ 入站有界化**：新增 `channels/qq/qq_runner.py`（`QqWebhookRunner`——容量 64 / worker 2 / 去重窗 1024 均为代码常量非 env，与企微 runner 同风格）；`qq_webhook.py` 拆出纯解析面 `parse_webhook_event`（不可路由事件返回 None、不登记去重），`process_webhook_event` 保留单事件直调语义（去重 + 路由，恒不抛）。端点改为 `runner.submit(payload)` 后**立即 200**（runner 未装配的嵌入形态回落直调）；队列满丢弃并计 `dropped_inbound`（ERROR 含 message_id / 队列深度 / 累计丢弃，不登记去重）；lifespan 装配 runner + 托管任务，停机 `request_stop` → cancel worker → 清空队列（槽位复位）。测试：`test_qq_runner.py` 10 例（容量满丢弃/计数/日志、丢弃不登记去重与重投恢复、重复吸收、不可路由不登记、worker 消费、停机零残留、周期观测三态）+ `test_channels_qq_api.py` 慢路由下立即确认 + `test_app_qq_channels_lifespan.py` 装配/停机槽位。
+2. **P2 实时语音 TTS 队列有界**：`REALTIME_VOICE_TTS_QUEUE_MAX`（默认 32，≥1）→ 队列 maxsize；满时丢最旧句并计 `tts_chunks_dropped`（与音频队列同策略），关闭指标日志新增 `tts_dropped=`。测试：`test_realtime_session.py` 满/丢最旧顺序/计数/关闭清零与 `tts_queue_max=0` 拒绝。
+3. **P2 WS 会话帽**：`REALTIME_VOICE_MAX_SESSIONS`（默认 2，≥1）→ 进程内并发计数；超限下行 `error(RATE_LIMITED)` 并以 **1013** 拒绝；名额在 `finally` 释放（含人格解析 / 装配失败的提前返回路径）。测试：两连通过、第三连 1013、结束释放后新连可用（API 层注入人格/聊天装配，避免共享库连接争用）。
+4. **P2 LLM 日预算闸**：`LLM_DAILY_BUDGET_GLOBAL` / `LLM_DAILY_BUDGET_PERSONA`（默认 0 = 不限，`ge=0`）落在 `LlmEndpointConfig`；网关在条目门控 / 传输前按 persona→global 判定，超限抛既有 `RATE_LIMITED`（details 含 scope/used/limit[/persona_id]），**不落用量行**；计数经 `wire_default_usage_counter()`（usage DB 口径，跨 worker 近似一致——软竞态写入 llm.md）；两档均 0 时零计数查询。慢调用 WARN：阈值常量 `SLOW_CALL_WARN_MS=10s`，success 路径输出 entry/model/purpose/latency（不打印内容）；网关新增注入式 `clock` 支撑判定。测试：persona/global 超限、limit-1 放行与 limit 拒绝、0 不限零查询、无人格上下文走 global、流式首迭代前拒绝、慢调用触发/不触发（伪时钟）。
+5. **P2 workers>1 语义**：`docs/backend/config.md` 新增「多 worker 语义」节（进程内限值 ×N、去重窗 / 心流 / per-chat 锁 / 实时语音计数不跨进程共享、预算 DB 计数近似全局）；`docs/backend/pools.md` 同步一句；代码零变更。
+6. **P2 最小观测面**：企微 / QQ runner 增加周期 INFO（`WECOM_STATS_INTERVAL_MS` / `QQ_STATS_INTERVAL_MS` 均为 60s 代码常量，注入时钟节流；仅 pending>0 或 dropped 有增量时输出深度/增量）；LLM 慢调用 WARN 同第 4 条。测试：两 runner 各自「到达间隔+有积压输出」「空队列静默」（QQ 另测未到间隔静默）+ LLM 阈值两组。
+7. **P2 前端 Node 护栏**：`frontend/package.json` 增 `engines.node=">=22 <23"`，`frontend/.npmrc` 增 `engine-strict=true`；`frontend/README.md` 的 Pixi 命令节与根 README 快速开始注明必须经 pixi（Node 22），勿直接 npm。
+8. **P2 构建体积基线**：`frontend/README.md` 新增「构建体积基线（决策）」——单 chunk 717.44 KB / gzip 213.91 KB、CSS 23.26 KB / gzip 5.28 KB；审计实测构建 6.16s、本机复跑 3.61s（负载相关）。决策维持单 chunk，触发条件 >1 MB 或部署机 LCP 明显退化再拆路由级 lazy（先 realtime / memories）。§5.2 已同步性能行。
+9. **env / 模板 / 向导 / conftest 同步**：4 个新键经 `_ENV_SECTIONS` 生成器进入 `.env.example` 与 `config.md` 分节表（`--sync-docs`）；向导按既有前缀自动落入「LLM 端点配置」/「实时语音会话配置」步骤；`conftest.py` 硬覆盖 4 键（门禁 200/200）。
+10. **文档**：`channels.md`（QQ 链路 / runner 行 / 有界队列与确认语义 / 去重边界）、`realtime-voice.md`（TTS 队列 / 并发帽 / 错误码 / 配置行 / 测试面）、`llm.md`（链路 ⓪ 预算闸、构造注入、日预算与慢调用节、测试位置）、`config.md`、`pools.md`、`frontend/README.md`、根 README、本台账。
+
+**验证**（命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2950 passed**；基线 2927 + 23 例）。
+- `cd backend && pixi run coverage-gates` → **0**（2950 passed；24 组 ≥80%，harness/channels 97.3% / harness/llm 98.0% / harness/voice 95.4% / app/api 83.5% / app/main.py 94.3%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**（`Success: no issues found in 195 source files`）。
+- 根 `pixi run gates` → **0**（注释门 violations=0；同步测试棘轮通过；noqa/type:ignore 基线 0；conftest env 200/200、豁免 0；沙盒漂移 38 项一致；红探针门 194 源文件 / 探针 7 条；文档真相；断言棘轮；导出面 102 引用·62 登记·40 豁免 + env 键面 701 行；prose-pin 报告）。
+- `cd backend && pixi run red-probe -- --symbol packages.harness.channels.qq.qq_runner:QqWebhookRunner` → **1**（期望 RED：failed=1——探针「去掉实现必变红」的正向证据）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 两次均 **0**；三件套 sha256 运行前 / 第一次 / 第二次完全一致（幂等）。
+- `cd frontend && pixi run test -- --maxWorkers=4` → **0**（**666 passed** / 85 文件）；`pixi run lint` → **0**；`pixi run build` → **0**（单 chunk 717.44 KB / gzip 213.91 KB，构建 3.61s）。
+- 前端未改业务代码（仅 package.json engines / .npmrc / README）；默认并发跑 `pixi run test` 出现既有负载敏感用例 `useStickersApi.test.ts` 的 `waitFor` 1s 超时（LEDGER 既载已知项），按既有做法以 `--maxWorkers=4` 复跑全绿。
+
+**偏离与决策**：
+
+- **预算计数口径**：单次 usage 查询（不按 purpose 过滤）以保持每调用 O(1) 查询；因此 search / tts / asr / voiceprint 的 usage 行也占用 LLM 日预算（模型调用总量闸语义），分面独立预算列入边界（见 §6）。
+- **「恰好等于上限」语义**：沿用 search 预算的 `used >= limit` 拒绝；测试同时锁定 `used = limit-1` 放行与 `used = limit` 拒绝（「调用后恰好达到上限」放行）。
+- **QQ 端点保留直调回落**：`app.state.channels_qq_runner` 未装配时仍走 `process_webhook_event`（嵌入 / 最小 app 形态与既有 API 测试兼容）；生产 QQ 启用形态恒装配 runner。
+- **WS 并发帽为进程内计数**：多 worker 部署每进程独立（config.md 已写明）；强全局上限需跨进程存储，本工程 NO Redis 决策下不引入。
+- **周期观测只在有事件入站时检查节流点**：空闲期无 ticker 任务，无积压可报；有积压时下一条入站即触发（与「仅当 pending>0 或 dropped 有增量」一致）。
+
+**剩余**：无（本切片范围）；复审由主 Agent 后续执行。
+
+**复审修复（Oracle 深审本切片后 6×P2 逐条闭环；复审结论由主 Agent 执行）**：
+
+1. **P2 预算 >10,000 静默失效**：`LlmEndpointConfig.daily_budget_global` / `daily_budget_persona` 增 `le=10_000`（计数页帽 50×200 为有效上限，超出则预算永远无法触发）；字段说明与 `docs/backend/llm.md`、`docs/backend/config.md` 注明「有效上限 10,000（计数页帽 50×200）」，`.env.example` 经生成器重出。测试：`test_config_settings.py` 新增上限校验（10,000 通过 / 10,001 双档拒绝）。
+2. **P2 计数器分页零测试**：`test_llm_gateway.py` 新增 `wire_default_usage_counter` 分页用例 4 例（共享 SQLite + ORM 批量灌行）：201 行跨页累计 = 201（200+1 且尾页终止）、恰好 200 行 = 200、空库 = 0、10,200 行按页帽截断 = 10,000。
+3. **P2 embed 预算零测试**：`test_llm_embeddings.py` 新增 embed 预算耗尽用例——`RATE_LIMITED`、details 形状与 persona 档一致（scope/used/limit/persona_id）、零出站、零用量事件。
+4. **P2 qq_webhook docstring 虚构共享窗口**：模块与 `process_webhook_event` docstring 改为「共享解析面与去重窗口类型（各自实例：直调路径用模块级窗口，runner 持独立窗口）」；`docs/backend/channels.md` 无同型失真句，未改。
+5. **P2 llm.md 流程 ⓪/① 顺序失真**：调用链图按实码重排（chat/stream 先角色解析后预算闸），并补图注「chat/stream：角色解析后、条目门控/传输前；embed：解析前」；日预算节同步位置描述与有效上限。
+6. **P2 qq runner worker 异常隔离零覆盖**：`test_qq_runner.py` 新增用例——首条抛 `RuntimeError` 后 worker 记录 ERROR 并继续消费第二条；断言两条均进入 router、第二条正常处理、runner 未停机（事件门等待，无固定 sleep）。
+
+**验证**（命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2957 passed**；基线 2950 + 7 例）。
+- `cd backend && pixi run coverage-gates` → **0**（2957 passed；24 组 ≥80%，harness/llm 99.0% / harness/channels 97.3% / harness/config 96.5% / app/api 83.5% / app/main.py 94.1%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**（`Success: no issues found in 195 source files`）。
+- 根 `pixi run gates` → **0**（注释门 violations=0；同步测试棘轮通过；noqa/type:ignore 基线 0；conftest env 200/200、豁免 0；沙盒漂移 38 项一致；红探针门 194 源文件 / 探针 7 条；文档真相；断言棘轮；导出面 102 引用·62 登记·40 豁免 + env 键面 701 行；prose-pin 报告）。
+- `cd backend && pixi run conftest-env` → **0**（登记表 200 / 硬覆盖 200 / 豁免 0）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 两次均 **0**；三件套 sha256 运行前 / 第一次 / 第二次完全一致（幂等，无 env 键新增）。
+
 ### 5.1 死代码处置（审计 B 抽样：5 个零引用公共符号）
 
 复核口径：对五个符号逐一执行 `grep -rIn` 覆盖仓库全树（backend / frontend /
@@ -656,6 +710,7 @@ scripts / docs / docker / models；排 `__pycache__` / `.pixi` / `node_modules` 
 |---|---|---|---|
 | `skills.match_for_compose` 在 500 行扫描帽前排序（`use_count DESC, id ASC`） | 复审必修（R2c 补审：扫描确定性） | **否——随复审即时落地** | 影响：扫描帽只裁剪低强化候选，高强化技能不再被插入顺序挤出命中面；观察：命中分布、`EXPLAIN` 计划稳定性、扫描上限是否需要随技能库规模调整 |
 | `ff_persona_facts` 复合索引 0018（`persona_id, status, confidence`） | 复审必修（R2c 深审：事实查询性能） | **否——随复审即时落地** | 影响：按人格 / 状态 / 置信度的现行事实查询；观察：迁移链升 / 降 / 复升、慢查询日志、写入放大（插入与更正路径的索引维护成本） |
+| 前端维持单 chunk（minified 717.44 KB / gzip 213.91 KB） | R3-2 构建体积基线实测 | **否——维持现状** | 影响：管理台首屏加载单文件；观察：单 chunk >1 MB 或部署机 LCP 明显退化时再引入路由级 `lazy()`（先拆 realtime / memories，保留共享 vendor chunk）。基线见 frontend/README.md「构建体积基线」 |
 
 ### 已完成切片：全约束审计 B 修复（P1×1 + P2×4，本分支工作区）
 
@@ -767,6 +822,7 @@ scripts / docs / docker / models；排 `__pycache__` / `.pixi` / `node_modules` 
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
 - SmsForwarder 短信通道（D3 记账推迟）；WhatsApp/其他平台未列入 R2。
 - 声纹（PIPL 合规）与表情包素材法律边界提示义务已随 R2d-2 交付（默认关闭，部署侧按需配置 `VOICEPRINT_*` / `STICKER_*` 并起说话人向量服务）。
+- 预算边界（R3-2）：LLM 日预算为全模型调用总量闸（usage 全 purpose 行数）；ASR / TTS / voiceprint 的独立分面预算未实现——需要时在 usage 域按 purpose 增加过滤面，不改变现闸语义。
 - 实时语音（R2f）遗留：真实 ASR / TTS 连通性与首字/首音延迟需部署机一次性验证（步骤见 docs/backend/realtime-voice.md「部署侧一次性真机验证」）；AEC / 回声消除未做（外放可能自触发打断，建议耳机或浏览器平台 AEC）；移动端采集（ScriptProcessor）与后台挂起优化未做；ASR/TTS 服务端点无真流式通道（partial 为节流中途批量转写、句级音频整句解码后播放）；实时语音轮次不注入工具面（需要搜索/沙盒走文字通道）。
 - 已知部署机注意：开发机无 NVIDIA GPU（Iris Xe）；GPU/模型项一律在 Clevo 机执行。
 

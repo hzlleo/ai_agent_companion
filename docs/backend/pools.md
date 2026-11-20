@@ -34,6 +34,8 @@ lifespan shutdown（LIFO）:
 
 幂等语义：重复 start 为 no-op（既有池不重建）；未 start / 重复 stop 为 no-op；get_* 未 start 时抛 `INTERNAL_ERROR`（快速暴露编程错误）；`get_seekdb_pool` 在 `SEEKDB_ENABLED=false` 时同样 `INTERNAL_ERROR`。
 
+多 worker（`SERVER_WORKERS`>1）时上述限值按进程各持一份——`POOLS_LLM_SEMAPHORE_LIMIT` / 熔断状态 / 共享 HTTP 池均为进程内资源，全局上限 = 单进程值 × N，状态不跨进程共享（详见 [config.md](config.md#多-worker-语义server_workers--1)）。
+
 app lifespan 的装配顺序契约（唯一真相 = `app/main.py`）：startup 为 `setup_logging → load_all_config → init_database → init_pool_manager + start → …`，shutdown 严格逆序（`pool_manager.stop()` 先于 `close_database()`）。本域只提供 start/stop API，装配顺序由 app 层决定——`init_database` 经 SQLAlchemy greenlet 桥建表、不依赖共享线程池，故数据库先于池初始化在功能上成立。
 
 ## PoolsConfig env 面

@@ -36,7 +36,9 @@ interrupted + state(listening)。取消语义安全边界（文档化决策）�
       拒绝（可恢复 error + ``audio_chunks_rejected`` 计数），会话继续；
     - **背压**：音频入队上限取 ``REALTIME_VOICE_AUDIO_QUEUE_MAX_CHUNKS``，
       溢出策略为**丢最旧块并计数**（实时音频宁丢旧帧不阻塞收帧循环；
-      丢弃数落关闭指标日志）；
+      丢弃数落关闭指标日志）；逐句 TTS 队列同策略（上限
+      ``REALTIME_VOICE_TTS_QUEUE_MAX``，溢出丢最旧句并计
+      ``tts_chunks_dropped``——生成快于合成时保留最新播报内容）；
     - **超时**：空闲（无任何上行消息）与最大时长由看门狗按注入时钟判定
       ——时钟与休眠面均可注入（伪时钟测试零真实等待）；
     - **优雅关闭**：``end`` 先冲刷 VAD 尾段，排空在途转写与轮次播报后
@@ -222,7 +224,9 @@ class RealtimeVoiceSession:
         self._audio_queue: asyncio.Queue[bytes] = asyncio.Queue(
             maxsize=realtime_settings.audio_queue_max_chunks
         )
-        self._tts_queue: asyncio.Queue[TtsSentenceJobModel] = asyncio.Queue()
+        self._tts_queue: asyncio.Queue[TtsSentenceJobModel] = asyncio.Queue(
+            maxsize=realtime_settings.tts_queue_max
+        )
         self._tasks: set[asyncio.Task[None]] = set()
         self._close_event = asyncio.Event()
         self._turn_idle_event = asyncio.Event()
@@ -917,6 +921,18 @@ class RealtimeVoiceSession:
             return
         sentence_index = self._sentence_seq
         self._sentence_seq += 1
+        if self._tts_queue.full():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._tts_queue.get_nowait()
+                self._tts_pending = max(0, self._tts_pending - 1)
+            self._metrics.tts_chunks_dropped += 1
+            if self._metrics.tts_chunks_dropped % 32 == 1:
+                logger.warning(
+                    "实时语音 TTS 队列溢出（丢最旧句）: session_id={}, dropped={}, capacity={}",
+                    self._session_id,
+                    self._metrics.tts_chunks_dropped,
+                    self._settings.tts_queue_max,
+                )
         self._tts_queue.put_nowait(
             TtsSentenceJobModel(turn_id=turn_id, sentence_index=sentence_index, text=sentence)
         )
@@ -1253,8 +1269,8 @@ class RealtimeVoiceSession:
         logger.info(
             "实时语音会话已关闭: session_id={}, reason={}, audio_chunks={}, dropped={}, "
             "rejected={}, segments={}, partials={}, finals={}, generations={}, "
-            "tts_sentences={}, audio_chunks_sent={}, interruptions={}, asr_failures={}, "
-            "tts_failures={}, generation_failures={}, duration_ms={}",
+            "tts_sentences={}, tts_dropped={}, audio_chunks_sent={}, interruptions={}, "
+            "asr_failures={}, tts_failures={}, generation_failures={}, duration_ms={}",
             self._session_id,
             reason.value,
             snapshot.audio_chunks_received,
@@ -1265,6 +1281,7 @@ class RealtimeVoiceSession:
             snapshot.final_transcripts,
             snapshot.generations,
             snapshot.tts_sentences,
+            snapshot.tts_chunks_dropped,
             snapshot.audio_chunks_sent,
             snapshot.interruptions,
             snapshot.asr_failures,

@@ -46,6 +46,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from typing import Final
 
 from loguru import logger
 
@@ -86,11 +87,28 @@ from packages.harness.llm.llm_models import (
 from packages.harness.pools.llm_pool import LlmEntryPool
 from packages.harness.pools.manager import PoolManager, get_pool_manager
 
-__all__ = ["LlmGateway", "UsageRecorder", "wire_default_usage_recorder"]
+__all__ = [
+    "LlmGateway",
+    "UsageCounter",
+    "UsageRecorder",
+    "wire_default_usage_counter",
+    "wire_default_usage_recorder",
+]
 
 
 #: 用量记录器契约——网关 → usage 域的注入式异步回调。
 UsageRecorder = Callable[[LlmUsageEvent], Awaitable[None]]
+#: 预算计数面契约——(persona_id, 日桶起点毫秒) → 当日用量行数（None = 全局）。
+UsageCounter = Callable[[str | None, int], Awaitable[int]]
+
+#: UTC 日桶宽（毫秒）——预算「今日」边界（与 usage 域 time_bucket=day 同口径）。
+DAY_BUCKET_MS: Final[int] = 86_400_000
+#: 预算计数分页大小（usage 域上限 200）。
+_BUDGET_COUNT_PAGE_LIMIT: Final[int] = 200
+#: 预算计数页数安全上限（防异常记录集拖死调用路径）。
+_BUDGET_COUNT_PAGE_CAP: Final[int] = 50
+#: 慢调用 WARN 阈值毫秒（仅 WARN——不重试、不中断）。
+SLOW_CALL_WARN_MS: Final[int] = 10_000
 
 
 def _role_value(role: ModelRole | str) -> str:
@@ -113,6 +131,8 @@ class LlmGateway:
         pool_manager: PoolManager | None = None,
         settings: Settings | None = None,
         usage_recorder: UsageRecorder | None = None,
+        usage_counter: UsageCounter | None = None,
+        clock: Callable[[], int] = now_ms,
         retry_attempts: int = 3,
         retry_wait_seconds: float = 0.5,
         retry_after_max_seconds: float = 30.0,
@@ -129,6 +149,9 @@ class LlmGateway:
                 密钥与 llm_request_timeout_seconds）。
             usage_recorder: 用量记录器（None = 未接线——零记录，app
                 装配时经 wire_default_usage_recorder 绑定）。
+            usage_counter: 预算计数面（None = 零预算门禁——纯编排 /
+                测试形态；app 装配经 wire_default_usage_counter 绑定）。
+            clock: 时钟（epoch 毫秒——预算日桶 / 时延统计，测试注入）。
             retry_attempts: 传输重试总次数上限（含首次）。
             retry_wait_seconds: 指数退避基数秒。
             retry_after_max_seconds: Retry-After 等待封顶秒数。
@@ -146,6 +169,8 @@ class LlmGateway:
         self._pool_manager = pool_manager
         self._settings = settings
         self._usage_recorder = usage_recorder
+        self._usage_counter = usage_counter
+        self._clock = clock
         self._retry_attempts = retry_attempts
         self._retry_wait_seconds = retry_wait_seconds
         self._retry_after_max_seconds = retry_after_max_seconds
@@ -328,13 +353,14 @@ class LlmGateway:
                 不计条目熔断失败）；条目熔断中（``LLM_REQUEST_FAILED``）；
                 传输失败（见 client 映射表）。
         """
-        entry = self._resolve_role(ModelRole.EMBED)
         resolved_persona = persona_id if persona_id is not None else persona_id_var.get()
+        await self._enforce_daily_budget(resolved_persona)
+        entry = self._resolve_role(ModelRole.EMBED)
         resolved_request_id = request_id if request_id is not None else request_id_var.get()
         client = self._build_client(entry)
         entry_pool = self._require_entry_pool()
         breaker = entry_pool.get_entry_breaker(entry)
-        started_ms = now_ms()
+        started_ms = self._clock()
         try:
             if not texts:
                 # 本地编程错误在 entry_gate 之前拒绝——不计条目熔断失败
@@ -360,9 +386,10 @@ class LlmGateway:
                 status="success",
                 usage=response.usage,
                 ts_ms=started_ms,
-                latency_ms=now_ms() - started_ms,
+                latency_ms=self._clock() - started_ms,
                 error_code=None,
             )
+            self._maybe_warn_slow(entry, purpose="embed", latency_ms=self._clock() - started_ms)
             return response
         except BusinessException as exc:
             self._log_call_failure(entry, purpose="embed", exc=exc)
@@ -374,7 +401,7 @@ class LlmGateway:
                 status="error",
                 usage=None,
                 ts_ms=started_ms,
-                latency_ms=now_ms() - started_ms,
+                latency_ms=self._clock() - started_ms,
                 error_code=str(exc.code),
             )
             raise
@@ -471,10 +498,11 @@ class LlmGateway:
         """
         resolved_persona = persona_id if persona_id is not None else persona_id_var.get()
         resolved_request_id = request_id if request_id is not None else request_id_var.get()
+        await self._enforce_daily_budget(resolved_persona)
         client = self._build_client(entry, wire_api_key=wire_api_key)
         entry_pool = self._require_entry_pool()
         breaker = entry_pool.get_entry_breaker(entry)
-        started_ms = now_ms()
+        started_ms = self._clock()
         try:
             async with entry_pool.entry_gate(entry):
                 try:
@@ -494,8 +522,11 @@ class LlmGateway:
                 status="success",
                 usage=response.usage,
                 ts_ms=started_ms,
-                latency_ms=now_ms() - started_ms,
+                latency_ms=self._clock() - started_ms,
                 error_code=None,
+            )
+            self._maybe_warn_slow(
+                entry, purpose=purpose, latency_ms=self._clock() - started_ms
             )
             return response
         except BusinessException as exc:
@@ -508,7 +539,7 @@ class LlmGateway:
                 status="error",
                 usage=None,
                 ts_ms=started_ms,
-                latency_ms=now_ms() - started_ms,
+                latency_ms=self._clock() - started_ms,
                 error_code=str(exc.code),
             )
             raise
@@ -656,10 +687,11 @@ class LlmGateway:
         """
         resolved_persona = persona_id if persona_id is not None else persona_id_var.get()
         resolved_request_id = request_id if request_id is not None else request_id_var.get()
+        await self._enforce_daily_budget(resolved_persona)
         client = self._build_client(entry, wire_api_key=wire_api_key)
         entry_pool = self._require_entry_pool()
         breaker = entry_pool.get_entry_breaker(entry)
-        started_ms = now_ms()
+        started_ms = self._clock()
         aggregated_usage: TokenUsageModel | None = None
         try:
             if messages_have_content_parts(messages):
@@ -689,8 +721,11 @@ class LlmGateway:
                 status="success",
                 usage=aggregated_usage,
                 ts_ms=started_ms,
-                latency_ms=now_ms() - started_ms,
+                latency_ms=self._clock() - started_ms,
                 error_code=None,
+            )
+            self._maybe_warn_slow(
+                entry, purpose=purpose, latency_ms=self._clock() - started_ms
             )
         except BusinessException as exc:
             self._log_call_failure(entry, purpose=purpose, exc=exc)
@@ -702,7 +737,7 @@ class LlmGateway:
                 status="error",
                 usage=aggregated_usage,
                 ts_ms=started_ms,
-                latency_ms=now_ms() - started_ms,
+                latency_ms=self._clock() - started_ms,
                 error_code=str(exc.code),
             )
             raise
@@ -717,6 +752,92 @@ class LlmGateway:
     # ------------------------------------------------------------------
     # 内部——用量发射 / 失败日志
     # ------------------------------------------------------------------
+
+    async def _enforce_daily_budget(self, persona_id: str | None) -> None:
+        """LLM 日预算门禁（persona 档先行——更紧的先报；超限即抛）。
+
+        计数口径 = 当日 usage 行（UTC 日桶；DB 口径，跨 worker 近似一致，
+        存在软竞态——并发请求可能同时通过同一剩余额度，见
+        docs/backend/llm.md「日预算闸与慢调用观测」）。两档均 0 = 不限（零计数查询）。
+
+        Args:
+            persona_id: 人格 ID（None = 系统调用——跳过 persona 档）。
+
+        Raises:
+            BusinessException: 任一档超限（``RATE_LIMITED``——details 含
+                scope / used / limit）。
+        """
+        counter = self._usage_counter
+        if counter is None:
+            return
+        llm_settings = (self._settings if self._settings is not None else global_settings).llm
+        persona_limit = llm_settings.daily_budget_persona
+        global_limit = llm_settings.daily_budget_global
+        if persona_limit <= 0 and global_limit <= 0:
+            return
+        day_start = (self._clock() // DAY_BUCKET_MS) * DAY_BUCKET_MS
+        if persona_id is not None and persona_limit > 0:
+            persona_used = await counter(persona_id, day_start)
+            if persona_used >= persona_limit:
+                self._raise_budget_exceeded(
+                    scope="persona", used=persona_used, limit=persona_limit, persona_id=persona_id
+                )
+        if global_limit > 0:
+            global_used = await counter(None, day_start)
+            if global_used >= global_limit:
+                self._raise_budget_exceeded(
+                    scope="global", used=global_used, limit=global_limit, persona_id=None
+                )
+
+    @staticmethod
+    def _raise_budget_exceeded(
+        *, scope: str, used: int, limit: int, persona_id: str | None
+    ) -> None:
+        """抛预算超限错误（统一 message / details 形状）。
+
+        Args:
+            scope: 超限档位（persona / global）。
+            used: 当日已用行数。
+            limit: 该档上限。
+            persona_id: 人格 ID（global 档为 None）。
+
+        Raises:
+            BusinessException: ``RATE_LIMITED``（429）。
+        """
+        details: dict[str, object] = {"scope": scope, "used": used, "limit": limit}
+        if persona_id is not None:
+            details["persona_id"] = persona_id
+        logger.warning(
+            "LLM 日预算已用尽（调用前拒绝）: scope={}, used={}, limit={}, persona={}",
+            scope,
+            used,
+            limit,
+            persona_id,
+        )
+        raise BusinessException(
+            code=ErrorCode.RATE_LIMITED,
+            message=f"LLM 每日预算已用尽（{scope}）: used={used}, limit={limit}",
+            details=details,
+        )
+
+    @staticmethod
+    def _maybe_warn_slow(entry: LlmModelEntry, *, purpose: str, latency_ms: int) -> None:
+        """慢调用 WARN（阈值常量；只输出标识与时延，不打印消息内容）。
+
+        Args:
+            entry: 调用的模型条目。
+            purpose: 调用用途。
+            latency_ms: 端到端时延毫秒。
+        """
+        if latency_ms < SLOW_CALL_WARN_MS:
+            return
+        logger.warning(
+            "LLM 慢调用: entry={}, model={}, purpose={}, latency_ms={}",
+            entry.name,
+            entry.model,
+            purpose,
+            latency_ms,
+        )
 
     @staticmethod
     def _log_call_failure(entry: LlmModelEntry, *, purpose: str, exc: BusinessException) -> None:
@@ -836,3 +957,41 @@ def wire_default_usage_recorder() -> UsageRecorder:
         )
 
     return _record
+
+
+def wire_default_usage_counter() -> UsageCounter:
+    """装配默认预算计数面（绑定 usage 域查询——app 装配调用）。
+
+    计数口径 = 当日 UTC 日桶内的 usage 行（全 purpose、含失败行）：
+    本闸是模型调用总量闸，TTS / ASR / voiceprint 的独立预算不在本批
+    （边界见 docs/backend/llm.md）。跨 worker 各自查询同一张表，结果
+    近似全局一致（软竞态：并发请求可能同时通过同一剩余额度）。
+
+    Returns:
+        ``(persona_id, day_start_ms) → 当日行数`` 的异步计数器。
+    """
+    from packages.harness.usage.dtos import UsageQueryDTO
+    from packages.harness.usage.service import UsageService
+
+    service = UsageService()
+
+    async def _count(persona_id: str | None, day_start_ms: int) -> int:
+        """游标分页统计当日行数（页数安全上限防异常膨胀）。"""
+        total = 0
+        cursor: str | None = None
+        for _ in range(_BUDGET_COUNT_PAGE_CAP):
+            page = await service.query(
+                UsageQueryDTO(
+                    persona_id=persona_id,
+                    start_ms=day_start_ms,
+                    cursor=cursor,
+                    limit=_BUDGET_COUNT_PAGE_LIMIT,
+                )
+            )
+            total += len(page.items)
+            cursor = page.next_cursor
+            if not cursor:
+                break
+        return total
+
+    return _count

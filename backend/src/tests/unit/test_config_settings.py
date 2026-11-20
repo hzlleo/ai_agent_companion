@@ -239,3 +239,13 @@ async def test_llm_logprobs_env_surface_and_validation() -> None:
         LlmEndpointConfig(top_logprobs=0)
     with pytest.raises(ValidationError):
         LlmEndpointConfig(prompt_logprobs=0)
+
+
+async def test_llm_daily_budget_effective_ceiling_validation() -> None:
+    """LLM 日预算上限：10,000（计数页帽 50×200）通过，10,001 拒绝。"""
+    assert LlmEndpointConfig(daily_budget_global=10_000).daily_budget_global == 10_000
+    assert LlmEndpointConfig(daily_budget_persona=10_000).daily_budget_persona == 10_000
+    with pytest.raises(ValidationError):
+        LlmEndpointConfig(daily_budget_global=10_001)
+    with pytest.raises(ValidationError):
+        LlmEndpointConfig(daily_budget_persona=10_001)

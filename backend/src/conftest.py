@@ -108,6 +108,8 @@ os.environ["LLM_MODEL"] = "test-model"
 # 开发者 shell 导出的同名值不得泄入测试）
 os.environ["LLM_TOP_LOGPROBS"] = "20"
 os.environ["LLM_PROMPT_LOGPROBS"] = "20"
+os.environ["LLM_DAILY_BUDGET_GLOBAL"] = "0"
+os.environ["LLM_DAILY_BUDGET_PERSONA"] = "0"
 
 # --- 亲密回复独立通道（LLM_INTIMATE_ 前缀 → IntimateChannelConfig；默认关闭
 #     → 测试零行为变更；S3 硬覆盖模式——裸构造 IntimateChannelConfig() 与
@@ -292,12 +294,14 @@ os.environ["REALTIME_VOICE_PARTIAL_TRANSCRIPT_INTERVAL_MS"] = "800"
 os.environ["REALTIME_VOICE_PARTIAL_MIN_SPEECH_MS"] = "600"
 os.environ["REALTIME_VOICE_SENTENCE_MAX_CHARS"] = "80"
 os.environ["REALTIME_VOICE_TTS_CHUNK_BYTES"] = "16384"
+os.environ["REALTIME_VOICE_TTS_QUEUE_MAX"] = "32"
 os.environ["REALTIME_VOICE_AUDIO_QUEUE_MAX_CHUNKS"] = "64"
 os.environ["REALTIME_VOICE_AUDIO_BATCH_MAX_CHUNKS"] = "8"
 os.environ["REALTIME_VOICE_MAX_SESSION_MS"] = "600000"
 os.environ["REALTIME_VOICE_IDLE_TIMEOUT_MS"] = "60000"
 os.environ["REALTIME_VOICE_HEARTBEAT_INTERVAL_MS"] = "15000"
 os.environ["REALTIME_VOICE_BARGE_IN_ENABLED"] = "true"
+os.environ["REALTIME_VOICE_MAX_SESSIONS"] = "2"
 
 # --- 联网搜索（SEARCH_ 前缀 → WebSearchSettings；默认关闭 → 测试零真实
 #     连接（搜索 provider 为外部 API）；S3 硬覆盖模式——开发者 shell

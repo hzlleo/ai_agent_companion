@@ -18,7 +18,7 @@ import pytest
 
 from packages.harness.config.model_entry import parse_model_entry
 from packages.harness.config.model_resolver import ModelResolver
-from packages.harness.config.models import PoolsConfig
+from packages.harness.config.models import LlmEndpointConfig, PoolsConfig
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.core.context import bind_context
 from packages.harness.core.errors import BusinessException, ErrorCode
@@ -377,3 +377,62 @@ async def test_gateway_embed_transport_error_breaker_and_usage() -> None:
         assert event.error_code == ErrorCode.LLM_CALL_FAILED
     finally:
         await manager.stop()
+
+
+class _ExhaustedBudgetCounter:
+    """预算耗尽的假计数面（固定返回已用行数并记录查询参数）。"""
+
+    def __init__(self, used: int) -> None:
+        """初始化计数面。
+
+        Args:
+            used: 每次查询返回的当日已用行数。
+        """
+        self.used = used
+        self.calls: list[tuple[str | None, int]] = []
+
+    async def __call__(self, persona_id: str | None, day_start_ms: int) -> int:
+        """返回脚本化已用行数。"""
+        self.calls.append((persona_id, day_start_ms))
+        return self.used
+
+
+async def test_gateway_embed_budget_exhausted_rejected_before_outbound() -> None:
+    """embed 预算耗尽：调用前拒绝（RATE_LIMITED + details），零出站且不落用量。"""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return _embeddings_response()
+
+    manager = await _make_pool_manager(handler)
+    recorder = RecordingUsageRecorder()
+    counter = _ExhaustedBudgetCounter(2)
+    gateway = LlmGateway(
+        resolver=ModelResolver([_embed_entry()]),
+        pool_manager=manager,
+        settings=build_isolated_settings(
+            pools=PoolsConfig(cb_fail_max=2),
+            llm=LlmEndpointConfig(daily_budget_persona=2),
+        ),
+        usage_recorder=recorder,
+        usage_counter=counter,
+        retry_attempts=1,
+        retry_wait_seconds=0.0,
+    )
+    try:
+        with pytest.raises(BusinessException) as exc_info:
+            await gateway.embed_by_role(["早安"], persona_id="p-budget")
+    finally:
+        await manager.stop()
+    assert exc_info.value.code == ErrorCode.RATE_LIMITED
+    assert exc_info.value.details == {
+        "scope": "persona",
+        "used": 2,
+        "limit": 2,
+        "persona_id": "p-budget",
+    }
+    assert captured == []
+    assert recorder.events == []
+    assert counter.calls[0][0] == "p-budget"
+    assert counter.calls[0][1] % 86_400_000 == 0

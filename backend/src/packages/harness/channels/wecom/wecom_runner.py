@@ -100,6 +100,7 @@ __all__ = [
     "WECOM_DEDUP_WINDOW_SIZE",
     "WECOM_INBOUND_QUEUE_SIZE",
     "WECOM_INBOUND_WORKER_COUNT",
+    "WECOM_STATS_INTERVAL_MS",
 ]
 
 #: msgid 去重窗口容量（官方文档：msgid 用于事件排重；窗口超容按 FIFO 淘汰）。
@@ -108,6 +109,8 @@ WECOM_DEDUP_WINDOW_SIZE: Final[int] = 1024
 WECOM_INBOUND_QUEUE_SIZE: Final[int] = 64
 #: 入站 worker 数（同聊天由路由器 per-chat 锁串行；多 worker 只提升跨聊天并行度）。
 WECOM_INBOUND_WORKER_COUNT: Final[int] = 2
+#: 队列观测 INFO 间隔毫秒（仅深度 > 0 或丢弃有增量时输出——常量非 env）。
+WECOM_STATS_INTERVAL_MS: Final[int] = 60_000
 #: 附件上传缺省 MIME 子类型（media_type 缺线索时的文件名后缀）。
 _UPLOAD_DEFAULT_SUBTYPE: Final[str] = "bin"
 
@@ -211,6 +214,8 @@ class WeComChannelRunner:
         self._stop_event = asyncio.Event()
         self._workers: list[asyncio.Task[None]] = []
         self._dropped_inbound = 0
+        self._last_stats_ms = self._clock()
+        self._last_dropped_at_stats = 0
 
     # ------------------------------------------------------------------
     # 观测面（装配 / 测试）
@@ -342,9 +347,30 @@ class WeComChannelRunner:
                 inbound.message_id,
                 self._dropped_inbound,
             )
+            self._maybe_log_stats()
             return
         if body.msgid:
             self._dedup.remember(body.msgid)
+        self._maybe_log_stats()
+
+    def _maybe_log_stats(self) -> None:
+        """按注入时钟节流输出队列深度 / 丢弃增量（仅在有积压或丢弃时）。"""
+        now = self._clock()
+        if now - self._last_stats_ms < WECOM_STATS_INTERVAL_MS:
+            return
+        self._last_stats_ms = now
+        dropped_delta = self._dropped_inbound - self._last_dropped_at_stats
+        self._last_dropped_at_stats = self._dropped_inbound
+        pending = self.pending_inbound
+        if pending <= 0 and dropped_delta <= 0:
+            return
+        logger.info(
+            "企微入站队列观测: pending={}, capacity={}, dropped_delta={}, dropped_total={}",
+            pending,
+            self._inbound_queue.maxsize,
+            dropped_delta,
+            self._dropped_inbound,
+        )
 
     @staticmethod
     def _log_event_frame(frame: WeComCallbackFrameModel) -> None:

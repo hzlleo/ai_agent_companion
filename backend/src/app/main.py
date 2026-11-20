@@ -135,6 +135,7 @@ from packages.harness.channels.douyin.douyin_client import DouyinWebClient
 from packages.harness.channels.douyin.douyin_runner import DouyinChannelRunner
 from packages.harness.channels.qq.qq_adapter import NapCatQQAdapter
 from packages.harness.channels.qq.qq_client import NapCatOneBotClient
+from packages.harness.channels.qq.qq_runner import QqWebhookRunner
 from packages.harness.channels.telegram.tg_client import TelegramClient
 from packages.harness.channels.telegram.tg_runner import TelegramChannelRunner
 from packages.harness.channels.wecom.wecom_client import WeComLongConnectionClient
@@ -154,7 +155,11 @@ from packages.harness.database.session import session_scope
 from packages.harness.duty.duty_models import DutyRunConfigModel
 from packages.harness.duty.duty_service import DutyService
 from packages.harness.intent.service import IntentShortcutService
-from packages.harness.llm.gateway import LlmGateway, wire_default_usage_recorder
+from packages.harness.llm.gateway import (
+    LlmGateway,
+    wire_default_usage_counter,
+    wire_default_usage_recorder,
+)
 from packages.harness.memory.dreaming import DreamService
 from packages.harness.memory.episode_sink import ChatTurnEpisodeSink
 from packages.harness.memory.retrieval import (
@@ -275,6 +280,7 @@ async def startup_app_state(
     app.state.gateway = LlmGateway(
         settings=settings,
         usage_recorder=wire_default_usage_recorder(),
+        usage_counter=wire_default_usage_counter(),
         top_logprobs=settings.llm.top_logprobs,
         prompt_logprobs=settings.llm.prompt_logprobs,
     )
@@ -545,7 +551,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     读写面 + 快径面注入）；telegram 启用时再装配 TelegramClient +
     TelegramChannelRunner → create_task + ``background_task_manager``
     托管；QQ 启用时装配 NapCatOneBotClient + NapCatQQAdapter →
-    ``router.register_adapter`` + 启动校验 get_login_info；企微启用时装配长连接
+    ``router.register_adapter`` + 启动校验 get_login_info + QqWebhookRunner
+    （有界入站队列，托管后台任务）；企微启用时装配长连接
     runner；抖音 web 启用时装配轮询 runner（消费浏览器 sidecar 底座——底座
     未就绪即跳过该通道，见 ``_startup_douyin_channel``）。全部关闭时
     no-op（零通道对象构造——rhythm / intent 槽位同样 None：二者的
@@ -571,8 +578,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     失败（NapCat 不可达 / token 无效）**warn-and-continue**——适配器仍
     注册（入站 webhook 照常确认），出站发送失败逐消息经路由器兜底隔离。
     理由：QQ 入站是推送式（NapCat 侧配置上报目标——后端启动时 NapCat
-    尚未就绪是常见部署时序），且 QQ 通道无长驻任务可终止；fail fast
-    只会因部署顺序杀掉整个 app。
+    尚未就绪是常见部署时序），且入站消费 runner 不轮询、不决定通道健康；
+    fail fast 只会因部署顺序杀掉整个 app。
 
     Args:
         app: 待装配的 FastAPI 应用（router / runner / task / rhythm /
@@ -589,6 +596,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     """
     app.state.channels_runner = None
     app.state.channels_task = None
+    app.state.channels_qq_runner = None
+    app.state.channels_qq_task = None
     app.state.channels_wecom_runner = None
     app.state.channels_wecom_task = None
     app.state.channels_douyin_runner = None
@@ -783,8 +792,14 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
         adapter = NapCatQQAdapter(client=qq_client)
         router.register_adapter(ChannelType.QQ, adapter)
         await _validate_qq_startup(qq_client)
+        qq_runner = QqWebhookRunner(router=router)
+        qq_task = asyncio.create_task(qq_runner.run(), name="qq-channel-runner")
+        background_task_manager.register(qq_task)
+        qq_task.add_done_callback(_log_channel_task_termination)
+        app.state.channels_qq_runner = qq_runner
+        app.state.channels_qq_task = qq_task
         logger.info(
-            "QQ 通道适配器已注册（webhook 入站 + NapCat HTTP API 出站）: base_url={}",
+            "QQ 通道适配器已注册（webhook 有界队列入站 + NapCat HTTP API 出站）: base_url={}",
             qq.http_api_base_url,
         )
     if wecom.enabled:
@@ -798,8 +813,8 @@ async def _validate_qq_startup(client: NapCatOneBotClient) -> None:
     """QQ 启动校验 get_login_info（warn-and-continue——不阻断启动）。
 
     与 telegram ``_startup_validate`` 的差异（文档化决策）：telegram 是
-    长驻轮询任务（token 无效 fail fast 终止任务 + 错误日志）；QQ 无长驻
-    任务且入站为推送式——校验失败仅告警，适配器保持注册（出站失败逐
+    长驻轮询任务（token 无效 fail fast 终止任务 + 错误日志）；QQ 入站为
+    推送式（runner 不轮询、不依赖启动校验结果）——校验失败仅告警，适配器保持注册（出站失败逐
     消息经路由器兜底隔离，不因启动时序杀 app）。
 
     Args:
@@ -954,22 +969,26 @@ async def _startup_douyin_channel(
 async def _shutdown_channels(app: FastAPI) -> None:
     """停机通道层（先于公共池——通道组件消费共享 HTTP client；幂等）。
 
-    停机链（telegram runner）：``request_stop``（优雅）→ bounded 等待任务
-    收尾 → 超时 ``cancel`` 兜底（在途长轮询被取消——offset 已逐批持久化，
-    重启安全）。QQ 通道无长驻任务（推送式入站 + 适配器注册态）——仅随
-    ``channels_router`` 槽位复位（共享池 client 生命周期归 pools）。
+    停机链（telegram / QQ / 企微 / 抖音 runner）：``request_stop``（优雅）
+    → bounded 等待任务收尾 → 超时 ``cancel`` 兜底（在途长轮询被取消——
+    offset 已逐批持久化，重启安全）。QQ runner 为有界队列消费面——
+    ``request_stop`` 后取消 worker 并清空待处理队列（零残留）；
+    ``channels_router`` 槽位随通道层复位（共享池 client 生命周期归 pools）。
     rhythm / intent 会话性组件无自有资源（随机源随实例丢弃）——槽位
     随通道层一同复位。
 
     Args:
         app: 待收尾的 FastAPI 应用（``channels_router`` / ``channels_runner``
-            / ``channels_task`` / ``channels_wecom_runner`` /
+            / ``channels_task`` / ``channels_qq_runner`` /
+            ``channels_qq_task`` / ``channels_wecom_runner`` /
             ``channels_wecom_task`` / ``channels_douyin_runner`` /
             ``channels_douyin_task`` / ``rhythm_service`` / ``intent_shortcut``
             槽位复位 None）。
     """
     runner: TelegramChannelRunner | None = getattr(app.state, "channels_runner", None)
     task: asyncio.Task[None] | None = getattr(app.state, "channels_task", None)
+    qq_runner: QqWebhookRunner | None = getattr(app.state, "channels_qq_runner", None)
+    qq_task: asyncio.Task[None] | None = getattr(app.state, "channels_qq_task", None)
     wecom_runner: WeComChannelRunner | None = getattr(
         app.state, "channels_wecom_runner", None
     )
@@ -982,6 +1001,8 @@ async def _shutdown_channels(app: FastAPI) -> None:
     )
     app.state.channels_runner = None
     app.state.channels_task = None
+    app.state.channels_qq_runner = None
+    app.state.channels_qq_task = None
     app.state.channels_wecom_runner = None
     app.state.channels_wecom_task = None
     app.state.channels_douyin_runner = None
@@ -992,6 +1013,7 @@ async def _shutdown_channels(app: FastAPI) -> None:
     app.state.intent_shortcut = None
     app.state.sticker_service = None
     await _stop_managed_channel_task(runner, task, label="Telegram 通道")
+    await _stop_managed_channel_task(qq_runner, qq_task, label="QQ 通道")
     await _stop_managed_channel_task(wecom_runner, wecom_task, label="企微长连接通道")
     await _stop_managed_channel_task(douyin_runner, douyin_task, label="抖音 web 通道")
 

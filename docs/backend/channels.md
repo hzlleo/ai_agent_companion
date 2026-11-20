@@ -14,7 +14,8 @@
 | `qq/qq_models.py` | OneBot v11 wire 模型子集（Unit 文件）：事件（段数组 / CQ 码字符串双形态 message）/ 段 / 动作请求包裹 / 动作响应包裹（投递映射）/ v2 附件段发射 | `Ob11EventModel` / `Ob11MessageSegmentModel` / `Ob11ApiRequestModel` / `Ob11ApiResponseModel` / `Ob11LoginInfoModel` / `attachment_to_ob11_segment` |
 | `qq/qq_client.py` | 手写 NapCat OneBot v11 HTTP API 客户端（共享 httpx client 注入；单一动作对象包裹；v2 段数组发送） | `NapCatOneBotClient` |
 | `qq/qq_adapter.py` | QQ 适配器发送面（chat_id grammar 解析 → NapCat 动作 → 投递映射；无 runner；v2 附件段数组出站） | `NapCatQQAdapter` |
-| `qq/qq_webhook.py` | webhook 事件处理器（容错解析 / 大类过滤 / message_id 去重 / 消息展平 / v2 附件提取；恒不抛） | `process_webhook_event` / `flatten_message_text` / `extract_message_attachments` / `QqMessageDedupWindow` / `reset_qq_webhook_state` |
+| `qq/qq_webhook.py` | webhook 事件解析面（容错解析 / 大类过滤 / 消息展平 / v2 附件提取）与单事件直调路径（去重 + 路由；恒不抛） | `parse_webhook_event` / `process_webhook_event` / `flatten_message_text` / `extract_message_attachments` / `QqMessageDedupWindow` / `reset_qq_webhook_state` |
+| `qq/qq_runner.py` | webhook 入站 runner（有界队列 + 固定 worker / message_id 去重 / 过载丢弃计数 / 周期观测 / 生命周期收尾）——端点立即确认，LLM 回合在后台消费 | `QqWebhookRunner` / `QQ_INBOUND_QUEUE_SIZE` / `QQ_INBOUND_WORKER_COUNT` / `QQ_STATS_INTERVAL_MS` |
 | `wecom/wecom_models.py` | 智能机器人长连接 wire 模型（Unit 文件）：订阅 / 心跳 / 回调 / 应答 / 回复 / 推送 / 素材上传命令 + 入站映射 + markdown 分段 | `WeComCallbackFrameModel` / `WeComCommandModel` / `map_wecom_callback_to_inbound` / `parse_wecom_chat_id` / `split_wecom_markdown_text` |
 | `wecom/wecom_client.py` | 长连接客户端（订阅 / req_id 应答关联 / 应用层心跳 / 指数退避重连 + 抖动 / 单连接不变式 / 被踢下线 / 优雅停机 / 素材分片上传） | `WeComLongConnectionClient` / `WeComConnectionState` / `WeComConnectionProtocol` |
 | `wecom/wecom_runner.py` | 企微 runner（回调去重 / 回复上下文 / 有界入站队列 + worker / 出站文本分段与附件投递 / 逐附件失败承载） | `WeComChannelRunner` / `WeComMessageDedupWindow` |
@@ -66,7 +67,9 @@ QQ_ENABLED=true 时（同一 ChannelRouter——任一通道启用即构造）�
     NapCatOneBotClient（access token 间接——缺失不 fail fast）
     → NapCatQQAdapter → router.register_adapter(QQ, adapter)
     → get_login_info 启动校验（warn-and-continue——见「QQ 通道」一节）
-    （无 runner / task——推送式入站零长驻任务）
+    → QqWebhookRunner（有界入站队列 + worker；不轮询、不持久化游标）
+    → asyncio.create_task(runner.run()) + background_task_manager.register
+    （app.state.channels_qq_runner / channels_qq_task 槽位）
 WECOM_ENABLED=true 时（同一 ChannelRouter）：
     WeComLongConnectionClient（BotID + 密钥环境变量间接——缺失即跳过该通道）
     → WeComChannelRunner → router.register_adapter(WECOM, runner)
@@ -435,13 +438,16 @@ QQ（NapCat 部署机服务，OneBot v11 实现）
     ↓ HTTP POST 事件上报（NapCat 侧配置上报 URL 指向本后端）
 POST /api/v1/channels/qq/webhook（app/api/channels_qq.py）
     ↓ token 校验（webhook_token_env 配置时恒时比较 Bearer）
-qq_webhook.process_webhook_event（qq/qq_webhook.py）
-    ① Ob11EventModel 容错解析（非法载荷 = 确认并忽略）
+    ↓ 立即 200 确认（不等待 LLM 回合；NapCat 上报超时不再阻塞后续事件）
+QqWebhookRunner.submit（qq/qq_runner.py——同步、恒不抛）
+    ① Ob11EventModel 容错解析（非法载荷 = 忽略且不登记去重）
     ② 大类过滤（仅 post_type=message 进路由；notice / request /
-       meta_event 确认并忽略）
+       meta_event 忽略且不登记去重）
     ③ message_id 去重（进程内有界 FIFO 窗口 1024）
     ④ 消息展平（段数组 / CQ 码字符串 → 纯文本；非文本段占位符化）
     ⑤ InboundMessageModel（chat_id grammar + epoch 秒 ×1000 归一）
+    ⑥ 有界入站队列（容量 64；满 = 丢弃 + 计数 + ERROR，不登记去重）
+固定 worker（2；跨聊天并行）
 ChannelRouter.handle_inbound（channel_service.py——与 telegram 共用）
     ↓ ①-⑤ 同 telegram（会话懒建 / 人格绑定 / ChatService.reply）
 NapCatQQAdapter.send_message（发送面适配）
@@ -451,7 +457,7 @@ NapCat HTTP API（POST {http_api_base_url} {"action": ..., "params": {...}}）
 QQ
 ```
 
-与 Telegram 的根本差异：**入站方向相反**。Telegram 是后端长轮询**拉取**（getUpdates + offset 游标 + runner 后台任务）；QQ 是 NapCat 主动**推送**到本后端 webhook（后端零长驻任务、零游标状态文件）。停机语义随之简化：QQ 无 runner 可停（适配器注册态随 `channels_router` 槽位复位；共享池 client 生命周期归 pools）。
+与 Telegram 的根本差异：**入站方向相反**。Telegram 是后端长轮询**拉取**（getUpdates + offset 游标 + runner 后台任务）；QQ 是 NapCat 主动**推送**到本后端 webhook（零轮询游标状态文件；后端仅持有一个纯入站消费 runner）。QQ runner 不轮询、不持久化游标——停机即取消 worker 并清空待处理队列（`request_stop` → bounded 等待 → cancel 兜底，零残留）；适配器注册态随 `channels_router` 槽位复位，共享池 client 生命周期归 pools。
 
 ### chat_id grammar（锁定决策）
 
@@ -491,10 +497,11 @@ OneBot v11 `message` 字段双形态：段数组（`[{"type": "text", "data": {.
 - **去重**：`message_id` 进程内有界 FIFO 窗口（1024——tg_runner 同语义同容量）；兜底「NapCat 重启 / 网络重试」窗口内的重投。进程重启清零（重启窗口内的重投可能重消费——QQ 无 offset 持久化等价物，OneBot v11 HTTP POST 上报无确认游标；NapCat 侧重试窗口短，影响面小）；
 - **顺序**：HTTP POST 上报不保证事件顺序（群消息并发上报可能乱序到达）——路由器以 per-chat `asyncio.Lock` 串行消费**到达序**（同聊天全链路串行：会话懒建 + 回复 + 兜底回发；不同聊天互不阻塞；并发首消息不重复建会话行）；到达序非平台发送序；
 - **message_id 负值**：NapCat 实现下常见——合法形态（去重键与入站 `message_id` 字符串化承载）。
+- **过载**：入站队列容量 64 / worker 2（**代码常量非 env**——与企微 runner 同风格）；队列满即丢弃并计 `dropped_inbound`，ERROR 含 `message_id` / 队列深度 / 累计丢弃。丢弃不登记去重——平台重投可在队列恢复后重新消费；已入队消息的重投由去重窗吸收。周期观测 INFO 每 60s gate 一次（注入时钟），仅在 `pending>0` 或丢弃有增量时输出深度 / 增量（常量 `QQ_STATS_INTERVAL_MS`，不可配置）。
 
 ### webhook 确认语义（铁律）
 
-**webhook 处理器恒不抛异常**（逐事件隔离：载荷非法 / 字段缺失 / 路由器内部异常只进日志）；端点对接受 / 忽略 / 隔离失败**恒 200 `{"status": "ok"}`**——OneBot 上报方对非 200 会**重试**，确认即防重投风暴（与 tg runner「非消息更新 offset 照常推进」同哲学）。仅两类请求形态错误走 4xx：鉴权失败（401）/ 请求体非 JSON 对象（400）。
+**webhook 端点只做鉴权 / 体校验 / 入队，随后恒 200 确认**——LLM 回合耗时由后台 worker 承担，NapCat 的上报等待不再被一次长回复阻塞（有界队列过载时求即 200 + 丢弃）。解析 / 去重 / 路由面**恒不抛异常**（逐事件隔离：载荷非法 / 字段缺失 / 路由器内部异常只进日志）；端点对接受 / 忽略 / 隔离失败**恒 200 `{"status": "ok"}`**——OneBot 上报方对非 200 会**重试**，确认即防重投风暴（与 tg runner「非消息更新 offset 照常推进」同哲学）。仅两类请求形态错误走 4xx：鉴权失败（401）/ 请求体非 JSON 对象（400）。
 
 ### 启动校验：warn-and-continue（与 telegram 的差异）
 
@@ -502,7 +509,7 @@ OneBot v11 `message` 字段双形态：段数组（`[{"type": "text", "data": {.
 |---|---|---|
 | token 缺失（构造期） | fail loud（app 拒绝启动） | 不 fail（NapCat 未开启鉴权是合法形态；**`ENV=prod` 且通道启用时**入站 `QQ_WEBHOOK_TOKEN` 为空 → 拒绝启动） |
 | 启动校验失败（getMe / get_login_info） | token 无效 → fail fast 终止 runner 任务；暂态失败 → 告警进退避循环 | **一律 warn-and-continue**——适配器仍注册，出站失败逐消息经路由器兜底隔离 |
-| 理由 | 长驻轮询任务——token 无效时任务无意义 | 推送式入站 + 无长驻任务；NapCat 常晚于后端就绪（部署时序），fail fast 只会因部署顺序杀掉整个 app |
+| 理由 | 长驻轮询任务——token 无效时任务无意义 | 推送式入站 + 入站 runner 不决定通道健康；NapCat 常晚于后端就绪（部署时序），fail fast 只会因部署顺序杀掉整个 app |
 
 ### NapCat 部署要点（部署机独立服务）
 

@@ -34,8 +34,10 @@ from packages.harness.persona.service import PersonaService, bind_persona_contex
 from packages.harness.voice.realtime_models import RealtimeVoiceSettings
 from tests.realtime_fakes import (
     FakeVoiceService,
+    ScriptedChatStream,
     audio_message,
     loud_frame,
+    persona_record,
     realtime_settings,
     silence_frame,
     start_message,
@@ -153,11 +155,12 @@ def _ws(
     gateway: Any = None,
     query_params: dict[str, str] | None = None,
     headers: dict[str, str] | None = None,
+    app: Any = None,
 ) -> FakeWebSocket:
-    """构造带 app.state 的假 WS。"""
+    """构造带 app.state 的假 WS（app 注入用于共享进程级计数面）。"""
     state = SimpleNamespace(settings=settings, gateway=gateway)
     return FakeWebSocket(
-        app=SimpleNamespace(state=state),
+        app=app if app is not None else SimpleNamespace(state=state),
         query_params=query_params,
         headers=headers,
     )
@@ -346,3 +349,57 @@ async def test_transport_adapter_ignores_close_runtime_error() -> None:
     transport = StarletteRealtimeTransport(websocket)
     await transport.close(1000, "done")
     assert websocket.client_state is WebSocketState.CONNECTED
+
+
+async def test_session_cap_rejects_third_and_releases_after_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """并发帽：两连通过、第三连 1013、结束释放后新连可用。
+
+    人格 / 聊天装配经 monkeypatch 注入（本用例只验证 API 层准入计数与
+    释放面，不触碰共享数据库连接）。
+    """
+    persona = persona_record()
+    chat = ScriptedChatStream()
+
+    async def _fake_resolve(_websocket: Any) -> Any:
+        return persona
+
+    async def _fake_build(_websocket: Any, _persona: Any) -> Any:
+        return chat
+
+    monkeypatch.setattr(realtime_voice, "_resolve_persona", _fake_resolve)
+    monkeypatch.setattr(realtime_voice, "_build_chat", _fake_build)
+    monkeypatch.setattr(realtime_voice, "VoiceService", lambda **_kwargs: FakeVoiceService())
+    settings = _settings(realtime=realtime_settings(max_sessions=2))
+    first = _ws(settings=settings)
+    shared_app = first.app
+    second = _ws(settings=settings, app=shared_app)
+    first_task = asyncio.create_task(realtime_voice_websocket(first))
+    second_task = asyncio.create_task(realtime_voice_websocket(second))
+    await first.push(start_message(persona_id=persona.id))
+    await first.wait_for(lambda sent: any(m.get("type") == "ready" for m in sent))
+    await second.push(start_message(persona_id=persona.id))
+    await second.wait_for(lambda sent: any(m.get("type") == "ready" for m in sent))
+    assert shared_app.state.realtime_voice_active_sessions == 2
+
+    third = _ws(settings=settings, app=shared_app)
+    await realtime_voice_websocket(third)
+    assert third.sent[-1]["type"] == "error"
+    assert third.sent[-1]["code"] == "RATE_LIMITED"
+    assert third.close_action == (1013, "realtime voice busy")
+    assert shared_app.state.realtime_voice_active_sessions == 2
+
+    await first.push({"type": "end", "ts_ms": 0})
+    await asyncio.wait_for(first_task, timeout=_WAIT_TIMEOUT)
+    await second.push({"type": "end", "ts_ms": 0})
+    await asyncio.wait_for(second_task, timeout=_WAIT_TIMEOUT)
+    assert shared_app.state.realtime_voice_active_sessions == 0
+
+    fourth = _ws(settings=settings, app=shared_app)
+    fourth_task = asyncio.create_task(realtime_voice_websocket(fourth))
+    await fourth.push(start_message(persona_id=persona.id))
+    await fourth.wait_for(lambda sent: any(m.get("type") == "ready" for m in sent))
+    await fourth.push({"type": "end", "ts_ms": 0})
+    await asyncio.wait_for(fourth_task, timeout=_WAIT_TIMEOUT)
+    assert shared_app.state.realtime_voice_active_sessions == 0

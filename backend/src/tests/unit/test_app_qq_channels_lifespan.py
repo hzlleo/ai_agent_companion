@@ -2,10 +2,10 @@
 
 覆盖矩阵：
 
-    - disabled（缺省）：零通道对象构造（router / runner / task 槽位 None）；
+    - disabled（缺省）：零通道对象构造（router / runner / qq_runner / task 槽位 None）；
     - enabled + fake 客户端：适配器注册（ChannelType.QQ）+ 启动校验
-      get_login_info 恰一次 + 无 runner / task 槽位（推送式入站——无
-      长驻任务）+ 出站发送面经注册适配器可达 + 停机幂等；
+      get_login_info 恰一次 + 有界入站 runner / task 槽位上挂与停机复位
+      + 出站发送面经注册适配器可达 + 停机幂等；
     - 启动校验失败：warn-and-continue（启动不抛 + 适配器仍注册——与
       telegram token 缺失 fail loud 的差异面）；
     - QQ + telegram 双启用：同一 ChannelRouter 服务双通道（会话按
@@ -39,6 +39,7 @@ from packages.harness.channels.qq.qq_models import (
     Ob11ApiResponseModel,
     Ob11LoginInfoModel,
 )
+from packages.harness.channels.qq.qq_runner import QqWebhookRunner
 from packages.harness.config.models import (
     ChannelsSettings,
     DatabaseConfig,
@@ -216,6 +217,27 @@ class TestEnabledWiring:
             assert FakeNapCatClient.instances[0].http_client is manager.get_http_client()
         finally:
             await shutdown_app_state(app)
+
+    async def test_qq_enabled_assembles_bounded_runner_lifecycle(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """enabled：有界入站 runner 上挂并托管；停机请求传导且槽位复位。"""
+        monkeypatch.setattr(app_main, "NapCatOneBotClient", FakeNapCatClient)
+        app = create_app()
+        settings = _settings(tmp_path, qq_enabled=True)
+        await startup_app_state(app, settings, config_dir=tmp_path)
+        runner = app.state.channels_qq_runner
+        task = app.state.channels_qq_task
+        try:
+            assert isinstance(runner, QqWebhookRunner)
+            assert task is not None and not task.done()
+            assert task in background_task_manager.tasks
+            assert runner.pending_inbound == 0
+        finally:
+            await shutdown_app_state(app)
+        assert runner.stopping is True
+        assert app.state.channels_qq_runner is None
+        assert app.state.channels_qq_task is None
 
     async def test_qq_and_telegram_share_single_router(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

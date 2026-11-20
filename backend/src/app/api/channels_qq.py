@@ -22,12 +22,17 @@
       JSON 的 ``RecursionError`` 同归 400（解析器递归上限面——恒 200/4xx
       契约不破）。对象内字段的合法性由 webhook 处理器容错解析承担
       （隔离确认——不进 HTTP 错误面）。
+    - **入站消纳（有界队列）**：QQ 启用时 lifespan 装配
+      ``app.state.channels_qq_runner``（``QqWebhookRunner``）——端点只做
+      鉴权 / 体校验 / 去重登记 / 入队后**立即确认**，LLM 回合耗时由后台
+      固定 worker 承担；队列满丢弃并计数（平台重投可重新消费）。runner
+      未装配的嵌入形态回落单事件直调（``process_webhook_event``）。
     - **路由器未装配**（QQ / 全通道关闭形态）：确认并丢弃（warning 日志
       ——通道层是可选装配面，webhook 端点不因配置缺失而 5xx）。
-    - **路由器装配面**：``app.state.channels_router``（lifespan 装配——
-      与 duty 出站投递面同槽位复用）；Settings 取
-      ``app.state.settings``（``create_app`` 上挂；未上挂形态回落全局
-      单例——与 main.lifespan 同回退次序）。
+    - **装配面**：``app.state.channels_qq_runner`` /
+      ``app.state.channels_router``（lifespan 装配——与 duty 出站投递面
+      同槽位复用）；Settings 取 ``app.state.settings``（``create_app``
+      上挂；未上挂形态回落全局单例——与 main.lifespan 同回退次序）。
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ from fastapi import APIRouter, Request
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from packages.harness.channels.qq.qq_runner import QqWebhookRunner
 from packages.harness.channels.qq.qq_webhook import process_webhook_event
 from packages.harness.config.models import Settings
 from packages.harness.config.models import settings as global_settings
@@ -105,7 +111,7 @@ def _require_webhook_auth(request: Request, qq_webhook_token_env: str) -> None:
 
 @router.post("/webhook", response_model=QqWebhookAckDTO)
 async def receive_qq_webhook(request: Request) -> QqWebhookAckDTO:
-    """接收 OneBot v11 事件上报（鉴权 → 体校验 → 委托处理器 → 恒确认）。
+    """接收 OneBot v11 事件上报（鉴权 → 体校验 → 入队 → 立即确认）。
 
     Args:
         request: 原始 ASGI 请求（JSON 对象体——OneBot 事件载荷）。
@@ -135,6 +141,10 @@ async def receive_qq_webhook(request: Request) -> QqWebhookAckDTO:
             code=ErrorCode.BAD_REQUEST,
             message="QQ webhook 请求体须为 JSON 对象（OneBot 事件形态）",
         )
+    runner: QqWebhookRunner | None = getattr(request.app.state, "channels_qq_runner", None)
+    if runner is not None:
+        runner.submit(payload)
+        return QqWebhookAckDTO()
     channel_router = getattr(request.app.state, "channels_router", None)
     if channel_router is None:
         logger.warning("QQ webhook 收到事件但通道路由器未装配（QQ_ENABLED=false?）——确认丢弃")

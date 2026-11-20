@@ -216,10 +216,12 @@ VoiceService.synthesize → CosyVoice（整句 WAV）
 | 机制 | 行为 |
 |---|---|
 | 音频入队 | 有界队列 `REALTIME_VOICE_AUDIO_QUEUE_MAX_CHUNKS`；满时**丢最旧块**并计数（实时音频宁丢旧帧不阻塞收帧循环）；丢弃数每 32 块落一条 warning，关闭时落指标日志 |
+| 逐句 TTS 队列 | 有界队列 `REALTIME_VOICE_TTS_QUEUE_MAX`（默认 32 句）；生成快于合成时满则**丢最旧句**并计入 `tts_chunks_dropped`（与音频队列同策略——保留最新播报内容），丢弃数落关闭指标日志 |
 | 音频块上限 | 单块 base64 解码后 **≤ 64 KiB**（`REALTIME_AUDIO_CHUNK_MAX_BYTES`；对应编码长度上限同步校验）；超限块在解析期拒绝——可恢复 `error(VALIDATION_ERROR)`，计入 `audio_chunks_rejected`，不进入队列、不影响后续帧 |
 | 批量出队 | 单次最多 `REALTIME_VOICE_AUDIO_BATCH_MAX_CHUNKS` 块喂 VAD（降低逐帧调度开销） |
 | 转写并发 | 切段后转写以独立任务执行并登记进统一任务集合——音频工人只投递，VAD / 起说判定 / 打断在转写窗口内持续工作；多段转写可并行，结果按完成序进入生成请求通道 |
 | 轮次串行 | 单会话同一时刻只有一个活跃轮次；打断开关关闭时新语段排队（播完当前轮再生成） |
+| 并发会话帽 | `REALTIME_VOICE_MAX_SESSIONS`（默认 2，进程内计数）；超限下行 `error(RATE_LIMITED)` 后以 **1013** 拒绝——名额在会话结束 / 异常关闭的 `finally` 释放。多 worker 部署时各进程独立计数（见 config.md 多 worker 语义） |
 | 会话上限 | `REALTIME_VOICE_MAX_SESSION_MS`（到时 `closed(max_duration)`） |
 | 空闲超时 | `REALTIME_VOICE_IDLE_TIMEOUT_MS`（无任何上行消息即 `closed(idle_timeout)`；ping / 音频 / 控制消息均刷新） |
 | 心跳 | `REALTIME_VOICE_HEARTBEAT_INTERVAL_MS` 为 `ready` 建议值；服务端只按空闲超时判定 |
@@ -233,6 +235,7 @@ VoiceService.synthesize → CosyVoice（整句 WAV）
 | 音频块超过单块上限（解码后 > 64 KiB） | `VALIDATION_ERROR` | true（该块丢弃并计入 `audio_chunks_rejected`，会话保留） |
 | ASR 未启用（start 时） | `CONFLICT` | false（随后 `closed(session_rejected)`） |
 | 总闸关闭（WS 准入） | `CONFLICT` | false（1013 关闭） |
+| 并发会话已达上限（WS 准入） | `RATE_LIMITED` | false（1013 关闭——稍后重试） |
 | 鉴权失败（WS 准入） | `UNAUTHORIZED` | false（1008 关闭） |
 | 无主人格 / 人格不存在 | `NOT_FOUND` | false（1008 关闭） |
 | ASR 调用失败 | `LLM_CALL_FAILED` | true（回聆听，会话保留） |
@@ -257,6 +260,8 @@ VoiceService.synthesize → CosyVoice（整句 WAV）
 | `REALTIME_VOICE_PARTIAL_MIN_SPEECH_MS` | `600` | 中途转写最短已积累语音 |
 | `REALTIME_VOICE_SENTENCE_MAX_CHARS` | `80` | 助手单句字符上限（TTS 单次请求上限 500 以内） |
 | `REALTIME_VOICE_TTS_CHUNK_BYTES` | `16384` | 下行音频分片字节数 |
+| `REALTIME_VOICE_TTS_QUEUE_MAX` | `32` | 逐句 TTS 队列上限（≥1；溢出丢最旧并计 `tts_chunks_dropped`） |
+| `REALTIME_VOICE_MAX_SESSIONS` | `2` | 进程内并发会话上限（≥1；超限 1013 拒绝） |
 | `REALTIME_VOICE_AUDIO_QUEUE_MAX_CHUNKS` | `64` | 音频入队上限（溢出丢最旧） |
 | `REALTIME_VOICE_AUDIO_BATCH_MAX_CHUNKS` | `8` | 单次批量出队上限（须 ≤ 队列上限） |
 | `REALTIME_VOICE_MAX_SESSION_MS` | `600000` | 单会话最长时长 |
@@ -306,7 +311,7 @@ VOICE_TTS_ENABLED=true
 - VAD：单帧不触发 / 防抖起说 / 静音切段 / 短语音丢弃 / 句中停顿不切分 / 单段强制 / 冲刷 / 多段序列；
 - 状态机：合法边矩阵穷举 / 关闭事件全相位 / 非法边 / 吸收态 / 规则唯一性；
 - 句切与音频：标点保留 / 收尾符号 / 长度上限与停顿优先 / 硬切 / 流式累积；能量 / WAV 容器 / 分片拼接 / 时长；
-- 会话端到端：ready 字段、完整轮次（转写 → 文本 → 音频 → 回聆听）、中途转写节流、强制切段、手动 / VAD 打断（任务集合清空、无泄漏）、打断关闭态、转写任务挂起时 VAD 打断仍生效、关闭取消挂起转写、背压丢最旧块、超限音频块拒绝后会话继续、空闲 / 最大时长、end 尾段冲刷、end 排空被关闭事件抢占、关闭 wire 顺序（state(closed) → closed）、ASR / 生成 / TTS 失败可恢复、TTS 关闭降级、传输断开、心跳应答、协议对称性、真实 `ChatService` 适配；
+- 会话端到端：ready 字段、完整轮次（转写 → 文本 → 音频 → 回聆听）、中途转写节流、强制切段、手动 / VAD 打断（任务集合清空、无泄漏）、打断关闭态、转写任务挂起时 VAD 打断仍生效、关闭取消挂起转写、背压丢最旧块、TTS 队列溢满丢最旧句与关闭清零、超限音频块拒绝后会话继续、空闲 / 最大时长、end 尾段冲刷、end 排空被关闭事件抢占、关闭 wire 顺序（state(closed) → closed）、ASR / 生成 / TTS 失败可恢复、TTS 关闭降级、传输断开、心跳应答、协议对称性、真实 `ChatService` 适配；WS 准入并发帽（两连通过 / 第三连 1013 / 结束释放后新连可用）；
 - 端点：路由挂载、总闸 / 鉴权 / 人格解析拒绝面、真实人格与聊天会话落库、传输适配（文本 / 二进制 / 断开 / 幂等关闭）。
 
 前端：`api/realtimeVoice.test.ts`、`lib/realtimeAudio.test.ts`、`lib/realtimeVoiceClient.test.ts`、`pages/realtime/RealtimeVoicePage.test.tsx`。

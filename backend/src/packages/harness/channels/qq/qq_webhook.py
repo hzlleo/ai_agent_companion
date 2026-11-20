@@ -34,9 +34,9 @@
 缺失 / 路由器内部异常）只进日志，向 HTTP 层返回确认语义（调用方
 据此恒 200；OneBot 上报方对非 200 会重试，确认即防重投）。
 
-去重状态：进程内模块级单例（QQ 通道无 runner 对象可挂载——与
-tg_runner 实例态去重的差异点）；测试经 ``reset_qq_webhook_state``
-逐测试复位。
+去重状态：直调路径与 runner 共享解析面与去重窗口类型，但窗口各自独立
+（直调路径用模块级窗口，runner 持独立窗口）；测试经
+``reset_qq_webhook_state`` 逐测试复位模块级窗口。
 """
 
 from __future__ import annotations
@@ -62,6 +62,7 @@ __all__ = [
     "QqMessageDedupWindow",
     "flatten_message_text",
     "extract_message_attachments",
+    "parse_webhook_event",
     "process_webhook_event",
     "reset_qq_webhook_state",
 ]
@@ -118,6 +119,17 @@ class QqMessageDedupWindow:
         self.cap = cap
         self._seen: set[int] = set()
         self._order: deque[int] = deque()
+
+    def contains(self, message_id: int) -> bool:
+        """判断 message_id 是否已在窗口内（只读——不登记）。
+
+        Args:
+            message_id: 消息 ID（OneBot v11 int 形态）。
+
+        Returns:
+            窗口内已登记返回 True。
+        """
+        return message_id in self._seen
 
     def remember(self, message_id: int) -> bool:
         """登记 message_id（窗口超容按 FIFO 淘汰最旧）。
@@ -297,33 +309,38 @@ def extract_message_attachments(
     return attachments
 
 
-async def process_webhook_event(payload: dict[str, Any], router: ChannelRouter) -> None:
-    """处理单条 webhook 事件（解析 → 过滤 → 去重 → 展平 → 路由；恒不抛）。
+def parse_webhook_event(payload: dict[str, Any]) -> InboundMessageModel | None:
+    """解析单条 webhook 事件为通道中立入站消息（不可路由返回 None）。
+
+    解析面只做纯变换与过滤（无去重登记 / 无路由副作用）：去重与排队由
+    调用方决定——webhook 端点经 :class:`~packages.harness.channels.qq.
+    qq_runner.QqWebhookRunner` 登记去重并入有界队列；单事件直调路径
+    :func:`process_webhook_event` 亦复用同一解析面。
 
     Args:
         payload: OneBot v11 事件上报载荷（JSON 对象——HTTP 层已保证形态）。
-        router: 通道路由器（入站消费面——``handle_inbound`` 恒不抛的
-            契约由路由器承担；本函数再做一层兜底捕获）。
+
+    Returns:
+        可路由的入站消息；载荷非法 / 非消息大类 / 消息类型不支持 / 无用户
+        文本且无非文本内容 / 会话目标缺失时返回 None（调用方确认并忽略，
+        且不登记去重）。
     """
     try:
         event = Ob11EventModel.model_validate(payload)
     except ValidationError as exc:
         logger.warning("QQ webhook 载荷不是合法的 OneBot 事件（隔离确认）: {}", str(exc)[:200])
-        return
+        return None
     if event.post_type != "message":
         logger.debug(
             "QQ webhook 非消息事件（确认并忽略）: post_type={!r}", event.post_type or "(缺失)"
         )
-        return
+        return None
     if event.message_type not in ("private", "group"):
         logger.debug(
             "QQ webhook 消息类型不支持（确认并忽略）: message_type={!r}",
             event.message_type or "(缺失)",
         )
-        return
-    if not _DEDUP_WINDOW.remember(event.message_id):
-        logger.debug("QQ webhook 消息重复投递（去重跳过）: message_id={}", event.message_id)
-        return
+        return None
     has_non_text_content = _has_non_text_content(event.message)
     text = flatten_message_text(event.message)
     attachments = extract_message_attachments(event.message)
@@ -336,37 +353,59 @@ async def process_webhook_event(payload: dict[str, Any], router: ChannelRouter) 
             "QQ webhook 消息无用户文本且无非文本内容（跳过路由）: message_id={}",
             event.message_id,
         )
-        return
+        return None
     if event.message_type == "group":
         if event.group_id is None or event.group_id < 1:
             logger.warning(
                 "QQ 群消息缺少合法 group_id（隔离确认）: message_id={}", event.message_id
             )
-            return
+            return None
         chat_id = f"group:{event.group_id}"
     else:
         if event.user_id < 1:
             logger.warning(
                 "QQ 私聊消息缺少合法 user_id（隔离确认）: message_id={}", event.message_id
             )
-            return
+            return None
         chat_id = f"private:{event.user_id}"
     sender_id = str(event.user_id) if event.user_id >= 1 else "0"
     ts_ms = event.time * 1000 if event.time > 0 else now_ms()
+    return InboundMessageModel(
+        channel=ChannelType.QQ,
+        chat_id=chat_id,
+        message_id=str(event.message_id),
+        sender_id=sender_id,
+        text=text,
+        ts_ms=ts_ms,
+        attachments=attachments,
+        is_group_chat=chat_id.startswith("group:"),
+    )
+
+
+async def process_webhook_event(payload: dict[str, Any], router: ChannelRouter) -> None:
+    """处理单条 webhook 事件（解析 → 去重 → 路由；恒不抛）。
+
+    单事件直调路径（测试 / 嵌入式调用面）：生产端点经
+    :class:`~packages.harness.channels.qq.qq_runner.QqWebhookRunner` 的
+    有界队列消纳，不在 HTTP 请求内等待路由；本函数保留「一次调用完成
+    一条事件」的语义，与 runner 共享解析面与去重窗口类型（各自实例：
+    直调路径用模块级窗口，runner 持独立窗口）。
+
+    Args:
+        payload: OneBot v11 事件上报载荷（JSON 对象——HTTP 层已保证形态）。
+        router: 通道路由器（入站消费面——``handle_inbound`` 恒不抛的
+            契约由路由器承担；本函数再做一层兜底捕获）。
+    """
+    inbound = parse_webhook_event(payload)
+    if inbound is None:
+        return
+    message_id = int(inbound.message_id)
+    if not _DEDUP_WINDOW.remember(message_id):
+        logger.debug("QQ webhook 消息重复投递（去重跳过）: message_id={}", message_id)
+        return
     try:
-        await router.handle_inbound(
-            InboundMessageModel(
-                channel=ChannelType.QQ,
-                chat_id=chat_id,
-                message_id=str(event.message_id),
-                sender_id=sender_id,
-                text=text,
-                ts_ms=ts_ms,
-                attachments=attachments,
-                is_group_chat=chat_id.startswith("group:"),
-            )
-        )
+        await router.handle_inbound(inbound)
     except Exception:
         logger.opt(exception=True).error(
-            "QQ webhook 消息路由失败（隔离确认）: message_id={}", event.message_id
+            "QQ webhook 消息路由失败（隔离确认）: message_id={}", message_id
         )
