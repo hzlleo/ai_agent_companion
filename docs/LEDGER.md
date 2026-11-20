@@ -79,7 +79,7 @@
 | 审计整改 | 六批 Oracle 深度审计→ALL CLEAN（blocker 5 / major ~35 / minor ~54 / 注释存量 ~240 处）：loguru 掩码链、并发唯一键（active_marker 模式）、per-chat 锁、46 项漂移门、契约门禁、look_at 接线、docs 真相化 | ✅ merged（PR #9） |
 | 真网修复 | B站工具真网验证修复 3 bug（WBI 子键名/评论端点/字幕后缀）+ SeekDB 实测对齐（ik 分词/Form B 混合检索精确排序/`1.4.0-100000172026082615` 镜像/root 空密码） | ✅ merged（PR #6/#8） |
 
-### R2（能力扩展）——进行中
+### R2（能力扩展）——已交付（归档于 `e95f5fe`）
 
 | 切片 | 内容 | 状态 |
 |---|---|---|
@@ -87,17 +87,17 @@
 | R2b 人格表达 | ①世界书高级（depth/recursive/groups/probability/cooldown）②性格组件库（33组件×8原型预设+导入API+冲突UI，DTO 68组）③内心独白协议+轻情绪引擎（8维/M层）④swipes 变体（迁移0010）⑤提醒（ff_reminders 迁移0011+扫描作业）+常备指令 | ✅ merged（PR #11 → main `6b54b2a`） |
 | R2c 记忆关系 | c1 管线闭环+生命周期（迁移0012/索引真接线/归档/审计二审整改）；c2 人物画像事实链（迁移0013/facts 域/梦境提取阶段/纠错闭环）；c2b provenance 分级紧急修（PEER 枚举/群聊 peer 落档/梦境双排除/skipped_peer 统计/证据面纵深防御）；c3 SKILL层+历史挖矿（迁移 0014 `ff_persona_skills` / `SkillsService` / 梦境 skills 提取阶段 / compose 相关技能块 / API+面板+文档）；c4 自编辑核心记忆+溯源闸（迁移 0015 `ff_core_memory_blocks` / `ff_core_memory_revisions` / `CoreMemoryService` / `edit_core_memory` 工具 + 发送者来源分级结构性工具闸 / compose【自我认知】块 / API+面板+文档，含活 SeekDB 0015 round-trip）；c5 终验 PR | ✅ merged（PR #12 → main `3872504`） |
 | R2-defense | 丙+丁：D1 结构隔离 + 宪章五条 + nonce 定界、D2 注入检测 + 角色内反击（毒舌 / 温柔 / 傲娇）、D3 peer 记忆免疫与来源标注、D4 38 条红队回归集 | ✅ merged（PR #13 → main `7fe68a0`；`INJECTION_*` 与 compliance 示例模板生成已并入主线） |
-| R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | ✅ 代码完成、PR #15 OPEN（`b5846c0`）；甲套件 core + 组件库A/成熟度分层 + 关系连续性A + 乙分轨已全门禁绿；**剩余仅「示例台词 few-shot」** |
-| R2d 心流社交 | R2d-1 心流门控（`FLOW_` env 面——判定矩阵 / 连发合并 / 延迟批次经调度器 / 关系与节律输入）+ 群聊多人格（`GROUP_PERSONA_` env 面——轮转 / 冷却 / 重复抑制 / 人格会话归属）；R2d-2 声纹（`VOICEPRINT_` env 面——PIPL 告知 / 同意记录 / 注册 / 校验 / 撤回删除 / 保存期）+ 表情包库与 VLM 标注（`STICKER_` env 面——哈希去重 / 来源授权备注 / 标注状态机 / 通道附件 v2 收发桥 / 前端面板），迁移 0016 | ✅ R2d-1 + R2d-2 代码完成（本分支；全门禁见第 5 节） |
-| R2e 通道扩展 | R2e-1 企微智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 去重 / 回复上下文 / 文本分段 / 素材分片上传 / 配置面 / 装配 / 文档）；R2e-2 抖音 web 通道（浏览器 sidecar 底座：页面采集 / 发送脚本、去重、synthetic、图片附件、指数退避、配置面、装配、文档）+ 画布产物面（迁移 0017 / 服务 / API / 沙箱预览面板 / 导出）；余项：GUI 微信容器化（PoC 门——部署机未跑） | 🔄 R2e-1 ✅ 代码完成、全门禁绿；R2e-2 ✅ 代码完成、全门禁绿（本分支，验证数值见第 5 节）；GUI 微信容器化 ⏳（部署机 PoC 门） |
-| R2f 实时语音 | 实时语音全双工会话：WS 协议 + 相位状态机 + 能量/静音 VAD 切段 + 切段转写（节流中途字幕）+ 人格回复句切与逐句 TTS 分片下行 + barge-in（取消在途生成/合成 + 清空队列）+ 会话资源上限（背压/空闲/最大时长/优雅关闭）+ `REALTIME_VOICE_` env 面 + 管理台实时字幕面板 | ✅ 代码完成、全门禁绿（本分支；溢出项与验证数值见第 5 节） |
+| R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | ✅ merged（PR #15）；四切片 + 逐批评审修复全部 PASS；示例台词已由组件库生成期折叠 mes_example 落地（证据见第 5 节） |
+| R2d 心流社交 | R2d-1 心流门控（`FLOW_` env 面——判定矩阵 / 连发合并 / 延迟批次经调度器 / 关系与节律输入）+ 群聊多人格（`GROUP_PERSONA_` env 面——轮转 / 冷却 / 重复抑制 / 人格会话归属）；R2d-2 声纹（`VOICEPRINT_` env 面——PIPL 告知 / 同意记录 / 注册 / 校验 / 撤回删除 / 保存期）+ 表情包库与 VLM 标注（`STICKER_` env 面——哈希去重 / 来源授权备注 / 标注状态机 / 通道附件 v2 收发桥 / 前端面板），迁移 0016 | ✅ merged（PR #16；复审修复 PR #29）；全门禁与证据见第 5 节 |
+| R2e 通道扩展 | R2e-1 企微智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 去重 / 回复上下文 / 文本分段 / 素材分片上传 / 配置面 / 装配 / 文档）；R2e-2 抖音 web 通道（浏览器 sidecar 底座：页面采集 / 发送脚本、去重、synthetic、图片附件、指数退避、配置面、装配、文档）+ 画布产物面（迁移 0017 / 服务 / API / 沙箱预览面板 / 导出）；余项：GUI 微信容器化（PoC 门——部署机未跑） | 🔄 R2e-1 ✅ merged（PR #16 的 WeCom 提交）；R2e-2 ✅ merged（PR #17；复审修复 PR #30）；GUI 微信容器化 ⏳（部署机 PoC 门，见第 6 节） |
+| R2f 实时语音 | 实时语音全双工会话：WS 协议 + 相位状态机 + 能量/静音 VAD 切段 + 切段转写（节流中途字幕）+ 人格回复句切与逐句 TTS 分片下行 + barge-in（取消在途生成/合成 + 清空队列）+ 会话资源上限（背压/空闲/最大时长/优雅关闭）+ `REALTIME_VOICE_` env 面 + 管理台实时字幕面板 | ✅ merged（PR #18；复审修复 PR #31）；溢出项与验证数值见第 5 节 |
 | R3 | 安全/防穿透/性能深度审计版（独立版本）：admin 鉴权已前置完成，余项：提示注入纵深/SSRF/SeekDB DSL 注入/密钥治理/限流背压/性能基线 | ⏳ |
 
 **当前分支状态**：
-- main：R2b（PR #11 → `6b54b2a`）、R2c（PR #12 → `3872504`）、R2-defense（PR #13 → `7fe68a0`）、logprobs 通道（PR #14 → `1305420`）已合并。
-- `feat/r2b-plus-intimacy`：PR #15 OPEN（`b5846c0`），承载 R2b+ 甲/乙/组件库/关系连续性；剩余仅示例台词 few-shot。
-- `feat/r2f-realtime-voice`：从合并后 main `56cf148` 新建，承载 R2f 实时语音全双工会话（本台账第 5 节「R2f 验证记录」）。
-- 本机工作区在 `feat/r2b-plus-intimacy` 分支上堆叠 R2d-1 + R2d-2 改动（未提交/未推送，以本台账第 5 节为准）。
+- main：PR#18–#33 已全部并入（`e95f5fe`）；更早切片分别归档于 `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
+- `feat/audit-a-fixes`：三批全约束审计修复，已并入 main（PR #33）。
+- `docs/final-cross-review-ledger`：台账终局修正（本分支），待合并；合并后 main 再前移一次。
+- 本机工作区 clean；历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入，可删除。
 
 ## 4. 全部拍板记录（原文语义）
 
@@ -533,9 +533,9 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 ### 里程碑：R2 全部批次交付并逐批通过 Oracle 深审
 
 - 批次清单与结论：注入防御、logprobs 置信度、亲密补强（R2b+ 四切片）、R2c 记忆与关系（含修复）、R2d 心流/群聊/声纹/表情包（含修复）、R2e 企微/抖音/Canvas（含修复）、R2f 实时语音（含修复）、加固门禁（Tier-1+Tier-2，含复审残留）、补审 R2a 通道底座与记忆域（含残留）——全部经 Oracle 明确判定无问题（PASS），修复循环见各自小节的命令与证据。
-- 合并状态：PR#18 至 PR#31 已全部合并入 main（当前 `a4bf3e1`），工作区 clean；每批验收证据在 `docs/evidence/`（按 sha8 对应）。
-- 未决事项：审计 A 已执行（实现/架构）：**2×P1 + 3×P2，已修复并复审**（复审结果以本节末尾「审计 A 修复」记录为准）；审计 B（测试/纪律）：**1×P1 + 4×P2，已修复**（证据见 §5「全约束审计 B 修复」，待复审）；审计 C（文档/注释/提示词/配置）尚未执行。R3 在所有审计与终局交叉复核 ALL CLEAN 之前不启动。
-- 恢复指引：从干净 main 起分支执行审计 B→C→终局复核；审计提示词口径见本会话记录（覆盖 19 条硬约束），修复分支命名沿用 `feat/<范围>-review-fixes`。
+- 合并状态：PR#18 至 PR#33 已全部合并入 main（`e95f5fe`），工作区 clean；每批验收证据在 `docs/evidence/`（按 sha8 对应）。
+- 未决事项：无。审计 A（实现/架构，2×P1+3×P2）、审计 B（测试/纪律，1×P1+4×P2）、审计 C（文档/注释/提示词/配置，4×P1+3×P2）均已执行、修复并经 Oracle 复审通过（记录见 §5 各小节）；终局交叉复核提出的 1 条台账过期句已在本次修正，复审在该修正提交上执行。R3 启动条件 = 终局交叉复核 PASS（本段即该状态）。
+- 恢复指引：R2 归档于 main `e95f5fe`；新工作从该点起分支，修复分支命名沿用 `feat/<范围>-review-fixes`；审计提示词口径见本会话记录（覆盖 19 条硬约束）。
 
 ### 已完成切片：全约束审计 A 修复（2×P1 + 3×P2，本分支工作区）
 
@@ -723,6 +723,14 @@ scripts / docs / docker / models；排 `__pycache__` / `.pixi` / `node_modules` 
   `MP3` 不命中）；还原文件后 → **0**（violations=0）。
 
 **剩余**：无（本切片范围）。
+
+### 已完成切片：终局交叉复核（跨审计无回归）
+
+- 复核方式：单只读会话在同一棵树（`89d5312`，后合入 `e95f5fe`）上核验审计 A/B/C 全部闭合项同时成立、无交互回归，并复跑全链。
+- 实测：`tests-all` 2875 passed / `coverage-gates` 24 组 ≥80% / `lint` / `typecheck` 192 文件 / `conftest-env` 196/196（豁免 0）/ 根 gates 全链 exit 0（断言棘轮 8283 asserts·602 raises 无下降、红探针门、导出面、文档真相、prose-pin 尾标记齐）/ `gen-examples` 连跑两次工作树零差异 / `verify-slice --hash-only` = `c1fddaf8`（646 文件）与 canonical 证据一致。
+- 交叉点核验：conftest `LOG_TEXT_FORMAT=""` 经空串→None 不改变默认日志行为；注释元数据门只扫 docstring 与 COMMENT token（字符串字面量不在面内，prompts 模板与示例注释零误伤，豁免仅检查器自身）；loader 白名单与示例 search 节闭环互洽；`router_fakes` 重构后三套用例 20/14/9 不变。
+- R2 不变量抽查 8/8 在树：synthetic 恒跳过、密度锚点、64KiB 块上限与池 LIFO 关闭序、关系摘要注入、亲密通道路由、梦境上限与重入窗、0018 复合索引、voiceprint 同意闸。
+- 结论：唯一 finding 为本文件上方「审计 C 尚未执行」过期句（P2，已按本切片修正并提交复审）；除此之外复核会话判定全部通过。
 
 ## 6. 遗留与部署台账（非阻塞）
 
