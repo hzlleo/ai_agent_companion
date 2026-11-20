@@ -52,7 +52,6 @@ __all__ = [
     "EpisodeNotePayloadModel",
     "EpisodePayload",
     "parse_episode_payload",
-    "payload_for_kind",
     "compute_content_hash",
     "CONTENT_HASH_LENGTH",
 ]
@@ -192,18 +191,6 @@ _PAYLOAD_BY_KIND: dict[EpisodeKind, type[EpisodePayload]] = {
     EpisodeKind.DREAM: EpisodeNotePayloadModel,
     EpisodeKind.SYSTEM: EpisodeNotePayloadModel,
 }
-
-
-def payload_for_kind(kind: EpisodeKind) -> type[EpisodePayload]:
-    """按事件类型取载荷 Model Class（判别表查询）。
-
-    Args:
-        kind: 事件类型。
-
-    Returns:
-        该 kind 对应的载荷 Model Class。
-    """
-    return _PAYLOAD_BY_KIND[kind]
 
 
 def parse_episode_payload(kind: EpisodeKind | str, raw: Any) -> EpisodePayload:

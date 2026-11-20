@@ -30,6 +30,7 @@ Python 标准库，经 backend pixi 环境的 python 执行；基线与允许清
 | `scripts/prose_pin_check.py` | prose-pin 启发式报告：命中文案分 field_or_code / prose 两桶，「疑似 prose pin」只计 prose 桶、Top-N prose 优先，另报纯结构断言占比，不阻断 | `cd backend && pixi run prose-pin` |
 | `scripts/count_sync_tests.py` | 同步测试只降不升棘轮 | `cd backend && pixi run sync-test-ratchet` |
 | `scripts/noqa_freeze_check.py` | noqa / type:ignore 增量冻结 | `cd backend && pixi run noqa-freeze` |
+| `scripts/conftest_env_check.py` + `scripts/.conftest_allowlist.json` | conftest env 硬覆盖完整性：生成器登记表全量键逐键核对 conftest 硬赋值，缺口即红并列出缺失键；允许清单每项须带 reason | `cd backend && pixi run conftest-env` |
 | `scripts/check_sandbox_dtos_drift.py` | 沙盒 / 浏览器 sidecar wire 契约文本镜像漂移 | `cd backend && pixi run sandbox-drift` |
 | `scripts/check_chinese_comments.py` | 注释门（docstring 存在性 + 中文 + Google 段落提示） | `cd backend && pixi run comment-gates` |
 | `scripts/check_coverage_per_module.py` | 按模块覆盖率门禁（≥80% enforce） | `cd backend && pixi run coverage-gates` |

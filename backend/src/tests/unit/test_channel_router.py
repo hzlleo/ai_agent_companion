@@ -23,23 +23,16 @@ from typing import Any
 
 from packages.harness.channels.channel_models import (
     ChannelAttachmentKind,
-    ChannelDeliveryResultModel,
     ChannelMessageAttachment,
     ChannelType,
     InboundMessageModel,
-    OutboundMessageModel,
 )
 from packages.harness.channels.channel_service import (
     CHANNEL_FALLBACK_REPLY_TEXT,
     ChannelRouter,
 )
-from packages.harness.chat.chat_models import ChatSessionStateModel
-from packages.harness.core.context import persona_id_var
 from packages.harness.core.errors import BusinessException, ErrorCode
-from packages.harness.persona.chara_card import CharaCardModel
-
-#: 测试人格固定主键（persona_id_var 断言用——字符串形态）。
-_PERSONA_ID = 7
+from tests.router_fakes import PERSONA_ID, FakeAdapter, FakeChatService
 
 
 def _inbound(
@@ -67,78 +60,6 @@ def _inbound(
         text=text,
         is_group_chat=is_group_chat,
     )
-
-
-class FakeChatService:
-    """fake ChatService——记录 create_session / reply 调用形状。"""
-
-    def __init__(
-        self,
-        *,
-        reply_error: Exception | None = None,
-        create_error: Exception | None = None,
-    ) -> None:
-        self.create_calls: list[dict[str, Any]] = []
-        self.reply_calls: list[dict[str, Any]] = []
-        self.reply_error = reply_error
-        self.create_error = create_error
-
-    async def create_session(
-        self,
-        *,
-        persona: object | None = None,
-        db_session: object | None = None,
-        title: str | None = None,
-    ) -> ChatSessionStateModel:
-        """fake 会话创建（记录调用形状；可编程抛错）。"""
-        if self.create_error is not None:
-            raise self.create_error
-        self.create_calls.append({"persona": persona, "db_session": db_session, "title": title})
-        return ChatSessionStateModel(
-            persona_id=_PERSONA_ID,
-            persona_name="小鱼",
-            card=CharaCardModel(name="小鱼"),
-        )
-
-    async def reply(
-        self, state: ChatSessionStateModel, user_text: str, *, sender_provenance=None
-    ) -> str:
-        """fake 回复（记录人格上下文 + 复用态断言原料 + 来源分级）。"""
-        self.reply_calls.append(
-            {
-                "state": state,
-                "text": user_text,
-                "persona_ctx": persona_id_var.get(),
-                "session_id": state.session_id,
-                "sender_provenance": sender_provenance,
-            }
-        )
-        if self.reply_error is not None:
-            raise self.reply_error
-        return f"echo:{user_text}"
-
-
-class FakeAdapter:
-    """fake 通道适配器——记录出站消息。"""
-
-    def __init__(self, *, fail_after: int | None = None) -> None:
-        self.sent: list[OutboundMessageModel] = []
-        self.fail_after = fail_after
-        self._calls = 0
-
-    async def send_message(self, message: OutboundMessageModel) -> ChannelDeliveryResultModel:
-        """fake 发送（可编程在第 N 次后失败——兜底级联测试用）。"""
-        self._calls += 1
-        if self.fail_after is not None and self._calls > self.fail_after:
-            raise BusinessException(
-                code=ErrorCode.CHANNEL_API_ERROR, message="平台发送失败（测试注入）"
-            )
-        self.sent.append(message)
-        return ChannelDeliveryResultModel(
-            channel=ChannelType.TELEGRAM,
-            chat_id=message.chat_id,
-            message_ids=[str(1000 + self._calls)],
-        )
 
 
 class FakeSessionFactory:
@@ -245,7 +166,7 @@ class TestReplyFlow:
 
         await router.handle_inbound(_inbound())
 
-        assert service.reply_calls[0]["persona_ctx"] == str(_PERSONA_ID)
+        assert service.reply_calls[0]["persona_ctx"] == str(PERSONA_ID)
 
     async def test_outbound_shape_reply_to_inbound(self) -> None:
         """出站形状：正常回复引用入站消息 ID。"""
@@ -374,52 +295,6 @@ class TestErrorIsolation:
         assert router.session_count == 1
 
 
-class GatedFakeChatService:
-    """门控 fake ChatService——reply 进入即登记事件并阻塞在释放门。
-
-    并发串行化断言原料：``events`` 按实际发生序记录 create / reply
-    进入 / 退出；``release`` 为一次性释放门（asyncio.Event——确定性
-    事件等待，零固定睡眠）。
-    """
-
-    def __init__(self) -> None:
-        """初始化（释放门关闭态——reply 恒等待显式放行）。"""
-        self.create_calls: int = 0
-        self.events: list[str] = []
-        self.release: asyncio.Event = asyncio.Event()
-        self._entered: dict[str, asyncio.Event] = {}
-
-    def entered_event(self, text: str) -> asyncio.Event:
-        """取指定消息文本的 reply 进入事件（懒建——等待面）。"""
-        return self._entered.setdefault(text, asyncio.Event())
-
-    async def create_session(
-        self,
-        *,
-        persona: object | None = None,
-        db_session: object | None = None,
-        title: str | None = None,
-    ) -> ChatSessionStateModel:
-        """fake 会话创建（记录事件 + 计数——串行化断言原料）。"""
-        self.events.append(f"create:{title}")
-        self.create_calls += 1
-        return ChatSessionStateModel(
-            persona_id=_PERSONA_ID,
-            persona_name="小鱼",
-            card=CharaCardModel(name="小鱼"),
-        )
-
-    async def reply(
-        self, state: ChatSessionStateModel, user_text: str, *, sender_provenance=None
-    ) -> str:
-        """fake 慢回复：登记进入事件 → 等待释放门 → 登记退出事件。"""
-        self.events.append(f"enter:{user_text}")
-        self.entered_event(user_text).set()
-        await self.release.wait()
-        self.events.append(f"exit:{user_text}")
-        return f"echo:{user_text}"
-
-
 class TestPerChatSerialization:
     """per-chat 串行化回归（QQ 推送式并发入站面——锁语义锚）。"""
 
@@ -430,9 +305,9 @@ class TestPerChatSerialization:
         未进入 reply（锁前阻塞——若锁缺失必然立即进入，测试即红）；
         放行后事件序为「一进出一、二进出二」的完整串行形态。
         """
-        service = GatedFakeChatService()
+        service = FakeChatService(gate_reply=True)
         adapter = FakeAdapter()
-        router = _router(service)  # type: ignore[arg-type]
+        router = _router(service)
         router.register_adapter(ChannelType.TELEGRAM, adapter)
 
         first = asyncio.create_task(router.handle_inbound(_inbound(text="一", message_id="1")))
@@ -455,15 +330,15 @@ class TestPerChatSerialization:
             "enter:二",
             "exit:二",
         ]
-        assert service.create_calls == 1
+        assert len(service.create_calls) == 1
         assert router.session_count == 1
         assert len(adapter.sent) == 2
 
     async def test_distinct_chats_concurrent_no_cross_serialization(self) -> None:
         """不同聊天并发：互不阻塞（消息二在一未完成时并行进入 reply）。"""
-        service = GatedFakeChatService()
+        service = FakeChatService(gate_reply=True)
         adapter = FakeAdapter()
-        router = _router(service)  # type: ignore[arg-type]
+        router = _router(service)
         router.register_adapter(ChannelType.TELEGRAM, adapter)
 
         first = asyncio.create_task(
@@ -487,7 +362,7 @@ class TestPerChatSerialization:
         await asyncio.wait_for(first, timeout=5.0)
         await asyncio.wait_for(second, timeout=5.0)
 
-        assert service.create_calls == 2
+        assert len(service.create_calls) == 2
         assert router.session_count == 2
         assert len(adapter.sent) == 2
 

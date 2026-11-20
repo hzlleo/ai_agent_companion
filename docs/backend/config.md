@@ -10,7 +10,7 @@
 | `settings.py` | 全局单例访问面 + 隔离构造助手 | `settings` / `build_isolated_settings` |
 | `loader.py` | config.yaml + extensions_config.json 运行时加载（分层加载 + 重载回调） | `load_all_config` / `register_reload_callback` |
 | `section_admin.py` | 配置节管理基座（写锁串行化 / 原子持久化 + 备份轮换 / 热重建 + 失败回滚——节无关共享机械） | `ConfigSectionAdmin` / `DEFAULT_BACKUP_KEEP` |
-| `registry_admin.py` | LLM 注册表管理服务（基座的 llm 段子类：条目 CRUD + 角色绑定守卫 + 脱敏读取） | `RegistryAdminService` / `render_config_yaml_text` |
+| `registry_admin.py` | LLM 注册表管理服务（基座的 llm 段子类：条目 CRUD + 角色绑定守卫 + 脱敏读取） | `RegistryAdminService` / `REGISTRY_BACKUP_KEEP` |
 | `registry_admin_dtos.py` | 注册表管理传输契约（创建 / 更新 / 脱敏 / 状态 / 角色绑定行 DTO） | `ModelEntryCreateDTO` / `RegistryStateDTO` |
 | `search_registry.py` | 搜索 provider 注册表管理服务（基座的 search 段子类：provider CRUD + 唯一 provider 守卫 + 脱敏 + 运行时真源三件套） | `SearchRegistryAdminService` / `runtime_search_config` / `load_search_config` |
 | `model_entry.py` | 模型注册表条目 + 角色枚举 + 密钥解析 | `LlmModelEntry` / `ModelRole` / `parse_model_entry` / `resolve_api_key` |

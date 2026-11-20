@@ -8,41 +8,29 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from typing import Any
 
 from packages.harness.channels.channel_models import (
     ChannelAttachmentKind,
-    ChannelDeliveryResultModel,
     ChannelMessageAttachment,
     ChannelType,
     InboundMessageModel,
-    OutboundMessageModel,
 )
 from packages.harness.channels.channel_service import ChannelRouter
-from packages.harness.chat.chat_models import ChatSessionStateModel
 from packages.harness.chat.flow_models import FlowGateSettings
-from packages.harness.persona.chara_card import CharaCardModel
 from packages.harness.persona.relationship_models import (
     RelationshipStage,
     RelationshipSummaryModel,
 )
 from packages.harness.rhythm.rhythm_models import RhythmGate
-
-_PERSONA_ID = 7
-_BASE_MS = 1_700_000_000_000
-
-
-class FakeClock:
-    """假时钟（epoch 毫秒——测试手动推进）。"""
-
-    def __init__(self, start_ms: int = _BASE_MS) -> None:
-        """初始化。"""
-        self.now = start_ms
-
-    def __call__(self) -> int:
-        """返回当前假时刻。"""
-        return self.now
+from tests.router_fakes import (
+    BASE_MS,
+    FakeAdapter,
+    FakeChatService,
+    FakeClock,
+    chat_scoped_message_ids,
+    empty_session_factory,
+)
 
 
 class FakeRhythm:
@@ -80,65 +68,6 @@ class FakeScheduler:
         """执行最近一次排程作业（模拟到期）。"""
         _, factory, _ = self.jobs[-1]
         await factory()
-
-
-class FakeChatService:
-    """fake ChatService（记录会话创建与回复调用；可编程回复失败）。"""
-
-    def __init__(self) -> None:
-        """初始化。"""
-        self.create_calls: list[dict[str, Any]] = []
-        self.reply_calls: list[dict[str, Any]] = []
-        self.reply_error: Exception | None = None
-
-    async def create_session(
-        self,
-        *,
-        persona: object | None = None,
-        db_session: object | None = None,
-        title: str | None = None,
-    ) -> ChatSessionStateModel:
-        """fake 会话创建。"""
-        self.create_calls.append({"persona": persona, "db_session": db_session, "title": title})
-        return ChatSessionStateModel(
-            persona_id=_PERSONA_ID,
-            persona_name="小鱼",
-            card=CharaCardModel(name="小鱼"),
-        )
-
-    async def reply(
-        self, state: ChatSessionStateModel, user_text: str, *, sender_provenance: Any = None
-    ) -> str:
-        """fake 回复（记录文本与来源分级）。"""
-        self.reply_calls.append(
-            {"state": state, "text": user_text, "sender_provenance": sender_provenance}
-        )
-        if self.reply_error is not None:
-            raise self.reply_error
-        return f"echo:{user_text}"
-
-
-class FakeAdapter:
-    """fake 适配器（记录出站消息）。"""
-
-    def __init__(self) -> None:
-        """初始化。"""
-        self.sent: list[OutboundMessageModel] = []
-
-    async def send_message(self, message: OutboundMessageModel) -> ChannelDeliveryResultModel:
-        """记录出站并返回成功结果。"""
-        self.sent.append(message)
-        return ChannelDeliveryResultModel(
-            channel=ChannelType.TELEGRAM,
-            chat_id=message.chat_id,
-            message_ids=[f"out:{message.chat_id}:{len(self.sent)}"],
-        )
-
-
-@asynccontextmanager
-async def _session_factory() -> Any:
-    """fake 数据库会话工厂（空会话对象——fake 服务不消费）。"""
-    yield object()
 
 
 def _inbound(
@@ -195,7 +124,7 @@ def _router(
     """装配路由器（注入 fake 依赖）。"""
     router = ChannelRouter(
         chat_service_factory=lambda: service,
-        session_factory=_session_factory,
+        session_factory=empty_session_factory,
         flow_settings=settings,
         rhythm_service=rhythm,
         scheduler_provider=(lambda: scheduler) if scheduler is not None else None,
@@ -209,12 +138,12 @@ def _router(
 async def test_flow_disabled_replies_immediately_without_scheduling() -> None:
     """门控关闭：立即回复且零排程（直通语义）。"""
     service = FakeChatService()
-    adapter = FakeAdapter()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     scheduler = FakeScheduler()
     clock = FakeClock()
     router = ChannelRouter(
         chat_service_factory=lambda: service,
-        session_factory=_session_factory,
+        session_factory=empty_session_factory,
         flow_settings=FlowGateSettings(enabled=False),
         scheduler_provider=lambda: scheduler,
         clock=clock,
@@ -230,7 +159,7 @@ async def test_synthetic_event_is_not_replied() -> None:
     """机器生成事件：路由器恒跳过（门控开启时不建会话 / 不回复 / 不排程 /
     不写节拍状态）。"""
     service = FakeChatService()
-    adapter = FakeAdapter()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     scheduler = FakeScheduler()
     router = _router(
         service=service,
@@ -254,7 +183,7 @@ async def test_synthetic_event_skipped_when_flow_disabled() -> None:
     """门控关闭（FLOW_ENABLED=false）时合成事件仍恒跳过——文档语义与部署
     开关无关。"""
     service = FakeChatService()
-    adapter = FakeAdapter()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     scheduler = FakeScheduler()
     router = _router(
         service=service,
@@ -276,7 +205,7 @@ async def test_synthetic_event_skipped_when_flow_disabled() -> None:
 async def test_sleep_window_schedules_delayed_batch() -> None:
     """睡眠窗口：转延迟排程；到期执行后回复缓冲文本。"""
     service = FakeChatService()
-    adapter = FakeAdapter()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     scheduler = FakeScheduler()
     clock = FakeClock()
     rhythm = FakeRhythm(allowed=False, delay_ms=10_000)
@@ -304,7 +233,7 @@ async def test_sleep_window_schedules_delayed_batch() -> None:
 async def test_burst_batch_reschedules_until_quiet_then_merges() -> None:
     """连发合并：窗口内新入站使批次重排，静默满足后按上限合并回复。"""
     service = FakeChatService()
-    adapter = FakeAdapter()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     scheduler = FakeScheduler()
     clock = FakeClock()
     router = _router(
@@ -330,7 +259,7 @@ async def test_burst_batch_reschedules_until_quiet_then_merges() -> None:
     assert len(scheduler.jobs) == 1
     await scheduler.run_last()
     assert len(scheduler.jobs) == 2
-    clock.now = scheduler.jobs[-1][2] + _BASE_MS + 200 + 10_000
+    clock.now = scheduler.jobs[-1][2] + BASE_MS + 200 + 10_000
     await scheduler.run_last()
     assert service.reply_calls[-1]["text"] == "第二条\n第三条"
     assert adapter.sent[-1].text == "echo:第二条\n第三条"
@@ -339,7 +268,7 @@ async def test_burst_batch_reschedules_until_quiet_then_merges() -> None:
 async def test_density_gap_reached_replies_without_scheduling() -> None:
     """追发间隔超过最小回复间隔：立即回复且不排程延迟批次。"""
     service = FakeChatService()
-    adapter = FakeAdapter()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     scheduler = FakeScheduler()
     clock = FakeClock()
     router = _router(
@@ -362,7 +291,7 @@ async def test_density_gap_reached_replies_without_scheduling() -> None:
 async def test_scheduler_missing_degrades_to_immediate_reply() -> None:
     """调度器不可用：延迟裁决降级立即回复（fail-safe）。"""
     service = FakeChatService()
-    adapter = FakeAdapter()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     router = _router(
         service=service,
         adapter=adapter,
@@ -389,7 +318,7 @@ async def test_close_relationship_prioritizes_reply() -> None:
         )
 
     service = FakeChatService()
-    adapter = FakeAdapter()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     scheduler = FakeScheduler()
     router = _router(
         service=service,
@@ -416,7 +345,7 @@ async def test_relationship_and_rhythm_failures_do_not_block_reply() -> None:
             raise RuntimeError("节律门不可用")
 
     service = FakeChatService()
-    adapter = FakeAdapter()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     scheduler = FakeScheduler()
     router = _router(
         service=service,
@@ -440,7 +369,7 @@ async def test_scheduler_raise_degrades_to_immediate_reply() -> None:
             raise RuntimeError("调度器拒绝")
 
     service = FakeChatService()
-    adapter = FakeAdapter()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     router = _router(
         service=service,
         adapter=adapter,
@@ -456,7 +385,7 @@ async def test_scheduler_raise_degrades_to_immediate_reply() -> None:
 async def test_delayed_batch_reply_failure_sends_fallback() -> None:
     """延迟批次回复失败：回发兜底文案（错误不击穿调度作业）。"""
     service = FakeChatService()
-    adapter = FakeAdapter()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     scheduler = FakeScheduler()
     clock = FakeClock()
     rhythm = FakeRhythm(allowed=False, delay_ms=1000)
@@ -480,7 +409,7 @@ async def test_delayed_batch_reply_failure_sends_fallback() -> None:
 async def test_pending_batch_recovered_after_grace() -> None:
     """已排程任务超过宽限未执行：新入站视为任务丢失并重新排程。"""
     service = FakeChatService()
-    adapter = FakeAdapter()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     scheduler = FakeScheduler()
     clock = FakeClock()
     router = _router(
@@ -501,7 +430,7 @@ async def test_pending_batch_recovered_after_grace() -> None:
 async def test_single_empty_text_media_skips_generation_without_fallback() -> None:
     """单条纯媒体空文本（立即裁决路径）：跳过生成、不排程、不发兜底。"""
     service = FakeChatService()
-    adapter = FakeAdapter()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     scheduler = FakeScheduler()
     router = _router(
         service=service,
@@ -523,7 +452,7 @@ async def test_empty_text_media_burst_keeps_buffer_clean_and_merges_real_text() 
     """连发纯媒体空文本：批次触发后无生成 / 无兜底、缓冲无空条目，到达与
     积压照常推进；随后真实文本合并为净文本（无前导换行）。"""
     service = FakeChatService()
-    adapter = FakeAdapter()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     scheduler = FakeScheduler()
     clock = FakeClock()
     router = _router(

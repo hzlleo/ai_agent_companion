@@ -129,13 +129,43 @@
 - 数据库迁移链 0001..0018；0012=curated lifecycle；0013=persona facts；0014=persona skills；0015=core memory（blocks + append-only revisions）；0016=voiceprint samples/consents + sticker library；0017=canvas documents；0018=persona facts 复合索引（persona_id/status/confidence）。
 - **记忆域保留期 = append-only 无限期保留**：不设 TTL 自动清理；删除权由单条管理面删除 + 人格级联删除覆盖。理由：审计与梦境回溯（运行决策 / 证据链 / 修订链需全量可复算）。
 
+### 4.1 拍板三案对照（抽样归档）
+
+> 抽样自 Oracle 审计 B 的三条拍板。口径：**选定项与其括号内定义是 §4 原始
+> 记录**；非选定项的名称与优缺点文本据该条决策要点重建（原始会话只保留选定
+> 项），不写入记录之外的细节。
+
+**抽样 1：P4 GUI 微信会话键（原始记录：B）**
+
+| 方案 | 优点 | 缺点 | 结论 |
+|---|---|---|---|
+| A 稳定平台标识（wxid / 会话 id） | 天然唯一，重命名不受影响；无需视觉识别 | GUI 微信不直接暴露稳定标识，需另建读取面；跨设备/换号时易漂移 | 非选定（重建） |
+| B 联系人备注名 + VLM 校验 | 备注名是 GUI 内可直接读取的稳定语义面；VLM 校验可抵消截图误读 | 依赖视觉链路；备注名被修改时需重建映射 | **选定（原始记录：B=联系人备注名+VLM 校验）** |
+| C 固定会话窗口索引 / 人工绑定 | 实现最简单，零识别成本 | 窗口顺序或数量变化即失效；人工绑定不可规模化 | 非选定（重建） |
+
+**抽样 2：亲密补强「道德层吞没」（原始记录：丙）**
+
+| 方案 | 优点 | 缺点 | 结论 |
+|---|---|---|---|
+| 甲 提示词对抗 + 后处理 | 不新增端点，全模型一致；角色契约 / 合规重试可复用 | 依赖模型服从性，长对话仍可能被保守策略吞没 | 非选定（重建） |
+| 乙 独立模型分轨（可开端点） | 端点与采样独立调优，不受主模型保守策略牵制 | 多一份端点、成本与运维；全部回合切轨时影响普通对话 | 非选定（重建） |
+| 丙 渐进组合（甲 + 乙可开 + 成熟度分层） | 默认零新增依赖，按关系阶段与成熟度逐级放开 | 配置面、测试面与文档面最大 | **选定（原始记录：丙=甲提示词对抗+后处理 / 乙模型分轨可开 / 渐进组合）** |
+
+**抽样 3：记忆存储 Q3（原始记录：A）**
+
+| 方案 | 优点 | 缺点 | 结论 |
+|---|---|---|---|
+| A SeekDB 统一检索 + MySQL 权威库 | 单一检索栈，少一套引擎运维；官方混合检索能力可直接用；知识图谱后置不阻塞 | 双栈一致性需服务层治理（提交后分发/补偿） | **选定（原始记录：Q3 方案 A；知识图谱后置，D2 未来 FalkorDB/Graphiti 可选）** |
+| B 独立向量库（Milvus / Qdrant）+ 关系库 | 向量生态成熟，容量与索引选项多 | 多一套引擎、同步链路与备份面；与权威库的一致性成本更高 | 非选定（重建） |
+| C 纯关系库全文检索（FULLTEXT / SQL LIKE） | 零新增引擎，部署最轻 | 语义召回弱；规模上升后相关性与延迟不足 | 非选定（重建） |
+
 ## 5. 工程实现事实（恢复续跑所需）
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2837 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 2871 passed）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
-cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift；当前 mypy 191 文件零问题）
+cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖/sandbox-drift；当前 mypy 192 文件零问题）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 11 用例（迁移链/并发唯一键/行锁/混合检索）
 cd frontend && pixi run test / coverage / lint / build   # 666 passed（高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
@@ -504,7 +534,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 - 批次清单与结论：注入防御、logprobs 置信度、亲密补强（R2b+ 四切片）、R2c 记忆与关系（含修复）、R2d 心流/群聊/声纹/表情包（含修复）、R2e 企微/抖音/Canvas（含修复）、R2f 实时语音（含修复）、加固门禁（Tier-1+Tier-2，含复审残留）、补审 R2a 通道底座与记忆域（含残留）——全部经 Oracle 明确判定无问题（PASS），修复循环见各自小节的命令与证据。
 - 合并状态：PR#18 至 PR#31 已全部合并入 main（当前 `a4bf3e1`），工作区 clean；每批验收证据在 `docs/evidence/`（按 sha8 对应）。
-- 未决事项：审计 A 已执行（实现/架构）：**2×P1 + 3×P2，已修复并复审**（复审结果以本节末尾「审计 A 修复」记录为准）；审计 B（测试/纪律）、C（文档/注释/提示词/配置）尚未执行。R3 在所有审计与终局交叉复核 ALL CLEAN 之前不启动。
+- 未决事项：审计 A 已执行（实现/架构）：**2×P1 + 3×P2，已修复并复审**（复审结果以本节末尾「审计 A 修复」记录为准）；审计 B（测试/纪律）：**1×P1 + 4×P2，已修复**（证据见 §5「全约束审计 B 修复」，待复审）；审计 C（文档/注释/提示词/配置）尚未执行。R3 在所有审计与终局交叉复核 ALL CLEAN 之前不启动。
 - 恢复指引：从干净 main 起分支执行审计 B→C→终局复核；审计提示词口径见本会话记录（覆盖 19 条硬约束），修复分支命名沿用 `feat/<范围>-review-fixes`。
 
 ### 已完成切片：全约束审计 A 修复（2×P1 + 3×P2，本分支工作区）
@@ -557,6 +587,69 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
   - 还原 QQ 归一 / 丢弃条件（`attachments and not _has_user_text` / `not text.strip() and not attachments`）→ `test_qq_webhook.py` **2 failed**（CQ 字符串纯图片、纯 face 段未以空文本投递）；复原后三文件 73 passed。
 
 **剩余**：无（本切片范围）；复审由主 Agent 后续执行。
+
+### 5.1 死代码处置（审计 B 抽样：5 个零引用公共符号）
+
+复核口径：对五个符号逐一执行 `grep -rIn` 覆盖仓库全树（backend / frontend /
+scripts / docs / docker / models；排 `__pycache__` / `.pixi` / `node_modules` /
+`.git` / `logs` / `coverage.json` / `dtoSchemas.json`）→ **零命中**（仅定义处与
+`__all__` 自身）。无任何非测试消费面，全部采用方案 A（删除并同步 `__all__`）。
+
+| 符号 | 位置 | 方案 | 优点 | 缺点 | 结论 |
+|---|---|---|---|---|---|
+| `render_config_yaml_text` | `config/registry_admin.py` | 删除并同步 `__all__` | 导出面与实际消费一致，消除误导性公共 API | 未来若需完整 yaml 文本需重写（一次性转发，成本极低） | **选定**：基座 `ConfigSectionAdmin` 已统一经 `_dump_config_yaml_text` 渲染，此函数只做 llm 段转发 |
+| 同上 | 同上 | 接线消费 | 公共面成为唯一渲染路径 | 与基座渲染职责重叠，llm 段出现第二条序列化路径 | 非选定（重建） |
+| 同上 | 同上 | 保留 | 零改动零风险 | 零引用符号持续扩大导出面，读者误判存在外部消费 | 非选定（重建） |
+| `current_settings_database` | `database/engine.py` | 删除并收窄 import | 去掉无意义间接层，`Settings` 导入随之消除 | 若未来需要统一读取面需重加 | **选定**：`init_database` / `rebuild_database_engine` 已直接读 `settings.database` |
+| 同上 | 同上 | 接线消费 | 读取路径统一 | 对单字段读取多一层函数调用，仍无第二个消费者 | 非选定（重建） |
+| 同上 | 同上 | 保留 | 零改动 | 测试/可观测性辅助实际无人使用，属于名义 API | 非选定（重建） |
+| `payload_for_kind` | `memory/models.py` | 删除并同步 `__all__` | 判别表真源只保留一个消费点（`parse_episode_payload`），减少误导 | 需要单取载荷类时需重加一行转发 | **选定**：`_PAYLOAD_BY_KIND` 判别表由解析函数直接消费，公共转发无调用方 |
+| 同上 | 同上 | 接线消费（解析函数改走它） | 公共面成为唯一查询路径 | 解析函数多一次转发，无行为收益 | 非选定（重建） |
+| 同上 | 同上 | 保留 | 零改动 | 与解析函数的职责重复，读者无法判断应使用哪个入口 | 非选定（重建） |
+| `RealtimeInboundType` / `RealtimeOutboundType` | `voice/realtime_models.py` | 删除并同步 `__all__` | 判别联合的 wire 真源保持为 `Literal`，避免两套类型真源 | 未来若需枚举化判别需重加并改联合定义 | **选定**：上下行消息全部用 `Literal` 判别，两个枚举从未参与解析、校验或导出 |
+| 同上 | 同上 | 接线消费（改为枚举判别） | 类型面统一为枚举 | 改变 pydantic 判别联合的 wire 校验形态，收益低于改动风险 | 非选定（重建） |
+| 同上 | 同上 | 保留 | 零改动 | 读者误以为枚举是协议真源，实际解析不经过它们 | 非选定（重建） |
+
+**prose-pin `other` 桶（历史处置补记）**：该桶已在加固门禁复审中删除（实现与
+报告均不再输出 `other`；分桶仅 `field_or_code` 与 `prose`）。按同格式补记当时
+的三案对照：
+
+| 方案 | 优点 | 缺点 | 结论 |
+|---|---|---|---|
+| 删除不可达分支并同步三处文档 | 分桶输出与实现一致，无维护噪声 | 历史报告口径需注明变更 | **选定（历史处置：已删除）** |
+| 保留空桶 | 零改动 | 判定域与 `prose` 完全重合、分支不可达，读者误以为存在第三类 | 非选定（重建） |
+| 合并进 `prose` 并保留报告字段 | 报告字段兼容旧读者 | 字段恒为空，同样需要文档解释 | 非选定（重建；最终效果与删除一致） |
+
+### 5.2 性能变更决策记录（复审必修项）
+
+| 变更 | 来源 | 是否入 R3 Plan | 影响面与后续观察点 |
+|---|---|---|---|
+| `skills.match_for_compose` 在 500 行扫描帽前排序（`use_count DESC, id ASC`） | 复审必修（R2c 补审：扫描确定性） | **否——随复审即时落地** | 影响：扫描帽只裁剪低强化候选，高强化技能不再被插入顺序挤出命中面；观察：命中分布、`EXPLAIN` 计划稳定性、扫描上限是否需要随技能库规模调整 |
+| `ff_persona_facts` 复合索引 0018（`persona_id, status, confidence`） | 复审必修（R2c 深审：事实查询性能） | **否——随复审即时落地** | 影响：按人格 / 状态 / 置信度的现行事实查询；观察：迁移链升 / 降 / 复升、慢查询日志、写入放大（插入与更正路径的索引维护成本） |
+
+### 已完成切片：全约束审计 B 修复（P1×1 + P2×4，本分支工作区）
+
+**已完成**（逐条闭环，分支 `feat/audit-a-fixes`）：
+
+1. **P1 conftest 硬覆盖缺口（1.6）**：以 `scripts/generate_examples_env.py` 的 `_ENV_SECTIONS` 登记表为真源逐字段枚举——`LLM_INTIMATE_*` 6 键 / `COMPLIANCE_*` 4 键 / `INJECTION_*` 4 键全部在 `backend/src/conftest.py` 按既有分节风格硬赋值（敏感键 `LLM_INTIMATE_API_KEY` 为测试专用值，温度给数值型测试值 0.8——空串对可空 float 解析非法）。同一门禁按全量登记表核对，因此同批补齐同表缺口的 `EMOTION_*` 4 键与 `SERVER_ADMIN_TOKEN_ENV`（间接变量名，必须与 `ADMIN_AUTH_TOKEN` 一同钉住）；数值与生产默认同值的分节在注释中写明理由（检测矩阵 / 守卫用例显式注入自己的配置）。新增 `scripts/conftest_env_check.py`（AST 扫描 `os.environ[...] = ...`；缺口打印键名与来源字段并 exit 1；允许清单 `scripts/.conftest_allowlist.json` 每项须带 `reason`，当前空）、backend `conftest-env` 任务与根 `gates` 链（`prose-pin` 保持链尾）。测试 `test_conftest_env_hardening.py` 2 例：裸构造取 conftest 测试值；先用 `monkeypatch` 写入相反环境值、再重放 conftest 硬覆盖块（`runpy` 执行同一源文件），裸构造仍取测试值。既有 `test_llm_intimate_channel.py` 4 处构造改为显式空值 / `temperature=None`——env 硬覆盖后原先依赖「环境为空」的隐式半配置不再成立，断言与用例集合零变化。
+2. **P2 死代码（2.2）**：全仓复核零引用后删除 5 个公共符号并同步 `__all__`（`render_config_yaml_text` / `current_settings_database` / `payload_for_kind` / `RealtimeInboundType` / `RealtimeOutboundType`），`docs/backend/config.md` 的模块导出列同步为仍存在的符号；三方案对照见 §5.1。删除后 lint / mypy / 覆盖率门禁全绿。
+3. **P2 拍板三案可复核（2.1）**：新增 §4.1，为 P4 GUI 微信会话键（B）、亲密补强「道德层吞没」（丙）、记忆存储 Q3（A）各列三案与优缺点；非选定项文本明确标注「据决策要点重建」。
+4. **P2 性能入 Plan 留痕（2.3）**：§5.2 记录 skills 扫描排序与 facts 复合索引 0018 的来源、是否入 R3 Plan（均为「否——随复审即时落地」）、影响面与观察点。
+5. **P2 测试资源重复（1.7）**：新增 `backend/src/tests/router_fakes.py` 共享 fake（会话 / 回复记录、`create_error` / `reply_error` / 人格级失败、回显形态、回复门控、适配器失败注入与出站 ID 工厂、假时钟、空会话工厂）；`test_channel_router{,_flow,_group}.py` 改为引用共享模块，用例数 20 / 14 / 9 保持不变。唯一断言形态改写是门控用例的 `create_calls` 计数（共享 fake 的记录面统一为列表，`== 1` 等价改为 `len(...) == 1`），无断言弱化。
+6. **同步面**：`docs/README.md` 门禁表、根 `README.md` 目录行、根 `pixi.toml` gates 注释与 `backend/pixi.toml` 任务说明同步新增门禁。
+
+**验证**（主 Agent 实跑，命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2871 passed**；基线 2869 + 新增 2 条硬覆盖用例；既有用例仅 `test_llm_intimate_channel.py` 4 处构造显式化）。
+- `cd backend && pixi run coverage-gates` → **0**（2871 passed；24 组 ≥80%：harness/config 96.4% / harness/llm 99.0% / harness/voice 95.5% / harness/chat 96.3% / harness/channels 97.2% / harness/memory 94.5% / harness/persona 95.6% / harness/emotion 94.9% / harness/database 93.4% / app/api 83.3% / app/main.py 93.1%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**（`Success: no issues found in 192 source files`）。
+- 根 `pixi run gates` → **0**（注释门 / 同步测试棘轮 / noqa 冻结 / conftest env 硬覆盖 / 沙盒漂移 38 项 / 红探针门 / 文档真相 / 断言棘轮无下降 / 导出面 102 引用·62 登记·40 豁免 + env 键面 686 行 / prose-pin 报告完成）。
+- **conftest 门禁红 / 绿实证**：`cd backend && pixi run conftest-env` → **0**（登记表 env 键 195；conftest 硬覆盖 195；允许豁免 0）；把 conftest 复制到 `/tmp/conftest_red.py` 并删除 `os.environ["INJECTION_THRESHOLD"]` 一行后 `pixi run python ../scripts/conftest_env_check.py --conftest-path /tmp/conftest_red.py` → **1**（输出 `INJECTION_THRESHOLD（InjectionGuardSettings.threshold）`，硬覆盖 194 / 195）。
+- **死代码复核**：`grep -rIn "<五符号>"`（全仓，排缓存与生成物）→ 无输出（exit 1）；`pixi run ruff check` 四文件 → `All checks passed!`；`pixi run mypy` 四文件 → `Success: no issues found in 4 source files`；相关测试 153 passed。
+- `cd backend && pixi run gen-examples` → **0**；三件套 `.env.example` / `config.example.yaml` / `extensions_config.example.json` 运行前后 sha256 完全一致（幂等，无 env 键新增）。
+- 前端未改动，按任务书略过（666 passed 基线不受影响）。
+
+**剩余**：无（本切片范围）。
 
 ## 6. 遗留与部署台账（非阻塞）
 
