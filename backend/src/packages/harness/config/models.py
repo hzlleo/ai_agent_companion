@@ -136,7 +136,7 @@ def _validate_daily_at_shape(value: str) -> str:
 class ServerConfig(BaseSettings):
     """Web 服务配置（env_prefix=``SERVER_``）。
 
-    管理面 owner-token 鉴权（R2 审计放行条件——新端点不得扩张无鉴权
+    管理面 owner-token 鉴权（审计放行条件——新端点不得扩张无鉴权
     面）：``admin_token_env`` 经环境变量间接（与 telegram ``bot_token_env``
     / 沙盒 ``token_env`` 同模式——**token 本值永不落 yaml / 配置树**），
     本配置只持有变量名；实际 token 由 ``app/middleware/admin_auth``
@@ -260,6 +260,8 @@ class LogConfig(BaseSettings):
         rotation: 轮转策略（默认每日轮转）。
         retention: 保留时长（默认 30 天）。
         module_levels: 按模块覆盖级别的规格串（空串 = 无覆盖）。
+        text_format: 自定义文本 sink 格式模板（loguru format 语法；
+            空串 = core 默认统一模板）。
         colorize_console: console sink 是否彩色输出。
         diagnose_exceptions: console / 文本 sink 的异常 ``diagnose`` 开关
             （默认 False——traceback 不展示帧局部变量，防异常帧内的
@@ -272,6 +274,9 @@ class LogConfig(BaseSettings):
     rotation: str = Field(default="1 day", description="轮转策略（每日轮转）")
     retention: str = Field(default="30 days", description="保留时长（30 天）")
     module_levels: str = Field(default="", description="按模块覆盖级别规格串")
+    text_format: str = Field(
+        default="", description="自定义文本格式模板（空串=core 默认统一模板）"
+    )
     colorize_console: bool = Field(default=True, description="console sink 彩色输出")
     diagnose_exceptions: bool = Field(
         default=False,
@@ -298,6 +303,7 @@ class LogConfig(BaseSettings):
             rotation=self.rotation,
             retention=self.retention,
             module_levels=self.module_levels,
+            text_format=self.text_format or None,
             colorize_console=self.colorize_console,
             diagnose_exceptions=self.diagnose_exceptions,
         )
@@ -1159,7 +1165,7 @@ class VoiceSettings(BaseModel):
 class WebSearchSettings(BaseSettings):
     """联网搜索运营配置（env_prefix=``SEARCH_``——search 域）。
 
-    锁定决策（D5=A + P6=B）：``enabled=False``（默认）——联网搜索是
+    锁定决策：``enabled=False``（默认）——联网搜索是
     **可选能力面**（外部搜索 provider 经 HTTP 契约消费），缺省零配置
     开发可用、测试 hermetic；``enabled=True`` 且 config.yaml ``search``
     段无 provider 条目时启动期 fail fast（中文错误）。
@@ -1454,7 +1460,7 @@ class LlmConfig(BaseModel):
 # 子块；管理面见 harness/config/search_registry.py）
 # ---------------------------------------------------------------------------
 
-#: 搜索 provider kind 值域（bocha 主 / zhipu 兜底——D5=A 两 provider 决策）。
+#: 搜索 provider kind 值域（bocha 主 / zhipu 兜底——两 provider 的 failover 次序）。
 SEARCH_PROVIDER_KINDS: tuple[str, str] = ("bocha", "zhipu")
 
 #: 各 kind 的缺省 API Key 环境变量名（api_key_env 间接——密钥本值永不落
@@ -1477,7 +1483,7 @@ def default_search_model_for_kind(kind: str) -> str:
     语义（provider 差异）：bocha 的 web-search 端点无模型选择参数——
     ``model`` 为观测标识（恒 ``web-search``）；zhipu 的
     ``/api/paas/v4/web_search`` 端点以 ``search_engine`` 字段选择引擎
-    （``model`` 缺省 ``search_std``——P6=B 兜底档；可配 ``search_pro`` 等）。
+    （``model`` 缺省 ``search_std`` 兜底档；可配 ``search_pro`` 等）。
 
     Args:
         kind: provider kind（bocha / zhipu）。

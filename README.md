@@ -35,7 +35,7 @@
 ```
 ai_agent_companion/
 ├── pixi.toml            # 根薄编排层（零依赖，仅委托任务）
-├── scripts/             # 工程级门禁脚本（注释/覆盖率/棘轮/noqa 冻结/红探针/证据包/文档真相/断言棘轮/导出面/prose-pin）
+├── scripts/             # 工程级门禁脚本（注释/覆盖率/棘轮/noqa 冻结/conftest env 硬覆盖/红探针/证据包/文档真相/断言棘轮/导出面/prose-pin）
 ├── backend/             # 后端独立 pixi 工程
 │   └── src/
 │       ├── app/         # 薄 FastAPI 交付层（只做 API）

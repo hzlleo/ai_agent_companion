@@ -18,15 +18,16 @@
            退出（在途长轮询最多再等一个窗口；app 停机路径 bounded wait
            超时后 cancel 兜底）。
 
-入站 v2 映射（协议 v2——wire 就绪，消费者 R2d/R2e 到场）：
+入站 v2 映射（协议 v2——wire 就绪，消费方随贴纸 / 语音与前端工作到场）：
 
     - 文本与媒体互斥（Bot API 语义）：媒体消息以 **caption 兜底为文本**
-      （用户随媒体说的话）；纯媒体无 caption 维持 v1 跳过语义（不进
-      路由器——offset 照常推进）；纯文本消息 v1 形态零变更；
+      （用户随媒体说的话）；纯媒体无 caption 归一为 ``text=""`` 入站
+      （附件照常搭载——路由器跳过生成但保留表情收录）；纯文本消息 v1
+      形态零变更；
     - 媒体字段（photo / voice / audio / document / sticker）提取为
       ``ChannelMessageAttachment``——**下载免取**（download-free v2）：
       附件以 ``path="tg-file://{file_id}"`` 伪方案承载平台文件引用
-      （真实媒体拉取需 getFile + 文件 URL 二段流程——deferred 到 R2d
+      （真实媒体拉取需 getFile + 文件 URL 二段流程——deferred 到后续
       贴纸 / 语音工作）；caption 挂首附件（供未来消费者渲染附件 +
       说明）；photo 取最大尺寸（宽 × 高）；voice / audio / document
       的 MIME 进 ``media_type``（photo / sticker 无 MIME 线索 → None）；
@@ -95,7 +96,7 @@ __all__ = [
 TG_OFFSET_STATE_FILENAME: str = "telegram_offset.json"
 
 #: 入站附件平台文件引用伪方案前缀（``tg-file://{file_id}``——下载免取
-#: v2 契约：真实媒体拉取 deferred 到 R2d；出站方向仅接受同形态作为
+#: v2 契约：真实媒体拉取 deferred 到后续媒体工作；出站方向仅接受同形态作为
 #: file_id 重发凭据）。
 TG_FILE_PSEUDO_SCHEME: str = "tg-file://"
 
@@ -213,28 +214,29 @@ def _decode_attachment_base64(value: str) -> bytes:
 def map_tg_message_to_inbound(message: TgMessageModel) -> InboundMessageModel | None:
     """映射 Bot API message 为通道中立入站消息（不可路由形态返回 None）。
 
-    路由门槛（v2——v1 语义保持）：文本或 caption 至少其一（纯媒体无
-    caption 维持 v1 跳过——不进路由器；文本消息 v1 形态零变更）；
-    媒体消息以 caption 兜底为文本。
+    路由门槛（v2）：文本或 caption 存在时以 caption 兜底为文本；仅媒体
+    无 caption 时归一为 ``text=""`` 入站（附件照常搭载，路由器跳过生成）；
+    既无文本又无附件才返回 None（调用方跳过路由、offset 照常推进）。
 
     Args:
         message: Bot API message wire 对象。
 
     Returns:
-        入站消息（媒体附件已提取）；不可路由（无文本且无 caption）返回
-        None（调用方跳过路由、offset 照常推进）。
+        入站消息（媒体附件已提取）；既无文本又无附件时返回 None（调用方
+        跳过路由、offset 照常推进）。
     """
     text = message.text or message.caption
-    if not text:
+    attachments = extract_tg_attachments(message)
+    if not text and not attachments:
         return None
     return InboundMessageModel(
         channel=ChannelType.TELEGRAM,
         chat_id=str(message.chat.id),
         message_id=str(message.message_id),
         sender_id=str(message.from_user.id) if message.from_user else "0",
-        text=text,
+        text=text or "",
         ts_ms=message.date * 1000,
-        attachments=extract_tg_attachments(message),
+        attachments=attachments,
         is_group_chat=message.chat.type in {"group", "supergroup", "channel"},
     )
 
@@ -488,8 +490,8 @@ class TelegramChannelRunner:
         """处理一批更新（去重 + 映射 + 路由 + offset 推进持久化）。
 
         非消息更新（edited_message / callback_query 等）与不可路由消息
-        （纯媒体无 caption——v1 纯文本过滤语义的 v2 延伸）跳过不路由，
-        但 **offset 照常推进**（确认语义——否则服务端会无限重投）。
+        （既无文本又无附件）跳过不路由，但 **offset 照常推进**（确认语义
+        ——否则服务端会无限重投）。
 
         Args:
             updates: 本批更新（可能为空——长轮询窗口自然耗尽形态）。

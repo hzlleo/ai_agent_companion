@@ -75,7 +75,7 @@ __all__ = [
     "SearchService",
 ]
 
-#: 搜索链路的用量 purpose（usage 域枚举成员——R2a-4 新增）。
+#: 搜索链路的用量 purpose（usage 域枚举成员——搜索调用专用）。
 SEARCH_PURPOSE: str = UsagePurpose.SEARCH.value
 
 #: 预算超限错误码（字符串字面量形态——core/errors.py 值域不在本变更

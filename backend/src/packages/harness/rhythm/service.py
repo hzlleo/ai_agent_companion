@@ -7,12 +7,12 @@
 
 消费面（前向兼容——文档化）：
 
-    - **R2d 心流层**：``gate_reply`` / ``should_reply_now`` 是心流
-      回复调度的决策入口（睡眠窗口静默 + 拟人延迟节拍）；R2a 交付
-      门面与契约，心流接线在后继版本；
-    - **R2e GUI / 浏览器通道**：门结果（allowed + reason）为人设状态
+    - **心流层**：``gate_reply`` / ``should_reply_now`` 是回复调度
+      的决策入口（睡眠窗口静默 + 拟人延迟节拍）；本节律层交付门面与
+      契约，心流接线在后继版本；
+    - **GUI / 浏览器通道**：门结果（allowed + reason）为人设状态
       展示面（在线 / 休息中）；
-    - **R2a 通道链路**：回复链路暂**不**消费门（既有回复行为零变化
+    - **通道链路**：回复链路暂**不**消费门（既有回复行为零变化
       ——文档化决策；意图快径的短延迟属意图面真实感，见
       :mod:`packages.harness.intent.service`）。
 
@@ -62,7 +62,7 @@ class RhythmService:
 
         Args:
             effective: 生效节律（``resolve_effective`` 产出——per-persona
-                覆写解析属 R2d 心流层，R2a 装配用全局面）。
+                覆写解析属心流层，本节律层装配用全局面）。
             enabled: 门控开关（False = 直通形态——allowed 恒 True、
                 延迟恒 0；来自 ``RhythmSettings.enabled``）。
             clock: 时钟（epoch 毫秒；``now_ms`` 参数缺省时取值面）。
@@ -121,8 +121,8 @@ class RhythmService:
     async def should_reply_now(self, now_ms: int | None = None) -> bool:
         """即时回复判定（门的布尔投影——心流层轻量消费面）。
 
-        前向兼容说明（文档化）：R2d 心流层将把本入口演化为带主动节拍
-        （主动消息 / 打字节奏）的完整决策面；R2a 语义 = ``gate_reply``
+        前向兼容说明（文档化）：心流层将把本入口演化为带主动节拍
+        （主动消息 / 打字节奏）的完整决策面；当前语义 = ``gate_reply``
         的 ``allowed`` 投影（睡眠窗口内 False，其余 True）。
 
         Args:

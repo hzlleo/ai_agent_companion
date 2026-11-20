@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from packages.harness.config.models import DatabaseConfig, Settings, settings
+from packages.harness.config.models import DatabaseConfig, settings
 from packages.harness.database.base import Base
 from packages.harness.database.units.engine_holder import EngineHolder
 
@@ -176,15 +176,3 @@ async def rebuild_database_engine(config: DatabaseConfig | None = None) -> Engin
     holder.owner_token = uuid.uuid4().hex
     logger.info("异步数据库引擎已重建: type={}", resolved.type)
     return holder
-
-
-def current_settings_database(settings_instance: Settings | None = None) -> DatabaseConfig:
-    """读取当前生效的数据库配置（测试 / 可观测性辅助）。
-
-    Args:
-        settings_instance: 显式 Settings（None = 全局单例）。
-
-    Returns:
-        对应的 :class:`DatabaseConfig`。
-    """
-    return settings_instance.database if settings_instance is not None else settings.database

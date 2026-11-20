@@ -4,8 +4,8 @@
 经本地模式表直接命中罐头回复，**完全绕过主 LLM 调用**——省钱、零延迟
 抖动、离线可用；未命中（``handled=False``）时文本照常流入 LLM。
 
-锁定决策（四类封顶 + R2b 第五类）：TIME_QUERY / GREETING / IDENTITY /
-HELP——高频、零风险、答案确定；``DIRECTIVE``（R2b D7-14 追加：常备
+锁定决策（四类封顶 + 第五类指令捕获）：TIME_QUERY / GREETING / IDENTITY /
+HELP——高频、零风险、答案确定；``DIRECTIVE``（常备
 指令捕获——「记住：X」「以后都 X」「别再 X」前缀句）是**带副作用的
 快径**：命中的正文经装配方注入的 ``DirectiveSinkFace`` 落库为长期指令，
 回复文案在落库成功后才给「已记住」确认（副作用失败退化普通附和）。
@@ -89,7 +89,7 @@ class IntentSettings(BaseSettings):
 
     Attributes:
         enabled: 是否启用意图快径（False = 装配方不注入快径面——
-            回复链路全量走 LLM，行为与 R2a 前完全一致）。
+            回复链路全量走 LLM，行为与快径接入前完全一致）。
     """
 
     enabled: bool = Field(default=True, description="是否启用意图快径（默认开启——纯本地零成本）")

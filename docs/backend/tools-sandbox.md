@@ -54,10 +54,14 @@ duty 轮 tool_calls（DutyService 工具循环）
 | 匹配语义 | 点边界后缀匹配：`api.example.com` 命中 `example.com`；`evil-example.com` / `evil.com`（对条目 `vil.com`）**不**命中 |
 | 重定向 | 30x **逐跳**过允许清单（自定义 `HTTPRedirectHandler`——防经重定向跳出清单）+ 终态 URL 复检 |
 | 正文 | 按字节截断 8192（8KB）；字符集取响应头（回退 utf-8）；解码 `errors="replace"` |
-| 抓取实现 | stdlib urllib 经 `asyncio.to_thread` 下沉（沙盒树零 httpx 依赖） |
+| 抓取实现 | stdlib urllib 经 `asyncio.to_thread` 下沉（沙盒树零 httpx 依赖；进程级默认执行器——见下节「阻塞 I/O 与线程池口径」） |
 | 失败 | 全部归一受控失败（`SandboxToolError` → `ok=False` 终态）——执行器对运行时恒不抛未受控异常 |
 
 参数面双树各持一份（后端 `HttpFetchArgsModel` 用于 registry 本地校验 + 默认值物化（fail-fast，免网络往返）；沙盒侧为权威执行面——双侧校验为**有意冗余**，改任一侧须同步另一侧）。
+
+### 阻塞 I/O 与线程池口径（公共池边界）
+
+沙盒树是**独立 pixi 项目**（源码隔离）：不能 import backend 的 `packages.harness.core.thread_pool`，因此不共享 backend 的 `run_blocking_ops` 公共池，`pools.thread_pool_size` 配置也不注入沙盒进程。树内全部阻塞调用（`http_fetch` 抓取 / `bili_*` 同步核心）统一经 `asyncio.to_thread` 使用**进程级默认执行器**——同一沙盒进程内共用该默认池，容量按容器资源限额与默认执行器口径统一评估。**树内禁止自建 `ThreadPoolExecutor`**（避免每工具独立池放大线程数并绕过统一背压口径）：全树以 `grep -rn "ThreadPoolExecutor(" docker/tool-sandbox-agent/src` 核对，零命中即符合。
 
 ## B 站只读工具组 `bili_*`
 

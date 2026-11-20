@@ -308,7 +308,7 @@ async def test_cli_main_entry_exit_code_passthrough(
 
     async def fake_run_chat_cli(**kwargs: Any) -> int:
         """假 REPL（记录调用与旗标面，返回哨兵退出码——**kwargs 兼容
-        P4 --voice 旗标新增参数）。"""
+        --voice 旗标等新增参数）。"""
         recorded["called"] = True
         recorded["kwargs"] = kwargs
         return 7

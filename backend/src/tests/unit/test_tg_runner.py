@@ -9,7 +9,7 @@
     - 优雅停机（request_stop → 循环退出）与发送面适配（Outbound 投递）；
     - 状态文件损坏 / 写失败降级（runner 不死）；
     - 协议 v2 入站：媒体消息 caption 兜底文本 + 附件提取（tg-file://
-      伪方案 / 最大尺寸 photo / MIME 线索 / 纯媒体无 caption 跳过）；
+      伪方案 / 最大尺寸 photo / MIME 线索 / 纯媒体无 caption 归一空文本）；
     - 协议 v2 出站：silent 透传 disable_notification；附件按 kind 分流
       （base64 上传 / url JSON / tg-file 重发 / sticker caption 丢弃）；
       逐附件部分失败聚合（文本照常 + ok=False 承载）。
@@ -621,16 +621,17 @@ class TestInboundMediaV2:
             runner.request_stop()
             await asyncio.wait_for(task, timeout=5.0)
 
-    async def test_pure_media_without_caption_skipped(self, tmp_path: Path) -> None:
-        """纯媒体无 caption：维持 v1 跳过语义（不路由，offset 照常推进）。"""
+    async def test_pure_media_without_caption_routed_with_empty_text(self, tmp_path: Path) -> None:
+        """纯媒体无 caption：归一 text="" 入站（表情桥可收录；offset 照常推进）。"""
         update = _media_update(5, sticker=TgStickerModel(file_id="CAACAgIAAx0"))
         client = FakeTgClient(batches=[[update, _update(6)]])
         router = FakeRouter()
         runner = _runner(client, router, state_dir=tmp_path)
         task = asyncio.create_task(runner.run())
         try:
-            await _run_until(task, lambda: len(client.polls) >= 2)
-            assert [message.text for message in router.handled] == ["你好"]
+            await _run_until(task, lambda: len(router.handled) >= 2)
+            assert [message.text for message in router.handled] == ["", "你好"]
+            assert router.handled[0].attachments[0].kind is ChannelAttachmentKind.STICKER
             assert runner.offset == 7
         finally:
             runner.request_stop()
@@ -684,13 +685,26 @@ class TestInboundMediaV2:
         assert inbound is not None
         assert inbound.attachments == []
 
-    async def test_map_unroutable_returns_none(self) -> None:
-        """无文本无 caption：映射返回 None（调用方跳过路由）。"""
+    async def test_map_photo_without_caption_maps_empty_text(self) -> None:
+        """纯图片无 caption：入站 text="" + 附件（供路由器跳过生成 / 收录）。"""
         message = TgMessageModel(
             message_id=1,
             chat=TgChatModel(id=1, type="private"),
             text=None,
             photo=[TgPhotoSizeModel(file_id="P")],
+            date=1731000000,
+        )
+        inbound = map_tg_message_to_inbound(message)
+        assert inbound is not None
+        assert inbound.text == ""
+        assert inbound.attachments[0].kind is ChannelAttachmentKind.IMAGE
+
+    async def test_map_unroutable_returns_none(self) -> None:
+        """无文本且无附件：映射返回 None（调用方跳过路由）。"""
+        message = TgMessageModel(
+            message_id=1,
+            chat=TgChatModel(id=1, type="private"),
+            text=None,
             date=1731000000,
         )
         assert map_tg_message_to_inbound(message) is None

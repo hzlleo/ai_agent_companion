@@ -1,4 +1,4 @@
-"""app/main CORS 装配 + 新管理路由注册测试（P2 chunk 1）。
+"""app/main CORS 装配 + 新管理路由注册测试。
 
 测试策略：``create_app(settings=隔离 Settings)`` 注入自定义
 ``ServerConfig.cors_origins``（零真实配置 / 零真实网络——ASGITransport）；
@@ -18,7 +18,7 @@ from app.main import create_app
 from packages.harness.config.models import ServerConfig
 from packages.harness.config.settings import build_isolated_settings
 
-#: Vite dev server 来源（P2 admin 前端默认形态）。
+#: Vite dev server 来源（管理台前端默认形态）。
 _ALLOWED_ORIGIN = "http://localhost:5173"
 
 

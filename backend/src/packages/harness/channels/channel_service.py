@@ -323,6 +323,7 @@ class ChannelRouter:
         self._group_states: dict[str, GroupResponderStateModel] = {}
         self._chat_group_flags: dict[str, bool] = {}
         self._synthetic_skip_count = 0
+        self._empty_text_skip_count = 0
         self._flow_job_seq = 0
         self._scheduler_missing_warned = False
 
@@ -365,10 +366,28 @@ class ChannelRouter:
         """持有心流节拍状态的会话数（观测面）。"""
         return len(self._flow_states)
 
+    def flow_state_for(self, key: str) -> FlowChatStateModel | None:
+        """读取单个会话的心流节拍状态快照（观测面——只读副本）。
+
+        Args:
+            key: 会话身份键（``channel:<通道>:<chat_id>``）。
+
+        Returns:
+            节拍状态副本（调用方修改不影响路由器内部态）；该聊天尚无
+            节拍状态时返回 None。
+        """
+        state = self._flow_states.get(key)
+        return None if state is None else state.model_copy(deep=True)
+
     @property
     def synthetic_skip_count(self) -> int:
         """累计跳过的合成事件条数（观测面——恒不回复语义的计数面）。"""
         return self._synthetic_skip_count
+
+    @property
+    def empty_text_skip_count(self) -> int:
+        """累计跳过生成的空文本入站条数（观测面——仅附件消息的计数面）。"""
+        return self._empty_text_skip_count
 
     @staticmethod
     def session_key(context: ChannelContextModel) -> str:
@@ -405,6 +424,10 @@ class ChannelRouter:
         合成事件：``message.synthetic=True`` 在门控与锁之前恒跳过——返回
         空投递结果，不建会话、不写心流节拍状态、不调用心流判定（与
         ``FLOW_ENABLED`` 无关）；跳过计数累加并记 debug 日志。
+
+        空文本入站（纯图片 / 纯表情附件）：表情收录与心流游标照常执行，
+        但**不调用生成**（不产生兜底文案、不写空回合）——返回空投递结果；
+        跳过计数累加并记 debug 日志（``empty_text_skip_count``）。
 
         群聊多人格：启用时按选择结论逐人格应答并逐条投递（每人格自己的
         持久化会话）；选择为空 / 未启用时回退主人格单人格路径。
@@ -471,6 +494,24 @@ class ChannelRouter:
                     )
                     if gate_result is not None:
                         return gate_result
+                if not message.text.strip():
+                    # 仅附件入站：表情已收录、心流游标已推进（门控 / 会话
+                    # 懒建保持既有顺序），但不进入生成——空文本会触发
+                    # ChatService 的 VALIDATION_ERROR 兜底文案并写空回合。
+                    self._empty_text_skip_count += 1
+                    logger.debug(
+                        "空文本入站（跳过生成——表情收录 / 游标照常）: "
+                        "channel={}, chat_id={}, message_id={}, skipped_total={}",
+                        message.channel.value,
+                        message.chat_id,
+                        message.message_id,
+                        self._empty_text_skip_count,
+                    )
+                    return ChannelDeliveryResultModel(
+                        channel=message.channel,
+                        chat_id=message.chat_id,
+                        message_ids=[],
+                    )
                 if group_pool is not None:
                     group_delivery = await self._reply_via_group(
                         context,
@@ -525,6 +566,9 @@ class ChannelRouter:
         合成事件不会到达本方法（路由器在门控前恒跳过 ``synthetic=True``）；
         判定层的 ``SKIP / SYNTHETIC_EVENT`` 结论保留为纯函数契约。
 
+        仅附件入站（空文本）只推进到达时刻与积压计数，不把空串追加进
+        待回复缓冲——连发 / 节律判定照常，合并批次不含空条目。
+
         Args:
             context: 通道会话上下文。
             adapter: 通道适配器（延迟批次投递面）。
@@ -553,7 +597,9 @@ class ChannelRouter:
                 now,
             )
             state = clear_pending(state)
-        state = record_inbound(state, message.text, now)
+        state = record_inbound(
+            state, message.text, now, append_text=bool(message.text.strip())
+        )
         self._flow_states[key] = state
         rhythm = await self._rhythm_snapshot(now)
         relationship = await self._relationship_summary(persona_id, now)
@@ -698,8 +744,8 @@ class ChannelRouter:
             merged = merge_buffered_texts(state.buffered_texts, settings)
             state = clear_pending(state)
             self._flow_states[key] = state
-            if not merged.text:
-                logger.debug("心流延迟批次缓冲为空（跳过）: job={}", job_name)
+            if not merged.text.strip():
+                logger.debug("心流延迟批次缓冲无可回复文本（跳过）: job={}", job_name)
                 return
             if merged.dropped_count > 0:
                 logger.info(

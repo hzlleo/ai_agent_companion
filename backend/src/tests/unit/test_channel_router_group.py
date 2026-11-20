@@ -8,36 +8,20 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-from typing import Any
-
-from packages.harness.channels.channel_models import (
-    ChannelDeliveryResultModel,
-    ChannelType,
-    InboundMessageModel,
-    OutboundMessageModel,
-)
+from packages.harness.channels.channel_models import ChannelType, InboundMessageModel
 from packages.harness.channels.channel_service import ChannelRouter
-from packages.harness.chat.chat_models import ChatSessionStateModel
 from packages.harness.chat.persona_rotation_models import GroupPersonaSettings
-from packages.harness.core.context import persona_id_var
 from packages.harness.memory.models import MemoryProvenance
 from packages.harness.persona.chara_card import CharaCardModel
 from packages.harness.persona.dtos import PersonaRecordDTO, PersonaStatus
-
-_BASE_MS = 1_700_000_000_000
-
-
-class FakeClock:
-    """假时钟（epoch 毫秒——测试手动推进）。"""
-
-    def __init__(self, start_ms: int = _BASE_MS) -> None:
-        """初始化。"""
-        self.now = start_ms
-
-    def __call__(self) -> int:
-        """返回当前假时刻。"""
-        return self.now
+from tests.router_fakes import (
+    BASE_MS,
+    FakeAdapter,
+    FakeChatService,
+    FakeClock,
+    empty_session_factory,
+    reply_index_message_ids,
+)
 
 
 def _record(persona_id: int, *, is_primary: bool = False) -> PersonaRecordDTO:
@@ -49,8 +33,8 @@ def _record(persona_id: int, *, is_primary: bool = False) -> PersonaRecordDTO:
         status=PersonaStatus.ACTIVE,
         is_primary=is_primary,
         card=CharaCardModel(name=f"人格{persona_id}"),
-        created_at=_BASE_MS,
-        updated_at=_BASE_MS,
+        created_at=BASE_MS,
+        updated_at=BASE_MS,
     )
 
 
@@ -66,73 +50,6 @@ class FakePersonaService:
         """返回固定启用人格集合。"""
         self.list_calls += 1
         return list(self.records)
-
-
-class FakeChatService:
-    """fake ChatService（按人格归属建会话 / 可编程人格级失败）。"""
-
-    def __init__(self, *, failing_persona_ids: set[int] | None = None) -> None:
-        """初始化。"""
-        self.create_calls: list[dict[str, Any]] = []
-        self.reply_calls: list[dict[str, Any]] = []
-        self.failing_persona_ids = failing_persona_ids or set()
-
-    async def create_session(
-        self,
-        *,
-        persona: PersonaRecordDTO | None = None,
-        db_session: object | None = None,
-        title: str | None = None,
-    ) -> ChatSessionStateModel:
-        """fake 会话创建（人格归属来自入参记录）。"""
-        persona_id = persona.id if persona is not None else 9
-        self.create_calls.append(
-            {"persona_id": persona_id, "db_session": db_session, "title": title}
-        )
-        return ChatSessionStateModel(
-            persona_id=persona_id,
-            persona_name=f"persona-{persona_id}",
-            card=CharaCardModel(name=f"人格{persona_id}"),
-        )
-
-    async def reply(
-        self, state: ChatSessionStateModel, user_text: str, *, sender_provenance: Any = None
-    ) -> str:
-        """fake 回复（人格级失败可编程）。"""
-        self.reply_calls.append(
-            {
-                "persona_id": state.persona_id,
-                "persona_ctx": persona_id_var.get(),
-                "text": user_text,
-                "sender_provenance": sender_provenance,
-            }
-        )
-        if state.persona_id in self.failing_persona_ids:
-            raise RuntimeError(f"persona-{state.persona_id} 回复失败")
-        return f"persona{state.persona_id}:{user_text}"
-
-
-class FakeAdapter:
-    """fake 适配器（记录出站消息）。"""
-
-    def __init__(self) -> None:
-        """初始化。"""
-        self.sent: list[OutboundMessageModel] = []
-
-    async def send_message(self, message: OutboundMessageModel) -> ChannelDeliveryResultModel:
-        """记录出站并返回成功结果。"""
-        self.sent.append(message)
-        return ChannelDeliveryResultModel(
-            channel=ChannelType.TELEGRAM,
-            chat_id=message.chat_id,
-            message_ids=[f"out:{len(self.sent)}"],
-        )
-
-
-@asynccontextmanager
-async def _session_factory() -> Any:
-    """fake 数据库会话工厂（空会话对象——fake 服务不消费）。"""
-    yield object()
 
 
 def _inbound(
@@ -163,7 +80,7 @@ def _router(
     """装配路由器（注入 fake 依赖）。"""
     router = ChannelRouter(
         chat_service_factory=lambda: service,
-        session_factory=_session_factory,
+        session_factory=empty_session_factory,
         group_settings=settings,
         persona_service=persona_service,
         clock=clock or FakeClock(),
@@ -174,8 +91,8 @@ def _router(
 
 async def test_group_mode_disabled_uses_single_primary_session() -> None:
     """功能关闭：群聊沿用单人格既有路径（无 persona 后缀会话）。"""
-    service = FakeChatService()
-    adapter = FakeAdapter()
+    service = FakeChatService(echo_style="persona")
+    adapter = FakeAdapter(message_ids=reply_index_message_ids)
     router = _router(
         service=service,
         adapter=adapter,
@@ -190,8 +107,8 @@ async def test_group_mode_disabled_uses_single_primary_session() -> None:
 
 async def test_group_rotation_hands_turn_to_previous_non_responder() -> None:
     """轮转：第二条消息改由上一轮未发言人格应答（独立会话归属）。"""
-    service = FakeChatService()
-    adapter = FakeAdapter()
+    service = FakeChatService(echo_style="persona")
+    adapter = FakeAdapter(message_ids=reply_index_message_ids)
     router = _router(
         service=service,
         adapter=adapter,
@@ -210,8 +127,8 @@ async def test_group_rotation_hands_turn_to_previous_non_responder() -> None:
 
 async def test_group_multi_responder_cap_and_reply_attribution() -> None:
     """多人格接续：上限内逐人格回复，首条引用入站、其余不引用。"""
-    service = FakeChatService()
-    adapter = FakeAdapter()
+    service = FakeChatService(echo_style="persona")
+    adapter = FakeAdapter(message_ids=reply_index_message_ids)
     router = _router(
         service=service,
         adapter=adapter,
@@ -232,8 +149,8 @@ async def test_group_multi_responder_cap_and_reply_attribution() -> None:
 async def test_group_cooldown_excludes_recent_and_falls_back_when_all_cooling() -> None:
     """冷却：刚发言者被排除；全员冷却时选最早发言者兜底。"""
     clock = FakeClock()
-    service = FakeChatService()
-    adapter = FakeAdapter()
+    service = FakeChatService(echo_style="persona")
+    adapter = FakeAdapter(message_ids=reply_index_message_ids)
     router = _router(
         service=service,
         adapter=adapter,
@@ -249,8 +166,8 @@ async def test_group_cooldown_excludes_recent_and_falls_back_when_all_cooling() 
 
 async def test_private_chat_ignores_group_rotation() -> None:
     """单聊：即使群聊多人格启用，也走单人格路径。"""
-    service = FakeChatService()
-    adapter = FakeAdapter()
+    service = FakeChatService(echo_style="persona")
+    adapter = FakeAdapter(message_ids=reply_index_message_ids)
     router = _router(
         service=service,
         adapter=adapter,
@@ -264,8 +181,8 @@ async def test_private_chat_ignores_group_rotation() -> None:
 
 async def test_single_persona_failure_isolated_from_other_responders() -> None:
     """逐人格失败隔离：一个失败不影响其余人格应答。"""
-    service = FakeChatService(failing_persona_ids={1})
-    adapter = FakeAdapter()
+    service = FakeChatService(echo_style="persona", failing_persona_ids={1})
+    adapter = FakeAdapter(message_ids=reply_index_message_ids)
     router = _router(
         service=service,
         adapter=adapter,
@@ -279,8 +196,8 @@ async def test_single_persona_failure_isolated_from_other_responders() -> None:
 
 async def test_all_persona_failures_fall_back_to_short_message() -> None:
     """全部人格失败：外层兜底回发短中文提示（不静默丢消息）。"""
-    service = FakeChatService(failing_persona_ids={1, 2})
-    adapter = FakeAdapter()
+    service = FakeChatService(echo_style="persona", failing_persona_ids={1, 2})
+    adapter = FakeAdapter(message_ids=reply_index_message_ids)
     router = _router(
         service=service,
         adapter=adapter,
@@ -294,8 +211,8 @@ async def test_all_persona_failures_fall_back_to_short_message() -> None:
 
 async def test_persona_pool_read_failure_falls_back_to_primary_path() -> None:
     """启用人格读取失败：回退主人格单人格路径（不阻断回复）。"""
-    service = FakeChatService()
-    adapter = FakeAdapter()
+    service = FakeChatService(echo_style="persona")
+    adapter = FakeAdapter(message_ids=reply_index_message_ids)
 
     class _FailingPersonaService:
         async def list_addressable(self, session: object) -> list[PersonaRecordDTO]:
@@ -303,7 +220,7 @@ async def test_persona_pool_read_failure_falls_back_to_primary_path() -> None:
 
     router = ChannelRouter(
         chat_service_factory=lambda: service,
-        session_factory=_session_factory,
+        session_factory=empty_session_factory,
         group_settings=GroupPersonaSettings(enabled=True, max_responders=2),
         persona_service=_FailingPersonaService(),
     )
@@ -316,8 +233,8 @@ async def test_persona_pool_read_failure_falls_back_to_primary_path() -> None:
 
 async def test_empty_pool_falls_back_to_primary_path() -> None:
     """空候选：回退主人格单人格路径（无 persona 后缀会话）。"""
-    service = FakeChatService()
-    adapter = FakeAdapter()
+    service = FakeChatService(echo_style="persona")
+    adapter = FakeAdapter(message_ids=reply_index_message_ids)
     router = _router(
         service=service,
         adapter=adapter,

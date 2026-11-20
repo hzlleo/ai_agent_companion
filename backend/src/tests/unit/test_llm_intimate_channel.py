@@ -150,6 +150,24 @@ def _complete_config(**overrides: Any) -> IntimateChannelConfig:
     return IntimateChannelConfig(**payload)
 
 
+def _incomplete_config(*, enabled: bool = False) -> IntimateChannelConfig:
+    """构造三项必填全缺的亲密通道（显式空值——不依赖进程环境）。
+
+    Args:
+        enabled: 总闸取值。
+
+    Returns:
+        必填项全缺、未配置的实例。
+    """
+    return IntimateChannelConfig(
+        enabled=enabled,
+        base_url="",
+        api_key=SecretStr(""),
+        model="",
+        temperature=None,
+    )
+
+
 class RecordingUsageRecorder:
     """假用量记录器（记录事件）。"""
 
@@ -329,9 +347,7 @@ async def test_route_matrix(
     expected_reason: IntimateRouteReason,
 ) -> None:
     """路由矩阵：开关 × 配置齐全 × 等级 0-3（含摘要缺失）逐格裁决。"""
-    config = (
-        _complete_config(enabled=enabled) if complete else IntimateChannelConfig(enabled=enabled)
-    )
+    config = _complete_config(enabled=enabled) if complete else _incomplete_config(enabled=enabled)
     decision = evaluate_intimate_route(config, intimacy_level=level)
     assert decision.use_intimate is expected_intimate
     assert decision.reason is expected_reason
@@ -366,7 +382,7 @@ async def test_build_intimate_entry_requires_complete_config() -> None:
     assert entry.api_key_env == ""
 
     with pytest.raises(BusinessException) as exc_info:
-        build_intimate_entry(IntimateChannelConfig(enabled=True))
+        build_intimate_entry(_incomplete_config(enabled=True))
     assert exc_info.value.code == ErrorCode.INTERNAL_ERROR
 
 
@@ -385,7 +401,9 @@ async def test_intimate_request_params_merge_priority() -> None:
     assert merged_partial.temperature == 1.1
     assert merged_partial.max_tokens == 32
 
-    no_temperature = IntimateChannelConfig(enabled=True, base_url="u", model="m")
+    no_temperature = IntimateChannelConfig(
+        enabled=True, base_url="u", model="m", temperature=None
+    )
     assert build_intimate_request_params(no_temperature, None) is None
 
 
@@ -424,7 +442,11 @@ async def test_incomplete_config_falls_back_and_warns_once() -> None:
         gateway = _gateway(
             manager,
             intimate_config=IntimateChannelConfig(
-                enabled=True, base_url=_INTIMATE_BASE_URL, api_key=SecretStr("k")
+                enabled=True,
+                base_url=_INTIMATE_BASE_URL,
+                api_key=SecretStr("k"),
+                model="",
+                temperature=None,
             ),
         )
         await gateway.chat_by_role("chat", _messages(), intimacy_level=3)

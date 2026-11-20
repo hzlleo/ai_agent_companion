@@ -21,8 +21,13 @@
        中文文案——不携带 token / 内部路径；执行器对运行时**恒不抛
        未受控异常**）。
 
-阻塞 I/O 下沉：stdlib urllib 在线程池执行（``asyncio.to_thread``——
-本树零 httpx 依赖，锁定决策）。
+阻塞 I/O 下沉：stdlib urllib 经 ``asyncio.to_thread`` 在线程池执行（本树
+零 httpx 依赖，锁定决策）。该调用使用**进程级默认执行器**——沙盒树是独立
+pixi 项目（源码隔离），不能引用 backend 的 ``run_blocking_ops`` 公共池，
+因此树内全部阻塞调用共用同一默认池；树内**禁止**自建
+``ThreadPoolExecutor``（避免每工具独立池放大线程数并绕过统一的背压口径）。
+backend 侧共享池容量（``pools.thread_pool_size``）不作用于沙盒进程，沙盒
+容量按容器资源限额与默认执行器口径统一评估。
 """
 
 from __future__ import annotations

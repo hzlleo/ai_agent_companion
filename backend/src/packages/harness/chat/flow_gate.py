@@ -156,7 +156,7 @@ def evaluate_flow_gate(
 
 
 def record_inbound(
-    state: FlowChatStateModel, text: str, now_ms: int
+    state: FlowChatStateModel, text: str, now_ms: int, *, append_text: bool = True
 ) -> FlowChatStateModel:
     """记录一条入站消息（到达时刻 + 积压递增 + 待回复缓冲追加）。
 
@@ -166,16 +166,28 @@ def record_inbound(
     :data:`~packages.harness.chat.flow_models.FLOW_BUFFERED_TEXT_LIMIT` 条
     （合并阶段的正式裁剪由 :func:`merge_buffered_texts` 按配置上限执行）。
 
+    仅附件入站（``text=""``）以 ``append_text=False`` 记录：到达时刻与
+    积压照常递增（连发窗口 / 节律判定不变），空文本不进入待回复缓冲——
+    合并文本不会因空条目产生孤立换行，纯媒体批次也不会被误判为有待
+    回复内容。
+
     Args:
         state: 既有会话节拍状态。
-        text: 入站文本（已通过空文本校验的原文）。
+        text: 入站文本（非空原文；append_text=False 时仅作占位，不追加）。
         now_ms: 入站时刻（epoch 毫秒——调用方注入）。
+        append_text: 是否把 ``text`` 追加进待回复缓冲（仅附件入站传
+            False）。
 
     Returns:
-        追加后的新状态（积压 +1，``pending`` / ``pending_due_ms`` 保持）。
+        追加后的新状态（积压 +1，``pending`` / ``pending_due_ms`` 保持；
+        append_text=False 时缓冲原样保留）。
     """
     arrivals = [*state.recent_arrival_ms, now_ms][-FLOW_ARRIVAL_HISTORY_LIMIT:]
-    buffered = [*state.buffered_texts, text][-FLOW_BUFFERED_TEXT_LIMIT:]
+    buffered = (
+        [*state.buffered_texts, text][-FLOW_BUFFERED_TEXT_LIMIT:]
+        if append_text
+        else list(state.buffered_texts)
+    )
     return state.model_copy(
         update={
             "recent_arrival_ms": arrivals,

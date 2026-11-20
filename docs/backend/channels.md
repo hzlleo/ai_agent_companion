@@ -119,6 +119,10 @@ FLOW_ENABLED=true
 （fail-safe，记 warning）；排程标记超过 `FLOW_PENDING_GRACE_MS` 未执行
 视为任务丢失，后续入站重新排程。单条消息的所有失败仍走既有兜底隔离。
 
+仅附件入站（`text=""`）照常记录到达时刻与积压（连发 / 节律判定原料），
+但不追加进待回复缓冲——合并结果不会出现空条目产生的孤立换行；纯媒体
+批次到期后无净文本即清除排程标记直接结束，不调用生成、不发兜底文案。
+
 门控裁决 JSON 示例：
 
 ```json
@@ -229,7 +233,7 @@ assistant 回合恒为 agent）。**peer 事件永不晋升策展记忆、永不
 
 ## 协议 v2（附件 / 静默 / 合成事件——additive，v1 形态缺省保持）
 
-v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语音附件、贴纸 / Canvas 媒体与合成 ID 等后续 R2d/R2e 特性）：`InboundMessageModel` / `OutboundMessageModel` / `ChannelDeliveryResultModel` 各增 v2 字段（全部带缺省值——**缺省即 v1 纯文本形态**，既有消费者零改动；本 chunk 内全部内部消费者已迁移到 v2 模型面）。新增 `ChannelMessageAttachment`（附件模型）与 `AttachmentDeliveryResult`（逐附件投递结果）。
+v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语音附件、贴纸 / Canvas 媒体与合成 ID 等后续媒体 / 前端特性）：`InboundMessageModel` / `OutboundMessageModel` / `ChannelDeliveryResultModel` 各增 v2 字段（全部带缺省值——**缺省即 v1 纯文本形态**，既有消费者零改动；本切片内全部内部消费者已迁移到 v2 模型面）。新增 `ChannelMessageAttachment`（附件模型）与 `AttachmentDeliveryResult`（逐附件投递结果）。
 
 ### 模型表（v2 字段 + JSON 示例）
 
@@ -274,6 +278,8 @@ v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语�
 ```
 
 `synthetic=True` = 机器生成事件上浮（heartflow / mood / 平台系统消息），非人类消息：**路由器恒跳过，与 `FLOW_ENABLED` 无关**——不建会话、不回调心流判定、不回复，跳过计数只进 debug 日志（`synthetic_skip_count` 为观测面）。入站 `silent` 为平台上报的无通知上下文标记位（预留）。
+
+入站 `text` 允许空串：**仅附件入站**（纯图片 / 纯表情，无用户字面文本）归一为 `text=""` 投递——路由器照常收录表情、推进心流游标，但**不调用生成**（不写空回合、不发兜底文案），跳过计数 `empty_text_skip_count` 只进 debug 日志。**占位文本不算用户文本，所有 wire 形态一致**（Telegram 媒体 / QQ 段数组 / QQ CQ 码字符串）：无用户字面文本但消息含非文本内容（CQ 码或非 text 段）即归一空文本投递；既无用户文本也无任何非文本内容的消息才由产生方丢弃（不进路由器）。
 
 **OutboundMessageModel v2 字段**（`attachments: list = []` / `silent: bool = False`）：
 
@@ -323,13 +329,15 @@ v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语�
 
 ### `tg-file://` 伪方案契约（入站方向——下载免取 v2）
 
-Telegram 真实媒体拉取需 **getFile + 文件 URL** 二段 Bot API 流程；v2 入站**不做下载**——附件以 `path="tg-file://{file_id}"` 伪方案承载平台文件引用，真实媒体 fetch deferred 到 R2d 贴纸 / 语音工作。photo 取最大尺寸（宽 × 高）的 `file_id`；voice / audio / document 的 `mime_type` 进 `media_type`（photo / sticker 无 MIME 线索 → None）；caption 挂首附件（`message.caption` 同时兜底为入站 `text`——媒体消息用户的伴随话语）；提取顺序 photo → voice → audio → document → sticker（真实 Bot API 消息至多一种媒体——固定顺序为确定性兜底）。
+Telegram 真实媒体拉取需 **getFile + 文件 URL** 二段 Bot API 流程；v2 入站**不做下载**——附件以 `path="tg-file://{file_id}"` 伪方案承载平台文件引用，真实媒体 fetch deferred 到后续贴纸 / 语音工作。photo 取最大尺寸（宽 × 高）的 `file_id`；voice / audio / document 的 `mime_type` 进 `media_type`（photo / sticker 无 MIME 线索 → None）；caption 挂首附件（`message.caption` 同时兜底为入站 `text`——媒体消息用户的伴随话语）；提取顺序 photo → voice → audio → document → sticker（真实 Bot API 消息至多一种媒体——固定顺序为确定性兜底）。
 
-Telegram 入站路由门槛（v2）：文本与媒体互斥（Bot API 语义）——媒体消息以 **caption 兜底为文本**（有 caption 即路由）；**纯媒体无 caption 维持 v1 跳过语义**（不进路由器，offset 照常推进）；纯文本消息 v1 形态零变更。
+Telegram 入站路由门槛（v2）：文本与媒体互斥（Bot API 语义）——媒体消息以 **caption 兜底为文本**（有 caption 即路由）；**纯媒体无 caption 归一为 `text=""` 入站**（附件照常搭载，路由器跳过生成但保留表情收录；offset 照常推进）；既无文本又无附件才跳过；纯文本消息 v1 形态零变更。
 
 ### QQ 入站附件提取（段数组形态）
 
 NapCat 段数组消息的 image / record 段提取为附件（引用形态优先序）：`data.url`（可下载 URL）→ `url` 源；`data.file` 为 `base64://` 前缀 → `base64` 源（载荷剥前缀）；其余 `data.file`（`file://` URL / 平台引用）→ `path` 源原样承载。**边界**：仅段数组形态提取（NapCat HTTP POST 上报缺省 `message_format=array`）；CQ 码字符串形态维持占位符降级（参数解析转义复杂度不抵增益——文档化决策）；无可用引用（url / file 皆缺）的媒体段跳过。
+
+**仅附件入站（锁定语义）**：纯图片 / 纯表情消息（无用户字面文本）不做前置丢弃——只要消息含非文本内容（段数组的非 text 段或 CQ 码字符串的 `[CQ:...]` 码，两种 wire 形态一致），就归一为 `text=""` 的入站消息投递（段数组形态照常搭载可提取附件），路由器跳过生成但照常执行表情收录与心流游标推进（见「协议 v2」空文本语义）；既无用户文本也无任何非文本内容才丢弃（无可投递内容）。
 
 ### 流式降级（锁定契约）
 
@@ -359,7 +367,7 @@ v2 只交付 **wire**（模型 + 适配器 + 测试）。**表情包收发桥**�
     ↓ 取表情 / 平台附件投递失败：文本照常投递（逐附件结果由适配器聚合）
 ```
 
-延迟 / 合并批次只承接文本，不携带入站附件；收录已在门控前完成（合成事件除外——路由器在收录前已恒跳过），回表情仅即时回复路径生效（文档化边界）。
+延迟 / 合并批次只承接文本，不携带入站附件；收录已在门控前完成（合成事件除外——路由器在收录前已恒跳过），回表情仅即时回复路径生效（文档化边界）。空文本入站（纯表情 / 纯图片）同样收录，但跳过生成与兜底回发（`empty_text_skip_count`）。
 
 群聊多人格模式的素材归属（锁定）：**应答侧**各人格仍使用各自素材库（人格隔离轴与文本会话一致）；**入站收录**只进主人格（第一位候选）的素材库——多人格应答下表情归属本身歧义，取首位候选是确定性选择（不按发言者 / 应答者猜归属）。
 
@@ -476,7 +484,7 @@ OneBot v11 `message` 字段双形态：段数组（`[{"type": "text", "data": {.
 | `forward` | `[合并转发]` | `json` / `xml` | `[卡片消息]` |
 | 未知类型 | `[其它消息]` | （CQ 字符串内 `text` 罕见形态） | 空串 |
 
-- 展平后空文本（无段 / 空串）跳过路由；纯图片消息展平为 `[图片]` **进路由**（人格可感知非文本内容——与 tg「非文本消息过滤不进路由」的差异点，QQ 占位符化后即文本）。
+- 展平后空文本（无段 / 空串）跳过路由；纯图片 / 纯表情消息（CQ 字符串与段数组形态一致）展平为占位文本后**无用户字面文本**归一 `text=""` 进路由（路由器跳过生成、照常推进心流游标；占位符只在混合消息中作为人格可感知的非文本降级形态保留）。
 
 ### 去重与顺序（文档化边界）
 
@@ -1207,7 +1215,7 @@ settings = build_isolated_settings(
 | `tests/unit/test_qq_settings.py` | QQ env 面对齐 / 默认值 / 边界校验 / 隔离构造 / `CHANNELS__QQ__*` 嵌套覆写 |
 | `tests/unit/test_tg_client.py` | MockTransport：请求形状（timeout / offset / 超时裕量）/ 4096 分段 / 错误映射表 / token fail fast；v2：silent → disable_notification / 媒体 JSON 引用与 multipart 上传形状 / 空媒体面校验 / 媒体错误映射；出站 429 retry_after 解析 / 延迟夹取 / 单次重试 / 重试失败上抛 / 缺参数不重试（伪休眠零等待） |
 | `tests/unit/test_qq_client.py` | MockTransport：动作包裹形状 / Bearer 头有无 / 超时注入 / status=async 成功 / 错误映射表 / 空文本拒绝；v2：段数组动作包裹形状 / 空段列表拒绝 |
-| `tests/unit/test_tg_runner.py` | fake client + fake router + 注入休眠：offset 往返 / 去重 / 退避 / 优雅停机 / 启动校验 / 发送面；v2：媒体消息 caption 兜底 + 伪方案附件提取 / 纯媒体跳过 / silent 透传 / 附件 kind 分流（base64 上传 / url JSON / file_id 重发 / sticker caption 丢弃）/ 部分失败聚合 / 文本失败上抛（v1 语义） |
+| `tests/unit/test_tg_runner.py` | fake client + fake router + 注入休眠：offset 往返 / 去重 / 退避 / 优雅停机 / 启动校验 / 发送面；v2：媒体消息 caption 兜底 + 伪方案附件提取 / 纯媒体归一空文本 / silent 透传 / 附件 kind 分流（base64 上传 / url JSON / file_id 重发 / sticker caption 丢弃）/ 部分失败聚合 / 文本失败上抛（v1 语义） |
 | `tests/unit/test_qq_adapter.py` | fake 客户端：chat_id grammar 双形态 / 投递映射（ok / 无 message_id）/ grammar 校验 / 失败上抛；v2：段数组发射（文本先 + 媒体后）/ base64 包装 / sticker→image 映射 / file 类逐附件失败承载 / silent no-op / 段发送失败上抛 |
 | `tests/unit/test_qq_webhook.py` | fake 路由器：私聊 / 群聊路由形状 / 展平双形态 + 占位符表 / 去重 + FIFO 淘汰 / 忽略矩阵 / 隔离铁律；v2：image / record 段附件提取（url / base64:// 剥前缀 / file:// path 源）/ 无引用跳过 / CQ 字符串形态提取不生效（边界） |
 | `tests/unit/test_channel_router.py` | fake ChatService：会话复用 / 持久化调用形状 / 人格绑定 / 错误隔离矩阵 / per-chat 并发串行化；v2：入站附件透传（回复循环纯文本）/ synthetic 恒跳过（不建会话、不回复、不投递） |

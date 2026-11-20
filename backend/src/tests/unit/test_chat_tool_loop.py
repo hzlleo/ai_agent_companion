@@ -22,6 +22,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from packages.harness.chat import prompts
 from packages.harness.chat.chat_models import ChatSessionStateModel
 from packages.harness.chat.service import CHAT_TOOL_STEP_CAP, ChatService
 from packages.harness.config.model_entry import ModelRole
@@ -330,7 +331,7 @@ class TestStepCap:
         # 收尾指令以 system 追加块进入最终请求
         final_messages = final_request["messages"]
         assert final_messages[-1].role == ChatMessageRole.SYSTEM
-        assert "收尾指令" in final_messages[-1].content
+        assert final_messages[-1].content == prompts.TOOL_LOOP_FINAL_INSTRUCTION_TEMPLATE
         # 循环步全部执行了工具
         assert len(executor.calls) == CHAT_TOOL_STEP_CAP
 

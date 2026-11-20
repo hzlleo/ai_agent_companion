@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """``.example`` 配置文件生成器——``backend/config.example.yaml`` 生成。
 
-从 ``LlmModelEntry`` / ``LlmConfig`` / ``MultimodalFallbackConfig`` 内省
-字段 schema（Field description），配合 ``LlmConfig.default_models()``
-示例数据（单一真相源）生成 ``config.example.yaml`` 内容。
+从 ``LlmModelEntry`` / ``LlmConfig`` / ``MultimodalFallbackConfig`` /
+``SearchConfig`` / ``SearchProviderEntry`` / ``WebSearchSettings`` 内省
+字段 schema（Field description）+ 代码默认值（单一真相源）生成
+``config.example.yaml`` 内容。
 """
 
 from __future__ import annotations
@@ -18,6 +19,9 @@ from packages.harness.config.model_entry import LlmModelEntry, ModelRole
 from packages.harness.config.models import (
     LlmConfig,
     MultimodalFallbackConfig,
+    SearchConfig,
+    SearchProviderEntry,
+    WebSearchSettings,
 )
 
 
@@ -33,6 +37,22 @@ def _yaml_quote(value: str) -> str:
     if not value:
         return '""'
     return f'"{value}"'
+
+
+def _yaml_scalar(value: object) -> str:
+    """渲染 YAML 标量（布尔值转小写字面量，字符串统一加引号）。
+
+    Args:
+        value: 字段默认值（bool / int / float / str）。
+
+    Returns:
+        YAML 标量文本。
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return _yaml_quote(value)
+    return str(value)
 
 
 def _type_display_name(annotation: object) -> str:
@@ -85,6 +105,51 @@ def generate_yaml_field_comments(cls: type[BaseModel]) -> list[str]:
     return lines
 
 
+def _search_section_lines() -> list[str]:
+    """生成 ``search`` 段示例行（provider 注册表 + web_search 运营子块）。
+
+    provider 示例值经 :class:`SearchProviderEntry` 构造物化（缺省
+    api_key_env / model 指向各 kind 的登记值），运营子块取
+    :class:`WebSearchSettings` 的字段代码默认——两处都不读进程环境，
+    产物与开发者 shell 无关。
+
+    Returns:
+        含分节注释与示例值的行列表（顶层段缩进已就位）。
+    """
+    lines: list[str] = [
+        "",
+        "# ===========================================================================",
+        "# search — 搜索 provider 注册表 + web_search 运营子块（默认关闭）",
+        "# providers 列表序 = failover 尝试序（bocha 主 / zhipu 兜底）；",
+        "# 条目只携带 api_key_env 变量名，密钥本值永不落 yaml。",
+        "# SearchConfig 字段 schema:",
+    ]
+    lines.extend(generate_yaml_field_comments(SearchConfig))
+    lines.extend(["# SearchProviderEntry 字段 schema:", *generate_yaml_field_comments(SearchProviderEntry)])
+    lines.extend(["# WebSearchSettings 字段 schema:", *generate_yaml_field_comments(WebSearchSettings)])
+    lines.extend(
+        [
+            "# ===========================================================================",
+            "search:",
+            "  providers:",
+        ]
+    )
+    for name, kind in (("bocha-main", "bocha"), ("zhipu-fallback", "zhipu")):
+        entry: dict[str, object] = SearchProviderEntry(name=name, kind=kind).model_dump()
+        # base_url 被模型校验物化为 kind 官方缺省；示例按「空=按 kind 缺省」
+        # 语义省略该键，缺省表仍是唯一真源。
+        entry.pop("base_url", None)
+        for index, key in enumerate(entry):
+            prefix = "    - " if index == 0 else "      "
+            lines.append(f"{prefix}{key}: {_yaml_scalar(entry[key])}")
+    lines.append("  web_search:")
+    for field_name, field_info in WebSearchSettings.model_fields.items():
+        if field_info.default is None:
+            continue
+        lines.append(f"    {field_name}: {_yaml_scalar(field_info.default)}")
+    return lines
+
+
 def generate_config_example_yaml() -> str:
     """从配置模型内省 + 示例数据生成 config.example.yaml 内容。
 
@@ -96,15 +161,16 @@ def generate_config_example_yaml() -> str:
         "#",
         "# 用法：复制为 config.yaml 并按需调整；或运行 `pixi run setup` 交互式生成。",
         "# 分层加载链（优先级从低到高）：代码默认值 < .env < 进程环境变量；",
-        "# 本文件承载结构化配置（llm 模型注册表 / 角色绑定 / 多模态回退链），",
-        "# 与 env 面不重叠。",
+        "# 本文件承载结构化配置（llm 模型注册表 / 角色绑定 / 多模态回退链 /",
+        "# search 搜索 provider 注册表），与 env 面不重叠。",
         "#",
         "# 所有配置键必须 lowercase_with_underscores。",
         "# 敏感信息（API Key、密码）不写在此文件，统一走 .env（条目经",
         "# api_key_env 指向环境变量名）。",
         "#",
         "# 本文件由 `pixi run gen-examples` 从 LlmModelEntry / LlmConfig /",
-        "# MultimodalFallbackConfig 自动生成。",
+        "# MultimodalFallbackConfig / SearchConfig / SearchProviderEntry /",
+        "# WebSearchSettings 自动生成。",
         "# 不要手动编辑——请修改配置类的 Field(description=...) 后重新生成。",
         "",
         "# ===========================================================================",
@@ -179,6 +245,7 @@ def generate_config_example_yaml() -> str:
             "      multimodal: true",
         ]
     )
+    lines.extend(_search_section_lines())
 
     return "\n".join(lines) + "\n"
 

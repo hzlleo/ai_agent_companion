@@ -129,13 +129,43 @@
 - 数据库迁移链 0001..0018；0012=curated lifecycle；0013=persona facts；0014=persona skills；0015=core memory（blocks + append-only revisions）；0016=voiceprint samples/consents + sticker library；0017=canvas documents；0018=persona facts 复合索引（persona_id/status/confidence）。
 - **记忆域保留期 = append-only 无限期保留**：不设 TTL 自动清理；删除权由单条管理面删除 + 人格级联删除覆盖。理由：审计与梦境回溯（运行决策 / 证据链 / 修订链需全量可复算）。
 
+### 4.1 拍板三案对照（抽样归档）
+
+> 抽样自 Oracle 审计 B 的三条拍板。口径：**选定项与其括号内定义是 §4 原始
+> 记录**；非选定项的名称与优缺点文本据该条决策要点重建（原始会话只保留选定
+> 项），不写入记录之外的细节。
+
+**抽样 1：P4 GUI 微信会话键（原始记录：B）**
+
+| 方案 | 优点 | 缺点 | 结论 |
+|---|---|---|---|
+| A 稳定平台标识（wxid / 会话 id） | 天然唯一，重命名不受影响；无需视觉识别 | GUI 微信不直接暴露稳定标识，需另建读取面；跨设备/换号时易漂移 | 非选定（重建） |
+| B 联系人备注名 + VLM 校验 | 备注名是 GUI 内可直接读取的稳定语义面；VLM 校验可抵消截图误读 | 依赖视觉链路；备注名被修改时需重建映射 | **选定（原始记录：B=联系人备注名+VLM 校验）** |
+| C 固定会话窗口索引 / 人工绑定 | 实现最简单，零识别成本 | 窗口顺序或数量变化即失效；人工绑定不可规模化 | 非选定（重建） |
+
+**抽样 2：亲密补强「道德层吞没」（原始记录：丙）**
+
+| 方案 | 优点 | 缺点 | 结论 |
+|---|---|---|---|
+| 甲 提示词对抗 + 后处理 | 不新增端点，全模型一致；角色契约 / 合规重试可复用 | 依赖模型服从性，长对话仍可能被保守策略吞没 | 非选定（重建） |
+| 乙 独立模型分轨（可开端点） | 端点与采样独立调优，不受主模型保守策略牵制 | 多一份端点、成本与运维；全部回合切轨时影响普通对话 | 非选定（重建） |
+| 丙 渐进组合（甲 + 乙可开 + 成熟度分层） | 默认零新增依赖，按关系阶段与成熟度逐级放开 | 配置面、测试面与文档面最大 | **选定（原始记录：丙=甲提示词对抗+后处理 / 乙模型分轨可开 / 渐进组合）** |
+
+**抽样 3：记忆存储 Q3（原始记录：A）**
+
+| 方案 | 优点 | 缺点 | 结论 |
+|---|---|---|---|
+| A SeekDB 统一检索 + MySQL 权威库 | 单一检索栈，少一套引擎运维；官方混合检索能力可直接用；知识图谱后置不阻塞 | 双栈一致性需服务层治理（提交后分发/补偿） | **选定（原始记录：Q3 方案 A；知识图谱后置，D2 未来 FalkorDB/Graphiti 可选）** |
+| B 独立向量库（Milvus / Qdrant）+ 关系库 | 向量生态成熟，容量与索引选项多 | 多一套引擎、同步链路与备份面；与权威库的一致性成本更高 | 非选定（重建） |
+| C 纯关系库全文检索（FULLTEXT / SQL LIKE） | 零新增引擎，部署最轻 | 语义召回弱；规模上升后相关性与延迟不足 | 非选定（重建） |
+
 ## 5. 工程实现事实（恢复续跑所需）
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2837 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 2871 passed）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
-cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/sandbox-drift；当前 mypy 191 文件零问题）
+cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖/sandbox-drift；当前 mypy 192 文件零问题）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 11 用例（迁移链/并发唯一键/行锁/混合检索）
 cd frontend && pixi run test / coverage / lint / build   # 666 passed（高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
@@ -504,8 +534,195 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 - 批次清单与结论：注入防御、logprobs 置信度、亲密补强（R2b+ 四切片）、R2c 记忆与关系（含修复）、R2d 心流/群聊/声纹/表情包（含修复）、R2e 企微/抖音/Canvas（含修复）、R2f 实时语音（含修复）、加固门禁（Tier-1+Tier-2，含复审残留）、补审 R2a 通道底座与记忆域（含残留）——全部经 Oracle 明确判定无问题（PASS），修复循环见各自小节的命令与证据。
 - 合并状态：PR#18 至 PR#31 已全部合并入 main（当前 `a4bf3e1`），工作区 clean；每批验收证据在 `docs/evidence/`（按 sha8 对应）。
-- 未决事项：**全约束审计 A（实现/架构）、B（测试/纪律）、C（文档/注释/提示词/配置）尚未执行**——原计划在 R2 收尾后立即进行，因运维维护子 Agent 所依赖的 LLM 服务顺延至次日；审计 A 的已发起任务若被中断需重跑。R3 在所有审计与终局交叉复核 ALL CLEAN 之前不启动。
-- 恢复指引：次日从干净 main 起分支执行审计 A→修正→复审循环→B→C→终局复核；审计提示词口径见本会话记录（覆盖 19 条硬约束），修复分支命名沿用 `feat/<范围>-review-fixes`。
+- 未决事项：审计 A 已执行（实现/架构）：**2×P1 + 3×P2，已修复并复审**（复审结果以本节末尾「审计 A 修复」记录为准）；审计 B（测试/纪律）：**1×P1 + 4×P2，已修复**（证据见 §5「全约束审计 B 修复」，待复审）；审计 C（文档/注释/提示词/配置）尚未执行。R3 在所有审计与终局交叉复核 ALL CLEAN 之前不启动。
+- 恢复指引：从干净 main 起分支执行审计 B→C→终局复核；审计提示词口径见本会话记录（覆盖 19 条硬约束），修复分支命名沿用 `feat/<范围>-review-fixes`。
+
+### 已完成切片：全约束审计 A 修复（2×P1 + 3×P2，本分支工作区）
+
+**已完成**（逐条闭环，分支 `feat/audit-a-fixes`，基线 main `f43d705`）：
+
+1. **P1 QQ 纯附件消息被前置丢弃**：`qq_webhook` 先提取附件再判文本——仅有附件（纯图片 / 纯表情）而无用户字面文本时归一为 `text=""` 入站并投递（`_has_user_text` 剥离占位符与 CQ 码字面判定）；`InboundMessageModel.text` 允许空串（说明同步：仅附件入站语义）；`ChannelRouter.handle_inbound` 在表情收录与门控游标之后对空文本短路——不调用生成、不发兜底、不写空回合，只累加 `empty_text_skip_count`。同语义同步到 Telegram（`map_tg_message_to_inbound` 纯媒体无 caption → `text=""` 入站，sticker 附件可进表情桥）。既无文本又无附件仍丢弃。
+2. **P1 实时语音任务异常静默**：`_spawn` 的 done 回调消费并记录非取消异常（`logger.opt(exception=...)` + 任务名，`task_failure_count` 观测面）；`_audio_worker` 主体加防御——未预期异常记日志、下行可恢复 `INTERNAL_ERROR` error、`_request_close(INTERNAL_ERROR)`（不再永久失聪至最大时长）；`_transcribe_segment` 的 `pcm16_to_wav` 移入异常处理范围（空 / 不足一帧 PCM 不抛）。
+3. **P2 写侧裸 dict 绕过 Model**：`_emotion_round_meta` 构造既有 `ChatMessageMetaModel`（thought / emotion_deltas / emotion_snapshot / variant_index 对齐），`_persist_turn` 形参改该 Model，落库前 `model_dump(exclude={"variant_index", "selected_variant_id"})` 保持旧三键 JSON 字节结构；读侧 DTO 兼容不变。
+4. **P2 app/ 表情桥业务逻辑**：解码 / 筛选 / 出站包装下沉 `harness/multimodal/sticker_bridge.py`（`StickerBridge` + `decode_inbound_stickers` + `InboundStickerPayloadModel` + 服务面 Protocol）；`app/main.py` 删除两个闭包，仅注入 `StickerService` / `session_scope` 并接线钩子；「只收录内联 base64」与失败隔离语义不变。
+5. **P2 沙盒公共池口径**：沙盒树源码隔离（不 import backend 公共池），`asyncio.to_thread` 使用进程级默认执行器、树内禁止自建 `ThreadPoolExecutor`——口径写入 `http_fetch.py` 模块注释与 `docs/backend/tools-sandbox.md`「阻塞 I/O 与线程池口径」小节；全树 `grep -rn "ThreadPoolExecutor(" docker/tool-sandbox-agent/src` 零命中。
+6. **同步面**：`docs/backend/channels.md`（空文本入站 / QQ 仅附件 / 表情桥）、`docs/backend/multimodal.md`（桥模块与下沉边界）、`docs/backend/chat.md`（meta Model 写侧口径）；`red_manifest.toml` 登记 `sticker-bridge-decode-removal` 红探针（新源文件门禁要求）。新增 17 例测试（QQ 仅附件 2、Telegram 纯媒体路由 1、路由器空文本 1、实时语音 2、meta Model 1、表情桥 10）。
+
+**验证**（主 Agent 实跑，命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2862 passed**；基线 2845 + 新增 17）。
+- `cd backend && pixi run coverage-gates` → **0**（24 组 ≥80%；harness/channels 97.0% / harness/chat 96.3% / harness/multimodal 93.9% / harness/voice 95.6% / app/main.py 93.1%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**（192 源文件零问题）。
+- 根 `pixi run gates` → **0**（注释门 / 同步测试棘轮 / noqa 冻结 / 沙盒漂移 38 项 / 红探针门 / 文档真相 / 断言棘轮 / 导出面 / prose-pin 全过）。
+- `cd backend && pixi run gen-examples` → **0** 连续两次；三件套 sha256 两次完全一致（幂等，无 env 键新增）。
+- `cd docker/tool-sandbox-agent && pixi run tests-unit` → **0**（**118 passed**；`http_fetch.py` 覆盖率 100%）；同树 `ThreadPoolExecutor(` 源文件零命中。
+- 前端未改动，按任务书略过；canonical 证据包 `docs/evidence/audit-a-fixes-da5b1bd3.json`（`verify-slice -- --slice audit-a-fixes` → **0**，5 步全 PASS：tests-all=2862 / coverage-gates=24 / typecheck=192）。
+- **反向实证**（逐条临时还原实现 → 目标用例变红 → 复原）：
+  - 还原 QQ 前置丢弃条件 → `test_qq_webhook.py` **3 failed**（纯图 / 纯表情 / record 文本空）；
+  - 还原 Telegram 前置丢弃条件 → `test_pure_media_without_caption_routed_with_empty_text` **1 failed**；
+  - `pcm16_to_wav` 移回 try 外 → `test_transcribe_segment_tolerates_empty_and_short_pcm` **1 failed**；
+  - meta 落库改 `model_dump()` 全字段 → `test_reply_meta_is_model_validated_and_byte_compatible` **1 failed**（键面多出变体字段）；
+  - 表情桥 base64 去掉空白折叠 → `test_decode_inbound_stickers_keeps_inline_base64_and_caption` **1 failed**；
+  - 红探针：`pixi run red-probe -- --symbol packages.harness.multimodal.sticker_bridge:decode_inbound_stickers` → **RED（failed=2）**。
+
+**剩余**：无（本切片范围）。
+
+### 已完成切片：审计 A 复审残留闭环（P2×2，本分支工作区）
+
+**已完成**（逐条闭环，分支 `feat/audit-a-fixes`）：
+
+1. **P2 心流合并空文本 → 兜底文案**：`record_inbound` 新增仅关键字形参 `append_text`——仅附件入站（`text=""`）以 False 记录，到达时刻 / 积压照常递增、空串不进入 `buffered_texts`；`_apply_flow_gate` 按入站 `text.strip()` 是否为空传入该开关；`_run_flow_batch` 的跳过守卫改为 `if not merged.text.strip():`（清除 pending 后直接返回，防御任何空白合并）。新增只读观测面 `ChannelRouter.flow_state_for`（返回节拍状态深拷贝，供断言缓冲 / 积压 / 到达面）。用例：`test_empty_text_media_burst_keeps_buffer_clean_and_merges_real_text`（门控启用 + 伪时钟连发 3 条纯媒体：缓冲零空条目、到达与积压均为 3、批次到期零生成零兜底、pending 清除；随后真实文本合并为 `真实文本`，无前导换行）、`test_single_empty_text_media_skips_generation_without_fallback`（单条立即路径仍跳过生成且不排程 / 不兜底）、`test_record_inbound_without_text_append_keeps_arrival_and_backlog`（纯函数面）。`docs/backend/channels.md` 心流节与空文本语义同步（纯媒体批次无净文本直接结束；占位文本不算用户文本）。
+2. **P2 QQ 占位符形态残留**：新增 `_has_non_text_content`（CQ 码字符串形态 `_CQ_CODE_RE.search`；段数组形态存在 `type != "text"` 的段）；入站归一条件改为「无用户字面文本且消息含非文本内容 → `text=""`」，丢弃条件改为「既无用户文本也无任何非文本内容」。CQ 字符串纯图片与纯 face 表情均以空文本投递（无可提取附件时路由器按 no-op 收录），混合文本 + 图片 / face 保留占位符进入生成面。用例 4 例：CQ 字符串纯图片 → `text=""`、纯 face 段 → `text=""`、混合文本 + face → `你好[表情]`、仅空 text 段 → 丢弃。既有 CQ / face 相关断言逐个核对后无需改动：`test_segment_array_image_face_placeholders` / `test_cq_string_flattening` / `test_cq_string_multiple_codes` 是展平纯函数断言（展平逻辑未变）；`test_cq_string_event_routed`（`在吗[CQ:face,id=2]`）带用户字面文本，仍为 `在吗[表情]`；`test_pure_sticker_face_with_image_routed_with_empty_text` 本就断言 `text=""`。qq_webhook 模块 docstring 与 `docs/backend/channels.md`（空文本语义 / QQ 仅附件 / 消息展平）同步为「占位文本不算用户文本，所有 wire 形态一致」。
+
+**验证**（主 Agent 实跑，命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2869 passed**；基线 2862 + 新增 7：心流 3、QQ 归一 4）。
+- `cd backend && pixi run coverage-gates` → **0**（24 组 ≥80%；harness/channels 97.2% / harness/chat 96.3%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**（192 源文件零问题）。
+- 根 `pixi run gates` → **0**（注释门 / 同步测试棘轮 / noqa 冻结 / 沙盒漂移 / 红探针门 / 文档真相 / 断言棘轮 / 导出面 / prose-pin 全过）。
+- `cd backend && pixi run gen-examples` → **0** 连续两次；三件套 sha256 两次完全一致（幂等，无 env 键新增）。
+- 前端未改动，按任务书略过。
+- **反向实证**（逐条临时还原实现 → 目标用例变红 → 复原）：
+  - 还原心流调用（`record_inbound(state, message.text, now)`）与批次守卫（`if not merged.text:`）→ `test_empty_text_media_burst_keeps_buffer_clean_and_merges_real_text` **1 failed**（`assert ['', '', ''] == []`——空条目进入缓冲）；复原后两文件 33 passed。
+  - 还原 QQ 归一 / 丢弃条件（`attachments and not _has_user_text` / `not text.strip() and not attachments`）→ `test_qq_webhook.py` **2 failed**（CQ 字符串纯图片、纯 face 段未以空文本投递）；复原后三文件 73 passed。
+
+**剩余**：无（本切片范围）；复审由主 Agent 后续执行。
+
+### 5.1 死代码处置（审计 B 抽样：5 个零引用公共符号）
+
+复核口径：对五个符号逐一执行 `grep -rIn` 覆盖仓库全树（backend / frontend /
+scripts / docs / docker / models；排 `__pycache__` / `.pixi` / `node_modules` /
+`.git` / `logs` / `coverage.json` / `dtoSchemas.json`）→ **零命中**（仅定义处与
+`__all__` 自身）。无任何非测试消费面，全部采用方案 A（删除并同步 `__all__`）。
+
+| 符号 | 位置 | 方案 | 优点 | 缺点 | 结论 |
+|---|---|---|---|---|---|
+| `render_config_yaml_text` | `config/registry_admin.py` | 删除并同步 `__all__` | 导出面与实际消费一致，消除误导性公共 API | 未来若需完整 yaml 文本需重写（一次性转发，成本极低） | **选定**：基座 `ConfigSectionAdmin` 已统一经 `_dump_config_yaml_text` 渲染，此函数只做 llm 段转发 |
+| 同上 | 同上 | 接线消费 | 公共面成为唯一渲染路径 | 与基座渲染职责重叠，llm 段出现第二条序列化路径 | 非选定（重建） |
+| 同上 | 同上 | 保留 | 零改动零风险 | 零引用符号持续扩大导出面，读者误判存在外部消费 | 非选定（重建） |
+| `current_settings_database` | `database/engine.py` | 删除并收窄 import | 去掉无意义间接层，`Settings` 导入随之消除 | 若未来需要统一读取面需重加 | **选定**：`init_database` / `rebuild_database_engine` 已直接读 `settings.database` |
+| 同上 | 同上 | 接线消费 | 读取路径统一 | 对单字段读取多一层函数调用，仍无第二个消费者 | 非选定（重建） |
+| 同上 | 同上 | 保留 | 零改动 | 测试/可观测性辅助实际无人使用，属于名义 API | 非选定（重建） |
+| `payload_for_kind` | `memory/models.py` | 删除并同步 `__all__` | 判别表真源只保留一个消费点（`parse_episode_payload`），减少误导 | 需要单取载荷类时需重加一行转发 | **选定**：`_PAYLOAD_BY_KIND` 判别表由解析函数直接消费，公共转发无调用方 |
+| 同上 | 同上 | 接线消费（解析函数改走它） | 公共面成为唯一查询路径 | 解析函数多一次转发，无行为收益 | 非选定（重建） |
+| 同上 | 同上 | 保留 | 零改动 | 与解析函数的职责重复，读者无法判断应使用哪个入口 | 非选定（重建） |
+| `RealtimeInboundType` / `RealtimeOutboundType` | `voice/realtime_models.py` | 删除并同步 `__all__` | 判别联合的 wire 真源保持为 `Literal`，避免两套类型真源 | 未来若需枚举化判别需重加并改联合定义 | **选定**：上下行消息全部用 `Literal` 判别，两个枚举从未参与解析、校验或导出 |
+| 同上 | 同上 | 接线消费（改为枚举判别） | 类型面统一为枚举 | 改变 pydantic 判别联合的 wire 校验形态，收益低于改动风险 | 非选定（重建） |
+| 同上 | 同上 | 保留 | 零改动 | 读者误以为枚举是协议真源，实际解析不经过它们 | 非选定（重建） |
+
+**prose-pin `other` 桶（历史处置补记）**：该桶已在加固门禁复审中删除（实现与
+报告均不再输出 `other`；分桶仅 `field_or_code` 与 `prose`）。按同格式补记当时
+的三案对照：
+
+| 方案 | 优点 | 缺点 | 结论 |
+|---|---|---|---|
+| 删除不可达分支并同步三处文档 | 分桶输出与实现一致，无维护噪声 | 历史报告口径需注明变更 | **选定（历史处置：已删除）** |
+| 保留空桶 | 零改动 | 判定域与 `prose` 完全重合、分支不可达，读者误以为存在第三类 | 非选定（重建） |
+| 合并进 `prose` 并保留报告字段 | 报告字段兼容旧读者 | 字段恒为空，同样需要文档解释 | 非选定（重建；最终效果与删除一致） |
+
+### 5.2 性能变更决策记录（复审必修项）
+
+| 变更 | 来源 | 是否入 R3 Plan | 影响面与后续观察点 |
+|---|---|---|---|
+| `skills.match_for_compose` 在 500 行扫描帽前排序（`use_count DESC, id ASC`） | 复审必修（R2c 补审：扫描确定性） | **否——随复审即时落地** | 影响：扫描帽只裁剪低强化候选，高强化技能不再被插入顺序挤出命中面；观察：命中分布、`EXPLAIN` 计划稳定性、扫描上限是否需要随技能库规模调整 |
+| `ff_persona_facts` 复合索引 0018（`persona_id, status, confidence`） | 复审必修（R2c 深审：事实查询性能） | **否——随复审即时落地** | 影响：按人格 / 状态 / 置信度的现行事实查询；观察：迁移链升 / 降 / 复升、慢查询日志、写入放大（插入与更正路径的索引维护成本） |
+
+### 已完成切片：全约束审计 B 修复（P1×1 + P2×4，本分支工作区）
+
+**已完成**（逐条闭环，分支 `feat/audit-a-fixes`）：
+
+1. **P1 conftest 硬覆盖缺口（1.6）**：以 `scripts/generate_examples_env.py` 的 `_ENV_SECTIONS` 登记表为真源逐字段枚举——`LLM_INTIMATE_*` 6 键 / `COMPLIANCE_*` 4 键 / `INJECTION_*` 4 键全部在 `backend/src/conftest.py` 按既有分节风格硬赋值（敏感键 `LLM_INTIMATE_API_KEY` 为测试专用值，温度给数值型测试值 0.8——空串对可空 float 解析非法）。同一门禁按全量登记表核对，因此同批补齐同表缺口的 `EMOTION_*` 4 键与 `SERVER_ADMIN_TOKEN_ENV`（间接变量名，必须与 `ADMIN_AUTH_TOKEN` 一同钉住）；数值与生产默认同值的分节在注释中写明理由（检测矩阵 / 守卫用例显式注入自己的配置）。新增 `scripts/conftest_env_check.py`（AST 扫描 `os.environ[...] = ...`；缺口打印键名与来源字段并 exit 1；允许清单 `scripts/.conftest_allowlist.json` 每项须带 `reason`，当前空）、backend `conftest-env` 任务与根 `gates` 链（`prose-pin` 保持链尾）。测试 `test_conftest_env_hardening.py` 2 例：裸构造取 conftest 测试值；先用 `monkeypatch` 写入相反环境值、再重放 conftest 硬覆盖块（`runpy` 执行同一源文件），裸构造仍取测试值。既有 `test_llm_intimate_channel.py` 4 处构造改为显式空值 / `temperature=None`——env 硬覆盖后原先依赖「环境为空」的隐式半配置不再成立，断言与用例集合零变化。
+2. **P2 死代码（2.2）**：全仓复核零引用后删除 5 个公共符号并同步 `__all__`（`render_config_yaml_text` / `current_settings_database` / `payload_for_kind` / `RealtimeInboundType` / `RealtimeOutboundType`），`docs/backend/config.md` 的模块导出列同步为仍存在的符号；三方案对照见 §5.1。删除后 lint / mypy / 覆盖率门禁全绿。
+3. **P2 拍板三案可复核（2.1）**：新增 §4.1，为 P4 GUI 微信会话键（B）、亲密补强「道德层吞没」（丙）、记忆存储 Q3（A）各列三案与优缺点；非选定项文本明确标注「据决策要点重建」。
+4. **P2 性能入 Plan 留痕（2.3）**：§5.2 记录 skills 扫描排序与 facts 复合索引 0018 的来源、是否入 R3 Plan（均为「否——随复审即时落地」）、影响面与观察点。
+5. **P2 测试资源重复（1.7）**：新增 `backend/src/tests/router_fakes.py` 共享 fake（会话 / 回复记录、`create_error` / `reply_error` / 人格级失败、回显形态、回复门控、适配器失败注入与出站 ID 工厂、假时钟、空会话工厂）；`test_channel_router{,_flow,_group}.py` 改为引用共享模块，用例数 20 / 14 / 9 保持不变。唯一断言形态改写是门控用例的 `create_calls` 计数（共享 fake 的记录面统一为列表，`== 1` 等价改为 `len(...) == 1`），无断言弱化。
+6. **同步面**：`docs/README.md` 门禁表、根 `README.md` 目录行、根 `pixi.toml` gates 注释与 `backend/pixi.toml` 任务说明同步新增门禁。
+
+**验证**（主 Agent 实跑，命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2871 passed**；基线 2869 + 新增 2 条硬覆盖用例；既有用例仅 `test_llm_intimate_channel.py` 4 处构造显式化）。
+- `cd backend && pixi run coverage-gates` → **0**（2871 passed；24 组 ≥80%：harness/config 96.4% / harness/llm 99.0% / harness/voice 95.5% / harness/chat 96.3% / harness/channels 97.2% / harness/memory 94.5% / harness/persona 95.6% / harness/emotion 94.9% / harness/database 93.4% / app/api 83.3% / app/main.py 93.1%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**（`Success: no issues found in 192 source files`）。
+- 根 `pixi run gates` → **0**（注释门 / 同步测试棘轮 / noqa 冻结 / conftest env 硬覆盖 / 沙盒漂移 38 项 / 红探针门 / 文档真相 / 断言棘轮无下降 / 导出面 102 引用·62 登记·40 豁免 + env 键面 686 行 / prose-pin 报告完成）。
+- **conftest 门禁红 / 绿实证**：`cd backend && pixi run conftest-env` → **0**（登记表 env 键 195；conftest 硬覆盖 195；允许豁免 0）；把 conftest 复制到 `/tmp/conftest_red.py` 并删除 `os.environ["INJECTION_THRESHOLD"]` 一行后 `pixi run python ../scripts/conftest_env_check.py --conftest-path /tmp/conftest_red.py` → **1**（输出 `INJECTION_THRESHOLD（InjectionGuardSettings.threshold）`，硬覆盖 194 / 195）。
+- **死代码复核**：`grep -rIn "<五符号>"`（全仓，排缓存与生成物）→ 无输出（exit 1）；`pixi run ruff check` 四文件 → `All checks passed!`；`pixi run mypy` 四文件 → `Success: no issues found in 4 source files`；相关测试 153 passed。
+- `cd backend && pixi run gen-examples` → **0**；三件套 `.env.example` / `config.example.yaml` / `extensions_config.example.json` 运行前后 sha256 完全一致（幂等，无 env 键新增）。
+- 前端未改动，按任务书略过（666 passed 基线不受影响）。
+
+**剩余**：无（本切片范围）。
+
+### 已完成切片：全约束审计 C 修复（P1×4 + P2×3，本分支工作区）
+
+**已完成**（逐条闭环，分支 `feat/audit-a-fixes`）：
+
+1. **P1 loader 误报 search 段（`config/loader.py`）**：未知顶层键判定改为模块常量白名单
+   `_CONFIG_YAML_SECTIONS = {"llm", "search"}`（`search` 段由 `search_registry.load_search_config`
+   独立加载——同文件双段共存，不属于未知键），告警文案改为「config.yaml 含未识别的顶层键
+   （已忽略，仅解析 llm / search 段）」。测试：`test_config_loader.py` 新增「含合法 search 段 →
+   加载 llm 且无该告警」（loguru handler 捕获 WARNING），既有第三键用例补文案断言；search 段
+   本身仍由 `load_search_config` 正常消费（示例模板闭环用例覆盖）。
+2. **P1 config.example.yaml 缺 search 节（`scripts/generate_examples_yaml.py`）**：新增
+   `_search_section_lines()`——provider 示例经 `SearchProviderEntry(name, kind).model_dump()`
+   物化（bocha 主 / zhipu 兜底；`api_key_env` 指向 `SEARCH_BOCHA_API_KEY` /
+   `SEARCH_ZHIPU_API_KEY`；`base_url` 按「空=按 kind 缺省」省略以免与缺省表重复），
+   `web_search` 子块取 `WebSearchSettings.model_fields` 的代码默认（`enabled=false`），字段注释
+   由 `generate_yaml_field_comments` 从 `SearchConfig` / `SearchProviderEntry` /
+   `WebSearchSettings` 内省生成；文件头补「search 搜索 provider 注册表」与生成源类清单。
+   `backend/config.example.yaml` 重生成（88 → 132 行）。测试
+   `test_config_examples_generation.py` 新增：search 段 kind 序 / 密钥变量名 / `enabled=false` /
+   条目字段齐备，且可经 `load_search_config` 完整加载（模板 ↔ 搜索域加载器闭环）。
+3. **P1 工具循环提示词内联（`chat/service.py` → `chat/prompts.py`）**：
+   `TOOL_LOOP_FINAL_INSTRUCTION_TEMPLATE` 迁入 prompt Unit 文件（无占位符），新增
+   `TOOL_LOOP_FINAL_INSTRUCTION_TEMPLATE_VERSION=1.0.0`，`PROMPTS_VERSION` 1.8.0 → 1.9.0；
+   service 改为 import，删除「chat/prompts.py 不在本变更允许清单内」的悬空理由注释。文本
+   sha256 `16076ed1…cbe94f`（与迁移前内联串字节一致）已入 `test_chat_prompts.py` 的
+   `_BYTE_LOCKS` 与版本常量清单；`test_chat_tool_loop.py` 步数上限用例改为与模板整串相等
+   断言（发送文本字节锁定，非子串）。
+4. **P1 拍板 / 切片编号元数据清洗（生产源码 + docs）**：逐处读上下文改写，去掉 `R2*` /
+   `D5=A` / `P6=B` / `P10=B` / `P1` / `chunk N` 编号而保留语义事实——`config/models.py`、
+   `config/search_registry.py`、`search/*`、`usage/models.py`、`chat/{service,prompts,world_book}.py`、
+   `persona/{chara_card,trait_library,directives_models}.py`、`reminders/models.py`、
+   `app/api/{reminders,directives}.py`、`app/main.py`、`app/middleware/admin_auth.py`、
+   `rhythm/*`、`intent/*`、`emotion/*`、`channels/*`。docs 侧 10 份（`backend/README`、`chat`、
+   `persona`、`search`、`config`、`usage`、`memory`、`emotion`、`reminders`、`channels` 及
+   `docs/README.md` 门禁行）同步；标题改写后锚点引用一并修正（`#长期指令usermd-式常备指令` /
+   `#消息变体swipes` / `#输出协议心声--情绪`）。编号保留面：`docs/LEDGER.md`（决策档案本体）与
+   `docs/README.md` 路线图 P0-P4（表格自身行标识，非跨文档引用坐标）。
+5. **P2 wizard docstring（`config/wizard_generators.py`）**：步骤前缀枚举改为「覆盖
+   `_ENV_SECTIONS` 全部前缀（当前 30 个）」，与既有 `_STEP_DEFINITIONS` × `.env.example` 键面
+   闭环测试同轴，消除枚举漂移面。
+6. **P2 日志格式可配（`config/models.py` LogConfig）**：新增 `text_format: str = ""`（空串 =
+   core 默认统一模板），`to_core_config` 映射空串 → `None`；重生成 `.env.example`
+   （`LOG_TEXT_FORMAT=` 出现，689 行）与 `docs/backend/config.md` env 分节表（`--sync-docs`）；
+   `backend/src/conftest.py` 同步硬覆盖（conftest-env 门禁 196/196）。测试：空串 → None、
+   非空透传两例；既有日志接线用例零变更全绿（默认行为零变化）。
+7. **P2 测试 docstring 批次元数据**：16 个测试文件（含 `src/tests/conftest.py`、
+   `src/tests/integration/test_core_wiring.py`）去掉 `P#` / `R2*` / `chunk N`，保留覆盖语义；
+   门禁选择「仅生产源码检查」，测试清理一次性完成。
+8. **新增门禁（`scripts/check_chinese_comments.py` 规则 4）**：注释 token + 各级 docstring 扫描
+   `D\d+\s*[=＝]|P\d+\b|R2[a-z]?-\d+|chunk \d`（前置字符守卫排除 `MP3` / `UUID4` /
+   `chunk_index` 类技术词；字符串字面量不在检查面），命中即违规 exit 1；本脚本 docstring 以编号
+   作示例，登记为唯一检查面豁免。`docs/README.md` 门禁表与根 `scripts` 的形态说明同步。
+
+**验证**（主 Agent 实跑，命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2875 passed**；基线 2871 + 新增 4 例：loader 无告警
+  1 / 示例 search 闭环 1 / text_format 2）。
+- `cd backend && pixi run coverage-gates` → **0**（2875 passed；24 组 ≥ 80%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**
+  （`Success: no issues found in 192 source files`）。
+- 根 `pixi run gates` → **0**（注释门 221 文件 / 0 违规 / 33 hints / 92 skips；同步测试棘轮；
+  noqa 冻结；conftest env 196/196 硬覆盖、豁免 0；沙盒漂移 38 项；红探针 191 源文件；文档真相；
+  断言棘轮 8283 asserts / 602 raises 无下降；导出面 102 引用·62 登记·40 豁免 + env 键面 689 行；
+  prose-pin 报告完成）。
+- `cd backend && pixi run gen-examples` → **0**，三件套 sha256 运行前后完全一致（幂等）。
+- `cd backend && pixi run export-dto-schemas` → **0**（仅 DTO description 文本随源码 docstring 清洗
+  更新，结构零变化；`test_dto_schema_fixture.py` 2 例绿）。
+- **门禁红 / 绿实证**：向 `search/__init__.py` 追加 `# R2a-9 临时探针（D5=A）chunk 2 / MP3 不算`
+  → `cd backend && pixi run comment-gates` → **1**（输出命中 `R2a-9` / `D5=` / `chunk 2` 三条，
+  `MP3` 不命中）；还原文件后 → **0**（violations=0）。
+
+**剩余**：无（本切片范围）。
 
 ## 6. 遗留与部署台账（非阻塞）
 

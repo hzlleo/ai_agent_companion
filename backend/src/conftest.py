@@ -52,6 +52,10 @@ from pathlib import Path
 os.environ["SERVER_HOST"] = "127.0.0.1"
 os.environ["SERVER_PORT"] = "8000"
 os.environ["SERVER_WORKERS"] = "1"
+# 管理面 owner token 的间接变量名（admin_token_env 字段——指向的变量名
+# 本身也必须硬覆盖：开发者 shell 若导出 SERVER_ADMIN_TOKEN_ENV=OTHER_ENV，
+# 鉴权矩阵读取的变量就会漂移）
+os.environ["SERVER_ADMIN_TOKEN_ENV"] = "ADMIN_AUTH_TOKEN"
 # 管理面 owner token（admin_token_env 默认指向的变量）——硬置空 = 测试
 # 默认鉴权关闭（既有路由测试全量不受影响，S3 硬覆盖——开发者 shell
 # 导出的真实 ADMIN_AUTH_TOKEN 不得泄入测试；鉴权矩阵测试按需
@@ -78,6 +82,8 @@ os.environ["LOG_JSON_FILE"] = "logs/test-app.json.log"
 os.environ["LOG_ROTATION"] = "1 day"
 os.environ["LOG_RETENTION"] = "30 days"
 os.environ["LOG_MODULE_LEVELS"] = ""
+# 自定义文本格式模板（空串 = core 默认统一模板——测试不覆写格式）
+os.environ["LOG_TEXT_FORMAT"] = ""
 os.environ["LOG_COLORIZE_CONSOLE"] = "false"
 # 异常 diagnose 开关（LogConfig.diagnose_exceptions env 面）——测试默认
 # 关闭（与生产默认一致：traceback 不展示帧局部变量）
@@ -102,6 +108,19 @@ os.environ["LLM_MODEL"] = "test-model"
 # 开发者 shell 导出的同名值不得泄入测试）
 os.environ["LLM_TOP_LOGPROBS"] = "20"
 os.environ["LLM_PROMPT_LOGPROBS"] = "20"
+
+# --- 亲密回复独立通道（LLM_INTIMATE_ 前缀 → IntimateChannelConfig；默认关闭
+#     → 测试零行为变更；S3 硬覆盖模式——裸构造 IntimateChannelConfig() 与
+#     gateway 缺省通道在开发者 shell / 本地 .env 导出同名键时仍取测试值。
+#     必填三项给测试专用值（api_key 不可触达真实端点）；温度给数值型测试值
+#     （该字段可空，但空串 env 对 float 解析非法——裸构造缺省温度由本值
+#     提供，需要「未注入温度」语义的用例显式传 temperature=None） ---
+os.environ["LLM_INTIMATE_ENABLED"] = "false"
+os.environ["LLM_INTIMATE_BASE_URL"] = "http://127.0.0.1:9/v1"
+os.environ["LLM_INTIMATE_API_KEY"] = "test-only-llm-intimate-api-key"
+os.environ["LLM_INTIMATE_MODEL"] = "test-intimate-model"
+os.environ["LLM_INTIMATE_TEMPERATURE"] = "0.8"
+os.environ["LLM_INTIMATE_MIN_INTIMACY_LEVEL"] = "2"
 
 # --- SeekDB 检索存储（SEEKDB_ 前缀 → SeekDBSettings；默认关闭 → 测试恒走
 #     SQLite 回退存储，零真实连接；S3 硬覆盖模式——开发者 shell 导出的
@@ -368,6 +387,35 @@ os.environ["STICKER_CHANNEL_REPLY_ENABLED"] = "true"
 #     注入（CLI / duty 不注入）——既有测试面构造 ChatService 时不带快径
 #     面，行为零变化；快径链路测试自注入 fake rng / sleep 面） ---
 os.environ["INTENT_ENABLED"] = "true"
+
+# --- 轻情绪引擎（EMOTION_ 前缀 → EmotionSettings；默认开启（纯本地零成本
+#     ——情绪状态由协议解析驱动）；S3 硬覆盖模式——裸构造 EmotionSettings()
+#     与 app 级 Settings 在开发者 shell / 本地 .env 导出同名键时仍取测试值。
+#     数值与生产默认同值——核心算法测试显式注入状态与时刻，不依赖本全局值） ---
+os.environ["EMOTION_ENABLED"] = "true"
+os.environ["EMOTION_DECAY_HALF_LIFE_MS"] = "21600000"
+os.environ["EMOTION_NEUTRAL_BASELINE"] = "0.5"
+os.environ["EMOTION_SUMMARY_THRESHOLD"] = "0.15"
+
+# --- 提示词注入防御（INJECTION_ 前缀 → InjectionGuardSettings；默认开启
+#     （纯本地文本处理——结构隔离与检测零外部依赖）；S3 硬覆盖模式——裸构造
+#     InjectionGuardSettings() 与 ChatService / SwipeService 的缺省防御面在
+#     开发者 shell / 本地 .env 导出同名键时仍取测试值。阈值与风格保持生产
+#     缺省——检测矩阵与红队用例显式注入自己的配置，不依赖本全局值） ---
+os.environ["INJECTION_ENABLED"] = "true"
+os.environ["INJECTION_COUNTER_STYLE"] = "sassy"
+os.environ["INJECTION_THRESHOLD"] = "2.0"
+os.environ["INJECTION_ANTI_INJECTION_HINT"] = "true"
+
+# --- 人格输出合规守卫（COMPLIANCE_ 前缀 → ComplianceGuardSettings；默认开启
+#     （检测为纯本地文本处理，命中代价是一次强化重试）；S3 硬覆盖模式——裸
+#     构造 ComplianceGuardSettings() 与 ChatService 的缺省守卫面在开发者
+#     shell / 本地 .env 导出同名键时仍取测试值。阈值 / 增量 / 重试次数保持
+#     生产缺省——守卫用例显式注入自己的配置，不依赖本全局值） ---
+os.environ["COMPLIANCE_ENABLED"] = "true"
+os.environ["COMPLIANCE_THRESHOLD"] = "2.0"
+os.environ["COMPLIANCE_TEMPERATURE_BUMP"] = "0.2"
+os.environ["COMPLIANCE_MAX_RETRIES"] = "1"
 
 # --- 运行环境标识（Settings.env → ENV） ---
 os.environ["ENV"] = "test"

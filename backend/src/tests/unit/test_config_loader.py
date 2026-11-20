@@ -191,6 +191,36 @@ async def test_load_config_yaml_unknown_top_keys_warned_not_fatal(tmp_path: Path
         logger.remove(handler_id)
     assert len(config.models) == 2
     assert any("future_section" in message for message in captured)
+    assert any("未识别的顶层键（已忽略，仅解析 llm / search 段）" in message for message in captured)
+
+
+async def test_load_config_yaml_with_search_section_does_not_warn(tmp_path: Path) -> None:
+    """合法 search 段：不产生未知顶层键告警（该段由搜索域加载器消费）。"""
+    from loguru import logger
+
+    captured: list[str] = []
+    handler_id = logger.add(lambda message: captured.append(str(message)), level="WARNING")
+    try:
+        _write_config(
+            tmp_path,
+            yaml_payload={
+                "search": {
+                    "providers": [
+                        {
+                            "name": "bocha-main",
+                            "kind": "bocha",
+                            "api_key_env": "SEARCH_BOCHA_API_KEY",
+                        }
+                    ],
+                },
+                **_sample_llm_payload(),
+            },
+        )
+        config = load_config_yaml(config_dir=tmp_path)
+    finally:
+        logger.remove(handler_id)
+    assert len(config.models) == 2
+    assert not any("未识别的顶层键" in message for message in captured)
 
 
 async def test_load_config_yaml_empty_file_treated_as_empty(tmp_path: Path) -> None:

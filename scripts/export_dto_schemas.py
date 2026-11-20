@@ -262,7 +262,7 @@ def build_manifest() -> list[SchemaExportEntry]:
         SchemaExportEntry("CharaBookEntryModel", CharaBookEntryModel, "CharaBookEntry", _FRONTEND_PERSONA),
         SchemaExportEntry("CharaCardPatchDTO", CharaCardPatchDTO, "CharaCardPatch", _FRONTEND_PERSONA),
         SchemaExportEntry("VoiceProfileModel", VoiceProfileModel, "VoiceProfile", _FRONTEND_PERSONA),
-        # persona 域——特质组件库与导入面（R2b-2）。
+        # persona 域——特质组件库与导入面。
         SchemaExportEntry("TraitComponentModel", TraitComponentModel, "TraitComponent", _FRONTEND_PERSONA),
         SchemaExportEntry("TraitPresetModel", TraitPresetModel, "TraitPreset", _FRONTEND_PERSONA),
         SchemaExportEntry("SceneScriptSetModel", SceneScriptSetModel, "TraitSceneScriptSet", _FRONTEND_PERSONA),
@@ -333,7 +333,7 @@ def build_manifest() -> list[SchemaExportEntry]:
         SchemaExportEntry("DreamDecisionModel", DreamDecisionModel, "DreamDecision", _FRONTEND_MEMORY),
         SchemaExportEntry("DreamRunRecordDTO", DreamRunRecordDTO, "DreamRunRecord", _FRONTEND_MEMORY),
         SchemaExportEntry("DreamTriggerRequestDTO", DreamTriggerRequestDTO, "DreamTriggerRequest", _FRONTEND_MEMORY),
-        # reminders 域——持久化提醒（P10=B）。
+        # reminders 域——持久化提醒。
         SchemaExportEntry("ReminderCreateModel", ReminderCreateModel, "ReminderCreateRequest", _FRONTEND_REMINDERS),
         SchemaExportEntry("ReminderRecordDTO", ReminderRecordDTO, "ReminderRecord", _FRONTEND_REMINDERS),
         SchemaExportEntry("ReminderQueryDTO", ReminderQueryDTO, "ReminderListParams", _FRONTEND_REMINDERS),

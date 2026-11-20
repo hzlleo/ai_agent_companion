@@ -13,7 +13,9 @@
       （HTTP 层确认语义）；
     - 协议 v2 附件提取：image / record 段 → 附件（url 源 / base64://
       剥前缀 / file:// path 源）；无引用媒体段跳过；CQ 码字符串形态
-      维持占位符降级（提取边界）；非媒体段不产附件。
+      维持占位符降级（提取边界）；非媒体段不产附件；
+    - 非文本内容归一：无用户文本但含 CQ 码 / 非 text 段（两种 wire 形态
+      一致）→ ``text=""`` 投递；混合文本保留占位符；仅空 text 段丢弃。
 """
 
 from __future__ import annotations
@@ -357,7 +359,11 @@ class TestAttachmentExtractionV2:
         assert attachment.url == "https://gchat.qpic.cn/1.jpg"
 
     async def test_record_segment_base64_file_strips_scheme(self) -> None:
-        """record 段（data.file=base64://）：audio 类 + base64 源（剥前缀）。"""
+        """record 段（data.file=base64://）：audio 类 + base64 源（剥前缀）。
+
+        纯媒体无用户文本：占位符不进入站文本（``text=""``——路由器跳过
+        生成，附件照常搭载）。
+        """
         router = FakeRouter()
         await process_webhook_event(
             _message_event(
@@ -368,10 +374,47 @@ class TestAttachmentExtractionV2:
             router,
         )
         message = router.handled[0]
-        assert message.text == "[语音]"
+        assert message.text == ""
         attachment = message.attachments[0]
         assert attachment.kind is ChannelAttachmentKind.AUDIO
         assert attachment.base64 == "aGVsbG8="
+
+    async def test_pure_image_routed_with_empty_text(self) -> None:
+        """纯图片无文本：仍归一入站（text=""）并搭载附件（不再前置丢弃）。"""
+        router = FakeRouter()
+        await process_webhook_event(
+            _message_event(
+                message=[
+                    {"type": "image", "data": {"url": "https://gchat.qpic.cn/pure.png"}},
+                ]
+            ),
+            router,
+        )
+        assert len(router.handled) == 1
+        message = router.handled[0]
+        assert message.text == ""
+        assert len(message.attachments) == 1
+        assert message.attachments[0].kind is ChannelAttachmentKind.IMAGE
+
+    async def test_pure_sticker_face_with_image_routed_with_empty_text(self) -> None:
+        """纯表情（face + 图片段）无文本：归一入站（text=""）供表情桥收录。"""
+        router = FakeRouter()
+        await process_webhook_event(
+            _message_event(
+                message=[
+                    {"type": "face", "data": {"id": "4"}},
+                    {
+                        "type": "image",
+                        "data": {"file": "base64://c3RpY2tlcg=="},
+                    },
+                ]
+            ),
+            router,
+        )
+        message = router.handled[0]
+        assert message.text == ""
+        assert len(message.attachments) == 1
+        assert message.attachments[0].base64 == "c3RpY2tlcg=="
 
     async def test_image_segment_file_scheme_maps_path_source(self) -> None:
         """image 段（data.file=file://…，无 url）：path 源原样承载。"""
@@ -432,3 +475,45 @@ class TestAttachmentExtractionV2:
             ChannelAttachmentKind.IMAGE,
             ChannelAttachmentKind.AUDIO,
         ]
+
+
+class TestNonTextNormalization:
+    async def test_cq_string_pure_image_routed_with_empty_text(self) -> None:
+        """CQ 字符串纯图片（无用户文本）：text="" 投递（占位符不冒充用户话语）。"""
+        router = FakeRouter()
+        await process_webhook_event(_message_event(message="[CQ:image,file=x.jpg]"), router)
+        assert len(router.handled) == 1
+        assert router.handled[0].text == ""
+        assert router.handled[0].attachments == []
+
+    async def test_pure_face_segment_routed_with_empty_text(self) -> None:
+        """纯 face 段（无用户文本、无可提取附件）：text="" 投递（no-op 收录）。"""
+        router = FakeRouter()
+        await process_webhook_event(
+            _message_event(message=[{"type": "face", "data": {"id": "4"}}]), router
+        )
+        assert len(router.handled) == 1
+        assert router.handled[0].text == ""
+        assert router.handled[0].attachments == []
+
+    async def test_mixed_text_and_face_keeps_placeholder(self) -> None:
+        """混合文本 + face：用户文本保留并携带占位符进入生成面。"""
+        router = FakeRouter()
+        await process_webhook_event(
+            _message_event(
+                message=[
+                    {"type": "text", "data": {"text": "你好"}},
+                    {"type": "face", "data": {"id": "4"}},
+                ]
+            ),
+            router,
+        )
+        assert router.handled[0].text == "你好[表情]"
+
+    async def test_empty_text_segment_without_non_text_skipped(self) -> None:
+        """仅空 text 段（无非文本内容）：丢弃（无可投递内容）。"""
+        router = FakeRouter()
+        await process_webhook_event(
+            _message_event(message=[{"type": "text", "data": {"text": ""}}]), router
+        )
+        assert router.handled == []

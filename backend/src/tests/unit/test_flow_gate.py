@@ -276,6 +276,15 @@ async def test_record_inbound_caps_history_and_buffer() -> None:
     assert state.backlog_count == FLOW_BUFFERED_TEXT_LIMIT + 5
 
 
+async def test_record_inbound_without_text_append_keeps_arrival_and_backlog() -> None:
+    """仅附件入站（append_text=False）：到达时刻与积压递增，缓冲不追加空条目。"""
+    state = record_inbound(FlowChatStateModel(), "旧文本", _BASE_MS)
+    state = record_inbound(state, "", _BASE_MS + 10, append_text=False)
+    assert state.buffered_texts == ["旧文本"]
+    assert state.backlog_count == 2
+    assert state.recent_arrival_ms == [_BASE_MS, _BASE_MS + 10]
+
+
 async def test_pending_and_backlog_state_transitions() -> None:
     """排程标记 / 清除与积压清空的状态迁移保持显式。"""
     state = record_inbound(FlowChatStateModel(), "你好", _BASE_MS)

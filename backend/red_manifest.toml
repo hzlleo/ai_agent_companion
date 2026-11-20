@@ -220,3 +220,11 @@ symbol = "packages.harness.chat.compliance_guard:detect_assistant_violation"
 tests = [
     "tests/unit/test_compliance_guard.py::test_detect_blank_text_not_violated",
 ]
+
+[[probes]]
+name = "sticker-bridge-decode-removal"
+symbol = "packages.harness.multimodal.sticker_bridge:decode_inbound_stickers"
+tests = [
+    "tests/unit/test_sticker_bridge.py::test_decode_inbound_stickers_keeps_inline_base64_and_caption",
+    "tests/unit/test_sticker_bridge.py::test_decode_inbound_stickers_skips_invalid_and_reference_sources",
+]

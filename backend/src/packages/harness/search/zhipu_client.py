@@ -10,7 +10,7 @@
         "search_query": str,     # 搜索词（必填；官方 schema maxLength 70——
                                  #   超长时本客户端截断到 70，见下方披露）
         "search_engine": str,    # 引擎码（必填；条目 model 字段——缺省
-                                 #   search_std（P6=B 兜底档）；可配 search_pro /
+                                 #   search_std（兜底档）；可配 search_pro /
                                  #   search_pro_sogou / search_pro_quark）
         "search_intent": false,  # 意图识别开关（必填——恒 false：直查）
         "count": int,            # 返回条数（1-50；条目 max_results 1-20）
@@ -111,7 +111,7 @@ class ZhipuWebSearchClient:
                 fail loud，此处不再校验）。
             base_url: API 基础 URL（尾斜杠容错；缺省官方端点）。
             search_engine: 搜索引擎码（条目 model 字段；缺省
-                ``search_std``——P6=B 兜底档）。
+                ``search_std`` 兜底档）。
             request_timeout_seconds: 单次搜索请求超时秒数。
             provider_name: provider 条目名（结果标记 + 日志面）。
             usage_emitter: 用量发射钩子（None = 不发射——纯传输测试面）。

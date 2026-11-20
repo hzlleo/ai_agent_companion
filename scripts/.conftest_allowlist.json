@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "note": "conftest env 硬覆盖豁免清单——每项登记未硬覆盖的 env 键并写明理由（scripts/conftest_env_check.py 消费）；无豁免时 entries 保持空列表。",
+  "entries": []
+}

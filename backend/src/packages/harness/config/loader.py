@@ -70,6 +70,11 @@ _CONFIG_YAML_PATH = Path("config.yaml")
 #: extensions_config.json 默认发现路径。
 _EXTENSIONS_JSON_PATH = Path("extensions_config.json")
 
+#: config.yaml 中由本进程解析的顶层段集合。``llm`` 段由本模块解析；
+#: ``search`` 段由 :mod:`packages.harness.config.search_registry` 独立
+#: 加载（同一文件、各自的管理面与热重建路径）——两段都不算未知键。
+_CONFIG_YAML_SECTIONS: frozenset[str] = frozenset({"llm", "search"})
+
 #: 配置热重载回调注册表（load_all_config 完成后通知）。
 _reload_callbacks: list[Callable[[], None]] = []
 
@@ -181,10 +186,10 @@ def load_config_yaml(path: Path | None = None, *, config_dir: Path | None = None
     if not isinstance(llm_section, dict):
         raise _wrap_config_invalid(str(yaml_path), ValueError("llm 段结构非 mapping"))
 
-    unknown_top_keys = [key for key in data if key != "llm"]
+    unknown_top_keys = [key for key in data if key not in _CONFIG_YAML_SECTIONS]
     if unknown_top_keys:
         logger.warning(
-            "config.yaml 含未识别的顶层键（已忽略，当前仅解析 llm 段）: {}", unknown_top_keys
+            "config.yaml 含未识别的顶层键（已忽略，仅解析 llm / search 段）: {}", unknown_top_keys
         )
 
     try:

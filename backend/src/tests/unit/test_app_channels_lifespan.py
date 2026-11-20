@@ -317,7 +317,7 @@ class TestFailurePaths:
 
 
 class TestRhythmIntentSlots:
-    """rhythm / intent 会话性组件装配（R2a-6——通道层槽位契约）。"""
+    """rhythm / intent 会话性组件装配（通道层槽位契约）。"""
 
     async def test_disabled_channels_leaves_slots_none(self, tmp_path: Path) -> None:
         """通道全关：rhythm / intent 槽位 None（消费面是通道工厂）。"""
@@ -353,7 +353,7 @@ class TestRhythmIntentSlots:
     async def test_intent_disabled_shortcut_slot_none(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """INTENT_ENABLED=false：快径槽位 None（工厂零注入——R2a 前行为）。"""
+        """INTENT_ENABLED=false：快径槽位 None（工厂零注入——快径接入前行为）。"""
         monkeypatch.setattr(app_main, "TelegramChannelRunner", FakeRunner)
         app = create_app()
         settings = build_isolated_settings(

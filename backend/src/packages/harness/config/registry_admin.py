@@ -81,14 +81,12 @@ from packages.harness.config.registry_admin_dtos import (
 from packages.harness.config.section_admin import (
     DEFAULT_BACKUP_KEEP,
     ConfigSectionAdmin,
-    _dump_config_yaml_text,
 )
 from packages.harness.core.errors import BusinessException, ErrorCode
 
 __all__ = [
     "RegistryAdminService",
     "REGISTRY_BACKUP_KEEP",
-    "render_config_yaml_text",
 ]
 
 
@@ -155,21 +153,6 @@ def _llm_section(config: LlmConfig) -> dict[str, Any]:
         "role_bindings": dict(config.role_bindings),
         "multimodal_fallback": _fallback_to_section(config.multimodal_fallback),
     }
-
-
-def render_config_yaml_text(config: LlmConfig, raw_existing: dict[str, Any] | None) -> str:
-    """渲染完整 config.yaml 文本（保留 ``llm`` 段之外的未知顶层键）。
-
-    Args:
-        config: 新的 LlmConfig（落盘的 ``llm`` 段真源）。
-        raw_existing: 既有文件的原始顶层 dict（None = 无既有文件）；
-            其 ``llm`` 键被整体替换，其余键原样保留（向前兼容后续
-            顶层配置段）。
-
-    Returns:
-        完整 config.yaml 文本（UTF-8 YAML，键序稳定）。
-    """
-    return _dump_config_yaml_text("llm", _llm_section(config), raw_existing)
 
 
 # ---------------------------------------------------------------------------

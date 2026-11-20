@@ -24,8 +24,13 @@
        现阶段只锁存在性 + 中文两条，段落要素作为后续增强项逐步补齐；
        启发式不确定时
        （生成器 / 纯 stub / 装饰器剥离了签名）记入 skips。
+    4. **无切片 / 拍板编号残留**（硬规则，命中即红）：生产源码的注释与
+       docstring 不得把批次编号当语义（如 ``R2a-4`` / ``P6=B`` / ``D7-14``
+       / ``chunk 1``）——编号是台账（docs/LEDGER.md）的坐标，源码注释须
+       自证书写它讲的事实。检查面 = 注释 token + 各级 docstring；字符串
+       字面量不在检查面内（键名 / 错误文案可含编号）。
 
-退出码由规则 1/2 的违规驱动：无违规 0；有违规 1（明细 + 计数摘要打印到
+退出码由规则 1/2/4 的违规驱动：无违规 0；有违规 1（明细 + 计数摘要打印到
 stdout）。规则 3 的段落缺口以 hints 形式并列报告，不影响退出码。
 
 用法::
@@ -38,7 +43,10 @@ from __future__ import annotations
 
 import argparse
 import ast
+import io
+import re
 import sys
+import tokenize
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,6 +81,73 @@ def _is_test_file(path: Path) -> bool:
 def _has_cjk(text: str) -> bool:
     """docstring 是否含 CJK 统一表意文字（含扩展 A 区）。"""
     return any("\u3400" <= ch <= "\u9fff" for ch in text)
+
+
+#: 规则 4 的检查面豁免：本文件 docstring 以编号本身作示例，不构成语义残留。
+_METADATA_EXEMPT_FILES: frozenset[str] = frozenset({"scripts/check_chinese_comments.py"})
+
+#: 切片 / 拍板编号残留模式（规则 4）：批次码 / 拍板等式 / 引擎档 / 切片号。
+#: 前置字符守卫排除「MP3」「UUID4」「chunk_index」这类技术词——只认真正
+#: 作为独立记号出现的编号。
+_METADATA_CODE_RE = re.compile(
+    r"(?<![A-Za-z0-9])D\d+\s*[=＝]"
+    r"|(?<![A-Za-z0-9])P\d+\b"
+    r"|R2[a-z]?-\d+"
+    r"|(?<![A-Za-z0-9])chunk \d"
+)
+
+
+def _iter_annotation_texts(path: Path, source: str, tree: ast.Module) -> Iterator[tuple[int, str]]:
+    """枚举文件内注释与 docstring 文本（规则 4 检查面）。
+
+    Args:
+        path: 源文件路径（注释 token 解析失败时的兜底读取）。
+        source: 已读取的源码文本。
+        tree: 已解析的 AST（各级 docstring 来源）。
+
+    Yields:
+        ``(行号, 文本)`` 二元组；注释按 token 起始行给出，docstring 按
+        所属节点起始行给出。
+    """
+    if (module_doc := ast.get_docstring(tree)) is not None:
+        yield 1, module_doc
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            doc = ast.get_docstring(node)
+            if doc is not None:
+                yield node.lineno, doc
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+    except tokenize.TokenError:  # 不完整文件：注释面放弃，docstring 面已覆盖
+        return
+    for token in tokens:
+        if token.type == tokenize.COMMENT:
+            yield token.start[0], token.string
+
+
+def _check_metadata_codes(
+    path: Path, source: str, tree: ast.Module, stats: _ScanStats
+) -> None:
+    """规则 4：注释 / docstring 内不得残留切片与拍板编号。
+
+    Args:
+        path: 源文件路径。
+        source: 源码文本。
+        tree: 已解析 AST。
+        stats: 扫描计数（命中即记违规）。
+    """
+    if path.relative_to(_REPO_ROOT).as_posix() in _METADATA_EXEMPT_FILES:
+        return
+    for lineno, text in _iter_annotation_texts(path, source, tree):
+        for match in _METADATA_CODE_RE.finditer(text):
+            hit_line = lineno + text[: match.start()].count("\n")
+            stats.add_violation(
+                path,
+                hit_line,
+                "comment-metadata",
+                match.group(0).strip(),
+                "残留切片 / 拍板编号（改为自证语义，编号归 docs/LEDGER.md）",
+            )
 
 
 def _iter_tree_files(tree: str) -> Iterator[Path]:
@@ -233,7 +308,8 @@ def _check_class(node: ast.ClassDef, path: Path, stats: _ScanStats) -> None:
 def _check_module(path: Path, stats: _ScanStats) -> None:
     stats.files += 1
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
     except SyntaxError as exc:
         stats.add_violation(path, exc.lineno or 0, "module", path.name, f"语法解析失败: {exc.msg}")
         return
@@ -248,6 +324,7 @@ def _check_module(path: Path, stats: _ScanStats) -> None:
             _check_function(node, path, stats, "function")
         elif isinstance(node, ast.ClassDef):
             _check_class(node, path, stats)
+    _check_metadata_codes(path, source, tree, stats)
 
 
 def main(argv: list[str] | None = None) -> int:

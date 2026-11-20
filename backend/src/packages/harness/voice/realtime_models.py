@@ -43,8 +43,6 @@ __all__ = [
     "REALTIME_AUDIO_CHUNK_MAX_BASE64_CHARS",
     "AUDIO_CHUNK_TOO_LARGE_ERROR_TYPE",
     "SentenceBufferModel",
-    "RealtimeInboundType",
-    "RealtimeOutboundType",
     "RealtimeSessionPhase",
     "RealtimeCloseReason",
     "RealtimeBargeInReason",
@@ -101,31 +99,6 @@ REALTIME_AUDIO_CHUNK_MAX_BASE64_CHARS: int = 4 * ((REALTIME_AUDIO_CHUNK_MAX_BYTE
 #: 音频块超限的校验错误类型标识（字段校验器抛出；上行分派据此把超限与
 #: 其它协议错误区分开——独立指标计数与针对性提示文案）。
 AUDIO_CHUNK_TOO_LARGE_ERROR_TYPE: str = "audio_chunk_too_large"
-
-
-class RealtimeInboundType(StrEnum):
-    """上行消息类型值（判别键取值域）。"""
-
-    START = "start"
-    AUDIO_CHUNK = "audio_chunk"
-    END = "end"
-    BARGE_IN = "barge_in"
-    BARGE_IN_ACK = "barge_in_ack"
-    PING = "ping"
-
-
-class RealtimeOutboundType(StrEnum):
-    """下行消息类型值（判别键取值域）。"""
-
-    READY = "ready"
-    PARTIAL_TRANSCRIPT = "partial_transcript"
-    FINAL_TRANSCRIPT = "final_transcript"
-    ASSISTANT_TEXT = "assistant_text"
-    AUDIO_CHUNK = "audio_chunk"
-    STATE = "state"
-    INTERRUPTED = "interrupted"
-    ERROR = "error"
-    CLOSED = "closed"
 
 
 class RealtimeSessionPhase(StrEnum):

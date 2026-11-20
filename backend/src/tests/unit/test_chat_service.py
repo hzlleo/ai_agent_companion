@@ -5,7 +5,7 @@
 走真实 PersonaService。组装断言覆盖：正典字段 / 世界书（constant 恒注 /
 关键词触发 + scan_depth 窗口 / selective / 大小写 / token 预算截断）/
 历史后再注入位置 / purpose 与 persona_id 直通 / 流式聚合与提前终止。
-R2b 增补：世界书回合状态功能式推进（compose 携带 + 服务回存闭环）、
+高级触发增补：世界书回合状态功能式推进（compose 携带 + 服务回存闭环）、
 种子 rng 概率门、冷却阻塞-解禁会话循环（算法链纯函数面见
 test_chat_world_book.py）。
 """
@@ -576,7 +576,7 @@ async def test_message_composition_result_contract() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R2b 世界书高级触发——组装 / 会话循环集成（算法链纯函数面见
+# 世界书高级触发——组装 / 会话循环集成（算法链纯函数面见
 # test_chat_world_book.py；此处锁定 compose 消费与 ChatService 回存）
 # ---------------------------------------------------------------------------
 

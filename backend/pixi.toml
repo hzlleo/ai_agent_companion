@@ -124,6 +124,11 @@ sandbox-drift = { cmd = "python ../scripts/check_sandbox_dtos_drift.py", descrip
 # noqa / type:ignore 增量冻结门（任务名契约——根 pixi gates 链调用）：
 # backend 生产面基线零——严禁任何 noqa / type:ignore 抑制注释。
 noqa-freeze = { cmd = "python ../scripts/noqa_freeze_check.py", description = "noqa / type:ignore 增量冻结门禁（backend 基线 0，只减不增）" }
+# conftest env 硬覆盖完整性门（任务名契约——根 pixi gates 链调用）：以
+# .env.example 生成器的 _ENV_SECTIONS 登记表为全量键集，逐键核对
+# backend/src/conftest.py 的 os.environ 硬赋值；缺口即红并打印缺失键，
+# 允许清单 scripts/.conftest_allowlist.json 每项须带 reason。
+conftest-env = { cmd = "python ../scripts/conftest_env_check.py", description = "conftest env 硬覆盖完整性门（生成器登记表全量键 vs conftest 硬赋值）" }
 # 红探针（符号级「删实现必须变红」证据）——带参形态：追加 --symbol /
 # --all；清单外符号可加 --tests <nodeid> 构造一次性探针（不写清单）；
 # errors>0 且 failed==0 会打印「疑似导入期假红」警示。门禁形态由

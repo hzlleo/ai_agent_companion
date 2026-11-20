@@ -34,11 +34,11 @@
     - :data:`FIRST_GREETING_FALLBACK_TEMPLATE` —— 开场白兜底（卡片
       ``first_mes`` 为空时的首条人格消息）；
     - :data:`OUTPUT_PROTOCOL_TEMPLATE`        —— 输出格式协议（心声 /
-      情绪标签指令——接在人格正典之后的格式块，R2b）；
+      情绪标签指令——接在人格正典之后的格式块）；
     - :data:`EMOTION_STATE_TEMPLATE`          —— 心情状态块（非中性
-      情绪摘要注入——R2b 轻情绪引擎 compose 面）；
+      情绪摘要注入——轻情绪引擎 compose 面）；
     - :data:`DIRECTIVES_BLOCK_TEMPLATE`       —— 长期指令块（USER.md 式
-      常备指令注入——R2b D7-14；截断说明见 :data:`DIRECTIVES_TRUNCATION_NOTE`）；
+      常备指令注入；截断说明见 :data:`DIRECTIVES_TRUNCATION_NOTE`）；
     - :data:`FACTS_BLOCK_TEMPLATE`            —— 人物事实块（【关于对方】
       结构化事实注入——高置信事实按类别标签逐行列出；无事实不注入）；
     - :data:`CORE_MEMORY_BLOCK_TEMPLATE`      —— 核心记忆块（【自我认知】
@@ -47,7 +47,9 @@
       阶段 / 最近变化 / 边界约定的恒注入摘要——空事实渲染「初识」；总字符
       1200 帽）；
     - :data:`SKILLS_BLOCK_TEMPLATE`           —— 相关技能块（【相关技能】
-      命中当前用户文本的程序性技能注入——命中才注入，总字符 2000 帽）。
+      命中当前用户文本的程序性技能注入——命中才注入，总字符 2000 帽）；
+    - :data:`TOOL_LOOP_FINAL_INSTRUCTION_TEMPLATE` —— 工具循环收尾指令
+      （步数上限触发时作为 system 消息追加；随后一轮不携带工具面）。
 
 渲染函数（纯函数——只做文本装配，不做条目选择 / 关键词匹配等逻辑；
 世界书筛选逻辑在 service 层）：chara card 字段 → 上述模板的最终文本。
@@ -93,6 +95,7 @@ __all__ = [
     "CORE_MEMORY_BLOCK_TEMPLATE_VERSION",
     "RELATIONSHIP_BLOCK_TEMPLATE_VERSION",
     "SKILLS_BLOCK_TEMPLATE_VERSION",
+    "TOOL_LOOP_FINAL_INSTRUCTION_TEMPLATE_VERSION",
     "DIRECTIVES_MAX_ENTRIES",
     "DIRECTIVES_MAX_CHARS",
     "SKILL_COMPOSE_MAX_CHARS",
@@ -129,6 +132,7 @@ __all__ = [
     "RELATIONSHIP_EVENT_LINE_TEMPLATE",
     "RELATIONSHIP_BOUNDARY_LINE_TEMPLATE",
     "SKILLS_BLOCK_TEMPLATE",
+    "TOOL_LOOP_FINAL_INSTRUCTION_TEMPLATE",
     "render_directives_block",
     "render_facts_block",
     "render_core_memory_block",
@@ -149,7 +153,7 @@ __all__ = [
 ]
 
 #: prompt 套件总版本（任一模板变更时同步上调）。
-PROMPTS_VERSION: str = "1.8.0"
+PROMPTS_VERSION: str = "1.9.0"
 
 # ---------------------------------------------------------------------------
 # 版本常量——逐模板独立版本（byte-lock 测试按模板分别锁定摘要）
@@ -189,6 +193,8 @@ CORE_MEMORY_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
 RELATIONSHIP_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
 #: 相关技能块模板版本（【相关技能】程序性技能注入）。
 SKILLS_BLOCK_TEMPLATE_VERSION: str = "1.0.0"
+#: 工具循环收尾指令模板版本（步数上限触发的 system 追加块）。
+TOOL_LOOP_FINAL_INSTRUCTION_TEMPLATE_VERSION: str = "1.0.0"
 
 #: 长期指令注入上限——条数（超出部分不进系统提示；截断说明行提示存在
 #: 其余指令）。
@@ -359,6 +365,12 @@ RELATIONSHIP_BOUNDARY_LINE_TEMPLATE: str = "相处边界：{boundaries}"
 #: 相关技能块（占位符 ``{skills}``——命中技能逐条以「### 名称 + 正文」
 #: 渲染；无命中不注入；总字符帽由 :func:`render_skills_block` 施加）。
 SKILLS_BLOCK_TEMPLATE: str = "【相关技能】\n{skills}"
+
+#: 工具循环收尾指令（步数上限触发——system 追加块，本轮不再携带工具面；
+#: 无占位符）。
+TOOL_LOOP_FINAL_INSTRUCTION_TEMPLATE: str = (
+    "【收尾指令】\n工具调用步数已用尽。请立即基于已有信息直接回复用户，不再调用任何工具。"
+)
 
 # ---------------------------------------------------------------------------
 # 渲染函数（纯文本装配——无状态 / 无 I/O / 无条目选择逻辑）

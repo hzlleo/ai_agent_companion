@@ -5,7 +5,7 @@
     - :class:`UsagePurpose` —— 调用用途：五大模型角色（chat / duty /
       dream / look_at / embed，与 ``config.ModelRole`` 一一对应）加上
       辅助能力用途（tts / asr / tool——语音与工具面；search——联网
-      搜索面，R2a-4 新增成员，预算按调用计数）；
+      搜索面，预算按调用计数）；
     - :class:`UsageStatus`   —— 调用结果（success / error）；
     - :class:`UsageGroupBy`  —— 聚合维度（model_entry / purpose /
       time_bucket）；

@@ -30,7 +30,7 @@
       disable_notification；QQ 无通知概念——适配器优雅忽略）；入站
       ``silent`` 为平台上报的无通知上下文标记位（预留）；
     - **合成事件**：入站 ``synthetic=True`` 标记机器生成事件面（heartflow /
-      mood 事件上浮——R2e 消费面），非人类消息；
+      mood 事件上浮——前端消费面），非人类消息；
     - **逐附件投递结果**：``ChannelDeliveryResultModel.attachment_results``
       承载每附件的独立送达结局（部分成功可见——适配器聚合不抛）；文本与
       附件按「先文本后附件」顺序逐平台消息投递；
@@ -40,7 +40,7 @@
 
 消费者边界（诚实边界——文档化于 docs/backend/channels.md「协议 v2」）：
 v2 只交付 wire（模型 + 适配器 + 测试）；入站附件由 ``InboundMessageModel``
-承载供**未来消费者**（R2d 贴纸 / 语音、R2e 合成事件）消费——当前
+承载供**未来消费者**（贴纸 / 语音、合成事件）消费——当前
 ChatService 回复循环仍为纯文本（回合内容不落附件，零 schema 变更），
 duty 属主投递亦维持纯文本。
 """
@@ -125,7 +125,7 @@ class ChannelMessageAttachment(BaseModel):
 
     平台引用约定（``path`` 伪方案——入站方向）：Telegram 入站附件以
     ``path="tg-file://{file_id}"`` 伪方案承载平台文件引用（真实媒体
-    拉取需 Bot API getFile + 文件 URL 二段流程，deferred 到 R2d 贴纸 /
+    拉取需 Bot API getFile + 文件 URL 二段流程，deferred 到后续贴纸 /
     语音工作；v2 只交付引用 wire）；出站方向 ``path`` 仅接受同伪方案
     形态（file_id 重发——适配器剥离方案前缀后作为 file_id 透传平台）。
 
@@ -184,11 +184,12 @@ class InboundMessageModel(BaseModel):
             维度复用会话）。
         message_id: 平台消息 ID（字符串形态——出站回复的引用目标）。
         sender_id: 发送者 ID（字符串形态；平台匿名形态归一 "0"）。
-        text: 消息文本（非空——v2 语义：Telegram 媒体消息以 caption 兜底
-            为文本；纯媒体无 caption 由 runner 过滤，不进路由器）。
+        text: 消息文本（**仅附件入站为空串**——纯图片 / 纯表情不含用户
+            字面文本，路由器照常收录表情 / 推进门控游标但不调用生成；
+            文本消息非空。Telegram 媒体消息以 caption 兜底为文本）。
         ts_ms: 消息时间（epoch 毫秒；平台 wire 的秒级时间戳在映射时归一）。
         attachments: 消息附件（v2——缺省空列表 = v1 纯文本形态；由平台
-            runner / webhook 提取，供未来消费者（R2d 贴纸 / 语音）消费，
+            runner / webhook 提取，供未来消费者（贴纸 / 语音）消费，
             当前回复循环纯文本）。
         is_group_chat: 群聊标记（provenance 分级依据——群聊消息按
             ``peer`` 落档、私聊按 ``owner``；缺省 False 保持 v1 形态）。
@@ -202,7 +203,7 @@ class InboundMessageModel(BaseModel):
     chat_id: str = Field(min_length=1, description="平台会话 ID（字符串形态）")
     message_id: str = Field(min_length=1, description="平台消息 ID（字符串形态）")
     sender_id: str = Field(min_length=1, description="发送者 ID（字符串形态）")
-    text: str = Field(min_length=1, description="消息文本（非空）")
+    text: str = Field(description="消息文本（附件-only 入站为空串）")
     ts_ms: int = Field(default_factory=now_ms, description="消息时间（epoch 毫秒）")
     attachments: list[ChannelMessageAttachment] = Field(
         default_factory=list, description="消息附件（缺省空 = v1 纯文本形态）"

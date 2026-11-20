@@ -89,7 +89,6 @@ memory 域经 memories 路由导入链注册。
 from __future__ import annotations
 
 import asyncio
-import base64
 import random
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -130,11 +129,7 @@ from app.middleware.admin_auth import (
     require_admin_token,
 )
 from app.middleware.error_handler import register_exception_handlers
-from packages.harness.channels.channel_models import (
-    ChannelAttachmentKind,
-    ChannelMessageAttachment,
-    ChannelType,
-)
+from packages.harness.channels.channel_models import ChannelType
 from packages.harness.channels.channel_service import ChannelRouter
 from packages.harness.channels.douyin.douyin_client import DouyinWebClient
 from packages.harness.channels.douyin.douyin_runner import DouyinChannelRunner
@@ -172,6 +167,7 @@ from packages.harness.memory.service import (
     MemoryService,
 )
 from packages.harness.multimodal.look_at import LookAtService, register_look_at_tool
+from packages.harness.multimodal.sticker_bridge import StickerBridge
 from packages.harness.multimodal.sticker_service import StickerService
 from packages.harness.persona.core_memory import (
     CoreMemoryService,
@@ -547,19 +543,19 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     runner；抖音 web 启用时装配轮询 runner（消费浏览器 sidecar 底座——底座
     未就绪即跳过该通道，见 ``_startup_douyin_channel``）。全部关闭时
     no-op（零通道对象构造——rhythm / intent 槽位同样 None：二者的
-    R2a 消费面是通道 ChatService 工厂，通道关闭即无消费面）。
+    消费面是通道 ChatService 工厂，通道关闭即无消费面）。
 
-    rhythm / intent 装配（R2a-6，通道专属——文档化决策）：
+    rhythm / intent 装配（通道专属——文档化决策）：
 
     - 单一随机源：``random.Random()`` 实例由 RhythmService 与
       IntentShortcutService **共享**（节律延迟采样与快径拟真延迟同源
       ——可测性与随机面收敛）；
     - ``app.state.rhythm_service``：门面直通或启用随
-      ``RHYTHM_ENABLED``（R2a 回复链路不消费门——R2d 心流 / R2e GUI
-      消费面；作息值面恒解析供 intent 问候选带）；
+      ``RHYTHM_ENABLED``（回复链路不消费门——心流层 / GUI 消费面；
+      作息值面恒解析供 intent 问候选带）；
     - ``app.state.intent_shortcut``：``INTENT_ENABLED``（默认 true——
-      纯本地零成本）关闭时为 None（工厂零注入，行为与 R2a 前一致）；
-      per-persona 节律覆写解析属 R2d（R2a 用全局面）；
+      纯本地零成本）关闭时为 None（工厂零注入，行为与快径接入前一致）；
+      per-persona 节律覆写解析属心流层（本节律层用全局面）；
     - **duty 不注入快径面**：duty 是无头计划任务（章程驱动的巡检 /
       报告生成），非对话性消费——意图快径是会话性能（「现在几点」
       这类用户高频问法只出现在对话里），duty 工具面 / 章程零变化。
@@ -723,64 +719,17 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
             return None
 
     sticker_service: StickerService | None = None
+    sticker_bridge: StickerBridge | None = None
     if settings.sticker.enabled:
         sticker_service = StickerService(settings=settings.sticker, gateway=gateway)
+        sticker_bridge = StickerBridge(
+            sticker_service=sticker_service, session_factory=session_scope
+        )
         logger.info(
             "表情包库通道桥已装配（入站收录 sticker 附件；回表情={}）",
             settings.sticker.channel_reply_enabled,
         )
     app.state.sticker_service = sticker_service
-
-    async def _ingest_inbound_stickers(
-        attachments: list[ChannelMessageAttachment],
-    ) -> None:
-        """通道入站表情收录（仅 base64 载荷；人格上下文由路由器绑定）。
-
-        v2 入站附件可能是 base64（QQ 段内联）或平台文件引用
-        （``tg-file://`` / ``url``）——后者需要二次下载，本桥按「只收录
-        已持有字节」的边界跳过（文档化于 channels.md）。单张失败仅告警
-        ——通道消息回复不受影响。
-        """
-        if sticker_service is None:
-            return
-        async with session_scope() as db_session:
-            for attachment in attachments:
-                if not attachment.base64:
-                    continue
-                try:
-                    payload = base64.b64decode(
-                        "".join(attachment.base64.split()), validate=True
-                    )
-                except ValueError:
-                    logger.opt(exception=True).warning(
-                        "通道入站表情 base64 解码失败（跳过该附件）"
-                    )
-                    continue
-                source_note = (
-                    f"通道入站表情：{attachment.caption}"
-                    if attachment.caption
-                    else "通道入站表情（平台消息附件）"
-                )
-                await sticker_service.ingest_bytes(
-                    db_session,
-                    payload,
-                    attachment.media_type or "image/png",
-                    source_note=source_note,
-                )
-
-    async def _pick_reply_sticker() -> ChannelMessageAttachment | None:
-        """取当前人格最新表情作为随文本附发的出站附件（无可发素材为 None）。"""
-        if sticker_service is None:
-            return None
-        async with session_scope() as db_session:
-            binary = await sticker_service.pick_channel_reply(db_session)
-        if binary is None:
-            return None
-        return ChannelMessageAttachment(
-            kind=ChannelAttachmentKind.STICKER,
-            media_type=binary.record.content_type,
-            base64=base64.b64encode(binary.content).decode("ascii"),
-        )
 
     router = ChannelRouter(
         chat_service_factory=_chat_service_factory,
@@ -791,8 +740,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
         scheduler_provider=lambda: getattr(app.state, "scheduler", None),
         persona_service=persona_service,
         relationship_lookup=_relationship_lookup,
-        sticker_ingest_hook=_ingest_inbound_stickers if sticker_service else None,
-        sticker_reply_hook=_pick_reply_sticker if sticker_service else None,
+        sticker_ingest_hook=sticker_bridge.ingest_inbound if sticker_bridge else None,
+        sticker_reply_hook=sticker_bridge.pick_reply if sticker_bridge else None,
     )
     if telegram.enabled:
         client = TelegramClient(
@@ -1413,7 +1362,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 def _include_routers(app: FastAPI) -> None:
     """注册全部路由（管理面鉴权单点挂接 + 豁免面显式清单）。
 
-    挂载契约（R2 审计放行条件——新端点不得扩张无鉴权面）：
+    挂载契约（审计放行条件——新端点不得扩张无鉴权面）：
 
         - **受保护路由集**：personas / memories / usage / voice /
           voiceprints / look_at / stickers / models / search / reminders /

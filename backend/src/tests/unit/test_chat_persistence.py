@@ -2,7 +2,7 @@
 
 覆盖面：create_session 落库（session_id 携带）/ reply 与 stream_reply
 回合落库（user + assistant，seq 递增）/ 网关失败时用户回合保留 /
-resume 全链路（持久化 → 恢复 → 续聊）/ 持久化关闭时行为与 P0 一致
+resume 全链路（持久化 → 恢复 → 续聊）/ 持久化关闭时行为与无持久化形态一致
 （零落库行）/ CLI /new /sessions /resume 命令（真实启动栈 + tmp
 SQLite + 假网关）。
 """
@@ -225,7 +225,7 @@ async def test_reply_gateway_failure_keeps_user_row(persist_env: tuple) -> None:
 
 
 async def test_persistence_off_behavior_unchanged(persist_env: tuple) -> None:
-    """持久化关闭（P0 形态）：session_id 为 None + 零落库行 + 对话照常。"""
+    """持久化关闭（无持久化形态）：session_id 为 None + 零落库行 + 对话照常。"""
     gateway = FakeGateway()
     service = ChatService(gateway=gateway)  # session_service=None
     _, _, _, persona, db_session = persist_env

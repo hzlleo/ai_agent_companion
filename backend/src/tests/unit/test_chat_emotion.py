@@ -25,6 +25,7 @@ from packages.harness.llm.llm_models import (
     ChatResponseModel,
     ChatStreamChunkModel,
 )
+from packages.harness.memory.dtos import ChatMessageMetaModel
 from packages.harness.memory.orm import ChatMessageRow
 from packages.harness.memory.service import ChatSessionService
 from packages.harness.persona.dtos import PersonaCreateDTO, PersonaRecordDTO
@@ -287,6 +288,44 @@ async def test_stream_reply_unclosed_tag_passes_through(
     state = await service.create_session(persona=persona, db_session=db_session)
     chunks = [token async for token in service.stream_reply(state, "嗯")]
     assert "".join(chunks) == "还没说完"
+
+
+async def test_reply_meta_is_model_validated_and_byte_compatible(
+    emotion_env: tuple[AsyncSession, PersonaRecordDTO, ChatSessionService],
+) -> None:
+    """写侧 meta 经 ChatMessageMetaModel 构造：落库结构仍为旧三键且可回读校验。"""
+    db_session, persona, session_service = emotion_env
+    gateway = ScriptedGateway(
+        response_content=(
+            "<心声>模型化心声。</心声><情绪>joy:0.3</情绪>收到。"
+        )
+    )
+    service = ChatService(
+        gateway=gateway,
+        session_service=session_service,
+        emotion_service=_emotion_service(),
+    )
+    state = await service.create_session(persona=persona, db_session=db_session)
+    assert await service.reply(state, "你好") == "收到。"
+    row = (
+        await db_session.execute(
+            select(ChatMessageRow).where(ChatMessageRow.session_id == state.session_id)
+            .where(ChatMessageRow.role == ChatMessageRole.ASSISTANT.value)
+        )
+    ).scalars().one()
+    assert row.meta is not None
+    assert set(row.meta) == {"thought", "emotion_deltas", "emotion_snapshot"}
+    parsed = ChatMessageMetaModel.model_validate(row.meta)
+    assert parsed.thought == "模型化心声。"
+    assert parsed.emotion_deltas == {"joy": 0.3}
+    assert parsed.emotion_snapshot is not None
+    assert parsed.emotion_snapshot["joy"] == pytest.approx(0.8)
+    async with bind_persona_context(persona.id):
+        detail = await session_service.get_session(db_session, state.session_id or 0)
+    assistant = detail.messages[-1]
+    assert assistant.meta is not None
+    assert assistant.meta.thought == "模型化心声。"
+    assert assistant.meta.emotion_deltas == {"joy": 0.3}
 
 
 async def test_append_message_meta_round_trip(

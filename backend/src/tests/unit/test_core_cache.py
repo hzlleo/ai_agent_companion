@@ -1,4 +1,4 @@
-"""``core.cache`` 单元测试——进程内 TTL 缓存 + 装饰器（NO Redis，P0 决策）。
+"""``core.cache`` 单元测试——进程内 TTL 缓存 + 装饰器（NO Redis，锁定决策）。
 
 覆盖矩阵：
 

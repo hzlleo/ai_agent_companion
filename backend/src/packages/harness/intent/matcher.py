@@ -3,7 +3,7 @@
 匹配链（单一入口 :func:`match_intent`）::
 
     原文 → NFKC 归一（全角→半角）+ 去全部空白 + casefold
-        ↓ ⓪ 指令前缀层（R2b D7-14）：记住 / 记得 / 以后都 / 以后 / 别再 /
+        ↓ ⓪ 指令前缀层（常备指令捕获）：记住 / 记得 / 以后都 / 以后 / 别再 /
               不要 开头 → DIRECTIVE（剥离前缀与标点后的正文进
               ``directive_text``；正文 < 2 字符不接管）
         ↓ ① 精确层：整句等值比对（四类按 TIME_QUERY → GREETING →
@@ -60,7 +60,7 @@ CONFIDENCE_FUZZY: Final[float] = 0.65
 #: 指令前缀命中置信度（观测面——前缀形态确定，但正文提取允许噪声）。
 CONFIDENCE_DIRECTIVE: Final[float] = 0.9
 
-#: 长期指令前缀表（R2b D7-14——次序即剥离优先序：长前缀先于其真前缀
+#: 长期指令前缀表（次序即剥离优先序：长前缀先于其真前缀
 #: 「以后都」先于「以后」）。
 DIRECTIVE_PREFIXES: Final[tuple[str, ...]] = (
     "记住",

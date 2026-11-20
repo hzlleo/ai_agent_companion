@@ -6,7 +6,7 @@
         ↓ resolve_effective(settings, override)
     EffectiveRhythm         生效值（覆写合并 + 延迟缩放后的解析结果——core 消费）
     PersonaRhythmOverride   人格级覆写（全可选——per-persona 节律解析的原料，
-                            R2d 心流层按人格注入）
+                            心流层按人格注入）
     TypingSimulation        打字模拟结果（duration_ms + chars）
     RhythmGate              回复门（allowed + suggested_delay_ms + 中文 reason——
                             service 层产出 / heartflow 与 GUI 消费）
@@ -69,8 +69,8 @@ class RhythmSettings(BaseSettings):
 
     锁定决策：``enabled=False``（默认）——节律门控 / 延迟是**拟人行为增强面**
     （缺省零行为变化：既有回复链路零延迟零门控），零配置开发可用、测试
-    hermetic；``enabled=True`` 时 RhythmService 的门语义生效（R2d 心流层
-    与 R2e GUI 消费——R2a 仅交付门面与纯函数核心）。
+    hermetic；``enabled=True`` 时 RhythmService 的门语义生效（心流层
+    与 GUI 消费——本节律层仅交付门面与纯函数核心）。
 
     时区约定：``bedtime`` / ``wake_time`` 为 naive 本地墙钟（scheduler
     ``daily_at`` 先例——无时区数据库；``timezone_note`` 字段为运维可见
@@ -156,8 +156,8 @@ class RhythmSettings(BaseSettings):
 class PersonaRhythmOverride(BaseModel):
     """人格级节律覆写（全可选——per-persona 节律解析原料）。
 
-    R2d 心流层按人格注入（人格记录 → 覆写 → ``resolve_effective`` 合并）；
-    R2a 交付模型与解析函数，消费面在后继版本接线。
+    心流层按人格注入（人格记录 → 覆写 → ``resolve_effective`` 合并）；
+    本节律层交付模型与解析函数，消费面在后继版本接线。
 
     Attributes:
         bedtime: 就寝时刻覆写（None = 沿用 RhythmSettings 值）。
@@ -239,7 +239,7 @@ class TypingSimulation(BaseModel):
 class RhythmGate(BaseModel):
     """回复门（RhythmService.gate_reply 的输出契约）。
 
-    消费面：R2d 心流层（回复调度决策）与 R2e GUI（状态展示）——R2a
+    消费面：心流层（回复调度决策）与 GUI（状态展示）——本节律层
     交付门面与契约，回复链路暂不消费（文档化前向兼容）。
 
     Attributes:
