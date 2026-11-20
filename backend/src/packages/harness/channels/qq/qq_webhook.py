@@ -24,6 +24,10 @@
            / ``group:<group_id>``；epoch 秒 ×1000 归一；attachments 搭载）
         ↓ ChannelRouter.handle_inbound（恒不抛——单消息错误隔离铁律）
 
+仅附件入站（纯图片 / 纯表情，无用户字面文本）：占位符文本是人格可见面
+的降级形态，不代表用户说了话——归一为 ``text=""`` 投递（附件照常搭载，
+路由器跳过生成并保留表情收录）；只有既无文本又无已知附件时才丢弃。
+
 隔离铁律：**本处理器恒不抛异常**——任何单事件失败（载荷非法 / 字段
 缺失 / 路由器内部异常）只进日志，向 HTTP 层返回确认语义（调用方
 据此恒 200；OneBot 上报方对非 200 会重试，确认即防重投）。
@@ -178,7 +182,8 @@ def flatten_message_text(message: list[Ob11MessageSegmentModel] | str) -> str:
         message: OneBot v11 消息内容（段数组或 CQ 码字符串）。
 
     Returns:
-        展平后的纯文本（可能为空——纯非文本内容缺失形态由调用方过滤）。
+        展平后的纯文本（非文本段占位符化；仅附件入站的空文本归一由
+        :func:`process_webhook_event` 承担）。
     """
     if isinstance(message, str):
         return _CQ_CODE_RE.sub(lambda match: _placeholder_for(match.group("type")), message)
@@ -189,6 +194,27 @@ def flatten_message_text(message: list[Ob11MessageSegmentModel] | str) -> str:
         else:
             parts.append(_placeholder_for(segment.type))
     return "".join(parts)
+
+
+def _has_user_text(message: list[Ob11MessageSegmentModel] | str) -> bool:
+    """消息是否携带可回复的用户字面文本（纯媒体为 False）。
+
+    仅附件入站（纯图片 / 纯表情）归一为空文本投递：占位符文本只服务
+    混合消息的人格可见面，不被误当作「用户说了话」。CQ 码字符串形态
+    剥掉码后的字面文本参与判定。
+
+    Args:
+        message: OneBot v11 消息内容（段数组或 CQ 码字符串）。
+
+    Returns:
+        True = 存在非空白用户字面文本。
+    """
+    if isinstance(message, str):
+        return bool(_CQ_CODE_RE.sub("", message).strip())
+    return any(
+        segment.type == "text" and str(segment.data.get("text", "")).strip()
+        for segment in message
+    )
 
 
 def _attachment_from_segment(segment: Ob11MessageSegmentModel) -> ChannelMessageAttachment | None:
@@ -278,8 +304,13 @@ async def process_webhook_event(payload: dict[str, Any], router: ChannelRouter) 
         logger.debug("QQ webhook 消息重复投递（去重跳过）: message_id={}", event.message_id)
         return
     text = flatten_message_text(event.message)
-    if not text.strip():
-        logger.debug("QQ webhook 消息无文本内容（跳过路由）: message_id={}", event.message_id)
+    attachments = extract_message_attachments(event.message)
+    if attachments and not _has_user_text(event.message):
+        text = ""
+    if not text.strip() and not attachments:
+        logger.debug(
+            "QQ webhook 消息无文本且无附件（跳过路由）: message_id={}", event.message_id
+        )
         return
     if event.message_type == "group":
         if event.group_id is None or event.group_id < 1:
@@ -297,7 +328,6 @@ async def process_webhook_event(payload: dict[str, Any], router: ChannelRouter) 
         chat_id = f"private:{event.user_id}"
     sender_id = str(event.user_id) if event.user_id >= 1 else "0"
     ts_ms = event.time * 1000 if event.time > 0 else now_ms()
-    attachments = extract_message_attachments(event.message)
     try:
         await router.handle_inbound(
             InboundMessageModel(

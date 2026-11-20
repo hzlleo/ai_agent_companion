@@ -504,8 +504,38 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 - 批次清单与结论：注入防御、logprobs 置信度、亲密补强（R2b+ 四切片）、R2c 记忆与关系（含修复）、R2d 心流/群聊/声纹/表情包（含修复）、R2e 企微/抖音/Canvas（含修复）、R2f 实时语音（含修复）、加固门禁（Tier-1+Tier-2，含复审残留）、补审 R2a 通道底座与记忆域（含残留）——全部经 Oracle 明确判定无问题（PASS），修复循环见各自小节的命令与证据。
 - 合并状态：PR#18 至 PR#31 已全部合并入 main（当前 `a4bf3e1`），工作区 clean；每批验收证据在 `docs/evidence/`（按 sha8 对应）。
-- 未决事项：**全约束审计 A（实现/架构）、B（测试/纪律）、C（文档/注释/提示词/配置）尚未执行**——原计划在 R2 收尾后立即进行，因运维维护子 Agent 所依赖的 LLM 服务顺延至次日；审计 A 的已发起任务若被中断需重跑。R3 在所有审计与终局交叉复核 ALL CLEAN 之前不启动。
-- 恢复指引：次日从干净 main 起分支执行审计 A→修正→复审循环→B→C→终局复核；审计提示词口径见本会话记录（覆盖 19 条硬约束），修复分支命名沿用 `feat/<范围>-review-fixes`。
+- 未决事项：审计 A 已执行（实现/架构）：**2×P1 + 3×P2，已修复并复审**（复审结果以本节末尾「审计 A 修复」记录为准）；审计 B（测试/纪律）、C（文档/注释/提示词/配置）尚未执行。R3 在所有审计与终局交叉复核 ALL CLEAN 之前不启动。
+- 恢复指引：从干净 main 起分支执行审计 B→C→终局复核；审计提示词口径见本会话记录（覆盖 19 条硬约束），修复分支命名沿用 `feat/<范围>-review-fixes`。
+
+### 已完成切片：全约束审计 A 修复（2×P1 + 3×P2，本分支工作区）
+
+**已完成**（逐条闭环，分支 `feat/audit-a-fixes`，基线 main `f43d705`）：
+
+1. **P1 QQ 纯附件消息被前置丢弃**：`qq_webhook` 先提取附件再判文本——仅有附件（纯图片 / 纯表情）而无用户字面文本时归一为 `text=""` 入站并投递（`_has_user_text` 剥离占位符与 CQ 码字面判定）；`InboundMessageModel.text` 允许空串（说明同步：仅附件入站语义）；`ChannelRouter.handle_inbound` 在表情收录与门控游标之后对空文本短路——不调用生成、不发兜底、不写空回合，只累加 `empty_text_skip_count`。同语义同步到 Telegram（`map_tg_message_to_inbound` 纯媒体无 caption → `text=""` 入站，sticker 附件可进表情桥）。既无文本又无附件仍丢弃。
+2. **P1 实时语音任务异常静默**：`_spawn` 的 done 回调消费并记录非取消异常（`logger.opt(exception=...)` + 任务名，`task_failure_count` 观测面）；`_audio_worker` 主体加防御——未预期异常记日志、下行可恢复 `INTERNAL_ERROR` error、`_request_close(INTERNAL_ERROR)`（不再永久失聪至最大时长）；`_transcribe_segment` 的 `pcm16_to_wav` 移入异常处理范围（空 / 不足一帧 PCM 不抛）。
+3. **P2 写侧裸 dict 绕过 Model**：`_emotion_round_meta` 构造既有 `ChatMessageMetaModel`（thought / emotion_deltas / emotion_snapshot / variant_index 对齐），`_persist_turn` 形参改该 Model，落库前 `model_dump(exclude={"variant_index", "selected_variant_id"})` 保持旧三键 JSON 字节结构；读侧 DTO 兼容不变。
+4. **P2 app/ 表情桥业务逻辑**：解码 / 筛选 / 出站包装下沉 `harness/multimodal/sticker_bridge.py`（`StickerBridge` + `decode_inbound_stickers` + `InboundStickerPayloadModel` + 服务面 Protocol）；`app/main.py` 删除两个闭包，仅注入 `StickerService` / `session_scope` 并接线钩子；「只收录内联 base64」与失败隔离语义不变。
+5. **P2 沙盒公共池口径**：沙盒树源码隔离（不 import backend 公共池），`asyncio.to_thread` 使用进程级默认执行器、树内禁止自建 `ThreadPoolExecutor`——口径写入 `http_fetch.py` 模块注释与 `docs/backend/tools-sandbox.md`「阻塞 I/O 与线程池口径」小节；全树 `grep -rn "ThreadPoolExecutor(" docker/tool-sandbox-agent/src` 零命中。
+6. **同步面**：`docs/backend/channels.md`（空文本入站 / QQ 仅附件 / 表情桥）、`docs/backend/multimodal.md`（桥模块与下沉边界）、`docs/backend/chat.md`（meta Model 写侧口径）；`red_manifest.toml` 登记 `sticker-bridge-decode-removal` 红探针（新源文件门禁要求）。新增 17 例测试（QQ 仅附件 2、Telegram 纯媒体路由 1、路由器空文本 1、实时语音 2、meta Model 1、表情桥 10）。
+
+**验证**（主 Agent 实跑，命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2862 passed**；基线 2845 + 新增 17）。
+- `cd backend && pixi run coverage-gates` → **0**（24 组 ≥80%；harness/channels 97.0% / harness/chat 96.3% / harness/multimodal 93.9% / harness/voice 95.6% / app/main.py 93.1%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**（192 源文件零问题）。
+- 根 `pixi run gates` → **0**（注释门 / 同步测试棘轮 / noqa 冻结 / 沙盒漂移 38 项 / 红探针门 / 文档真相 / 断言棘轮 / 导出面 / prose-pin 全过）。
+- `cd backend && pixi run gen-examples` → **0** 连续两次；三件套 sha256 两次完全一致（幂等，无 env 键新增）。
+- `cd docker/tool-sandbox-agent && pixi run tests-unit` → **0**（**118 passed**；`http_fetch.py` 覆盖率 100%）；同树 `ThreadPoolExecutor(` 源文件零命中。
+- 前端未改动，按任务书略过；canonical 证据包 `docs/evidence/audit-a-fixes-da5b1bd3.json`（`verify-slice -- --slice audit-a-fixes` → **0**，5 步全 PASS：tests-all=2862 / coverage-gates=24 / typecheck=192）。
+- **反向实证**（逐条临时还原实现 → 目标用例变红 → 复原）：
+  - 还原 QQ 前置丢弃条件 → `test_qq_webhook.py` **3 failed**（纯图 / 纯表情 / record 文本空）；
+  - 还原 Telegram 前置丢弃条件 → `test_pure_media_without_caption_routed_with_empty_text` **1 failed**；
+  - `pcm16_to_wav` 移回 try 外 → `test_transcribe_segment_tolerates_empty_and_short_pcm` **1 failed**；
+  - meta 落库改 `model_dump()` 全字段 → `test_reply_meta_is_model_validated_and_byte_compatible` **1 failed**（键面多出变体字段）；
+  - 表情桥 base64 去掉空白折叠 → `test_decode_inbound_stickers_keeps_inline_base64_and_caption` **1 failed**；
+  - 红探针：`pixi run red-probe -- --symbol packages.harness.multimodal.sticker_bridge:decode_inbound_stickers` → **RED（failed=2）**。
+
+**剩余**：无（本切片范围）。
 
 ## 6. 遗留与部署台账（非阻塞）
 

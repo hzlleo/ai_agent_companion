@@ -30,6 +30,10 @@ _PERSONA_ID = 7
 class FakeChatService:
     """fake ChatService（记录回复调用）。"""
 
+    def __init__(self) -> None:
+        """初始化调用计数。"""
+        self.reply_calls: list[str] = []
+
     async def create_session(
         self,
         *,
@@ -48,6 +52,7 @@ class FakeChatService:
         self, state: ChatSessionStateModel, user_text: str, *, sender_provenance: Any = None
     ) -> str:
         """fake 回复。"""
+        self.reply_calls.append(user_text)
         return f"echo:{user_text}"
 
 
@@ -107,10 +112,12 @@ def _router(
     adapter: FakeAdapter,
     ingest: Any = None,
     reply: Any = None,
+    chat: FakeChatService | None = None,
 ) -> ChannelRouter:
     """装配路由器（注入 fake 依赖与可选表情钩子）。"""
+    service = chat if chat is not None else FakeChatService()
     router = ChannelRouter(
-        chat_service_factory=lambda: FakeChatService(),
+        chat_service_factory=lambda: service,
         session_factory=_session_factory,
         sticker_ingest_hook=ingest,
         sticker_reply_hook=reply,
@@ -175,6 +182,24 @@ async def test_hooks_absent_keeps_legacy_shape() -> None:
     await router.handle_inbound(_sticker())
     assert adapter.sent[0].attachments == []
     assert adapter.sent[0].text == "echo:看看这个"
+
+
+async def test_empty_text_sticker_ingested_without_generation_or_fallback() -> None:
+    """纯表情空文本：收录 1 次、生成 0 次、无兜底、空投递结果。"""
+    adapter = FakeAdapter()
+    chat = FakeChatService()
+    ingested: list[int] = []
+
+    async def ingest(attachments: list[ChannelMessageAttachment]) -> None:
+        ingested.append(len(attachments))
+
+    router = _router(adapter=adapter, ingest=ingest, chat=chat)
+    result = await router.handle_inbound(_sticker(text=""))
+    assert ingested == [1]
+    assert chat.reply_calls == []
+    assert adapter.sent == []
+    assert result.message_ids == []
+    assert router.empty_text_skip_count == 1
 
 
 async def test_ingest_and_reply_failures_do_not_block_reply() -> None:

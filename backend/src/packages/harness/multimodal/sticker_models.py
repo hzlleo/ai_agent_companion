@@ -46,6 +46,7 @@ __all__ = [
     "StickerBatchDeleteResultModel",
     "StickerAnnotationResultModel",
     "StickerBinaryModel",
+    "InboundStickerPayloadModel",
     "StickerAnnotateGatewayFace",
 ]
 
@@ -313,6 +314,20 @@ class StickerBinaryModel(BaseModel):
 
     record: StickerRecordDTO
     content: bytes
+
+
+class InboundStickerPayloadModel(BaseModel):
+    """通道入站表情收录载荷（解码后的字节 + MIME + 来源备注）。
+
+    Attributes:
+        payload: 图片文件字节。
+        content_type: 图片 MIME 类型（附件无线索时回退 image/png）。
+        source_note: 素材来源备注（通道桥生成——服务层按配置截断）。
+    """
+
+    payload: bytes = Field(description="图片文件字节")
+    content_type: str = Field(min_length=1, description="图片 MIME 类型")
+    source_note: str = Field(min_length=1, description="素材来源与授权备注")
 
 
 class StickerAnnotateGatewayFace(Protocol):

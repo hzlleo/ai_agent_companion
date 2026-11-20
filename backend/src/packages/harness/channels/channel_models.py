@@ -184,8 +184,9 @@ class InboundMessageModel(BaseModel):
             维度复用会话）。
         message_id: 平台消息 ID（字符串形态——出站回复的引用目标）。
         sender_id: 发送者 ID（字符串形态；平台匿名形态归一 "0"）。
-        text: 消息文本（非空——v2 语义：Telegram 媒体消息以 caption 兜底
-            为文本；纯媒体无 caption 由 runner 过滤，不进路由器）。
+        text: 消息文本（**仅附件入站为空串**——纯图片 / 纯表情不含用户
+            字面文本，路由器照常收录表情 / 推进门控游标但不调用生成；
+            文本消息非空。Telegram 媒体消息以 caption 兜底为文本）。
         ts_ms: 消息时间（epoch 毫秒；平台 wire 的秒级时间戳在映射时归一）。
         attachments: 消息附件（v2——缺省空列表 = v1 纯文本形态；由平台
             runner / webhook 提取，供未来消费者（R2d 贴纸 / 语音）消费，
@@ -202,7 +203,7 @@ class InboundMessageModel(BaseModel):
     chat_id: str = Field(min_length=1, description="平台会话 ID（字符串形态）")
     message_id: str = Field(min_length=1, description="平台消息 ID（字符串形态）")
     sender_id: str = Field(min_length=1, description="发送者 ID（字符串形态）")
-    text: str = Field(min_length=1, description="消息文本（非空）")
+    text: str = Field(description="消息文本（附件-only 入站为空串）")
     ts_ms: int = Field(default_factory=now_ms, description="消息时间（epoch 毫秒）")
     attachments: list[ChannelMessageAttachment] = Field(
         default_factory=list, description="消息附件（缺省空 = v1 纯文本形态）"

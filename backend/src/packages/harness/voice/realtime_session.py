@@ -251,6 +251,7 @@ class RealtimeVoiceSession:
         self._partial_task: asyncio.Task[None] | None = None
         self._audio_task: asyncio.Task[None] | None = None
         self._transcribe_tasks: set[asyncio.Task[None]] = set()
+        self._task_failure_count = 0
         self._last_partial_voiced_ms = 0
 
     # ------------------------------------------------------------------
@@ -276,6 +277,11 @@ class RealtimeVoiceSession:
     def active_task_count(self) -> int:
         """当前登记的派生任务数（关闭后应为 0——泄漏断言面）。"""
         return len(self._tasks)
+
+    @property
+    def task_failure_count(self) -> int:
+        """派生任务异常计数（done 回调检索面——异常不再悬空未取）。"""
+        return self._task_failure_count
 
     # ------------------------------------------------------------------
     # 主循环
@@ -555,22 +561,45 @@ class RealtimeVoiceSession:
         self._metrics.audio_chunks_received += 1
 
     async def _audio_worker(self) -> None:
-        """音频工人：批量出队喂 VAD，按事件推进切段 / 转写 / 部分转写。"""
-        while not self._closed:
-            first = await self._audio_queue.get()
-            batch = [first]
-            while len(batch) < self._settings.audio_batch_max_chunks:
-                try:
-                    batch.append(self._audio_queue.get_nowait())
-                except asyncio.QueueEmpty:
-                    break
-            now = self._clock()
-            for frame in batch:
-                result = self._vad.feed(frame, now)
-                for event in result.events:
-                    await self._handle_vad_event(event, now)
-                self._schedule_partial(now)
-            await asyncio.sleep(0)
+        """音频工人：批量出队喂 VAD，按事件推进切段 / 转写 / 部分转写。
+
+        Raises:
+            asyncio.CancelledError: 关闭收尾取消（原样上抛）。
+        """
+        try:
+            while not self._closed:
+                first = await self._audio_queue.get()
+                batch = [first]
+                while len(batch) < self._settings.audio_batch_max_chunks:
+                    try:
+                        batch.append(self._audio_queue.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+                now = self._clock()
+                for frame in batch:
+                    result = self._vad.feed(frame, now)
+                    for event in result.events:
+                        await self._handle_vad_event(event, now)
+                    self._schedule_partial(now)
+                await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # 音频工人退出会让会话永久失聪（收帧仍在入队、无人消费）——
+            # 下行可恢复 error 后主动关闭，不让会话静默挂到最大时长。
+            self._task_failure_count += 1
+            logger.opt(exception=True).error(
+                "实时语音音频工人异常（关闭会话——不再静默失聪）: session_id={}",
+                self._session_id,
+            )
+            await self._send_error(
+                code=str(ErrorCode.INTERNAL_ERROR),
+                message="实时语音音频处理内部错误，会话已关闭",
+                recoverable=True,
+            )
+            await self._request_close(
+                RealtimeCloseReason.INTERNAL_ERROR, detail="audio_worker_exception"
+            )
 
     async def _handle_vad_event(self, event: VadEventModel, now_ms_value: int) -> None:
         """处理 VAD 事件（起说 / 切段 / 丢弃）。
@@ -643,8 +672,8 @@ class RealtimeVoiceSession:
             pcm: 语段 PCM16 字节。
             duration_ms: 语段有效语音时长（毫秒）。
         """
-        wav = pcm16_to_wav(pcm, self._settings.sample_rate_hz, self._settings.channels)
         try:
+            wav = pcm16_to_wav(pcm, self._settings.sample_rate_hz, self._settings.channels)
             result = await self._voice.transcribe(
                 wav, f"{segment_id}.wav", persona=self._persona
             )
@@ -1319,7 +1348,7 @@ class RealtimeVoiceSession:
             await self._send_state_message(detail=detail or transition.detail)
 
     def _spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
-        """登记并启动派生任务（关闭时统一取消）。
+        """登记并启动派生任务（关闭时统一取消；异常经 done 回调检索）。
 
         Args:
             coro: 协程体。
@@ -1327,9 +1356,26 @@ class RealtimeVoiceSession:
         Returns:
             已登记的 :class:`asyncio.Task`。
         """
+        task_name = getattr(coro, "__qualname__", type(coro).__name__)
         task = asyncio.create_task(coro)
+
+        def _on_done(done: asyncio.Task[None]) -> None:
+            """回收登记并消费未处理异常（避免 never retrieved 静默丢失）。"""
+            self._tasks.discard(done)
+            if done.cancelled():
+                return
+            exc = done.exception()
+            if exc is None:
+                return
+            self._task_failure_count += 1
+            logger.opt(exception=exc).error(
+                "实时语音派生任务异常（已检索）: session_id={}, task={}",
+                self._session_id,
+                task_name,
+            )
+
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(_on_done)
         return task
 
     async def _cancel_task(self, task: asyncio.Task[None] | None) -> None:

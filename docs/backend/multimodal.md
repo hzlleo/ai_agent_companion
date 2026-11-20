@@ -11,10 +11,11 @@
 | `mm_models.py` | 多模态域 Model Classes（Unit 文件）：look_at 请求 / 结果 / 工具参数契约、data URL 构建与解析助手、网关与服务注入面协议 | `LookAtRequestModel` / `LookAtResultModel` / `LookAtToolArgsModel` / `LookAtGatewayFace` / `LookAtFace` / `build_data_url` / `parse_data_url` / `LOOK_AT_IMAGE_MIME_ALLOWLIST` / `LOOK_AT_IMAGE_MAX_BYTES` |
 | `mm_prompts.py` | prompt Unit 文件（视觉理解任务书 + 聚焦区块 + 缺省指令；版本常量 + sha256 byte-lock） | `LOOK_AT_CHARTER_TEMPLATE` / `render_look_at_charter` / `render_user_instruction` |
 | `look_at.py` | LookAtService 编排门面（校验 / 消息组装 / 条目链 / 网关调用）+ look_at 工具注册面 | `LookAtService` / `register_look_at_tool` / `LOOK_AT_TOOL_NAME` |
-| `sticker_models.py` | 表情包库 Model Classes（Unit 文件）：`STICKER_` 配置面、上传 / 查询 / 修改 / 删除 / 标注 / 批量结果契约、视觉标注网关注入面 | `StickerSettings` / `StickerBatchUploadDTO` / `StickerRecordDTO` / `StickerAnnotationResultModel` |
+| `sticker_models.py` | 表情包库 Model Classes（Unit 文件）：`STICKER_` 配置面、上传 / 查询 / 修改 / 删除 / 标注 / 批量结果契约、通道桥收录载荷、视觉标注网关注入面 | `StickerSettings` / `StickerBatchUploadDTO` / `StickerRecordDTO` / `InboundStickerPayloadModel` / `StickerAnnotationResultModel` |
 | `sticker_orm.py` | 表情包 ORM 行（PersonaMixin 人格作用域 + 哈希去重） | `StickerRow` |
 | `sticker_prompts.py` | 表情包 VLM 标注提示词（prompt Unit 文件——版本常量 + byte-lock） | `STICKER_ANNOTATION_CHARTER_TEMPLATE` / `render_sticker_annotation_charter` |
 | `sticker_service.py` | 表情包服务（上传去重 / 标签 / 删除 / VLM 标注 / 通道收发桥） | `StickerService` |
+| `sticker_bridge.py` | 通道表情桥（附件解码 / 入站收录 / 出站素材包装——app 装配薄服务，模型与逻辑从 `app/main.py` 下沉） | `StickerBridge` / `decode_inbound_stickers` / `StickerBridgeServiceFace` |
 
 依赖方向：multimodal → llm（`ChatMessageModel` 内容分块 / `LlmGateway` 条目直连）+ config（`ModelResolver` 角色解析 / `resolve_multimodal_chain` 回退链裁决 / `LlmModelEntry`）+ tools（`ToolRegistry` 注册面）+ core（errors / time_utils）；llm / config / tools 不反向依赖 multimodal（单向，无环）。**multimodal 不硬依赖 usage 域**——look_at 用量行完全由网关 `chat_for_entry(purpose="look_at")` 自动发射（成功 / 失败均落账），服务层零双记。
 
@@ -269,7 +270,9 @@ GET /api/v1/stickers/12/file
 
 `ChannelRouter` 新增两个可选钩子（`sticker_ingest_hook` / `sticker_reply_hook`，缺省 None = 零影响）：
 
-- **入站收录**：入站消息含 `kind=sticker` 附件时，以应答人格上下文调用收录桥（app 装配闭包开短事务 → `StickerService.ingest_bytes`）；仅收录**已持有字节**的 base64 载荷（QQ 段内联形态）；`tg-file://` / `url` 引用需二次下载，桥跳过并文档化；收录失败仅告警，不阻断回复；
+- 解码 / 筛选 / 出站包装逻辑在 `harness/multimodal/sticker_bridge.py`（`StickerBridge`，失败隔离与「只收录内联 base64」边界同源）；`app/main.py` 只注入 `StickerService` 与 `session_scope` 并接线钩子；
+
+- **入站收录**：入站消息含 `kind=sticker` 附件时，以应答人格上下文调用收录桥（桥开短事务 → `StickerService.ingest_bytes`）；仅收录**已持有字节**的 base64 载荷（QQ 段内联形态）；`tg-file://` / `url` 引用需二次下载，桥跳过并文档化；收录失败仅告警，不阻断回复；
 - **出站附发**：本轮入站带 sticker 附件且 `STICKER_CHANNEL_REPLY_ENABLED=true` 时，取当前人格最新可读素材作为 `OutboundMessageModel.attachments` 的一张 `sticker` 附件（base64 形态）随文本投递；取表情失败仅告警，文本照常投递；
 - 延迟 / 合并批次不携带附件（批次只承接文本）——入站收录已在门控判定前完成，回表情仅即时回复路径生效；
 - 通道适配器按既有 v2 映射表投递（Telegram `sendSticker`；QQ `image` 段），不新建第二套发送面。

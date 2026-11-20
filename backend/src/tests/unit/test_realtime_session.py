@@ -34,6 +34,7 @@ from packages.harness.voice.realtime_session import (
     ChatSessionStreamAdapter,
     RealtimeVoiceSession,
 )
+from packages.harness.voice.realtime_vad import EnergyVad, VadFeedResultModel, build_vad_config
 from tests.realtime_fakes import (
     FakeClock,
     FakeRealtimeTransport,
@@ -138,6 +139,18 @@ class SessionHarness:
         """等待会话自主关闭（超时 / 断开 / 拒绝路径）。"""
         assert self.task is not None
         await asyncio.wait_for(self.task, timeout=_WAIT_TIMEOUT)
+
+
+class _ExplodingVad(EnergyVad):
+    """首次 feed 即抛内部异常的伪 VAD（音频工人防御面故障注入）。"""
+
+    def __init__(self) -> None:
+        """以测试缺省 VAD 配置初始化（仅覆写 feed 行为）。"""
+        super().__init__(build_vad_config(realtime_settings()))
+
+    def feed(self, pcm16: bytes, now_ms: int) -> VadFeedResultModel:
+        """模拟 VAD 内部故障。"""
+        raise RuntimeError("vad boom")
 
 
 def _last_state(sent: list[dict[str, Any]]) -> str | None:
@@ -376,6 +389,38 @@ async def test_empty_transcript_returns_to_listening_without_generation() -> Non
     await harness.request_end()
     assert harness.session is not None
     assert harness.session.metrics.generations == 0
+
+
+async def test_audio_worker_failure_emits_error_and_closes() -> None:
+    """音频工人内部异常：下行可恢复 error → 会话 internal_error 关闭、任务清零。"""
+    harness = SessionHarness()
+    await harness.boot()
+    assert harness.session is not None
+    harness.session._vad = _ExplodingVad()
+    await harness.push(audio_message(0, loud_frame()))
+    await harness.await_close()
+    errors = harness.messages("error")
+    assert errors
+    assert errors[-1]["code"] == "INTERNAL_ERROR"
+    assert errors[-1]["recoverable"] is True
+    assert harness.messages("closed")[0]["reason"] == "internal_error"
+    assert harness.session.active_task_count == 0
+    assert harness.session.task_failure_count == 1
+
+
+async def test_transcribe_segment_tolerates_empty_and_short_pcm() -> None:
+    """空 / 不足一帧的 PCM：WAV 封装失败被防御捕获（error，会话不抛）。"""
+    harness = SessionHarness()
+    await harness.boot()
+    assert harness.session is not None
+    before = len(harness.messages("error"))
+    await harness.session._transcribe_segment("seg-empty", b"", 0)
+    await harness.session._transcribe_segment("seg-short", b"\x01", 0)
+    errors = harness.messages("error")[before:]
+    assert len(errors) == 2
+    assert all(error["code"] == "INTERNAL_ERROR" for error in errors)
+    assert harness.voice.asr_calls == []
+    await harness.request_end()
 
 
 async def test_forced_segment_on_speech_ceiling() -> None:

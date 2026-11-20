@@ -283,7 +283,7 @@ from __future__ import annotations
 import json
 import random
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, Final, Protocol
+from typing import Final, Protocol
 
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -352,6 +352,7 @@ from packages.harness.llm.llm_models import (
     ChatResponseModel,
     ToolDefinitionModel,
 )
+from packages.harness.memory.dtos import ChatMessageMetaModel
 from packages.harness.memory.episode_sink import EpisodeSinkFace
 from packages.harness.memory.models import MemoryProvenance
 from packages.harness.memory.service import ChatSessionService
@@ -1708,7 +1709,7 @@ class ChatService:
         state: ChatSessionStateModel,
         turn: ChatTurnModel,
         *,
-        meta: dict[str, Any] | None = None,
+        meta: ChatMessageMetaModel | None = None,
     ) -> None:
         """持久化单回合（持久化绑定 + 会话已落库时；否则 no-op）。
 
@@ -1725,6 +1726,13 @@ class ChatService:
         """
         if self._session_service is None or state.session_id is None:
             return
+        # 既有落库形态只含三键（心声 / 增量 / 快照）——变体字段不写 meta，
+        # 保持 JSON 结构字节兼容（读侧仍按 Model 缺省 None 解释）。
+        meta_payload = (
+            meta.model_dump(exclude={"variant_index", "selected_variant_id"})
+            if meta is not None
+            else None
+        )
         async with session_scope() as db_session, bind_persona_context(state.persona_id):
             await self._session_service.append_message(
                 db_session,
@@ -1732,7 +1740,7 @@ class ChatService:
                 role=turn.role,
                 content=turn.content,
                 ts_ms=turn.ts_ms,
-                meta=meta,
+                meta=meta_payload,
             )
 
     async def _record_episode(
@@ -1961,7 +1969,7 @@ class ChatService:
 
     async def _emotion_round_meta(
         self, state: ChatSessionStateModel, parsed: ParsedAssistantOutputModel
-    ) -> dict[str, Any] | None:
+    ) -> ChatMessageMetaModel | None:
         """构建本轮回合元数据（心声 + 情绪增量 + 推进后快照）。
 
         引擎未激活时仍保留心声 / 增量留档（观测面），快照为 None；
@@ -1972,7 +1980,7 @@ class ChatService:
             parsed: 输出协议解析结果。
 
         Returns:
-            回合元数据字典；无任何元数据时为 None。
+            回合元数据 Model；无任何元数据时为 None。
         """
         if parsed.thought is None and not parsed.emotion_deltas:
             return None
@@ -1983,8 +1991,9 @@ class ChatService:
             )
             if advanced is not None:
                 snapshot = dict(advanced.values)
-        return {
-            "thought": parsed.thought,
-            "emotion_deltas": dict(parsed.emotion_deltas),
-            "emotion_snapshot": snapshot,
-        }
+        return ChatMessageMetaModel(
+            thought=parsed.thought,
+            emotion_deltas=dict(parsed.emotion_deltas),
+            emotion_snapshot=snapshot,
+            variant_index=None,
+        )

@@ -449,7 +449,10 @@ COMPLIANCE_MAX_RETRIES=1
 
 `GET /api/v1/memories/sessions/{id}` 的 `messages[].meta` 即上述文档（未产生
 元数据的回合为 `null`）；前端会话详情以灰色斜体「心声:」块与情绪小标签
-渲染（对方不可见面）。情绪状态推进 / 衰减 / 摘要规则见
+渲染（对方不可见面）。写侧由 `ChatMessageMetaModel` 构造（字段对齐
+thought / emotion_deltas / emotion_snapshot / variant_index），落库前
+`model_dump(exclude={"variant_index", "selected_variant_id"})` 保持上述三键
+JSON 结构不变；读侧经同一 Model 校验。情绪状态推进 / 衰减 / 摘要规则见
 [emotion.md](emotion.md)。
 
 ### stream_reply 边界（锁定）

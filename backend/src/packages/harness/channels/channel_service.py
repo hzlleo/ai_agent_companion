@@ -323,6 +323,7 @@ class ChannelRouter:
         self._group_states: dict[str, GroupResponderStateModel] = {}
         self._chat_group_flags: dict[str, bool] = {}
         self._synthetic_skip_count = 0
+        self._empty_text_skip_count = 0
         self._flow_job_seq = 0
         self._scheduler_missing_warned = False
 
@@ -370,6 +371,11 @@ class ChannelRouter:
         """累计跳过的合成事件条数（观测面——恒不回复语义的计数面）。"""
         return self._synthetic_skip_count
 
+    @property
+    def empty_text_skip_count(self) -> int:
+        """累计跳过生成的空文本入站条数（观测面——仅附件消息的计数面）。"""
+        return self._empty_text_skip_count
+
     @staticmethod
     def session_key(context: ChannelContextModel) -> str:
         """会话身份键（``channel:chat_id``——每聊天一个 ChatService 会话）。
@@ -405,6 +411,10 @@ class ChannelRouter:
         合成事件：``message.synthetic=True`` 在门控与锁之前恒跳过——返回
         空投递结果，不建会话、不写心流节拍状态、不调用心流判定（与
         ``FLOW_ENABLED`` 无关）；跳过计数累加并记 debug 日志。
+
+        空文本入站（纯图片 / 纯表情附件）：表情收录与心流游标照常执行，
+        但**不调用生成**（不产生兜底文案、不写空回合）——返回空投递结果；
+        跳过计数累加并记 debug 日志（``empty_text_skip_count``）。
 
         群聊多人格：启用时按选择结论逐人格应答并逐条投递（每人格自己的
         持久化会话）；选择为空 / 未启用时回退主人格单人格路径。
@@ -471,6 +481,24 @@ class ChannelRouter:
                     )
                     if gate_result is not None:
                         return gate_result
+                if not message.text.strip():
+                    # 仅附件入站：表情已收录、心流游标已推进（门控 / 会话
+                    # 懒建保持既有顺序），但不进入生成——空文本会触发
+                    # ChatService 的 VALIDATION_ERROR 兜底文案并写空回合。
+                    self._empty_text_skip_count += 1
+                    logger.debug(
+                        "空文本入站（跳过生成——表情收录 / 游标照常）: "
+                        "channel={}, chat_id={}, message_id={}, skipped_total={}",
+                        message.channel.value,
+                        message.chat_id,
+                        message.message_id,
+                        self._empty_text_skip_count,
+                    )
+                    return ChannelDeliveryResultModel(
+                        channel=message.channel,
+                        chat_id=message.chat_id,
+                        message_ids=[],
+                    )
                 if group_pool is not None:
                     group_delivery = await self._reply_via_group(
                         context,

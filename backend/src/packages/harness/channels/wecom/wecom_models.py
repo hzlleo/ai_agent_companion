@@ -209,7 +209,7 @@ WECOM_UPLOAD_MIN_SIZE_BYTES: Final[int] = 5
 #: markdown 消息 content 上限（官方文档：≤20480 字节 UTF-8）。
 WECOM_MARKDOWN_MAX_BYTES: Final[int] = 20480
 
-#: 纯媒体入站的文本占位符（``InboundMessageModel.text`` 非空契约的兜底形态）。
+#: 纯媒体入站的文本占位符（企微回调消费面——附件仅占位文本，保留可回复语义）。
 WECOM_PLACEHOLDER_IMAGE: Final[str] = "[图片]"
 #: 文件入站的文本占位符。
 WECOM_PLACEHOLDER_FILE: Final[str] = "[文件]"

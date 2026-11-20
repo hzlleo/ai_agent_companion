@@ -357,7 +357,11 @@ class TestAttachmentExtractionV2:
         assert attachment.url == "https://gchat.qpic.cn/1.jpg"
 
     async def test_record_segment_base64_file_strips_scheme(self) -> None:
-        """record 段（data.file=base64://）：audio 类 + base64 源（剥前缀）。"""
+        """record 段（data.file=base64://）：audio 类 + base64 源（剥前缀）。
+
+        纯媒体无用户文本：占位符不进入站文本（``text=""``——路由器跳过
+        生成，附件照常搭载）。
+        """
         router = FakeRouter()
         await process_webhook_event(
             _message_event(
@@ -368,10 +372,47 @@ class TestAttachmentExtractionV2:
             router,
         )
         message = router.handled[0]
-        assert message.text == "[语音]"
+        assert message.text == ""
         attachment = message.attachments[0]
         assert attachment.kind is ChannelAttachmentKind.AUDIO
         assert attachment.base64 == "aGVsbG8="
+
+    async def test_pure_image_routed_with_empty_text(self) -> None:
+        """纯图片无文本：仍归一入站（text=""）并搭载附件（不再前置丢弃）。"""
+        router = FakeRouter()
+        await process_webhook_event(
+            _message_event(
+                message=[
+                    {"type": "image", "data": {"url": "https://gchat.qpic.cn/pure.png"}},
+                ]
+            ),
+            router,
+        )
+        assert len(router.handled) == 1
+        message = router.handled[0]
+        assert message.text == ""
+        assert len(message.attachments) == 1
+        assert message.attachments[0].kind is ChannelAttachmentKind.IMAGE
+
+    async def test_pure_sticker_face_with_image_routed_with_empty_text(self) -> None:
+        """纯表情（face + 图片段）无文本：归一入站（text=""）供表情桥收录。"""
+        router = FakeRouter()
+        await process_webhook_event(
+            _message_event(
+                message=[
+                    {"type": "face", "data": {"id": "4"}},
+                    {
+                        "type": "image",
+                        "data": {"file": "base64://c3RpY2tlcg=="},
+                    },
+                ]
+            ),
+            router,
+        )
+        message = router.handled[0]
+        assert message.text == ""
+        assert len(message.attachments) == 1
+        assert message.attachments[0].base64 == "c3RpY2tlcg=="
 
     async def test_image_segment_file_scheme_maps_path_source(self) -> None:
         """image 段（data.file=file://…，无 url）：path 源原样承载。"""

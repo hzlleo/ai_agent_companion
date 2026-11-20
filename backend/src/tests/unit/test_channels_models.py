@@ -71,7 +71,7 @@ async def test_inbound_message_defaults_and_fields() -> None:
 
 
 async def test_inbound_message_rejects_empty_fields() -> None:
-    """InboundMessageModel：空 chat_id / 空文本拒绝（边界校验）。"""
+    """InboundMessageModel：空 chat_id 拒绝；空文本合法（仅附件入站）。"""
     with pytest.raises(ValidationError):
         InboundMessageModel(
             channel=ChannelType.TELEGRAM,
@@ -84,10 +84,18 @@ async def test_inbound_message_rejects_empty_fields() -> None:
         InboundMessageModel(
             channel=ChannelType.TELEGRAM,
             chat_id="10086",
-            message_id="42",
+            message_id="",
             sender_id="7",
-            text="",
+            text="你好",
         )
+    attachment_only = InboundMessageModel(
+        channel=ChannelType.TELEGRAM,
+        chat_id="10086",
+        message_id="42",
+        sender_id="7",
+        text="",
+    )
+    assert attachment_only.text == ""
 
 
 async def test_outbound_message_reply_to_nullable() -> None:
