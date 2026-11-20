@@ -145,6 +145,17 @@ async def test_log_to_core_config_field_mapping() -> None:
     assert core.diagnose_exceptions is True
 
 
+async def test_log_text_format_empty_maps_to_none() -> None:
+    """text_format 空串（env 默认）→ core 默认统一模板（None）。"""
+    assert LogConfig(env_file=None).to_core_config().text_format is None
+
+
+async def test_log_text_format_non_empty_passthrough() -> None:
+    """text_format 非空值原样透传给 core 配置。"""
+    log = LogConfig(text_format="CUSTOM|{name}|{message}", env_file=None)
+    assert log.to_core_config().text_format == "CUSTOM|{name}|{message}"
+
+
 async def test_database_url_mysql_with_special_chars() -> None:
     """MySQL 连接串：特殊字符 URL 编码 + charset 参数。"""
     config = DatabaseConfig(

@@ -11,22 +11,22 @@
         ↓ ⑤ prompts.render_persona_contract(card.name)     角色契约（人格输出
               契约五条——不自我声明 AI / 不道歉式开场 / 不总结腔软化 /
               亲密场景不升维 / 被纠正不辩论）
-        ↓ ⑥ 非中性情绪摘要块（render_emotion_state_block——R2b 轻情绪引擎；
+        ↓ ⑥ 非中性情绪摘要块（render_emotion_state_block——轻情绪引擎；
               无状态 / 全中性跳过）
-        ↓ ⑦ 长期指令块（render_directives_block——R2b D7-14；现行指令
+        ↓ ⑦ 长期指令块（render_directives_block——常备指令注入；现行指令
               注入，20 条 / 2000 字符帽截断；无指令跳过）
-        ↓ ⑧ 人物事实块（render_facts_block——R2c；【关于对方】现行高置信
+        ↓ ⑧ 人物事实块（render_facts_block——人物事实注入；【关于对方】现行高置信
               事实注入，12 条 / 1500 字符帽由读取面裁剪；无事实跳过）
-        ↓ ⑨ 核心记忆块（render_core_memory_block——R2c；【自我认知】四块
+        ↓ ⑨ 核心记忆块（render_core_memory_block——自编辑核心记忆；【自我认知】四块
               自编辑自我模型的非空块注入，锁定块带锁定标识，总字符 2400
               帽由渲染面截断；全空跳过）
-        ↓ ⑩ 关系进展块（render_relationship_block——R2b+；【关系进展】由
+        ↓ ⑩ 关系进展块（render_relationship_block——关系进展摘要；【关系进展】由
               关系类事实派生的阶段 / 最近变化 / 边界约定摘要，恒注入——
               空事实渲染「初识」，总字符 1200 帽）
-        ↓ ⑪ 相关技能块（render_skills_block——R2c；【相关技能】仅当命中
+        ↓ ⑪ 相关技能块（render_skills_block——程序性技能注入；【相关技能】仅当命中
               本轮用户文本时注入，2 条 / 2000 字符帽；无命中跳过）
         ↓ ⑫ prompts.render_output_protocol()               输出格式协议（心声 /
-              情绪标签指令——R2b）
+              情绪标签指令）
         ↓ ⑬ 世界书 after_char 条目块                       检索增强（后段）
         ↓ ⑭ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合；
               当轮入站回合经 nonce 定界包裹——历史 user 回合最近 10 条同样
@@ -83,7 +83,7 @@ docs/backend/defense.md）：
     - **流式边界**：``stream_reply`` 恒不重试——逐块产出时已经交给了
       消费方，无法回头重说一遍；检测面因此只覆盖非流式回复。
 
-世界书筛选语义（chara card v2 规格 + R2b 高级触发——算法链全文见
+世界书筛选语义（chara card v2 规格 + 高级触发——算法链全文见
 ``world_book`` 模块文档，此处为消费面摘要）：
 
     - ``constant=True`` 条目恒注入（世界观保底——**不占 token 预算**、
@@ -107,7 +107,7 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
 优先于上下文变量——与 ``bind_persona_context`` 语义等价，选直传因其
 可测性与可读性）。
 
-可选工具循环（R2a-4——构造注入 ``tools`` + ``tool_executor`` 后，
+可选工具循环（构造注入 ``tools`` + ``tool_executor`` 后，
 ``reply`` 走有界工具循环；缺省 ``tools=None`` 保持既有零工具形态）：
 
     - 循环机械与 duty 域同源：gateway ``chat_by_role(chat, messages,
@@ -129,7 +129,7 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
     - 流式 ``stream_reply`` 恒 content-only（网关面 tools+stream 已
       拒绝——本域不组合二者）。
 
-输出协议 + 轻情绪引擎（R2b D7-2 / D7-7——模块文档锁定边界）：
+输出协议 + 轻情绪引擎（模块文档锁定边界）：
 
     - ``reply`` 的模型原始输出经 ``output_protocol.parse_assistant_output``
       解析：``<心声>`` / ``<情绪>`` 前导标签被剥离，**返回 / 落回合 /
@@ -146,7 +146,7 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
     - 不合规模型（无标签 / 标签残缺）优雅降级：原文可见、零状态变化
       ——协议面永不因模型输出抛异常。
 
-长期指令注入（R2b D7-14——构造注入 ``directive_service`` 后）：
+长期指令注入（构造注入 ``directive_service`` 后）：
 
     - compose 链在心情块之后、输出格式协议之前注入【长期指令】块
       （``render_directives_block``——现行指令按写入倒序，20 条 / 2000
@@ -156,7 +156,7 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
       附加 I/O，既有测试面零变更；读取失败不阻断回复（日志 + 空块，
       文档化：常备指令是增强面而非回复前提）。
 
-人物事实注入（R2c——构造注入 ``facts_reader`` 后）：
+人物事实注入（构造注入 ``facts_reader`` 后）：
 
     - compose 链在长期指令块之后、输出格式协议之前注入【关于对方】块
       （``render_facts_block``——现行高置信事实按类别标签逐行列出，
@@ -166,7 +166,7 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
       回复（日志 + 空块——画像注入是增强面而非回复前提），无现行事实时
       整块跳过。
 
-关系进展注入（R2b+——复用构造注入 ``facts_reader`` 的事实读面）：
+关系进展注入（复用构造注入 ``facts_reader`` 的事实读面）：
 
     - compose 链在核心记忆块之后、相关技能块之前恒注入【关系进展】块
       （``render_relationship_block``——由关系类现行事实派生的阶段 / 最近
@@ -189,7 +189,7 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
       ``intimacy_ceiling`` 形参供未来接线），边界文档化于
       ``persona.relationship_models`` 模块文档。
 
-亲密通道路由输入（R2b+ 乙分轨——可选独立模型端点，默认关闭）：
+亲密通道路由输入（独立亲密通道——可选独立模型端点，默认关闭）：
 
     - 本服务**只声明路由输入**：把本轮关系摘要的 ``intimacy_level`` 原样
       传给网关的 ``chat_by_role`` / ``stream_by_role``（``intimacy_level``
@@ -203,7 +203,7 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
       等级 0——两种情况都低于缺省阈值，自然回退默认通道；亲密通道调用
       失败按网关既有错误语义上抛，本服务不做静默换道。
 
-相关技能注入（R2c——构造注入 ``skills_reader`` 后）：
+相关技能注入（构造注入 ``skills_reader`` 后）：
 
     - compose 链在关系进展块之后、输出格式协议之前注入【相关技能】块
       （``render_skills_block``——仅当命中**本轮用户文本**时注入；命中
@@ -215,7 +215,7 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
       跳过；命中后的使用计数写入由服务层 fire-and-forget 调度（回复
       链路不等待、不因计数失败而失败）。
 
-核心记忆注入与自编辑工具闸（R2c——构造注入 ``core_memory_reader`` 后）：
+核心记忆注入与自编辑工具闸（构造注入 ``core_memory_reader`` 后）：
 
     - compose 链在人物事实块之后、相关技能块之前注入【自我认知】块
       （``render_core_memory_block``——四块自编辑自我模型的非空块按固定
@@ -230,7 +230,7 @@ purpose="chat"、persona_id 显式参数直传（网关用量面直接携带；�
       工具执行期的会话主键经 ``core_memory_session_id_var`` 绑定（修订
       行的 ``session_id`` 归属），循环结束即复位。
 
-意图快径前钩（R2a-6——构造注入 ``intent_shortcut`` 后，``reply`` 前端
+意图快径前钩（构造注入 ``intent_shortcut`` 后，``reply`` 前端
 先试快径；缺省 ``intent_shortcut=None`` 保持既有零快径形态）：
 
     - 匹配链：``reply`` 前端调用 ``intent_shortcut.try_shortcut``（
@@ -311,6 +311,7 @@ from packages.harness.chat.output_protocol import (
     parse_assistant_output,
 )
 from packages.harness.chat.prompts import (
+    TOOL_LOOP_FINAL_INSTRUCTION_TEMPLATE,
     UNTRUSTED_LABEL_DEFAULT,
     UNTRUSTED_LABEL_HISTORY,
     UNTRUSTED_LABEL_OWNER,
@@ -408,14 +409,6 @@ HISTORY_WRAP_MAX_TURNS: Final[int] = 10
 #: chat 工具循环步数上限（锁定决策：5——chat 单轮回复的工具面收敛快于
 #: duty 巡检的 8 步；超限触发收尾指令 + 无工具面最终调用）。
 CHAT_TOOL_STEP_CAP: Final[int] = 5
-
-#: 收尾指令（步数上限触发——system 追加块，本轮不再携带工具面）。
-#: 就地定义说明：chat/prompts.py 不在本变更允许清单内（prompt Unit
-#: 文件迁移属后续独立变更）；文本经测试锁定。
-_TOOL_LOOP_FINAL_INSTRUCTION: Final[str] = (
-    "【收尾指令】\n工具调用步数已用尽。请立即基于已有信息直接回复用户，不再调用任何工具。"
-)
-
 
 # ---------------------------------------------------------------------------
 # 工具结果反馈渲染（chat 本地——duty render_tool_result 的 chat 侧对应物）
@@ -1145,7 +1138,7 @@ class ChatService:
     ) -> str:
         """单轮回复（非流式）：追加用户回合 → 组装 → 网关 chat_by_role。
 
-        意图快径分派（R2a-6——``intent_shortcut`` 绑定时）：``reply``
+        意图快径分派（``intent_shortcut`` 绑定时）：``reply``
         前端先试快径（``try_shortcut``）；命中（``handled=True``）时
         追加用户回合 → 拟真延迟（``realism_delay``——800-1500ms 随机）
         → 罐头文本追加为 assistant 回合（持久化语义与正常回复**完全
@@ -1607,7 +1600,7 @@ class ChatService:
                     tool_tail.append(tool_round)
             # 步数上限触发：收尾指令 + 无工具面最终调用（final-report forcing）。
             loop_messages.append(
-                ChatMessageModel(role=ChatMessageRole.SYSTEM, content=_TOOL_LOOP_FINAL_INSTRUCTION)
+                ChatMessageModel(role=ChatMessageRole.SYSTEM, content=TOOL_LOOP_FINAL_INSTRUCTION_TEMPLATE)
             )
             final_response = await self._gateway.chat_by_role(
                 ModelRole.CHAT,

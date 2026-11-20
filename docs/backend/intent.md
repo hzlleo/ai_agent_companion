@@ -72,14 +72,14 @@ ChannelRouter.handle_inbound（既有链路不变）
 
 ## 拟真延迟（决策文档化）
 
-快径回复用**短固定区间 800-1500ms** 随机延迟（`INTENT_SHORTCUT_DELAY_MIN_MS` / `MAX_MS` 服务常量），**不走**节律门完整延迟（上限 45s——罐头回复是「顺手秒回」语义，长延迟反而失真）；采样经与 rhythm 域共享的随机源（单一随机源决策）；睡眠门控不适用于快径（R2d 心流层统一承载回复调度）。测试经注入随机源 + 假休眠面断言区间（零真实等待）。
+快径回复用**短固定区间 800-1500ms** 随机延迟（`INTENT_SHORTCUT_DELAY_MIN_MS` / `MAX_MS` 服务常量），**不走**节律门完整延迟（上限 45s——罐头回复是「顺手秒回」语义，长延迟反而失真）；采样经与 rhythm 域共享的随机源（单一随机源决策）；睡眠门控不适用于快径（心流层统一承载回复调度）。测试经注入随机源 + 假休眠面断言区间（零真实等待）。
 
 ## 装配（app `_startup_channels`——通道专属，duty 零变化）
 
 | 形态 | 装配结果 |
 |---|---|
 | 任一通道启用 + `INTENT_ENABLED=true`（默认） | `IntentShortcutService(rng=共享随机源, effective=全局面节律)` 上挂 `app.state.intent_shortcut`；通道 ChatService 工厂三分支（搜索工具 / 浏览器工具 / 零工具）均注入快径面 |
-| `INTENT_ENABLED=false` | 槽位 None——工厂零注入，通道回复全量走 LLM（R2a 前行为） |
+| `INTENT_ENABLED=false` | 槽位 None——工厂零注入，通道回复全量走 LLM（快径接入前行为） |
 | 通道全关 | 槽位 None（快径的唯一消费面是通道 ChatService 工厂） |
 
 **duty 不注入快径面**（文档化决策）：duty 是无头计划任务（章程驱动巡检 / 报告生成），非对话性消费——「现在几点」这类用户高频问法只出现在对话里；duty 工具面 / 章程零变化。`effective` 值面恒注入（作息描述与 `RHYTHM_ENABLED` 门控正交——问候选带恒可用节律值）。

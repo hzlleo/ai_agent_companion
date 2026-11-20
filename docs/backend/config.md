@@ -45,7 +45,7 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 |---|---|---|
 | SERVER — Web 服务配置 | `SERVER_` | `SERVER_HOST`(127.0.0.1) · `SERVER_PORT`(8000) · `SERVER_WORKERS`(1) · `SERVER_ADMIN_TOKEN_ENV`(空) |
 | DATABASE — 数据库连接配置（MySQL 8 权威 / SQLite 测试） | `DATABASE_` | `DATABASE_TYPE`(mysql) · `DATABASE_HOST`(127.0.0.1) · `DATABASE_PORT`(3306) · `DATABASE_NAME`(ai_agent_companion) · `DATABASE_USER`(root) · `DATABASE_PASSWORD`(空) · `DATABASE_POOL_SIZE`(10) · `DATABASE_MAX_OVERFLOW`(20) · `DATABASE_POOL_RECYCLE`(3600) · `DATABASE_POOL_PRE_PING`(true) |
-| LOG — 日志配置（三 sink：console + 文本 + JSON） | `LOG_` | `LOG_LEVEL`(INFO) · `LOG_FILE`(logs/app.log) · `LOG_JSON_FILE`(logs/app.json.log) · `LOG_ROTATION`(1 day) · `LOG_RETENTION`(30 days) · `LOG_MODULE_LEVELS`(空) · `LOG_COLORIZE_CONSOLE`(true) · `LOG_DIAGNOSE_EXCEPTIONS`(false) |
+| LOG — 日志配置（三 sink：console + 文本 + JSON） | `LOG_` | `LOG_LEVEL`(INFO) · `LOG_FILE`(logs/app.log) · `LOG_JSON_FILE`(logs/app.json.log) · `LOG_ROTATION`(1 day) · `LOG_RETENTION`(30 days) · `LOG_MODULE_LEVELS`(空) · `LOG_TEXT_FORMAT`(空) · `LOG_COLORIZE_CONSOLE`(true) · `LOG_DIAGNOSE_EXCEPTIONS`(false) |
 | POOLS — 共享池配置（线程池 / HTTP 池 / LLM 信号量 / 熔断） | `POOLS_` | `POOLS_THREAD_POOL_SIZE`(8) · `POOLS_HTTP_MAX_CONNECTIONS`(100) · `POOLS_HTTP_MAX_KEEPALIVE_CONNECTIONS`(20) · `POOLS_HTTP_CONNECT_TIMEOUT_SECONDS`(5.0) · `POOLS_HTTP_TIMEOUT_SECONDS`(30.0) · `POOLS_LLM_SEMAPHORE_LIMIT`(5) · `POOLS_LLM_REQUEST_TIMEOUT_SECONDS`(120) · `POOLS_CB_FAIL_MAX`(5) · `POOLS_CB_RESET_TIMEOUT_SECONDS`(60) |
 | LLM — 默认端点 env 面（模型注册表经 config.yaml 配置） | `LLM_` | `LLM_BASE_URL`(空) · `LLM_API_KEY`(空) · `LLM_MODEL`(空) · `LLM_TOP_LOGPROBS`(20) · `LLM_PROMPT_LOGPROBS`(20) |
 | LLM.INTIMATE — 亲密回复独立通道（默认关闭；base_url / api_key / model 三项齐全且开关开启才生效） | `LLM_INTIMATE_` | `LLM_INTIMATE_ENABLED`(false) · `LLM_INTIMATE_BASE_URL`(空) · `LLM_INTIMATE_API_KEY`(空) · `LLM_INTIMATE_MODEL`(空) · `LLM_INTIMATE_TEMPERATURE`(空) · `LLM_INTIMATE_MIN_INTIMACY_LEVEL`(2) |
@@ -78,7 +78,7 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 分节与 `.env.example` 逐分节对齐（生成器 `scripts/generate_examples_env.py` 的 `_ENV_SECTIONS` 登记表为序——键面以 `.env.example` 为真源且每个键带字段说明注释；本表为分节索引，字段级语义见 example 注释与各域文档；敏感字段在 example 中恒留空）。各分节语义详见所属域文档（channels / duty / tools-sandbox / voice / realtime-voice / multimodal）；声纹与表情包分节见 [voice.md](voice.md#声纹档案pipl-合规面) 与 [multimodal.md](multimodal.md#表情包库与-vlm-标注sticker_-env-面默认关闭)。
 
 - `DatabaseConfig.async_sqlalchemy_url`：`mysql` → `mysql+aiomysql://user:pwd@host:port/db?charset=utf8mb4`（用户名/密码 URL 编码）；`sqlite` → `sqlite+aiosqlite:///{name}`（`name=":memory:"` 内存库）。
-- `LogConfig.to_core_config()`：字段一一映射为 `core.LoggingConfig`（`file→log_file` / `json_file→log_json_file`）；app lifespan 经 `setup_logging_from_settings(settings)` 接线 `core.setup_logging`。
+- `LogConfig.to_core_config()`：字段一一映射为 `core.LoggingConfig`（`file→log_file` / `json_file→log_json_file`；`text_format` 空串 → `None`，走 core 默认统一模板）；app lifespan 经 `setup_logging_from_settings(settings)` 接线 `core.setup_logging`。
 - 嵌套覆盖：`Settings` 开启 `env_nested_delimiter="__"`（如 `DATABASE__POOL_SIZE`），与各分节自身 `env_prefix` 并行生效。
 - 测试隔离：`build_isolated_settings(database=..., pools=..., seekdb=...)` 显式值构造（子配置实例 pass-through，不重读 env）。
 
@@ -212,7 +212,7 @@ config.yaml 结构化配置节**写路径的共享抽象基建**：从 LLM 注�
 
 新配置节管理面 = 定义节 Model Class（列表节 + 绑定式语义）→ 子类化 `ConfigSectionAdmin[节类型]` 实现七个缝 → 条目 CRUD 突变方法走读改写形态（锁内校验 + 构造）。机械（锁 / 备份 / 轮换 / 重建编排 / 回滚）零复制——与 LLM 注册表行为同源。
 
-### 搜索 provider 注册表子类（search_registry.py — R2a-4 已接入）
+### 搜索 provider 注册表子类（search_registry.py — 已接入）
 
 基座的第二个消费者，缝实现：
 
@@ -270,9 +270,10 @@ search:
     cooldown_seconds: 60
 ```
 
-`search` 段由 `search_registry.load_search_config` 自行解析（loader 仅解析
-`llm` 段——其「未知顶层键」告警对本段无害，键值原样保留）；条目字段表 /
-wire 契约 / 管理面详见 [search.md](search.md)。
+`search` 段由 `search_registry.load_search_config` 自行解析（loader 只解析
+`llm` 段，`search` 属其白名单内的已知顶层段——不会触发「未知顶层键」告警；
+键值原样保留，供搜索域加载器与注册表管理面消费）；条目字段表 / wire 契约 /
+管理面详见 [search.md](search.md)。
 
 ## llm_wire — 网关下发契约（llm 网关消费）
 
@@ -326,7 +327,7 @@ pixi run setup -- --non-interactive  # 使用模板默认值（CI/自动化）
 cd backend && pixi run gen-examples
 ```
 
-从 Pydantic 配置类内省生成 `backend/.env.example` / `config.example.yaml` / `extensions_config.example.json`（幂等 byte-stable——由 `test_config_examples_generation.py` 逐字节校验锁定）。示例数据单一真源：`LlmConfig.default_models()` / `ExtensionsConfig.default_tools()`。修改配置类后重新生成再提交。
+从 Pydantic 配置类内省生成 `backend/.env.example` / `config.example.yaml` / `extensions_config.example.json`（幂等 byte-stable——由 `test_config_examples_generation.py` 逐字节校验锁定）。示例数据单一真源：`LlmConfig.default_models()` / `ExtensionsConfig.default_tools()`，`search` 段 provider 示例由 `SearchProviderEntry` / `WebSearchSettings` 的 kind 缺省与代码默认物化。修改配置类后重新生成再提交。
 
 ## 测试与门禁
 

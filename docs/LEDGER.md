@@ -651,6 +651,79 @@ scripts / docs / docker / models；排 `__pycache__` / `.pixi` / `node_modules` 
 
 **剩余**：无（本切片范围）。
 
+### 已完成切片：全约束审计 C 修复（P1×4 + P2×3，本分支工作区）
+
+**已完成**（逐条闭环，分支 `feat/audit-a-fixes`）：
+
+1. **P1 loader 误报 search 段（`config/loader.py`）**：未知顶层键判定改为模块常量白名单
+   `_CONFIG_YAML_SECTIONS = {"llm", "search"}`（`search` 段由 `search_registry.load_search_config`
+   独立加载——同文件双段共存，不属于未知键），告警文案改为「config.yaml 含未识别的顶层键
+   （已忽略，仅解析 llm / search 段）」。测试：`test_config_loader.py` 新增「含合法 search 段 →
+   加载 llm 且无该告警」（loguru handler 捕获 WARNING），既有第三键用例补文案断言；search 段
+   本身仍由 `load_search_config` 正常消费（示例模板闭环用例覆盖）。
+2. **P1 config.example.yaml 缺 search 节（`scripts/generate_examples_yaml.py`）**：新增
+   `_search_section_lines()`——provider 示例经 `SearchProviderEntry(name, kind).model_dump()`
+   物化（bocha 主 / zhipu 兜底；`api_key_env` 指向 `SEARCH_BOCHA_API_KEY` /
+   `SEARCH_ZHIPU_API_KEY`；`base_url` 按「空=按 kind 缺省」省略以免与缺省表重复），
+   `web_search` 子块取 `WebSearchSettings.model_fields` 的代码默认（`enabled=false`），字段注释
+   由 `generate_yaml_field_comments` 从 `SearchConfig` / `SearchProviderEntry` /
+   `WebSearchSettings` 内省生成；文件头补「search 搜索 provider 注册表」与生成源类清单。
+   `backend/config.example.yaml` 重生成（88 → 132 行）。测试
+   `test_config_examples_generation.py` 新增：search 段 kind 序 / 密钥变量名 / `enabled=false` /
+   条目字段齐备，且可经 `load_search_config` 完整加载（模板 ↔ 搜索域加载器闭环）。
+3. **P1 工具循环提示词内联（`chat/service.py` → `chat/prompts.py`）**：
+   `TOOL_LOOP_FINAL_INSTRUCTION_TEMPLATE` 迁入 prompt Unit 文件（无占位符），新增
+   `TOOL_LOOP_FINAL_INSTRUCTION_TEMPLATE_VERSION=1.0.0`，`PROMPTS_VERSION` 1.8.0 → 1.9.0；
+   service 改为 import，删除「chat/prompts.py 不在本变更允许清单内」的悬空理由注释。文本
+   sha256 `16076ed1…cbe94f`（与迁移前内联串字节一致）已入 `test_chat_prompts.py` 的
+   `_BYTE_LOCKS` 与版本常量清单；`test_chat_tool_loop.py` 步数上限用例改为与模板整串相等
+   断言（发送文本字节锁定，非子串）。
+4. **P1 拍板 / 切片编号元数据清洗（生产源码 + docs）**：逐处读上下文改写，去掉 `R2*` /
+   `D5=A` / `P6=B` / `P10=B` / `P1` / `chunk N` 编号而保留语义事实——`config/models.py`、
+   `config/search_registry.py`、`search/*`、`usage/models.py`、`chat/{service,prompts,world_book}.py`、
+   `persona/{chara_card,trait_library,directives_models}.py`、`reminders/models.py`、
+   `app/api/{reminders,directives}.py`、`app/main.py`、`app/middleware/admin_auth.py`、
+   `rhythm/*`、`intent/*`、`emotion/*`、`channels/*`。docs 侧 10 份（`backend/README`、`chat`、
+   `persona`、`search`、`config`、`usage`、`memory`、`emotion`、`reminders`、`channels` 及
+   `docs/README.md` 门禁行）同步；标题改写后锚点引用一并修正（`#长期指令usermd-式常备指令` /
+   `#消息变体swipes` / `#输出协议心声--情绪`）。编号保留面：`docs/LEDGER.md`（决策档案本体）与
+   `docs/README.md` 路线图 P0-P4（表格自身行标识，非跨文档引用坐标）。
+5. **P2 wizard docstring（`config/wizard_generators.py`）**：步骤前缀枚举改为「覆盖
+   `_ENV_SECTIONS` 全部前缀（当前 30 个）」，与既有 `_STEP_DEFINITIONS` × `.env.example` 键面
+   闭环测试同轴，消除枚举漂移面。
+6. **P2 日志格式可配（`config/models.py` LogConfig）**：新增 `text_format: str = ""`（空串 =
+   core 默认统一模板），`to_core_config` 映射空串 → `None`；重生成 `.env.example`
+   （`LOG_TEXT_FORMAT=` 出现，689 行）与 `docs/backend/config.md` env 分节表（`--sync-docs`）；
+   `backend/src/conftest.py` 同步硬覆盖（conftest-env 门禁 196/196）。测试：空串 → None、
+   非空透传两例；既有日志接线用例零变更全绿（默认行为零变化）。
+7. **P2 测试 docstring 批次元数据**：16 个测试文件（含 `src/tests/conftest.py`、
+   `src/tests/integration/test_core_wiring.py`）去掉 `P#` / `R2*` / `chunk N`，保留覆盖语义；
+   门禁选择「仅生产源码检查」，测试清理一次性完成。
+8. **新增门禁（`scripts/check_chinese_comments.py` 规则 4）**：注释 token + 各级 docstring 扫描
+   `D\d+\s*[=＝]|P\d+\b|R2[a-z]?-\d+|chunk \d`（前置字符守卫排除 `MP3` / `UUID4` /
+   `chunk_index` 类技术词；字符串字面量不在检查面），命中即违规 exit 1；本脚本 docstring 以编号
+   作示例，登记为唯一检查面豁免。`docs/README.md` 门禁表与根 `scripts` 的形态说明同步。
+
+**验证**（主 Agent 实跑，命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2875 passed**；基线 2871 + 新增 4 例：loader 无告警
+  1 / 示例 search 闭环 1 / text_format 2）。
+- `cd backend && pixi run coverage-gates` → **0**（2875 passed；24 组 ≥ 80%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**
+  （`Success: no issues found in 192 source files`）。
+- 根 `pixi run gates` → **0**（注释门 221 文件 / 0 违规 / 33 hints / 92 skips；同步测试棘轮；
+  noqa 冻结；conftest env 196/196 硬覆盖、豁免 0；沙盒漂移 38 项；红探针 191 源文件；文档真相；
+  断言棘轮 8283 asserts / 602 raises 无下降；导出面 102 引用·62 登记·40 豁免 + env 键面 689 行；
+  prose-pin 报告完成）。
+- `cd backend && pixi run gen-examples` → **0**，三件套 sha256 运行前后完全一致（幂等）。
+- `cd backend && pixi run export-dto-schemas` → **0**（仅 DTO description 文本随源码 docstring 清洗
+  更新，结构零变化；`test_dto_schema_fixture.py` 2 例绿）。
+- **门禁红 / 绿实证**：向 `search/__init__.py` 追加 `# R2a-9 临时探针（D5=A）chunk 2 / MP3 不算`
+  → `cd backend && pixi run comment-gates` → **1**（输出命中 `R2a-9` / `D5=` / `chunk 2` 三条，
+  `MP3` 不命中）；还原文件后 → **0**（violations=0）。
+
+**剩余**：无（本切片范围）。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。

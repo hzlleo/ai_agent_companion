@@ -8,7 +8,7 @@
   不触碰任何全局 settings / .env / config.yaml；
 - 共享资源经 fixture 隔离：缓存单例 / 线程池单例 / config 运行时状态用后
   即复位，测试间零泄漏；
-- 共享 DB fixture（P0-3 落地）：SQLite in-memory + StaticPool 会话级引擎
+- 共享 DB fixture（会话级）：SQLite in-memory + StaticPool 会话级引擎
   共享 + 每测试自动清表——多测试依赖的数据库资源不私建池（见
   docs/test-strategy/README.md 铁律 3）。aiosqlite 的 future 按调用在当前
   事件循环上创建并由工作线程回调（无跨循环持久绑定），会话级引擎在
@@ -50,7 +50,7 @@ from tests.db_models import PersonaNoteRow, PlainCounterRow  # noqa: F401  模�
 
 
 # ---------------------------------------------------------------------------
-# core 测试资源（P0-2 既有）
+# core 测试资源
 # ---------------------------------------------------------------------------
 
 
@@ -109,7 +109,7 @@ async def _reset_shared_thread_pool() -> AsyncIterator[None]:
 
 
 # ---------------------------------------------------------------------------
-# config 运行时状态复位（P0-3：loader / 解析器 / 回退链跨测试零残留）
+# config 运行时状态复位（loader / 解析器 / 回退链跨测试零残留）
 # ---------------------------------------------------------------------------
 
 
@@ -145,7 +145,7 @@ async def _reset_background_task_manager() -> AsyncIterator[None]:
 
 
 # ---------------------------------------------------------------------------
-# 共享数据库 fixture（P0-3：SQLite StaticPool 会话级引擎 + 每测试自动清表）
+# 共享数据库 fixture（SQLite StaticPool 会话级引擎 + 每测试自动清表）
 # ---------------------------------------------------------------------------
 
 

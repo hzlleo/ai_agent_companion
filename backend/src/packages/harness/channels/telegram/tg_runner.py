@@ -18,7 +18,7 @@
            退出（在途长轮询最多再等一个窗口；app 停机路径 bounded wait
            超时后 cancel 兜底）。
 
-入站 v2 映射（协议 v2——wire 就绪，消费者 R2d/R2e 到场）：
+入站 v2 映射（协议 v2——wire 就绪，消费方随贴纸 / 语音与前端工作到场）：
 
     - 文本与媒体互斥（Bot API 语义）：媒体消息以 **caption 兜底为文本**
       （用户随媒体说的话）；纯媒体无 caption 归一为 ``text=""`` 入站
@@ -27,7 +27,7 @@
     - 媒体字段（photo / voice / audio / document / sticker）提取为
       ``ChannelMessageAttachment``——**下载免取**（download-free v2）：
       附件以 ``path="tg-file://{file_id}"`` 伪方案承载平台文件引用
-      （真实媒体拉取需 getFile + 文件 URL 二段流程——deferred 到 R2d
+      （真实媒体拉取需 getFile + 文件 URL 二段流程——deferred 到后续
       贴纸 / 语音工作）；caption 挂首附件（供未来消费者渲染附件 +
       说明）；photo 取最大尺寸（宽 × 高）；voice / audio / document
       的 MIME 进 ``media_type``（photo / sticker 无 MIME 线索 → None）；
@@ -96,7 +96,7 @@ __all__ = [
 TG_OFFSET_STATE_FILENAME: str = "telegram_offset.json"
 
 #: 入站附件平台文件引用伪方案前缀（``tg-file://{file_id}``——下载免取
-#: v2 契约：真实媒体拉取 deferred 到 R2d；出站方向仅接受同形态作为
+#: v2 契约：真实媒体拉取 deferred 到后续媒体工作；出站方向仅接受同形态作为
 #: file_id 重发凭据）。
 TG_FILE_PSEUDO_SCHEME: str = "tg-file://"
 

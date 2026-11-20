@@ -82,6 +82,8 @@ os.environ["LOG_JSON_FILE"] = "logs/test-app.json.log"
 os.environ["LOG_ROTATION"] = "1 day"
 os.environ["LOG_RETENTION"] = "30 days"
 os.environ["LOG_MODULE_LEVELS"] = ""
+# 自定义文本格式模板（空串 = core 默认统一模板——测试不覆写格式）
+os.environ["LOG_TEXT_FORMAT"] = ""
 os.environ["LOG_COLORIZE_CONSOLE"] = "false"
 # 异常 diagnose 开关（LogConfig.diagnose_exceptions env 面）——测试默认
 # 关闭（与生产默认一致：traceback 不展示帧局部变量）

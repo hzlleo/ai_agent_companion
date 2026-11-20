@@ -12,13 +12,13 @@
 | `injection_models.py` | 注入防御 Model Classes（Unit 文件）：信号种类 / 命中原因 / 检测结果 / 规则表 / 包裹结果 / 反击风格 / `INJECTION_` 配置 | `InjectionKind` / `InjectionSignalModel` / `INJECTION_RULES` / `WrappedContentModel` / `CounterStyle` / `InjectionGuardSettings` |
 | `injection_guard.py` | 注入防御纯函数（Unit 文件）：不可信内容 nonce 定界包裹 / 规则表加权检测 / 提示块构建 | `wrap_untrusted_content` / `detect_injection` / `build_injection_hint` |
 | `injection_counter_texts.py` | 角色内反击台词表（Unit 文件——毒舌 / 温柔 / 傲娇；确定性选句） | `COUNTER_TEXTS` / `pick_counter_text` |
-| `output_protocol.py` | 输出协议解析（R2b——纯函数 Unit）：前导 ``<心声>`` / ``<情绪>`` 标签 → 可见正文 / 心声 / 情绪增量；流式起始前缀 best-effort 剥离器 | `parse_assistant_output` / `ParsedAssistantOutputModel` / `StreamTagStripper` / `strip_leading_protocol_prefix` |
+| `output_protocol.py` | 输出协议解析（纯函数 Unit）：前导 ``<心声>`` / ``<情绪>`` 标签 → 可见正文 / 心声 / 情绪增量；流式起始前缀 best-effort 剥离器 | `parse_assistant_output` / `ParsedAssistantOutputModel` / `StreamTagStripper` / `strip_leading_protocol_prefix` |
 | `chat_models.py` | 会话回合 / 会话状态 / 组装结果 Model Classes（Unit 文件；含世界书回合状态——冷却追踪） | `ChatTurnModel` / `ChatSessionStateModel` / `MessageCompositionResult` |
 | `flow_models.py` | 心流门控 Model Classes（Unit 文件）：`FLOW_` 配置 / 裁决与理由枚举 / 节律快照 / 会话节拍状态 / 判定输入输出 / 合并结果 | `FlowGateSettings` / `FlowVerdict` / `FlowReason` / `FlowChatStateModel` / `FlowGateInputModel` / `FlowGateDecisionModel` / `MergedBurstModel` |
 | `flow_gate.py` | 心流门控纯函数（判定矩阵 / 入站记录 / 连发合并 / 静默窗口与状态迁移——时间全部注入） | `evaluate_flow_gate` / `record_inbound` / `merge_buffered_texts` / `remaining_quiet_ms` / `mark_pending` / `clear_pending` / `clear_backlog` / `rhythm_state_from_gate` |
 | `persona_rotation_models.py` | 群聊多人格 Model Classes（Unit 文件）：`GROUP_PERSONA_` 配置 / 选择理由枚举 / 应答候选 / 应答记忆 / 选择结论 | `GroupPersonaSettings` / `GroupSelectionReason` / `GroupResponderCandidateModel` / `GroupResponderStateModel` / `GroupPersonaSelectionModel` |
 | `persona_rotation.py` | 群聊多人格选择纯函数（轮转 / 冷却 / 重复抑制 / 全冷却兜底——确定性） | `select_group_responders` |
-| `world_book.py` | 世界书高级选择算法链（R2b——纯函数 Unit 文件；rng / 回合状态可注入）+ token 近似估算 | `select_world_book_entries` / `SelectedEntryModel` / `WorldBookTurnStateModel` / `WorldBookSelectionResult` / `RECURSION_HOP_CAP` / `estimate_text_tokens` |
+| `world_book.py` | 世界书高级选择算法链（纯函数 Unit 文件；rng / 回合状态可注入）+ token 近似估算 | `select_world_book_entries` / `SelectedEntryModel` / `WorldBookTurnStateModel` / `WorldBookSelectionResult` / `RECURSION_HOP_CAP` / `estimate_text_tokens` |
 | `service.py` | 消息组装（消费选择结果）+ `ChatService` 会话循环（回合状态回存 / 可选工具循环与发送者来源分级工具闸） | `compose_messages` / `ChatService` |
 | `cli.py` | 控制台 REPL（启动 / 停机序列 + 命令面 + 流式直写） | `run_chat_cli` / `main` |
 
@@ -43,35 +43,35 @@
     ⑤ render_persona_contract(card.name)               人格输出契约五条
                                                         （见下方「人格输出
                                                         契约与合规守卫」）
-    ⑥ 心情状态块（emotion_summary 非空时）              R2b 轻情绪——M 态
+    ⑥ 心情状态块（emotion_summary 非空时）              轻情绪引擎——M 态
                                                         非中性摘要（见
                                                         [emotion.md](emotion.md)）
-    ⑦ 长期指令块（directives 非空时）                   R2b D7-14 USER.md
+    ⑦ 长期指令块（directives 非空时）                  USER.md
                                                         式常备指令（见
                                                         [persona.md](persona.md)
                                                         长期指令一节）
-    ⑧ 人物事实块（facts 非空时）                        R2c「关于对方」——
+    ⑧ 人物事实块（facts 非空时）                       「关于对方」——
                                                         现行高置信事实（见
                                                         [persona.md](persona.md)
                                                         人物画像一节）
-    ⑨ 核心记忆块（core_memory 非空时）                 R2c「自我认知」——
+    ⑨ 核心记忆块（core_memory 非空时）                 「自我认知」——
                                                         四块自编辑自我模型
                                                         的非空块（见
                                                         [persona.md](persona.md)
                                                         核心记忆一节）
-    ⑩ 关系进展块（relationship 非空时）                R2b+「关系进展」——
+    ⑩ 关系进展块（relationship 非空时）                「关系进展」——
                                                         关系类事实派生的阶段 /
                                                         最近变化 / 边界约定
                                                         （恒注入——空事实渲染
                                                         「初识」；见
                                                         [persona.md](persona.md)
                                                         关系进展摘要一节）
-    ⑪ 相关技能块（skills 命中时）                       R2c「相关技能」——
+    ⑪ 相关技能块（skills 命中时）                      「相关技能」——
                                                         仅命中本轮用户文本的
                                                         技能（见
                                                         [persona.md](persona.md)
                                                         程序性技能一节）
-    ⑫ render_output_protocol()                          R2b 输出格式协议
+    ⑫ render_output_protocol()                         输出格式协议
                                                         （心声 / 情绪标签指令）
     ⑬ 世界书 after_char 条目块                          检索增强（行为补充）
 [历史回合]
@@ -183,17 +183,17 @@ wrap_current_message=False, current_message_label="", injection_hint=None)`
 来源分级时缺省标签「消息」）；包裹不改变 `state.turns` 原文与落库内容。包裹格式、检测矩阵、来源标签与攻击面缺口
 见 [defense.md](defense.md)。
 
-### 意图快径（含 DIRECTIVE 常备指令捕获——R2b D7-14）
+### 意图快径（含 DIRECTIVE 常备指令捕获）
 
 通道路径的 `ChatService.reply` 前端可注入意图快径面（`INTENT_ENABLED` 默认开启）：
 高频固定问法（时间 / 问候 / 身份 / 帮助）直接命中罐头回复并**完全跳过网关**。
-R2b 追加的 `DIRECTIVE` 类型捕获「记住 / 记得 / 以后都 / 以后 / 别再 / 不要」开头
+意图快径的 `DIRECTIVE` 类型捕获「记住 / 记得 / 以后都 / 以后 / 别再 / 不要」开头
 的消息：matcher 剥离前缀与句末标点得到正文，经装配注入的 `DirectiveSinkFace`
 落库为长期指令（[persona.md](persona.md) 长期指令一节），**落库成功才**回复
 「已记住：正文」；落库失败 / 未接线时退化为普通附和（不承诺记住）。副作用恒不
 阻断回复链路（错误仅日志）；快径回合照常落用户 + 助手回合（记忆 / 梦境可见）。
 
-### 世界书筛选语义（R2b 高级触发——`world_book.select_world_book_entries` 纯函数）
+### 世界书筛选语义（高级触发——`world_book.select_world_book_entries` 纯函数）
 
 选择算法链（顺序锁定，逐候选按链序过门；字段规格见 persona.md 世界书高级触发语义一节）：
 
@@ -247,7 +247,7 @@ clear_history(state) / history(state)   /clear 与 /history 命令面
 `None`，读取失败降级为空摘要（stranger / 0）——两者都回退默认通道；亲密通道
 调用失败沿用既有网关错误语义上抛，本域不做静默换道。
 
-**工具循环（可选工具面——R2a-4）与自编辑写入闸（R2c）**：构造注入
+**工具循环（可选工具面）与自编辑写入闸**：构造注入
 `tools` + `tool_executor` 后，`reply` 走有界工具循环（机械镜像 duty 域：
 gateway `chat_by_role(..., tools=specs)` → assistant 工具调用轮回放 →
 `tool_call_id` 配对执行 → tool 反馈轮；步数上限
@@ -278,7 +278,7 @@ CLI 不注入工具面，行为零变化。
 `stream_reply` 不重试。契约块、检测矩阵、重试语义与配置表见下节「人格输出
 契约与合规守卫」。
 
-**输出协议（R2b——`reply` 面）**：模型原始输出先经
+**输出协议（`reply` 面）**：模型原始输出先经
 `output_protocol.parse_assistant_output` 解析——返回 / 落回合 / 进历史 /
 发通道的**只有可见正文**；心声与情绪增量只进回合 `meta`（`ff_chat_messages.meta`，
 9 号迁移）与会话详情 API。协议语法与解析规则见下节「输出协议」；流式边界
@@ -415,7 +415,7 @@ COMPLIANCE_MAX_RETRIES=1
 `env_prefix=COMPLIANCE_`）读取；`.env.example` / Setup Wizard 的示例模板由根
 脚本统一生成。
 
-## 输出协议（`<心声>` / `<情绪>`——R2b）
+## 输出协议（`<心声>` / `<情绪>`）
 
 `prompts.py` 的 `OUTPUT_PROTOCOL_TEMPLATE`（版本常量
 `OUTPUT_PROTOCOL_TEMPLATE_VERSION`）在 compose 中作为格式指令块注入，要求
@@ -613,7 +613,7 @@ JSON 结构不变；读侧经同一 Model 校验。情绪状态推进 / 衰减 /
 
 表情包管理面（上传 / 标签 / VLM 标注 / 删除）见 [multimodal.md](multimodal.md#表情包库与-vlm-标注sticker_-env-面默认关闭)。
 
-## 消息变体（swipes——R2b D7-5）
+## 消息变体（swipes）
 
 单回合多候选重生成 + 选定提升（实现：`harness/chat/swipe.py` 的 `SwipeService`，
 持久面见 [memory.md](memory.md) 的 `ff_chat_messages` 变体列）。设计边界（锁定）：
@@ -834,8 +834,8 @@ lifespan                                          上述函数对的 asynccontex
 ## 测试与门禁
 
 - `tests/unit/test_chat_prompts.py`——byte-lock（sha256 摘要锁）+ 渲染契约（覆写 / 空段跳过 / 兜底）；
-- `tests/unit/test_chat_world_book.py`——R2b 选择算法链纯函数面：constant 恒注入 / 关键词窗口 / selective 副键 / 递归 2 跳上限与环安全 / 互斥分组确定性（含平局索引裁定）/ 概率门三态（种子 rng 按渲染序消耗）/ 冷却阻塞-解禁 / 功能式状态传递（入参不变更）/ token 预算截止（截断不记冷却）/ 深度槽渲染序 / 缺省字段 = 既有行为（兼容证明）；
-- `tests/unit/test_chat_service.py`——假网关记录组装消息：正典字段 / 世界书全语义（constant / scan_depth / selective / 大小写 / 预算截断 / 位置次序）/ PHI 末位 / 参数直通 / 流式聚合与提前终止 / 会话上限 / 查库路径（共享 SQLite）；R2b 增补：组装回合状态功能式推进 / 种子 rng 概率门 / 冷却会话循环闭环（第 1 轮注入 → 2/3 轮缺席 → 第 4 轮回归）；
+- `tests/unit/test_chat_world_book.py`——选择算法链纯函数面：constant 恒注入 / 关键词窗口 / selective 副键 / 递归 2 跳上限与环安全 / 互斥分组确定性（含平局索引裁定）/ 概率门三态（种子 rng 按渲染序消耗）/ 冷却阻塞-解禁 / 功能式状态传递（入参不变更）/ token 预算截止（截断不记冷却）/ 深度槽渲染序 / 缺省字段 = 既有行为（兼容证明）；
+- `tests/unit/test_chat_service.py`——假网关记录组装消息：正典字段 / 世界书全语义（constant / scan_depth / selective / 大小写 / 预算截断 / 位置次序）/ PHI 末位 / 参数直通 / 流式聚合与提前终止 / 会话上限 / 查库路径（共享 SQLite）；高级触发增补：组装回合状态功能式推进 / 种子 rng 概率门 / 冷却会话循环闭环（第 1 轮注入 → 2/3 轮缺席 → 第 4 轮回归）；
 - `tests/unit/test_output_protocol.py`——协议解析矩阵（心声 / 情绪 / 双标签
   两种次序 / 无标签 / 未闭合 / 未知维度 / 越界夹取 / 重复标签 / 纯标签空正文）
   + 流式前缀剥离（扣留 / 直通 / flush 交还 / 跨块标签）；

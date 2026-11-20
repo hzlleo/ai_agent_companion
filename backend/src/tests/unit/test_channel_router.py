@@ -370,7 +370,7 @@ class TestPerChatSerialization:
 class TestV2PassThrough:
     async def test_inbound_attachments_pass_through_unmodified(self) -> None:
         """v2 附件透传：入站消息经路由器全程不被消耗 / 剥离（回复循环
-        纯文本——附件供未来消费者（R2d/R2e）从 InboundMessageModel 读取；
+        纯文本——附件供未来消费者（贴纸 / 语音、前端事件）从 InboundMessageModel 读取；
         零路由器改动证明面）。合成事件另由「恒跳过」契约覆盖（见下一类）。"""
         service = FakeChatService()
         adapter = FakeAdapter()

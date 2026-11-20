@@ -74,3 +74,38 @@ async def test_config_example_yaml_loads_via_loader(tmp_path: Path) -> None:
     assert llm.multimodal_fallback.local is not None
     assert llm.multimodal_fallback.remote is not None
     assert len(extensions.tools) >= 1
+
+
+async def test_config_example_yaml_carries_search_registry(tmp_path: Path) -> None:
+    """config.example.yaml 的 search 段：字段齐全 + 经搜索域加载器闭环。"""
+    import shutil
+
+    import yaml
+
+    from packages.harness.config.models import SEARCH_PROVIDER_KINDS, SearchConfig
+    from packages.harness.config.search_registry import (
+        load_search_config,
+        reset_search_runtime_state,
+    )
+
+    payload = yaml.safe_load((_BACKEND_DIR / "config.example.yaml").read_text(encoding="utf-8"))
+    search = payload["search"]
+    providers = search["providers"]
+    assert [entry["kind"] for entry in providers] == list(SEARCH_PROVIDER_KINDS)
+    assert {entry["api_key_env"] for entry in providers} == {
+        "SEARCH_BOCHA_API_KEY",
+        "SEARCH_ZHIPU_API_KEY",
+    }
+    assert search["web_search"]["enabled"] is False
+    for entry in providers:
+        assert {"name", "kind", "api_key_env", "model", "max_results", "timeout_seconds"} <= set(
+            entry
+        )
+    assert SearchConfig.model_validate(search).providers[0].name == "bocha-main"
+
+    shutil.copy(_BACKEND_DIR / "config.example.yaml", tmp_path / "config.yaml")
+    try:
+        loaded = load_search_config(config_dir=tmp_path)
+    finally:
+        reset_search_runtime_state()
+    assert [entry.kind for entry in loaded.providers] == list(SEARCH_PROVIDER_KINDS)

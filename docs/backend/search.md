@@ -1,7 +1,7 @@
 # search — 联网搜索域（含管理 API）
 
-R2a-4（owner 决策 D5=A 两 provider + P6=B Zhipu 兜底档）：web search 落地为一等能力——
-Bocha 主 / Zhipu `search_std` 兜底双 provider，经 config.yaml `search` 段注册表管理
+owner 拍板为两 provider 的 failover 形态：web search 落地为一等能力——
+Bocha 主 / Zhipu `search_std` 兜底双 provider（决策记录见 [LEDGER](../LEDGER.md)），经 config.yaml `search` 段注册表管理
 （ConfigSectionAdmin 基座的第二个消费者），`web_search` 工具同时供 duty 工具循环与
 chat 工具循环消费，per-day / per-persona 预算门禁经 usage 域 `purpose=search` 行计数。
 
@@ -60,7 +60,7 @@ search:
       timeout_seconds: 15
     - name: "zhipu-fallback"
       kind: "zhipu"
-      model: "search_std"                    # P6=B 兜底档
+      model: "search_std"                    # 兜底引擎档
       api_key_env: "SEARCH_ZHIPU_API_KEY"
       max_results: 5
   web_search:
@@ -72,8 +72,8 @@ search:
 ```
 
 > loader 只解析 `llm` 段——`search` 段由 `search_registry.load_search_config`
-> 自行解析（app lifespan 在 `load_all_config` 之后调用）；loader 的「未知顶层键」
-> 告警对本段无害（键值原样保留）。
+> 自行解析（app lifespan 在 `load_all_config` 之后调用）；`search` 在 loader 的
+> 已知顶层段白名单内，不产生「未知顶层键」告警（键值原样保留供本域消费）。
 
 ## provider wire 契约（实现口径）
 
@@ -150,7 +150,7 @@ global 档 `data` 恰为 `{"used": ..., "limit": ..., "scope": "global"}`。
 
 | 列 | 值 |
 |---|---|
-| `purpose` | `search`（枚举新成员——R2a-4） |
+| `purpose` | `search`（枚举成员，搜索调用专用） |
 | `model_entry` | provider 条目名（如 `bocha-main`） |
 | `provider` | kind（`bocha` / `zhipu`） |
 | `input/output/total_tokens` | 恒 0/0/0（按次计费——预算按计数，表结构不变） |
@@ -262,7 +262,7 @@ usage-summary 示例：
 
 ## 配置节管理（ConfigSectionAdmin 搜索子类）
 
-`SearchRegistryAdminService` 消费 R2a-3 基座的「读改写节（条目 CRUD）」接入形态：
+`SearchRegistryAdminService` 消费配置节管理基座的「读改写节（条目 CRUD）」接入形态：
 条目级校验（唯一名 409 / 存在性 404 / 唯一 provider 守卫 409）在各突变方法的
 `asyncio.Lock` 锁窗口内先行完成，构造新 `SearchConfig` 后调用继承的
 `_persist_and_rebuild` 尾段（原子持久化 → 热重建 → 失败回滚内存）。缝实现：

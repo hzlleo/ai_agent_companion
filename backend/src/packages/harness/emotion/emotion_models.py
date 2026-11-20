@@ -1,6 +1,6 @@
 """emotion 域 Model Classes——情绪维度枚举 / 情绪状态 / 增量 / 引擎配置与环境开关。
 
-设计定位（R2b D7-7 轻情绪引擎——纯本地、零外部成本）：
+设计定位（轻情绪引擎——纯本地、零外部成本）：
 
     - :class:`EmotionDimension` —— 8 个轻情绪维度（中文展示名随枚举
       注释；模型输出协议 ``<情绪>维度:+增量</情绪>`` 的值域即本枚举）；
@@ -56,8 +56,8 @@ DEFAULT_SUMMARY_THRESHOLD: float = 0.15
 class EmotionDimension(StrEnum):
     """轻情绪维度值域（8 维——协议值域 + M 态字段真源）。
 
-    维度选择以「陪伴场景可感、TTS / 前端可表达」为原则（R2d / R2e 的
-    TTS 风格与前端表情消费面将按本枚举取值）：
+    维度选择以「陪伴场景可感、TTS / 前端可表达」为原则（后续
+    TTS 风格与前端表情消费面按本枚举取值）：
 
     - ``joy`` 愉悦 / ``affection`` 亲昵 / ``shyness`` 羞怯 /
       ``excitement`` 兴奋 / ``calm`` 平静 / ``sadness`` 低落 /
@@ -225,7 +225,7 @@ class EmotionSettings(BaseSettings):
 
     Attributes:
         enabled: 是否启用情绪引擎（False = 不读不写 M 态情绪、不注入
-            心情块——回复链路行为与 R2b 前一致；协议标签仍被解析并
+            心情块——回复链路行为与引擎接入前一致；协议标签仍被解析并
             以 meta 持久化，仅状态推进停用）。
         decay_half_life_ms: 衰减半衰期覆写（默认 6 小时）。
         neutral_baseline: 中性基线覆写（默认 0.5）。

@@ -1,4 +1,4 @@
-"""persona 域语音绑定测试——voice_profile 列全链路 round-trip（P4 chunk 1）。
+"""persona 域语音绑定测试——voice_profile 列全链路 round-trip。
 
 覆盖矩阵：
 

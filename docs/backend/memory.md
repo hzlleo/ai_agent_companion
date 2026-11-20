@@ -74,16 +74,16 @@
 | `access_count` | Integer，默认 0 | 检索命中累计次数（写读强化轴——见「记忆生命周期」；迁移 0012） |
 | `last_accessed_ms` | BIGINT，可空 | 最近检索命中时刻（epoch 毫秒；NULL = 未命中；迁移 0012） |
 
-长期指令（R2b D7-14）不新建表：以 `kind=user_note` + `topic='directive:<slug>'` 行承载
+长期指令不新建表：以 `kind=user_note` + `topic='directive:<slug>'` 行承载
 （supersede / 历史链 / 唯一键全部复用本表；服务层只做命名空间收窄——详见
-[persona.md](persona.md#长期指令r2b-d7-14usermd-式常备指令)）。
+[persona.md](persona.md#长期指令usermd-式常备指令)）。
 
 ### ff_chat_sessions / ff_chat_messages（工作层）
 
 `ff_chat_sessions`：`persona_id`（PersonaMixin）/ `title` / `message_count`（下一消息 seq）/ `last_active_at`（索引）。
 `ff_chat_messages`：`session_id`（FK ff_chat_sessions.id，级联删除，索引）/ `seq`（会话内从 1 递增；迁移 0010 后唯一键为复合键 `uq_ff_chat_messages_seq_variant (session_id, seq, variant_of_id, variant_index)`——变体身份 DB 级兜底；正典行两列 NULL，正典 seq 唯一性由服务层会话行锁计数维持，迁移沿革 0007 → 0010）/ `role`（user/assistant/system）/ `content` / `ts_ms` / `meta`（JSON 可空——回合内部观测元数据：`thought` 心声 / `emotion_deltas` 情绪增量 / `emotion_snapshot` 情绪快照 / 变体行 `variant_index` / 选中注记 `selected_variant_id`，**永不进入可见正文**；迁移 0009，见 [emotion.md](emotion.md)）/ `variant_of_id`（自引用 FK ff_chat_messages.id，ON DELETE CASCADE，索引；NULL = 正典链行；迁移 0010）/ `variant_index`（父回合内变体序号 1..N；NULL = 正典链行）。
 
-消息变体（swipes——单回合多候选，[chat.md](chat.md#消息变体swipesr2b-d7-5)）：变体行
+消息变体（swipes——单回合多候选，[chat.md](chat.md#消息变体swipes)）：变体行
 `seq = 父回合 seq`、`variant_of_id` 指向父 assistant 回合、`variant_index` 续编（既有
 候选不清洗）；不推进会话 `message_count` / `last_active_at`；仅 assistant 正典回合可
 作父回合（服务层强制）；降级 0009 丢弃变体行后重建旧 `(session_id, seq)` 唯一键。

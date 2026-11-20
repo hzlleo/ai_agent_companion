@@ -1,4 +1,4 @@
-# reminders — 持久化提醒（P10=B）
+# reminders — 持久化提醒
 
 `backend/src/packages/harness/reminders/` 承载**跨重启存活的定时提醒**：主人预约一条提醒
 （标题 + 到期时刻），落库到 `ff_reminders`（PersonaMixin 人格作用域），由中央调度器的

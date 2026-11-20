@@ -1,6 +1,6 @@
 """管理面 owner-token 鉴权依赖——admin API 路由的统一准入守卫。
 
-R2 设计审计放行条件（新端点不得扩张无鉴权面）：personas / memories /
+设计审计放行条件（新端点不得扩张无鉴权面）：personas / memories /
 usage / voice / look_at / models 六个管理路由集共享本依赖；豁免面
 （health / channels-qq webhook）与挂载契约见 ``app/main.py`` 装配注释
 及 docs/backend/README.md 认证一节。

@@ -543,19 +543,19 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     runner；抖音 web 启用时装配轮询 runner（消费浏览器 sidecar 底座——底座
     未就绪即跳过该通道，见 ``_startup_douyin_channel``）。全部关闭时
     no-op（零通道对象构造——rhythm / intent 槽位同样 None：二者的
-    R2a 消费面是通道 ChatService 工厂，通道关闭即无消费面）。
+    消费面是通道 ChatService 工厂，通道关闭即无消费面）。
 
-    rhythm / intent 装配（R2a-6，通道专属——文档化决策）：
+    rhythm / intent 装配（通道专属——文档化决策）：
 
     - 单一随机源：``random.Random()`` 实例由 RhythmService 与
       IntentShortcutService **共享**（节律延迟采样与快径拟真延迟同源
       ——可测性与随机面收敛）；
     - ``app.state.rhythm_service``：门面直通或启用随
-      ``RHYTHM_ENABLED``（R2a 回复链路不消费门——R2d 心流 / R2e GUI
-      消费面；作息值面恒解析供 intent 问候选带）；
+      ``RHYTHM_ENABLED``（回复链路不消费门——心流层 / GUI 消费面；
+      作息值面恒解析供 intent 问候选带）；
     - ``app.state.intent_shortcut``：``INTENT_ENABLED``（默认 true——
-      纯本地零成本）关闭时为 None（工厂零注入，行为与 R2a 前一致）；
-      per-persona 节律覆写解析属 R2d（R2a 用全局面）；
+      纯本地零成本）关闭时为 None（工厂零注入，行为与快径接入前一致）；
+      per-persona 节律覆写解析属心流层（本节律层用全局面）；
     - **duty 不注入快径面**：duty 是无头计划任务（章程驱动的巡检 /
       报告生成），非对话性消费——意图快径是会话性能（「现在几点」
       这类用户高频问法只出现在对话里），duty 工具面 / 章程零变化。
@@ -1362,7 +1362,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 def _include_routers(app: FastAPI) -> None:
     """注册全部路由（管理面鉴权单点挂接 + 豁免面显式清单）。
 
-    挂载契约（R2 审计放行条件——新端点不得扩张无鉴权面）：
+    挂载契约（审计放行条件——新端点不得扩张无鉴权面）：
 
         - **受保护路由集**：personas / memories / usage / voice /
           voiceprints / look_at / stickers / models / search / reminders /

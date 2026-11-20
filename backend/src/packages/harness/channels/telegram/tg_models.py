@@ -21,7 +21,7 @@ document / sticker）与 ``caption``——Bot API 语义：**文本与媒体互�
 （一条 message 要么 ``text`` 要么媒体字段 + 可选 ``caption``）；runner
 映射入站时 caption 兜底为文本（见 ``tg_runner``）。媒体对象只声明
 ``file_id`` 与消费到的线索字段（MIME / 宽高 / 文件名——真实媒体拉取
-需 getFile + 文件 URL 二段流程，deferred 到 R2d）。
+需 getFile + 文件 URL 二段流程，deferred 到后续媒体工作）。
 """
 
 from __future__ import annotations
@@ -145,7 +145,7 @@ class TgStickerModel(BaseModel):
     """Bot API ``sticker`` 对象（贴纸消息——子集）。
 
     Attributes:
-        file_id: 平台文件 ID（贴纸重发 / 引用凭据——R2d 贴纸工作消费面）。
+        file_id: 平台文件 ID（贴纸重发 / 引用凭据——贴纸工作消费面）。
     """
 
     model_config = ConfigDict(extra="ignore")

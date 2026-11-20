@@ -2,7 +2,7 @@
 
 全纯函数（零 I/O / 零全局态）：``now_ms`` 由调用方注入（时钟可测），
 ``rng`` 为 :class:`random.Random` 注入（种子化确定性测试）；本模块被
-service 薄门面与未来的 heartflow（R2d）/ GUI（R2e）消费。
+service 薄门面与未来的心流层 / GUI 消费。
 
 时区约定（naive 本地墙钟——scheduler 先例）：本地时刻经
 ``datetime.fromtimestamp``（无 tz 参数）解析——与

@@ -1,7 +1,7 @@
 """搜索 provider 注册表管理——config.yaml ``search`` 段读写 + /api/v1/search 管理面后端。
 
 本模块是 :class:`packages.harness.config.section_admin.ConfigSectionAdmin`
-共享基座的**搜索域子类**（R2a-3 基座的第二个消费者——接入形态遵循
+共享基座的**搜索域子类**（该基座的第二个接入者——接入形态遵循
 基座 docstring 的「读改写节（条目 CRUD）」文档化决策：条目级校验在
 突变方法的锁窗口内先行完成，构造新节后调用继承的
 ``_persist_and_rebuild`` 尾段）。承载内容：

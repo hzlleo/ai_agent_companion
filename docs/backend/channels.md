@@ -233,7 +233,7 @@ assistant 回合恒为 agent）。**peer 事件永不晋升策展记忆、永不
 
 ## 协议 v2（附件 / 静默 / 合成事件——additive，v1 形态缺省保持）
 
-v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语音附件、贴纸 / Canvas 媒体与合成 ID 等后续 R2d/R2e 特性）：`InboundMessageModel` / `OutboundMessageModel` / `ChannelDeliveryResultModel` 各增 v2 字段（全部带缺省值——**缺省即 v1 纯文本形态**，既有消费者零改动；本 chunk 内全部内部消费者已迁移到 v2 模型面）。新增 `ChannelMessageAttachment`（附件模型）与 `AttachmentDeliveryResult`（逐附件投递结果）。
+v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语音附件、贴纸 / Canvas 媒体与合成 ID 等后续媒体 / 前端特性）：`InboundMessageModel` / `OutboundMessageModel` / `ChannelDeliveryResultModel` 各增 v2 字段（全部带缺省值——**缺省即 v1 纯文本形态**，既有消费者零改动；本切片内全部内部消费者已迁移到 v2 模型面）。新增 `ChannelMessageAttachment`（附件模型）与 `AttachmentDeliveryResult`（逐附件投递结果）。
 
 ### 模型表（v2 字段 + JSON 示例）
 
@@ -329,7 +329,7 @@ v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语�
 
 ### `tg-file://` 伪方案契约（入站方向——下载免取 v2）
 
-Telegram 真实媒体拉取需 **getFile + 文件 URL** 二段 Bot API 流程；v2 入站**不做下载**——附件以 `path="tg-file://{file_id}"` 伪方案承载平台文件引用，真实媒体 fetch deferred 到 R2d 贴纸 / 语音工作。photo 取最大尺寸（宽 × 高）的 `file_id`；voice / audio / document 的 `mime_type` 进 `media_type`（photo / sticker 无 MIME 线索 → None）；caption 挂首附件（`message.caption` 同时兜底为入站 `text`——媒体消息用户的伴随话语）；提取顺序 photo → voice → audio → document → sticker（真实 Bot API 消息至多一种媒体——固定顺序为确定性兜底）。
+Telegram 真实媒体拉取需 **getFile + 文件 URL** 二段 Bot API 流程；v2 入站**不做下载**——附件以 `path="tg-file://{file_id}"` 伪方案承载平台文件引用，真实媒体 fetch deferred 到后续贴纸 / 语音工作。photo 取最大尺寸（宽 × 高）的 `file_id`；voice / audio / document 的 `mime_type` 进 `media_type`（photo / sticker 无 MIME 线索 → None）；caption 挂首附件（`message.caption` 同时兜底为入站 `text`——媒体消息用户的伴随话语）；提取顺序 photo → voice → audio → document → sticker（真实 Bot API 消息至多一种媒体——固定顺序为确定性兜底）。
 
 Telegram 入站路由门槛（v2）：文本与媒体互斥（Bot API 语义）——媒体消息以 **caption 兜底为文本**（有 caption 即路由）；**纯媒体无 caption 归一为 `text=""` 入站**（附件照常搭载，路由器跳过生成但保留表情收录；offset 照常推进）；既无文本又无附件才跳过；纯文本消息 v1 形态零变更。
 

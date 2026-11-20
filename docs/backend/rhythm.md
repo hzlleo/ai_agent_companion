@@ -42,7 +42,7 @@
         "delay_scale": 1.5
     }
 
-人格覆写（`PersonaRhythmOverride`，全可选——per-persona 解析属 R2d 心流层）：`bedtime` / `wake_time`（HH:MM 校验）+ `delay_scale`（0.5-2.0 温度缩放——延迟 min/max 同乘；打字参数与快答概率为全局面不参与覆写）。
+人格覆写（`PersonaRhythmOverride`，全可选——per-persona 解析属心流层）：`bedtime` / `wake_time`（HH:MM 校验）+ `delay_scale`（0.5-2.0 温度缩放——延迟 min/max 同乘；打字参数与快答概率为全局面不参与覆写）。
 
 ## 纯函数语义（core）
 
@@ -86,7 +86,7 @@ gate_reply(now_ms=None → 注入时钟)
     ↓ ③ 清醒 → RhythmGate(allowed=True, suggested_delay_ms=reply_delay_ms(采样), reason="清醒时段…")
 ```
 
-`should_reply_now` = 门的 `allowed` 布尔投影（心流层轻量消费面；R2d 将演化为带主动节拍的完整决策面）。
+`should_reply_now` = 门的 `allowed` 布尔投影（心流层轻量消费面；心流层将演化为带主动节拍的完整决策面）。
 
 门结果 JSON 示例::
 
@@ -98,14 +98,14 @@ gate_reply(now_ms=None → 注入时钟)
 
 ## 装配与消费面（app lifespan）
 
-`_startup_channels`（任一通道启用时）：`random.Random()` 单一随机源 → `resolve_effective(settings.rhythm, None)`（全局面——per-persona 覆写解析属 R2d）→ `RhythmService` 上挂 `app.state.rhythm_service`（enabled 随 `RHYTHM_ENABLED`）；随机源**同时**注入 `IntentShortcutService`（快径拟真延迟与节律延迟采样同源——见 intent.md 装配一节）。停机随通道层槽位复位。
+`_startup_channels`（任一通道启用时）：`random.Random()` 单一随机源 → `resolve_effective(settings.rhythm, None)`（全局面——per-persona 覆写解析属心流层）→ `RhythmService` 上挂 `app.state.rhythm_service`（enabled 随 `RHYTHM_ENABLED`）；随机源**同时**注入 `IntentShortcutService`（快径拟真延迟与节律延迟采样同源——见 intent.md 装配一节）。停机随通道层槽位复位。
 
 消费面前向兼容（文档化）：
 
 | 消费方 | 版本 | 形态 |
 |---|---|---|
 | 心流门控 | 已接线 | `FLOW_ENABLED=true` 时 `ChannelRouter` 在聊天生成前读取 `gate_reply`：睡眠窗口 → `defer`（距醒来毫秒）；清醒拟人延迟 → `defer`（延迟批次）；门控关闭 / 节律停用 → 即时回复。per-persona `PersonaRhythmOverride` 解析仍由后续接线（当前门控使用全局面） |
-| R2e GUI / 浏览器通道 | 后继 | 门结果（allowed + reason）人设状态展示（在线 / 休息中） |
+| GUI / 浏览器通道 | 后继 | 门结果（allowed + reason）人设状态展示（在线 / 休息中） |
 | 未启用门控的通道回复 | 本版 | **不消费门**——既有回复行为零变化（意图快径的短延迟属意图面，见 intent.md） |
 
 ## 测试

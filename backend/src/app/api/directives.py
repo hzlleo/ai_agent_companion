@@ -1,4 +1,4 @@
-"""长期指令管理 admin 路由——常备指令（USER.md 式）的操作面（D7-14）。
+"""长期指令管理 admin 路由——常备指令（USER.md 式）的操作面。
 
     - GET    /api/v1/directives           —— 现行指令列表（active——新写入在前）
     - POST   /api/v1/directives           —— 创建（同 topic 覆盖为 supersede）

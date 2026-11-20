@@ -1,4 +1,4 @@
-"""app/api/memories 梦境端点测试——trigger / runs / run detail（P1 chunk 3）。
+"""app/api/memories 梦境端点测试——trigger / runs / run detail。
 
 测试策略：本地装配 FastAPI app（memories router + 共享异常处理器——同
 test_memories_api.py 模式；DB 经共享会话级 SQLite fixture 外部安装；网关

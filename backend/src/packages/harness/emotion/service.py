@@ -22,7 +22,7 @@
       等由他人格状态消费者写入），只替换 ``emotion`` 键。
 
 消费者面：chat 服务 reply 路径（推进 + 持久化 + meta 快照）与 compose
-心情块（摘要行）；未来 TTS 风格 / 前端表情消费面（R2d / R2e）直接读
+心情块（摘要行）；未来 TTS 风格 / 前端表情消费面直接读
 本服务 current_state（见 docs/backend/emotion.md）。
 """
 

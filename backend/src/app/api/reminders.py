@@ -1,4 +1,4 @@
-"""提醒管理 admin 路由——持久化提醒的操作面（P10=B）。
+"""提醒管理 admin 路由——持久化提醒的操作面。
 
     - POST /api/v1/reminders                  —— 创建（persona 解析同记忆面）
     - GET  /api/v1/reminders                  —— 游标分页（status 过滤）
