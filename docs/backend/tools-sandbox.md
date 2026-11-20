@@ -22,7 +22,7 @@ duty 轮 tool_calls（DutyService 工具循环）
     ↓ 共享 httpx 池 → http://127.0.0.1:8765     docker/tool-sandbox-agent（compose 部署）
     ↓ ASGI /invoke（token 恒时比较）            沙盒树 server.py
     ↓ SandboxToolRuntime.invoke                 沙盒树 runtime.py（寻址 → 参数校验 → 执行 → 计时；恒不抛）
-    ↓ 工具执行器                                沙盒树 http_fetch.py（域名允许清单 + 8KB 截断）
+    ↓ 工具执行器                                沙盒树 http_fetch.py（域名允许清单 + 私网/DNS 复检 + 8KB 截断）
 ```
 
 失败语义（三层恒不抛）：客户端层——token 缺失 / 沙盒不可达 / 非成功状态 / wire 破坏 → `ToolResultModel(ok=False)`；代理层——客户端 ok=False 转 `INTERNAL_ERROR` 业务异常；registry 层——异常归一 ok=False（既有隔离面）。**duty 工具循环恒不见异常。**
@@ -52,7 +52,8 @@ duty 轮 tool_calls（DutyService 工具循环）
 | 参数 | `url`（http/https + 主机名，必填，≤2048）、`timeout_seconds`（1-30，默认 10） |
 | 域名允许清单 | env `SANDBOX_HTTP_ALLOWLIST`（逗号分隔域名后缀）；**空 = 工具禁用 / 默认拒绝**——零配置部署永不产生出站流量 |
 | 匹配语义 | 点边界后缀匹配：`api.example.com` 命中 `example.com`；`evil-example.com` / `evil.com`（对条目 `vil.com`）**不**命中 |
-| 重定向 | 30x **逐跳**过允许清单（自定义 `HTTPRedirectHandler`——防经重定向跳出清单）+ 终态 URL 复检 |
+| 私网拒绝 | IP 字面量（loopback / RFC1918 / link-local / ULA / 保留 / 组播 / 未指定）**无论是否命中允许清单**一律拒绝；域名在请求前 `socket.getaddrinfo` 解析，**全部**解析地址均须公网（任一私网即拒，解析失败 fail-closed）——与 browser-sidecar 导航策略同语义 |
+| 重定向 | 30x **逐跳**过允许清单 + 私网字面量 + DNS 解析复检（自定义 `HTTPRedirectHandler`——防经重定向跳出清单或跳进私网）+ 终态 URL 复检 |
 | 正文 | 按字节截断 8192（8KB）；字符集取响应头（回退 utf-8）；解码 `errors="replace"` |
 | 抓取实现 | stdlib urllib 经 `asyncio.to_thread` 下沉（沙盒树零 httpx 依赖；进程级默认执行器——见下节「阻塞 I/O 与线程池口径」） |
 | 失败 | 全部归一受控失败（`SandboxToolError` → `ok=False` 终态）——执行器对运行时恒不抛未受控异常 |
@@ -119,7 +120,7 @@ B 站 2026-07 曾对第三方 Python 库采取法律行动——暴露面收敛�
 | 沙盒 | `server.py` | ASGI 入口薄层（app 工厂 + uvicorn main + token 鉴权依赖） |
 | 沙盒 | `tool_sandbox/wire_models.py` | wire 契约 Model Classes（镜像源） |
 | 沙盒 | `tool_sandbox/runtime.py` | 沙盒工具运行时（注册 / 隔离执行 / 计时——镜像后端 ToolRegistry 语义） |
-| 沙盒 | `tool_sandbox/http_fetch.py` | http_fetch 工具（允许清单 / 重定向校验 / 8KB 截断 / to_thread 抓取） |
+| 沙盒 | `tool_sandbox/http_fetch.py` | http_fetch 工具（允许清单 / 私网与 DNS 复检 / 重定向校验 / 8KB 截断 / to_thread 抓取） |
 | 沙盒 | `tool_sandbox/bili_tools.py` | B 站只读工具组（共享客户端核心：限速 / 412 硬冷却 / WBI 键缓存 / 白名单裁剪 / 16KB 上限） |
 | 后端 | `harness/tools/sandbox_models.py` | Unit 文件：wire 契约（镜像副本）+ `SandboxSettingsFace` / `SandboxClientFace` 协议 + `HttpFetchArgsModel` + `build_http_fetch_spec` + B 站四参数模型（镜像）+ 四 `build_bili_*_spec` |
 | 后端 | `harness/tools/sandbox.py` | `ToolSandboxClient`（共享池 + Bearer + 恒不抛）+ `build_sandbox_client` + `register_sandbox_tool` + `register_sandbox_tools_for_bili`（registry 代理注册） |
@@ -201,6 +202,6 @@ docker compose up -d tool-sandbox-agent   # 127.0.0.1:8765 → 容器 8765
 |---|---|
 | `src/tests/unit/test_wire_models.py` | wire 契约模型校验面 |
 | `src/tests/unit/test_runtime.py` | 运行时四类隔离 + 计时（注入时钟）+ 默认值物化 |
-| `src/tests/unit/test_http_fetch.py` | 允许清单矩阵 / URL 校验 / 重定向逐跳 / 抓取（monkeypatch opener）/ 执行器注入回路 |
+| `src/tests/unit/test_http_fetch.py` | 允许清单矩阵 / URL 校验（含私网字面量与解析私网 fail-closed）/ 重定向逐跳 / 抓取（monkeypatch opener + 注入解析面）/ 执行器注入回路 |
 | `src/tests/unit/test_bili_tools.py` | WBI 签名确定性（测试内独立参考算法）/ nav TTL / 限速 / 412 硬冷却递增封顶 + 过期 + 归零 / -352 不重试 / code!=0 / 白名单裁剪（四工具）/ 16KB 上限 / cookie 间接 + 代理禁用 / 字幕空容忍 + CDN 后缀清单 / 允许清单默认 vs 禁用 / 参数校验矩阵 / 全链默认值物化 |
 | `src/tests/unit/test_server.py` | ASGI 手写调用：鉴权矩阵 / 端点面 / 422 / 默认运行时全链 / fail-fast / 恒时比较 / 绑定解析 |

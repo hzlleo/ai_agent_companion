@@ -141,6 +141,7 @@ from packages.harness.channels.wecom.wecom_client import WeComLongConnectionClie
 from packages.harness.channels.wecom.wecom_runner import WeComChannelRunner
 from packages.harness.chat.service import ChatService
 from packages.harness.config import search_registry
+from packages.harness.config.auth_policy import ensure_auth_policy
 from packages.harness.config.loader import load_all_config, setup_logging_from_settings
 from packages.harness.config.models import Settings
 from packages.harness.config.models import settings as global_settings
@@ -255,11 +256,16 @@ async def startup_app_state(
 
     Raises:
         BusinessException: 配置解析失败（``CONFIG_INVALID``——fail loud，
-            半生效配置不可审计）；通道启用但 bot token 缺失
-            （``CHANNEL_TOKEN_MISSING``——fail loud，装配期拒绝启动）。
+            半生效配置不可审计）；生产环境鉴权 token 缺失
+            （``CONFIG_INVALID``——fail-closed，见
+            :func:`packages.harness.config.auth_policy.ensure_auth_policy`）；
+            通道启用但 bot token 缺失（``CHANNEL_TOKEN_MISSING``——
+            fail loud，装配期拒绝启动）。
     """
     setup_logging_from_settings(settings)
     load_all_config(config_dir=config_dir)
+    # 生产鉴权策略（fail-closed——先于组件装配；日志系统就绪后即可观测）。
+    ensure_auth_policy(settings)
     # 管理面鉴权模式通告（ONE info——日志先行步骤之后、组件装配之前；
     # 鉴权依赖本体在 create_app 静态装配期挂接，此处只落启动日志）。
     log_admin_auth_startup_notice(settings)

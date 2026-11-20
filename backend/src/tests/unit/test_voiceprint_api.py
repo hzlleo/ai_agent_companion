@@ -27,7 +27,10 @@ from app.middleware.error_handler import register_exception_handlers
 from packages.harness.database.engine import db_engine_holder
 from packages.harness.persona.dtos import PersonaCreateDTO
 from packages.harness.persona.service import PersonaService
-from packages.harness.voice.voiceprint_models import VoiceprintSettings
+from packages.harness.voice.voiceprint_models import (
+    VOICEPRINT_AUDIO_BASE64_MAX_LENGTH,
+    VoiceprintSettings,
+)
 from packages.harness.voice.voiceprint_service import VoiceprintService
 
 
@@ -200,3 +203,17 @@ async def test_request_body_validation(
         "/api/v1/voiceprints/user-1/consent", json={"consent_text_version": "v0"}
     )
     assert bad_version.status_code == 422
+
+
+async def test_audio_base64_over_dto_cap_422(client: AsyncClient) -> None:
+    """声纹 base64 超 DTO 长度帽：请求体校验层拒绝（共享处理器归一 400，不进服务层）。"""
+    payload = {
+        "sample": {
+            "audio_base64": "A" * (VOICEPRINT_AUDIO_BASE64_MAX_LENGTH + 1),
+            "content_type": "audio/wav",
+            "duration_ms": 0,
+            "sample_rate_hz": 0,
+        }
+    }
+    response = await client.post("/api/v1/voiceprints/user-1/verify", json=payload)
+    assert response.status_code == 400

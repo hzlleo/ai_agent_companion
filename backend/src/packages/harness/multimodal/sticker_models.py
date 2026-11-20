@@ -31,7 +31,9 @@ from packages.harness.config.model_entry import LlmModelEntry
 from packages.harness.llm.llm_models import ChatMessageModel, ChatResponseModel
 
 __all__ = [
+    "STICKER_IMAGE_BASE64_MAX_LENGTH",
     "STICKER_IMAGE_MIME_ALLOWLIST",
+    "STICKER_MAX_UPLOAD_BYTES",
     "StickerSettings",
     "StickerAnnotationStatus",
     "StickerRejectReason",
@@ -49,6 +51,13 @@ __all__ = [
     "InboundStickerPayloadModel",
     "StickerAnnotateGatewayFace",
 ]
+
+#: 单文件图片字节上限的代码默认（服务层字节帽与 DTO 长度帽的单一来源）。
+STICKER_MAX_UPLOAD_BYTES: int = 5242880
+
+#: base64 载荷字符串上限（按字节帽的 4/3 展开精确推导——pydantic 层
+#: 提前拒绝超大请求体，服务层仍保留解码后的精确字节校验）。
+STICKER_IMAGE_BASE64_MAX_LENGTH: int = 4 * ((STICKER_MAX_UPLOAD_BYTES + 2) // 3)
 
 #: 允许入库的图片 MIME 白名单（与 look_at 图像能力面一致）。
 STICKER_IMAGE_MIME_ALLOWLIST: frozenset[str] = frozenset(
@@ -100,7 +109,7 @@ class StickerSettings(BaseSettings):
         default="data/stickers", min_length=1, description="表情包文件落盘根目录"
     )
     max_upload_bytes: int = Field(
-        default=5242880, ge=1024, description="单文件字节上限（5MB 量级）"
+        default=STICKER_MAX_UPLOAD_BYTES, ge=1024, description="单文件字节上限（5MB 量级）"
     )
     max_tags: int = Field(default=8, ge=1, description="单条表情包标签数上限")
     tag_max_length: int = Field(default=24, ge=1, description="单个标签最长字符数")
@@ -125,15 +134,20 @@ class StickerUploadItemModel(BaseModel):
     """单条表情包上传形态（JSON base64 载荷）。
 
     Attributes:
-        image_base64: 图片字节 base64 编码（解码后按 MIME 白名单与大小上限
-            校验）。
+        image_base64: 图片字节 base64 编码（DTO 层按代码默认字节帽的
+            4/3 展开上限拒绝超大载荷；解码后服务层仍按生效
+            ``max_upload_bytes`` 与 MIME 白名单精确校验）。
         content_type: 图片 MIME 类型（png / jpeg / webp / gif）。
         source_note: 素材来源与授权备注（必填——法律边界提示义务）。
         tags: 初始标签（可选；服务归一去重并套用上限）。
         description: 描述（可选；VLM 标注成功后可补充）。
     """
 
-    image_base64: str = Field(min_length=1, description="图片字节 base64 载荷")
+    image_base64: str = Field(
+        min_length=1,
+        max_length=STICKER_IMAGE_BASE64_MAX_LENGTH,
+        description="图片字节 base64 载荷",
+    )
     content_type: str = Field(
         default="image/png", min_length=1, max_length=64, description="图片 MIME 类型"
     )

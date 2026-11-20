@@ -37,6 +37,7 @@ from packages.harness.intent.intent_models import (
 )
 from packages.harness.intent.intent_texts import DIRECTIVE_CONFIRMED_TEXT
 from packages.harness.intent.matcher import match_intent
+from packages.harness.memory.models import MemoryProvenance
 from packages.harness.rhythm.rhythm_models import EffectiveRhythm
 
 __all__ = [
@@ -97,18 +98,30 @@ class IntentShortcutService:
         self._directive_sink = directive_sink
 
     async def try_shortcut(
-        self, text: str, persona: PersonaNaming, now_ms: int | None = None
+        self,
+        text: str,
+        persona: PersonaNaming,
+        now_ms: int | None = None,
+        *,
+        sender_provenance: MemoryProvenance = MemoryProvenance.OWNER,
     ) -> IntentMatchModel:
         """意图快径尝试（纯委托 + 人格称呼提取；恒不抛异常）。
 
         人格称呼提取：``display_name`` 非空优先、回落 ``persona_name``
         （注册名）——罐头文案的 ``{persona_name}`` 注入值。
 
+        指令捕获副作用按发送者来源分级收口：仅 ``owner``（私聊主人 /
+        管理面 owner 回合）命中 DIRECTIVE 时落库长期指令；``peer``
+        （群聊统一按 peer 处理——群内的主人发言同样不写指令）只回附和
+        文案，指令写入权限收敛在受信来源。
+
         Args:
             text: 用户消息原文（空 / 纯空白 → 恒未命中）。
             persona: 人格命名面（会话状态 / 人格记录同形满足——
                 ``persona_name`` + ``display_name``）。
             now_ms: 判定时刻（epoch 毫秒；None = 注入时钟取当前值）。
+            sender_provenance: 发送者来源分级（owner = 私聊主人；peer =
+                群聊回合——含群内主人发言，指令副作用不执行）。
 
         Returns:
             :class:`~packages.harness.intent.intent_models.IntentMatchModel`
@@ -118,31 +131,37 @@ class IntentShortcutService:
             now = now_ms if now_ms is not None else self._clock()
             persona_display = persona.display_name or persona.persona_name
             match = match_intent(text, persona_display, now, self._effective)
-            return await self._apply_directive_side_effect(match)
+            return await self._apply_directive_side_effect(match, sender_provenance)
         except Exception:
             # 快径失败永不阻断正常回复链路（隔离边界：本服务是回复链路
             # 的可选加速面——内部任何异常归一未命中，错误细节进日志）。
             logger.opt(exception=True).warning("意图快径内部异常（归一未命中，文本照常流入 LLM）")
             return IntentMatchModel()
 
-    async def _apply_directive_side_effect(self, match: IntentMatchModel) -> IntentMatchModel:
+    async def _apply_directive_side_effect(
+        self, match: IntentMatchModel, sender_provenance: MemoryProvenance
+    ) -> IntentMatchModel:
         """DIRECTIVE 命中副作用（落库成功 → 替换为「已记住」确认文案）。
 
-        语义（锁定）：sink 未接线 / 落库失败 / 正文缺失时原样返回附和
-        文案（不承诺「记住」——下一轮 compose 读不到指令时不自相矛盾）；
-        副作用异常在此吞没（快径链路恒不抛，错误进日志）。
+        语义（锁定）：仅 ``owner`` 来源执行落库；``peer``（群聊统一口径，
+        含群内的主人发言）只保留附和文案——群聊消息不得改写长期指令。
+        sink 未接线 / 落库失败 / 正文缺失时原样返回附和文案（不承诺
+        「记住」——下一轮 compose 读不到指令时不自相矛盾）；副作用异常
+        在此吞没（快径链路恒不抛，错误进日志）。
 
         Args:
             match: 匹配结果（matcher 产出）。
+            sender_provenance: 发送者来源分级（owner 才写指令）。
 
         Returns:
-            处理后的匹配结果（DIRECTIVE + 落库成功时 response_text 为
-            确认文案）。
+            处理后的匹配结果（DIRECTIVE + owner + 落库成功时 response_text
+            为确认文案）。
         """
         if (
             not match.handled
             or match.kind is not IntentKind.DIRECTIVE
             or not match.directive_text
+            or sender_provenance is not MemoryProvenance.OWNER
         ):
             return match
         if self._directive_sink is None:

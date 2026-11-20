@@ -31,8 +31,10 @@ from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = [
+    "VOICEPRINT_AUDIO_BASE64_MAX_LENGTH",
     "VOICEPRINT_AUDIO_MIME_ALLOWLIST",
     "VOICEPRINT_CONSENT_TEXT_VERSION",
+    "VOICEPRINT_MAX_UPLOAD_BYTES",
     "VOICEPRINT_PRIVACY_NOTICE_VERSION",
     "VoiceprintSettings",
     "VoiceprintSampleUploadModel",
@@ -59,6 +61,13 @@ VOICEPRINT_CONSENT_TEXT_VERSION: str = "v1"
 
 #: 隐私告知版本（与同意文本版本同步演进；管理 API 回传供前端展示）。
 VOICEPRINT_PRIVACY_NOTICE_VERSION: str = "v1"
+
+#: 单样本音频字节上限的代码默认（服务层字节帽与 DTO 长度帽的单一来源）。
+VOICEPRINT_MAX_UPLOAD_BYTES: int = 10485760
+
+#: base64 载荷字符串上限（按字节帽的 4/3 展开精确推导——pydantic 层
+#: 提前拒绝超大请求体，服务层仍保留解码后的精确字节校验）。
+VOICEPRINT_AUDIO_BASE64_MAX_LENGTH: int = 4 * ((VOICEPRINT_MAX_UPLOAD_BYTES + 2) // 3)
 
 #: 可接受的音频 MIME 白名单（WAV / MP3 / OGG / WebM / MP4 容器）。
 VOICEPRINT_AUDIO_MIME_ALLOWLIST: frozenset[str] = frozenset(
@@ -155,7 +164,9 @@ class VoiceprintSettings(BaseSettings):
         default=8000, ge=1, description="注册样本最低采样率（赫兹）"
     )
     max_upload_bytes: int = Field(
-        default=10485760, ge=1024, description="单样本音频字节上限（10MB 量级）"
+        default=VOICEPRINT_MAX_UPLOAD_BYTES,
+        ge=1024,
+        description="单样本音频字节上限（10MB 量级）",
     )
     max_batch_samples: int = Field(
         default=20, ge=1, description="单次注册请求的样本条数上限（资源面守卫）"
@@ -200,14 +211,19 @@ class VoiceprintSampleUploadModel(BaseModel):
     """单条声纹样本上传形态（JSON base64 载荷——与 look_at 同约定）。
 
     Attributes:
-        audio_base64: 音频字节的 base64 编码（解码后按 ``max_upload_bytes``
-            与 MIME 白名单校验）。
+        audio_base64: 音频字节的 base64 编码（DTO 层按代码默认字节帽的
+            4/3 展开上限拒绝超大载荷；解码后服务层仍按生效
+            ``max_upload_bytes`` 与 MIME 白名单精确校验）。
         content_type: 音频 MIME 类型（缺省 ``audio/wav``）。
         duration_ms: 音频时长毫秒（由上传方声明；服务按最短时长门槛校验）。
         sample_rate_hz: 采样率赫兹（由上传方声明；服务按最低采样率校验）。
     """
 
-    audio_base64: str = Field(min_length=1, description="音频字节 base64 载荷")
+    audio_base64: str = Field(
+        min_length=1,
+        max_length=VOICEPRINT_AUDIO_BASE64_MAX_LENGTH,
+        description="音频字节 base64 载荷",
+    )
     content_type: str = Field(
         default="audio/wav", min_length=1, max_length=64, description="音频 MIME 类型"
     )

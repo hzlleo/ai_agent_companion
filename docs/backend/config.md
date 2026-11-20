@@ -77,6 +77,8 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 
 分节与 `.env.example` 逐分节对齐（生成器 `scripts/generate_examples_env.py` 的 `_ENV_SECTIONS` 登记表为序——键面以 `.env.example` 为真源且每个键带字段说明注释；本表为分节索引，字段级语义见 example 注释与各域文档；敏感字段在 example 中恒留空）。各分节语义详见所属域文档（channels / duty / tools-sandbox / voice / realtime-voice / multimodal）；声纹与表情包分节见 [voice.md](voice.md#声纹档案pipl-合规面) 与 [multimodal.md](multimodal.md#表情包库与-vlm-标注sticker_-env-面默认关闭)。
 
+- `ENV` 取值面为 `RuntimeEnv` 枚举（`local` / `dev` / `test` / `prod`）。`ENV=prod` 触发生产鉴权 fail-closed 启动策略（管理面 owner token 与启用中的 QQ 入站 token 必须非空，见 [README.md](README.md#认证管理面-owner-token-鉴权) 与 `packages/harness/config/auth_policy.py`）；其余环境保持「空 token = 鉴权关闭」的开发形态。
+
 - `DatabaseConfig.async_sqlalchemy_url`：`mysql` → `mysql+aiomysql://user:pwd@host:port/db?charset=utf8mb4`（用户名/密码 URL 编码）；`sqlite` → `sqlite+aiosqlite:///{name}`（`name=":memory:"` 内存库）。
 - `LogConfig.to_core_config()`：字段一一映射为 `core.LoggingConfig`（`file→log_file` / `json_file→log_json_file`；`text_format` 空串 → `None`，走 core 默认统一模板）；app lifespan 经 `setup_logging_from_settings(settings)` 接线 `core.setup_logging`。
 - 嵌套覆盖：`Settings` 开启 `env_nested_delimiter="__"`（如 `DATABASE__POOL_SIZE`），与各分节自身 `env_prefix` 并行生效。

@@ -28,6 +28,8 @@
         │    上下文缺失 / 过期 → aibot_send_msg（chatid + chat_type）
         │    续段：恒 aibot_send_msg（同一 req_id 多条回复语义官方未文档化）
         ↓ ④ 附件：解析字节（base64 直接 / url 经共享 HTTP 池下载 / path 本地读）
+        │    出站守卫：url 仅 http/https 且非私网 IP 字面量；三种源统一
+        │    8MB 字节上限（超限逐附件受控失败，不阻断文本）
         │    → 分片上传取 media_id → aibot_send_msg（image / voice / file）
         ↓ ChannelDeliveryResultModel（message_ids 恒空——平台应答不含消息 ID；
               attachment_results 逐附件结局）
@@ -67,6 +69,11 @@ from packages.harness.channels.channel_models import (
     OutboundMessageModel,
 )
 from packages.harness.channels.channel_service import ChannelRouter
+from packages.harness.channels.outbound_guard import (
+    OUTBOUND_ATTACHMENT_MAX_BYTES,
+    validate_attachment_size,
+    validate_http_url,
+)
 from packages.harness.channels.wecom.wecom_client import WeComLongConnectionClient
 from packages.harness.channels.wecom.wecom_models import (
     WECOM_CMD_MSG_CALLBACK,
@@ -538,14 +545,20 @@ class WeComChannelRunner:
     async def _fetch_url(self, url: str) -> bytes:
         """经共享 HTTP 客户端下载附件内容（无私有连接）。
 
+        URL 先过出站守卫（http/https + 非私网 IP 字面量）；响应按字节流
+        累积并在超过 :data:`OUTBOUND_ATTACHMENT_MAX_BYTES` 时立即受控
+        失败（不把超大响应完整读入内存）。
+
         Args:
-            url: 媒体 URL。
+            url: 媒体 URL（外部载荷来源）。
 
         Returns:
-            下载字节。
+            下载字节（不超过大小上限）。
 
         Raises:
-            BusinessException: HTTP 客户端未装配 / 下载失败（``CHANNEL_API_ERROR``）。
+            BusinessException: URL 形态违规（``VALIDATION_ERROR``）；
+                HTTP 客户端未装配 / 下载失败 / 超出大小上限
+                （``CHANNEL_API_ERROR``）。
         """
         if self._http is None:
             raise BusinessException(
@@ -553,21 +566,28 @@ class WeComChannelRunner:
                 message="企微附件 url 源需要共享 HTTP 客户端（装配缺失）",
                 details={"url": url},
             )
+        validate_http_url(url)
         try:
-            response = await self._http.get(url)
+            async with self._http.stream("GET", url) as response:
+                if response.status_code != 200:
+                    raise BusinessException(
+                        code=ErrorCode.CHANNEL_API_ERROR,
+                        message=f"企微附件下载失败（HTTP {response.status_code}）: {url}",
+                        details={"url": url, "status_code": response.status_code},
+                    )
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    validate_attachment_size(total, source="url")
+                    chunks.append(chunk)
+                return b"".join(chunks)
         except httpx.HTTPError as exc:
             raise BusinessException(
                 code=ErrorCode.CHANNEL_API_ERROR,
                 message=f"企微附件下载失败（传输异常）: {url}",
                 details={"url": url, "error": str(exc)},
             ) from exc
-        if response.status_code != 200:
-            raise BusinessException(
-                code=ErrorCode.CHANNEL_API_ERROR,
-                message=f"企微附件下载失败（HTTP {response.status_code}）: {url}",
-                details={"url": url, "status_code": response.status_code},
-            )
-        return response.content
 
     @staticmethod
     def _upload_filename(attachment: ChannelMessageAttachment, media_kind: WeComMediaKind) -> str:
@@ -588,21 +608,29 @@ class WeComChannelRunner:
 def _read_local_file(path: str) -> bytes:
     """读取本地附件文件（阻塞 I/O——经共享线程池下沉调用）。
 
+    ``path`` 源仅由**内部生产者**构造（调度器报告 / 工具产物等），不是
+    外部消息载荷；本函数仍施加与 url 源一致的字节上限，避免单个大文件
+    把共享线程池与上传链路拖垮。
+
     Args:
-        path: 本地文件路径。
+        path: 本地文件路径（内部生产者来源）。
 
     Returns:
-        文件字节。
+        文件字节（不超过 :data:`OUTBOUND_ATTACHMENT_MAX_BYTES`）。
 
     Raises:
-        BusinessException: 文件不存在 / 不可读（``CHANNEL_API_ERROR``）。
+        BusinessException: 文件不存在 / 不可读（``CHANNEL_API_ERROR``）；
+            文件超过大小上限（同码）。
     """
     try:
-        return Path(path).read_bytes()
+        with Path(path).open("rb") as handle:
+            content = handle.read(OUTBOUND_ATTACHMENT_MAX_BYTES + 1)
     except OSError as exc:
         raise BusinessException(
             code=ErrorCode.CHANNEL_API_ERROR,
             message=f"企微附件本地路径读取失败: {path}",
             details={"path": path, "error": str(exc)},
         ) from exc
+    validate_attachment_size(len(content), source="path")
+    return content
 

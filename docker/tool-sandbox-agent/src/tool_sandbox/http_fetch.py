@@ -12,12 +12,16 @@
     2. **重定向逐跳校验**：30x 跳转的目标主机逐跳过允许清单（自定义
        :class:`urllib.request.HTTPRedirectHandler`——防经重定向跳出清单）；
        终态 URL 复检（belt-and-suspenders）；
-    3. **协议面**：仅 http/https；正文按字节截断 8192（8KB），解码
+    3. **私网拒绝**：IP 字面量（loopback / RFC1918 / link-local / ULA /
+       保留段）无论是否在允许清单均拒绝；域名在请求前 DNS 解析，全部
+       解析地址均须公网（任一私网即拒，fail-closed——与 browser-sidecar
+       导航策略同语义）；
+    4. **协议面**：仅 http/https；正文按字节截断 8192（8KB），解码
        ``errors="replace"``（字符集取响应头，回退 utf-8——解码恒不抛）；
-    4. **不走系统代理**：opener 显式 ``ProxyHandler({})`` 禁用环境代理
+    5. **不走系统代理**：opener 显式 ``ProxyHandler({})`` 禁用环境代理
        （部署机 ``http_proxy`` 等残留不得改道出站——与 bili_tools 同
        锁定决策：允许清单校验的是目标主机，出站路径须点对点直连）；
-    5. **受控失败**：全部失败路径归一 :class:`SandboxToolError`（受控
+    6. **受控失败**：全部失败路径归一 :class:`SandboxToolError`（受控
        中文文案——不携带 token / 内部路径；执行器对运行时**恒不抛
        未受控异常**）。
 
@@ -33,7 +37,9 @@ backend 侧共享池容量（``pools.thread_pool_size``）不作用于沙盒进�
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
+import socket
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -48,9 +54,13 @@ __all__ = [
     "HTTP_FETCH_TOOL_NAME",
     "HttpFetchArgsModel",
     "FetchFn",
+    "ResolverFace",
     "build_http_fetch_tool",
     "default_fetch",
     "domain_matches_allowlist",
+    "ensure_host_resolves_public",
+    "ip_literal_host_is_private",
+    "ip_text_is_private",
     "parse_allowlist",
     "validate_fetch_url",
 ]
@@ -73,6 +83,9 @@ _USER_AGENT: str = "tool-sandbox-agent/0.1.0"
 #: 抓取函数契约（url / 超时秒 / 允许清单 → 结果 dict；受控失败抛
 #: SandboxToolError——测试注入面同签名）。
 FetchFn = Callable[[str, int, list[str]], dict[str, Any]]
+
+#: 域名解析面契约（host → IP 文本列表；受控失败抛 SandboxToolError）。
+ResolverFace = Callable[[str], list[str]]
 
 
 class HttpFetchArgsModel(BaseModel):
@@ -153,8 +166,108 @@ def domain_matches_allowlist(host: str, allowlist: list[str]) -> bool:
     return any(normalized == entry or normalized.endswith("." + entry) for entry in allowlist)
 
 
+def ip_literal_host_is_private(host: str) -> bool:
+    """判定主机名是否为私网 / 保留段的 IP 字面量（纯函数）。
+
+    与 browser-sidecar 导航策略同语义：loopback、RFC1918、link-local、
+    ULA、保留 / 组播 / 未指定段一律视为私网；**无论是否在允许清单**均
+    拒绝。
+
+    Args:
+        host: 归一化主机名（IPv4 点分 / IPv6 冒分；容忍方括号包裹）。
+
+    Returns:
+        True 表示私网 IP 字面量（域名为 False）。
+    """
+    try:
+        address = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+    return _address_is_private(address)
+
+
+def ip_text_is_private(ip_text: str) -> bool:
+    """判定 DNS 解析产物 IP 文本是否私网（纯函数——fail-closed）。
+
+    Args:
+        ip_text: 解析产物 IP 文本（如 ``"10.0.0.5"``）。
+
+    Returns:
+        是否私网；不可解析的非法文本按私网处理（解析器垃圾值不得穿透
+        私网拒绝面）。
+    """
+    try:
+        address = ipaddress.ip_address(ip_text.strip("[]"))
+    except ValueError:
+        return True
+    return _address_is_private(address)
+
+
+def _address_is_private(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """IP 地址私网属性并集判定（内部纯函数）。
+
+    Args:
+        address: 解析出的 IP 地址（v4 / v6）。
+
+    Returns:
+        是否落入任一私网 / 保留语义段（``is_private`` 已涵盖 loopback /
+        link-local / RFC1918 / ULA；``is_reserved`` / ``is_multicast`` /
+        ``is_unspecified`` 并集收紧——fail-closed）。
+    """
+    return bool(
+        address.is_private
+        or address.is_reserved
+        or address.is_multicast
+        or address.is_unspecified
+    )
+
+
+def _resolve_host_addresses(host: str) -> list[str]:
+    """用 stdlib getaddrinfo 解析主机全部地址（阻塞 I/O——调用方下沉线程池）。
+
+    Args:
+        host: 目标主机名。
+
+    Returns:
+        IP 文本列表（v4 / v6 混合，去重保序）。
+
+    Raises:
+        OSError: 解析失败（gaierror 等——调用方归一受控失败）。
+    """
+    addresses: list[str] = []
+    for info in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM):
+        address = str(info[4][0])
+        if address not in addresses:
+            addresses.append(address)
+    return addresses
+
+
+def ensure_host_resolves_public(host: str, resolver: ResolverFace | None = None) -> None:
+    """DNS 解析复检：主机全部解析地址均须公网（fail-closed）。
+
+    Args:
+        host: 已通过允许清单与私网字面量校验的主机名。
+        resolver: 解析面注入（None = stdlib getaddrinfo；测试注入确定性
+            地址列表）。
+
+    Raises:
+        SandboxToolError: 解析失败 / 无地址 / 任一解析地址为私网
+            （受控失败——DNS rebinding 对策）。
+    """
+    resolve = resolver if resolver is not None else _resolve_host_addresses
+    try:
+        addresses = resolve(host)
+    except OSError as exc:
+        raise SandboxToolError(f"域名解析失败: {host}") from exc
+    if not addresses:
+        raise SandboxToolError(f"域名解析无结果: {host}")
+    for address in addresses:
+        if ip_text_is_private(address):
+            raise SandboxToolError(f"目标域名解析到私网地址: {host}")
+
+
 def validate_fetch_url(url: str, allowlist: list[str]) -> str:
-    """校验目标 URL（协议 / 主机名 / 域名允许清单）。
+    """校验目标 URL（协议 / 主机名 / 私网字面量 / 域名允许清单）。
 
     Args:
         url: 目标 URL。
@@ -164,8 +277,8 @@ def validate_fetch_url(url: str, allowlist: list[str]) -> str:
         归一化主机名（小写、去尾点）。
 
     Raises:
-        SandboxToolError: 协议非法 / 主机名缺失 / 域名不在允许清单
-            （受控失败——人读中文文案）。
+        SandboxToolError: 协议非法 / 主机名缺失 / 私网 IP 字面量 /
+            域名不在允许清单（受控失败——人读中文文案）。
     """
     parsed = urlparse(url)
     if parsed.scheme not in _ALLOWED_SCHEMES:
@@ -173,26 +286,31 @@ def validate_fetch_url(url: str, allowlist: list[str]) -> str:
     host = (parsed.hostname or "").lower().rstrip(".")
     if not host:
         raise SandboxToolError("URL 缺少主机名")
+    if ip_literal_host_is_private(host):
+        raise SandboxToolError(f"目标主机是私网 IP 字面量: {host}")
     if not domain_matches_allowlist(host, allowlist):
         raise SandboxToolError(f"目标域名不在允许清单: {host}")
     return host
 
 
 class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """重定向逐跳校验（30x 目标主机过允许清单——防经重定向跳出清单）。
+    """重定向逐跳校验（30x 目标主机过允许清单与私网复检）。
 
     Attributes:
         _allowlist: 域名允许清单（归一化产物）。
+        _resolver: 解析面注入（None = 模块默认 getaddrinfo）。
     """
 
-    def __init__(self, allowlist: list[str]) -> None:
-        """初始化（携带允许清单快照）。
+    def __init__(self, allowlist: list[str], resolver: ResolverFace | None = None) -> None:
+        """初始化（携带允许清单快照与解析面）。
 
         Args:
             allowlist: 域名允许清单。
+            resolver: 解析面注入（None = stdlib getaddrinfo）。
         """
         super().__init__()
         self._allowlist = allowlist
+        self._resolver = resolver
 
     def redirect_request(
         self,
@@ -217,13 +335,21 @@ class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
             校验通过后基类构造的新请求（透传 urllib 语义）。
 
         Raises:
-            SandboxToolError: 重定向目标域名不在允许清单。
+            SandboxToolError: 重定向目标域名不在允许清单 / 私网字面量 /
+                解析到私网地址。
         """
-        validate_fetch_url(newurl, self._allowlist)
+        host = validate_fetch_url(newurl, self._allowlist)
+        ensure_host_resolves_public(host, self._resolver)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def default_fetch(url: str, timeout_seconds: int, allowlist: list[str]) -> dict[str, Any]:
+def default_fetch(
+    url: str,
+    timeout_seconds: int,
+    allowlist: list[str],
+    *,
+    resolver: ResolverFace | None = None,
+) -> dict[str, Any]:
     """stdlib urllib 同步抓取（线程池下沉由执行器 ``to_thread`` 承担）。
 
     全部失败路径归一 :class:`SandboxToolError`（受控文案）；成功返回
@@ -231,29 +357,35 @@ def default_fetch(url: str, timeout_seconds: int, allowlist: list[str]) -> dict[
     出站不走系统代理：opener 携带 ``ProxyHandler({})`` 显式禁用环境
     代理（``build_opener`` 缺省会拾取 ``http_proxy`` 等 env——与
     bili_tools 同锁定决策，允许清单的信任模型按点对点直连解释）。
+    首跳、重定向目标与终态 URL 均先过允许清单与私网字面量校验，再做
+    DNS 解析复检（全部地址须公网）。
 
     Args:
         url: 目标 URL（首跳校验 + 重定向逐跳校验 + 终态复检）。
         timeout_seconds: 请求超时秒数（连接 / 读取共用）。
         allowlist: 域名允许清单（非空——禁用检查由执行器承担）。
+        resolver: 解析面注入（None = stdlib getaddrinfo；测试注入确定性
+            地址列表实现零网络）。
 
     Returns:
         抓取结果（``url`` 终态 / ``status_code`` / ``content_type`` /
         ``body`` 截断文本 / ``truncated`` 是否截断）。
 
     Raises:
-        SandboxToolError: 首跳或重定向目标被拒 / 非成功 HTTP 状态 /
-            传输失败 / 超时 / URL 形态非法（受控失败面）。
+        SandboxToolError: 首跳或重定向目标被拒 / 解析失败或解析到私网 /
+            非成功 HTTP 状态 / 传输失败 / 超时 / URL 形态非法（受控失败面）。
     """
     try:
-        validate_fetch_url(url, allowlist)
+        host = validate_fetch_url(url, allowlist)
+        ensure_host_resolves_public(host, resolver)
         request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT}, method="GET")
         opener = urllib.request.build_opener(
-            _AllowlistRedirectHandler(allowlist), urllib.request.ProxyHandler({})
+            _AllowlistRedirectHandler(allowlist, resolver), urllib.request.ProxyHandler({})
         )
         with opener.open(request, timeout=timeout_seconds) as response:
             final_url = response.geturl()
-            validate_fetch_url(final_url, allowlist)
+            final_host = validate_fetch_url(final_url, allowlist)
+            ensure_host_resolves_public(final_host, resolver)
             raw = response.read(_MAX_BODY_BYTES + 1)
             truncated = len(raw) > _MAX_BODY_BYTES
             if truncated:

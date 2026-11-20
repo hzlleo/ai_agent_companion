@@ -8267,7 +8267,7 @@
     "StickerBatchUploadDTO": {
       "$defs": {
         "StickerUploadItemModel": {
-          "description": "单条表情包上传形态（JSON base64 载荷）。\n\nAttributes:\n    image_base64: 图片字节 base64 编码（解码后按 MIME 白名单与大小上限\n        校验）。\n    content_type: 图片 MIME 类型（png / jpeg / webp / gif）。\n    source_note: 素材来源与授权备注（必填——法律边界提示义务）。\n    tags: 初始标签（可选；服务归一去重并套用上限）。\n    description: 描述（可选；VLM 标注成功后可补充）。",
+          "description": "单条表情包上传形态（JSON base64 载荷）。\n\nAttributes:\n    image_base64: 图片字节 base64 编码（DTO 层按代码默认字节帽的\n        4/3 展开上限拒绝超大载荷；解码后服务层仍按生效\n        ``max_upload_bytes`` 与 MIME 白名单精确校验）。\n    content_type: 图片 MIME 类型（png / jpeg / webp / gif）。\n    source_note: 素材来源与授权备注（必填——法律边界提示义务）。\n    tags: 初始标签（可选；服务归一去重并套用上限）。\n    description: 描述（可选；VLM 标注成功后可补充）。",
           "properties": {
             "content_type": {
               "default": "image/png",
@@ -8286,6 +8286,7 @@
             },
             "image_base64": {
               "description": "图片字节 base64 载荷",
+              "maxLength": 6990508,
               "minLength": 1,
               "title": "Image Base64",
               "type": "string"
@@ -8798,7 +8799,7 @@
       "type": "object"
     },
     "StickerUploadItemModel": {
-      "description": "单条表情包上传形态（JSON base64 载荷）。\n\nAttributes:\n    image_base64: 图片字节 base64 编码（解码后按 MIME 白名单与大小上限\n        校验）。\n    content_type: 图片 MIME 类型（png / jpeg / webp / gif）。\n    source_note: 素材来源与授权备注（必填——法律边界提示义务）。\n    tags: 初始标签（可选；服务归一去重并套用上限）。\n    description: 描述（可选；VLM 标注成功后可补充）。",
+      "description": "单条表情包上传形态（JSON base64 载荷）。\n\nAttributes:\n    image_base64: 图片字节 base64 编码（DTO 层按代码默认字节帽的\n        4/3 展开上限拒绝超大载荷；解码后服务层仍按生效\n        ``max_upload_bytes`` 与 MIME 白名单精确校验）。\n    content_type: 图片 MIME 类型（png / jpeg / webp / gif）。\n    source_note: 素材来源与授权备注（必填——法律边界提示义务）。\n    tags: 初始标签（可选；服务归一去重并套用上限）。\n    description: 描述（可选；VLM 标注成功后可补充）。",
       "properties": {
         "content_type": {
           "default": "image/png",
@@ -8817,6 +8818,7 @@
         },
         "image_base64": {
           "description": "图片字节 base64 载荷",
+          "maxLength": 6990508,
           "minLength": 1,
           "title": "Image Base64",
           "type": "string"

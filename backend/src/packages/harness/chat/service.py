@@ -707,7 +707,12 @@ class IntentShortcutFace(Protocol):
     """
 
     async def try_shortcut(
-        self, text: str, persona: PersonaNaming, now_ms: int | None = None
+        self,
+        text: str,
+        persona: PersonaNaming,
+        now_ms: int | None = None,
+        *,
+        sender_provenance: MemoryProvenance = MemoryProvenance.OWNER,
     ) -> IntentMatchModel:
         """尝试意图快径匹配（恒不抛异常——内部异常归一未命中）。
 
@@ -715,6 +720,8 @@ class IntentShortcutFace(Protocol):
             text: 用户消息原文。
             persona: 人格命名面（会话状态同形——称呼提取原料）。
             now_ms: 判定时刻（epoch 毫秒；None = 服务注入时钟）。
+            sender_provenance: 发送者来源分级（owner = 私聊主人；peer =
+                群聊回合——指令捕获副作用仅 owner 执行）。
 
         Returns:
             匹配结果（``handled=False`` = 未命中——照常走 LLM）。
@@ -1145,6 +1152,9 @@ class ChatService:
         同构**——用户 + 助手回合均落库，记忆 / 梦境可见；网关调用完全
         跳过）；未命中照常走组装 / 工具循环 / 网关链路。快径面自身
         恒不抛异常（未命中兜底——见 :class:`IntentShortcutFace`）。
+        DIRECTIVE 捕获副作用按 ``sender_provenance`` 收口：仅 ``owner``
+        回合落库长期指令；群聊 ``peer`` 回合（含群内的主人发言）只回
+        附和文案——群聊消息不得改写受信指令层。
 
         工具面分派：``tools`` 绑定时走有界工具循环（步数上限 + 收尾
         forcing——见模块 docstring「可选工具循环」；工具步为循环内部
@@ -1188,7 +1198,9 @@ class ChatService:
                 持久化写入失败（透传——append-only 日志不静默丢行）。
         """
         if self._intent_shortcut is not None:
-            match = await self._intent_shortcut.try_shortcut(user_text, state)
+            match = await self._intent_shortcut.try_shortcut(
+                user_text, state, sender_provenance=sender_provenance
+            )
             if match.handled:
                 logger.debug(
                     "意图快径命中（跳过网关）: persona={}, kind={}, confidence={:.2f}",

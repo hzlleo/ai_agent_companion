@@ -23,7 +23,7 @@
 | `GREETING` | 你好 / 早 / 晚安 / hi / 在吗 | 按时段带：`早上好呀～{persona_name}在这里` / 下午 / 晚上 / `这么晚还没睡呀？{persona_name}陪着你呢…` |
 | `IDENTITY` | 你是谁 / 你叫什么 / who are you | `我是{persona_name}呀，你的专属小伙伴…` |
 | `HELP` | 帮助 / 你能干什么 / help | 静态能力清单（陪伴对话 / 记忆 / 时间问答 + 能力解锁提示） |
-| `DIRECTIVE` | 记住… / 记得… / 以后都… / 以后… / 别再… / 不要… | 常备指令捕获（`directive_text` 剥前缀后经注入的 `DirectiveSinkFace` 落库；成功确认「好，我记住啦：{正文}」，sink 缺失或失败降级为普通纪律 ack——恒不阻断回复） |
+| `DIRECTIVE` | 记住… / 记得… / 以后都… / 以后… / 别再… / 不要… | 常备指令捕获（`directive_text` 剥前缀后经注入的 `DirectiveSinkFace` 落库；成功确认「好，我记住啦：{正文}」，sink 缺失或失败降级为普通纪律 ack——恒不阻断回复）。副作用只对 `sender_provenance=owner` 执行：群聊统一按 `peer` 处理（含群内主人发言），只回附和文案、不写指令 |
 
 `STOP_STEER` 等**对话控制类有意不收**（控制流语义需要上下文感知，罐头回复会破坏对话状态机——后续心流层统一承载）。
 

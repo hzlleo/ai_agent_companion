@@ -192,6 +192,9 @@ wrap_current_message=False, current_message_label="", injection_hint=None)`
 落库为长期指令（[persona.md](persona.md) 长期指令一节），**落库成功才**回复
 「已记住：正文」；落库失败 / 未接线时退化为普通附和（不承诺记住）。副作用恒不
 阻断回复链路（错误仅日志）；快径回合照常落用户 + 助手回合（记忆 / 梦境可见）。
+DIRECTIVE 捕获副作用按 `sender_provenance` 收口：**仅 `owner` 回合落库**；群聊
+统一按 `peer` 处理（含群内的主人发言），只回附和文案——群聊消息不得改写长期
+指令层（[defense.md](defense.md) 受信层）。
 
 ### 世界书筛选语义（高级触发——`world_book.select_world_book_entries` 纯函数）
 

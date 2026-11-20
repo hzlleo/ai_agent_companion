@@ -23,6 +23,7 @@
       后写入序列化载荷：
         - ``api_key=xxx`` / ``api_key:xxx`` → ``api_key=***``
         - ``token=xxx`` / ``password=xxx`` / ``secret=xxx`` → 同上
+        - 连字符形态同面（``X-Api-Key`` / ``access-token``）→ 同上
         - ``Authorization: Bearer xxx`` → ``Authorization: Bearer ***``
         - ``sk-xxxx`` / ``sk-ant-xxxx``（OpenAI / Anthropic API Key 前缀）
     - 长度阈值（默认 8）：短于阈值的值不脱敏（避免误伤 ``id=1`` 这类短值）
@@ -87,9 +88,13 @@ SENSITIVE_KEY_PARTS: tuple[str, ...] = (
 # 长度阈值：value 长度 >= 8 才脱敏（避免误伤 ``id=1`` / ``port=8080`` 这类短值）
 _MIN_SENSITIVE_VALUE_LEN = 8
 
-# 构建 key 模式：匹配 "key=value" 或 "key: value" 形式
+# 构建 key 模式：匹配 "key=value" 或 "key: value" 形式。
+# 关键词内部的 ``_`` 允许以 ``-`` 出现（HTTP 头等连字符形态，如
+# ``X-Api-Key`` / ``access-token``）——分隔符差异不影响敏感判定。
 _SENSITIVE_KEY_PATTERN = re.compile(
-    r"(" + "|".join(re.escape(p) for p in SENSITIVE_KEY_PARTS) + r")"
+    r"("
+    + "|".join(re.escape(p).replace("_", "[-_]") for p in SENSITIVE_KEY_PARTS)
+    + r")"
     r"(\s*[:=]\s*)(['\"]?)([^\s'\",}]{8,})(\3)",
     re.IGNORECASE,
 )

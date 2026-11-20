@@ -126,6 +126,22 @@ class TestValidateFetchUrl:
         with pytest.raises(SandboxToolError, match="evil.example.org"):
             validate_fetch_url("https://evil.example.org/x", ["example.com"])
 
+    @pytest.mark.parametrize(
+        "host",
+        ["127.0.0.1", "10.0.0.5", "172.16.1.1", "169.254.1.1", "::1", "fc00::1"],
+    )
+    async def test_private_ip_literal_rejected_even_in_allowlist(self, host: str) -> None:
+        """私网 IP 字面量：即使命中允许清单也拒绝。"""
+        url = f"http://[{host}]/x" if ":" in host else f"http://{host}/x"
+        with pytest.raises(SandboxToolError, match="私网"):
+            validate_fetch_url(url, [host])
+
+    async def test_public_ip_literal_allowed(self) -> None:
+        """公网 IP 字面量：命中允许清单即通过。"""
+        assert validate_fetch_url("http://93.184.216.34/x", ["93.184.216.34"]) == (
+            "93.184.216.34"
+        )
+
 
 class _FakeResponse:
     """fake urllib 响应（上下文管理器 + read / geturl / headers）。"""
@@ -188,8 +204,11 @@ class _FakeOpener:
 
 
 def _patch_opener(monkeypatch: pytest.MonkeyPatch, opener: _FakeOpener) -> None:
-    """将 urllib.request.build_opener 替换为 fake opener 工厂。"""
+    """将 urllib.request.build_opener 替换为 fake opener 工厂，并注入公网解析面。"""
     monkeypatch.setattr(urllib.request, "build_opener", lambda *args: opener)
+    monkeypatch.setattr(
+        http_fetch_module, "_resolve_host_addresses", lambda host: ["93.184.216.34"]
+    )
 
 
 class TestDefaultFetch:
@@ -321,6 +340,9 @@ class TestDefaultFetch:
             return _FakeOpener(response=_FakeResponse())
 
         monkeypatch.setattr(urllib.request, "build_opener", _capture_build)
+        monkeypatch.setattr(
+            http_fetch_module, "_resolve_host_addresses", lambda host: ["93.184.216.34"]
+        )
         result = default_fetch("http://allowed.example/direct", 10, ["allowed.example"])
 
         assert result["status_code"] == 200
@@ -331,6 +353,49 @@ class TestDefaultFetch:
         ]
         assert proxy_handlers, "default_fetch 须显式传入 ProxyHandler"
         assert all(handler.proxies == {} for handler in proxy_handlers)
+
+    async def test_host_resolving_to_private_rejected_before_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """域名解析到私网：请求前受控失败（opener 零调用）。"""
+        opener = _FakeOpener(response=_FakeResponse())
+        monkeypatch.setattr(urllib.request, "build_opener", lambda *args: opener)
+        with pytest.raises(SandboxToolError, match="私网"):
+            default_fetch(
+                "http://allowed.example/x",
+                10,
+                ["allowed.example"],
+                resolver=lambda host: ["10.1.2.3"],
+            )
+        assert opener.calls == []
+
+    async def test_mixed_public_private_resolution_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """解析结果含任一私网地址：整体拒绝（fail-closed）。"""
+        opener = _FakeOpener(response=_FakeResponse())
+        monkeypatch.setattr(urllib.request, "build_opener", lambda *args: opener)
+        with pytest.raises(SandboxToolError, match="私网"):
+            default_fetch(
+                "http://allowed.example/x",
+                10,
+                ["allowed.example"],
+                resolver=lambda host: ["93.184.216.34", "192.168.1.10"],
+            )
+        assert opener.calls == []
+
+    async def test_public_resolution_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """解析结果全公网：抓取照常成功。"""
+        opener = _FakeOpener(response=_FakeResponse(body=b"ok"))
+        _patch_opener(monkeypatch, opener)
+        result = default_fetch(
+            "http://allowed.example/x",
+            10,
+            ["allowed.example"],
+            resolver=lambda host: ["93.184.216.34"],
+        )
+        assert result["status_code"] == 200
+        assert result["body"] == "ok"
 
 
 class TestRedirectHandler:
@@ -348,8 +413,13 @@ class TestRedirectHandler:
                 "https://evil.example.org/next",
             )
 
-    async def test_redirect_within_allowlist_passes_through(self) -> None:
-        """重定向留在清单内：透传基类（构造新请求，零 I/O）。"""
+    async def test_redirect_within_allowlist_passes_through(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """重定向留在清单内：透传基类（构造新请求，解析面注入零网络）。"""
+        monkeypatch.setattr(
+            http_fetch_module, "_resolve_host_addresses", lambda host: ["93.184.216.34"]
+        )
         handler = http_fetch_module._AllowlistRedirectHandler(["example.com"])
         request = urllib.request.Request("http://example.com/a")
         redirected = handler.redirect_request(

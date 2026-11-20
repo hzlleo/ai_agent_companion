@@ -28,6 +28,7 @@ from packages.harness.channels.channel_models import (
     ChannelMessageAttachment,
     OutboundMessageModel,
 )
+from packages.harness.channels.outbound_guard import OUTBOUND_ATTACHMENT_MAX_BYTES
 from packages.harness.channels.wecom.wecom_models import (
     WECOM_MARKDOWN_MAX_BYTES,
     WeComCallbackFrameModel,
@@ -740,3 +741,61 @@ class TestAttachmentFailureSurfaces:
         )
         assert result.attachment_results[0].ok is False
         assert "读取失败" in (result.attachment_results[0].error or "")
+
+    async def test_url_response_over_size_cap_fails_per_attachment(self) -> None:
+        """url 响应超 8MB：逐附件受控失败（不阻断文本投递）。"""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                status_code=200, content=b"x" * (OUTBOUND_ATTACHMENT_MAX_BYTES + 1)
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
+            client = FakeWeComClient()
+            runner = _runner(client=client, http_client=http_client)
+            attachment = ChannelMessageAttachment(
+                kind=ChannelAttachmentKind.IMAGE, url="https://cdn.example.com/big.png"
+            )
+            result = await runner.send_message(
+                OutboundMessageModel(chat_id="single:u1", text="远程大图", attachments=[attachment])
+            )
+        assert result.attachment_results[0].ok is False
+        assert "超过大小上限" in (result.attachment_results[0].error or "")
+        assert client.uploads == []
+        assert len(client.markdown_pushes) == 1
+
+    async def test_local_file_over_size_cap_fails_per_attachment(self, tmp_path: Path) -> None:
+        """本地 path 文件超 8MB：逐附件受控失败。"""
+        big_file = tmp_path / "big.bin"
+        big_file.write_bytes(b"y" * (OUTBOUND_ATTACHMENT_MAX_BYTES + 1))
+        client = FakeWeComClient()
+        runner = _runner(client=client)
+        attachment = ChannelMessageAttachment(
+            kind=ChannelAttachmentKind.FILE, path=str(big_file)
+        )
+        result = await runner.send_message(
+            OutboundMessageModel(chat_id="single:u1", text="大文件", attachments=[attachment])
+        )
+        assert result.attachment_results[0].ok is False
+        assert "超过大小上限" in (result.attachment_results[0].error or "")
+
+    async def test_url_private_ip_literal_rejected_per_attachment(self) -> None:
+        """url 指向私网 IP 字面量：受控失败且不发起下载请求。"""
+        requests: list[str] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            requests.append(str(request.url))
+            return httpx.Response(status_code=200, content=b"private")
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
+            client = FakeWeComClient()
+            runner = _runner(client=client, http_client=http_client)
+            attachment = ChannelMessageAttachment(
+                kind=ChannelAttachmentKind.IMAGE, url="http://127.0.0.1/secret.png"
+            )
+            result = await runner.send_message(
+                OutboundMessageModel(chat_id="single:u1", text="私网图", attachments=[attachment])
+            )
+        assert result.attachment_results[0].ok is False
+        assert "私网" in (result.attachment_results[0].error or "")
+        assert requests == []
