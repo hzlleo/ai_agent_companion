@@ -39,12 +39,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import statistics
 import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 #: 仓库根（本脚本位于 <repo>/scripts/）。
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -478,6 +480,27 @@ def _load_baseline(*, required: bool) -> dict[str, dict[str, float]] | None:
     return cases
 
 
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    """原子写入 JSON 基线（同目录临时文件 + ``os.replace``）。
+
+    先完整写入同目录 ``.tmp`` 再整体替换目标文件——写入中途失败时目标基线
+    保持原内容，不会留下半截 JSON；临时文件在 ``finally`` 中清理。
+
+    Args:
+        path: 目标 JSON 文件路径。
+        payload: 待序列化对象（UTF-8 / 两空格缩进 / 末尾换行）。
+    """
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    try:
+        tmp_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 def _write_baseline(measurements: list[CaseMeasurement]) -> None:
     """按本轮测量写入基线文件（人工评审后提交）。
 
@@ -496,9 +519,7 @@ def _write_baseline(measurements: list[CaseMeasurement]) -> None:
             for item in measurements
         },
     }
-    BASELINE_PATH.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    _write_json_atomic(BASELINE_PATH, payload)
     print(
         f"[bench_core] 基线已写入 {BASELINE_PATH}（用例 {len(measurements)} 项，"
         f"max_ratio={MAX_RATIO:g}）"

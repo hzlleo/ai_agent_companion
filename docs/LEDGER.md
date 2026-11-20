@@ -742,6 +742,13 @@ scripts / docs / docker / models；排 `__pycache__` / `.pixi` / `node_modules` 
 | `GET /api/v1/personas` | 3.098 / 3.587 | ms |
 | `GET /api/v1/canvas?persona_id` | 3.596 / 5.184 | ms |
 
+canvas 端点基线 p95（5.184 ms）约为 health（0.651 ms）的 8 倍：该端点是按
+persona 过滤的产物列表查询，临时 SQLite 上存在行集扫描与逐行 DTO 物化，
+首样还叠冷缓存页面读取（health 为零依赖存活面，差异属「有数据库查询」与
+「无数据库查询」的结构区别）；10× 容忍覆盖此差异，不以该端点做绝对性能
+承诺（原因详见 [backend/performance.md](backend/performance.md) 基线表下
+说明）。
+
 **验证**（本机实跑，命令与退出码）：
 
 - `cd backend && pixi run bench-core --gate` → **0**，连续 2 次 PASS（6 项
@@ -758,6 +765,41 @@ scripts / docs / docker / models；排 `__pycache__` / `.pixi` / `node_modules` 
 `api-smoke --gate` 需建临时库真实取样，对同机负载敏感，**不入链**，在
 部署机 / 负载可控环境手动执行。**基线随硬件漂移，以同机复跑为准；跨机
 绝对耗时不可比。**
+
+**复审修复（深审报告 4 条 P2 逐条闭环）**：
+
+1. `scripts/api_smoke.py`：`main()` 外层捕获导入期 / 隔离构造的 pydantic
+   `ValidationError`，折叠为单行受控错误（含首个错误字段摘要）并 exit 1——
+   无关分节的非法环境值不再抛裸 traceback；正常路径与 0 / 2 退出码语义不变。
+2. `scripts/bench_core.py` / `scripts/api_smoke.py`：`_write_baseline` 改为
+   先在目标同目录完整写 `.tmp`、再 `os.replace` 原子替换，失败在 `finally`
+   清理临时文件；JSON 结构与键序（顶层 / 条目）与更新前逐项一致。
+3. `docs/backend/performance.md`：隔离节补「无关分节非法环境值显式拒跑
+   （单行错误；与真实 app 启动失败同源，属设计内受控失败）」；基线表下补
+   canvas p95 约 8 倍于 health 的结构原因（persona 过滤列表查询的行集扫描与
+   冷缓存首样；10× 容忍覆盖该差异，不作绝对性能承诺）。
+4. 根 `README.md` 快速开始区补性能基线指向行（`docs/backend/performance.md`
+   与 `bench-core` / `api-smoke` 入口）。
+
+**复审修复验证**（本机实跑，命令与退出码）：
+
+- `FLOW_BURST_COUNT=99 pixi run api-smoke --gate` → **1**；脚本输出恰 1 行
+  「非本次冒烟相关环境变量取值非法……burst_count: Input should be less than
+  or equal to 20（type=less_than_equal）」，`Traceback` 出现 0 次；同命令在
+  干净环境 → **0**（4 端点 200，p95 均在基线 ×10 内）。
+- `pixi run bench-core --update` 连跑 2 次 → **0 / 0**，随后 `--gate` → **0**；
+  `pixi run api-smoke --update` 连跑 2 次 → **0 / 0**，随后 `--gate` → **0**；
+  两基线 JSON 顶层键序与条目键序与更新前一致、脚本目录无 `.tmp` 残留（数值
+  复跑后恢复交付前字节，本切片不含性能口径变化）。原子写故障探针（目标为
+  目录 → `os.replace` 失败）对两脚本同款函数各跑一次：原目标内容不变、
+  无 `.tmp` 残留。
+- `pixi run bench-core --self-check` / `api-smoke --self-check` → **0 / 0**；
+  `pixi run bench-core --gate` / `api-smoke --gate` → **0 / 0**。
+- 全量门禁：`pixi run tests-all` → **0**（2957 passed）；
+  `pixi run coverage-gates` → **0**（24 组 ≥80%）；`pixi run lint` → **0**；
+  `pixi run typecheck` → **0**（195 files）；`pixi run conftest-env` → **0**
+  （登记表 200 / 硬覆盖 200 / 豁免 0）；根 `pixi run gates` → **0**；
+  `pixi run gen-examples` → **0** 且三件套 sha256 前后一致（幂等）。
 
 ### 已完成切片：全约束审计 B 修复（P1×1 + P2×4，本分支工作区）
 

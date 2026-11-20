@@ -38,7 +38,9 @@ CPU 频率、容器配额与同机负载极敏感，硬阈值在共享 CI 上必
 
 Exit:
     0 = 报告 / 门禁通过 / 自检通过 / 基线更新成功；
-    1 = 响应非 200、门禁超限或自检键集不一致；
+    1 = 响应非 200、门禁超限、自检键集不一致，或无关分节的环境变量取值
+        非法（导入期 / 隔离配置构造的 ``ValidationError``——打印单行受控
+        错误，不展开 traceback）；
     2 = 参数错误 / 基线缺失或损坏。
 """
 
@@ -201,6 +203,27 @@ def _load_baseline(*, required: bool) -> dict[str, dict[str, float]] | None:
     return endpoints
 
 
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    """原子写入 JSON 基线（同目录临时文件 + ``os.replace``）。
+
+    先完整写入同目录 ``.tmp`` 再整体替换目标文件——写入中途失败时目标基线
+    保持原内容，不会留下半截 JSON；临时文件在 ``finally`` 中清理。
+
+    Args:
+        path: 目标 JSON 文件路径。
+        payload: 待序列化对象（UTF-8 / 两空格缩进 / 末尾换行）。
+    """
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    try:
+        tmp_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 def _write_baseline(measurements: list[EndpointMeasurement]) -> None:
     """按本轮取样写入基线文件（人工评审后提交）。
 
@@ -219,9 +242,7 @@ def _write_baseline(measurements: list[EndpointMeasurement]) -> None:
             for item in measurements
         },
     }
-    BASELINE_PATH.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    _write_json_atomic(BASELINE_PATH, payload)
     print(
         f"[api_smoke] 基线已写入 {BASELINE_PATH}（端点 {len(measurements)} 项，"
         f"max_ratio={MAX_RATIO:g}）"
@@ -525,6 +546,49 @@ def _gate() -> int:
     return 0
 
 
+def _is_config_validation_error(exc: BaseException) -> bool:
+    """判定异常是否为 pydantic 配置校验错误。
+
+    延迟导入 pydantic，保持脚本模块导入期只依赖标准库。
+
+    Args:
+        exc: 捕获到的异常。
+
+    Returns:
+        True = 该异常是 ``pydantic.ValidationError``。
+    """
+    from pydantic import ValidationError
+
+    return isinstance(exc, ValidationError)
+
+
+def _format_config_validation_error(exc: BaseException) -> str:
+    """把配置校验错误折叠为单行受控提示（不展开 traceback）。
+
+    Args:
+        exc: ``pydantic.ValidationError`` 实例。
+
+    Returns:
+        含首个错误字段摘要的单行错误文本（字段路径 + 校验消息 + 错误类型）。
+    """
+    collector = getattr(exc, "errors", None)
+    raw_errors = collector() if callable(collector) else []
+    if raw_errors:
+        first = raw_errors[0]
+        location = ".".join(str(part) for part in first.get("loc", ())) or "<root>"
+        detail = (
+            f"{location}: {first.get('msg', exc)}"
+            f"（type={first.get('type', 'unknown')}）"
+        )
+    else:
+        detail = str(exc)
+    return (
+        "[api_smoke] 非本次冒烟相关环境变量取值非法"
+        f"（导入期或隔离配置构造校验失败）：{detail}"
+        "——请清理 / 修正该环境变量后重跑（与真实 app 启动失败同源）"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI 入口（模式互斥）。
 
@@ -546,22 +610,28 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--self-check", action="store_true", help="只校验端点注册表与基线键集一致")
     args = parser.parse_args(argv)
 
-    if args.self_check:
-        return _self_check()
-    if args.update:
-        try:
-            measurements = _run_with_temp_db()
-        except RuntimeError as exc:
-            print(f"[api_smoke] 取样失败: {exc}", file=sys.stderr)
-            return 1
-        _print_results(measurements)
-        _print_table(measurements, None)
-        _write_baseline(measurements)
-        print(f"[api_smoke] 冒烟完成 端点={len(measurements)} 模式=update")
-        return 0
-    if args.gate:
-        return _gate()
-    return _report()
+    try:
+        if args.self_check:
+            return _self_check()
+        if args.update:
+            try:
+                measurements = _run_with_temp_db()
+            except RuntimeError as exc:
+                print(f"[api_smoke] 取样失败: {exc}", file=sys.stderr)
+                return 1
+            _print_results(measurements)
+            _print_table(measurements, None)
+            _write_baseline(measurements)
+            print(f"[api_smoke] 冒烟完成 端点={len(measurements)} 模式=update")
+            return 0
+        if args.gate:
+            return _gate()
+        return _report()
+    except Exception as exc:
+        if not _is_config_validation_error(exc):
+            raise
+        print(_format_config_validation_error(exc), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
