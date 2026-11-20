@@ -7,8 +7,9 @@
 ``_persist_and_rebuild`` 尾段）。承载内容：
 
     - 运行时真源 :data:`runtime_search_config`（loader 语义镜像——
-      ``search`` 段不在 loader 解析面内（loader 仅解析 ``llm`` 段，
-      其余顶层键告警忽略），本模块自持加载 / 应用 / 复位三件套；
+      ``search`` 段不在 loader 解析面内（loader 仅解析 ``llm`` 段；
+      ``search`` 属其白名单已知段、不告警；其余顶层键告警忽略），
+      本模块自持加载 / 应用 / 复位三件套；
       app lifespan 启动序列经 :func:`load_search_config` 装配）；
     - 条目 CRUD（唯一名 409 / 存在性 404 / 删除唯一 provider 守卫 409
       ——能力启用时删除最后一个条目会破坏「启用即至少一条目」的
