@@ -537,6 +537,27 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **剩余**：无（本切片范围）。
 
+### 已完成切片：审计 A 复审残留闭环（P2×2，本分支工作区）
+
+**已完成**（逐条闭环，分支 `feat/audit-a-fixes`）：
+
+1. **P2 心流合并空文本 → 兜底文案**：`record_inbound` 新增仅关键字形参 `append_text`——仅附件入站（`text=""`）以 False 记录，到达时刻 / 积压照常递增、空串不进入 `buffered_texts`；`_apply_flow_gate` 按入站 `text.strip()` 是否为空传入该开关；`_run_flow_batch` 的跳过守卫改为 `if not merged.text.strip():`（清除 pending 后直接返回，防御任何空白合并）。新增只读观测面 `ChannelRouter.flow_state_for`（返回节拍状态深拷贝，供断言缓冲 / 积压 / 到达面）。用例：`test_empty_text_media_burst_keeps_buffer_clean_and_merges_real_text`（门控启用 + 伪时钟连发 3 条纯媒体：缓冲零空条目、到达与积压均为 3、批次到期零生成零兜底、pending 清除；随后真实文本合并为 `真实文本`，无前导换行）、`test_single_empty_text_media_skips_generation_without_fallback`（单条立即路径仍跳过生成且不排程 / 不兜底）、`test_record_inbound_without_text_append_keeps_arrival_and_backlog`（纯函数面）。`docs/backend/channels.md` 心流节与空文本语义同步（纯媒体批次无净文本直接结束；占位文本不算用户文本）。
+2. **P2 QQ 占位符形态残留**：新增 `_has_non_text_content`（CQ 码字符串形态 `_CQ_CODE_RE.search`；段数组形态存在 `type != "text"` 的段）；入站归一条件改为「无用户字面文本且消息含非文本内容 → `text=""`」，丢弃条件改为「既无用户文本也无任何非文本内容」。CQ 字符串纯图片与纯 face 表情均以空文本投递（无可提取附件时路由器按 no-op 收录），混合文本 + 图片 / face 保留占位符进入生成面。用例 4 例：CQ 字符串纯图片 → `text=""`、纯 face 段 → `text=""`、混合文本 + face → `你好[表情]`、仅空 text 段 → 丢弃。既有 CQ / face 相关断言逐个核对后无需改动：`test_segment_array_image_face_placeholders` / `test_cq_string_flattening` / `test_cq_string_multiple_codes` 是展平纯函数断言（展平逻辑未变）；`test_cq_string_event_routed`（`在吗[CQ:face,id=2]`）带用户字面文本，仍为 `在吗[表情]`；`test_pure_sticker_face_with_image_routed_with_empty_text` 本就断言 `text=""`。qq_webhook 模块 docstring 与 `docs/backend/channels.md`（空文本语义 / QQ 仅附件 / 消息展平）同步为「占位文本不算用户文本，所有 wire 形态一致」。
+
+**验证**（主 Agent 实跑，命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2869 passed**；基线 2862 + 新增 7：心流 3、QQ 归一 4）。
+- `cd backend && pixi run coverage-gates` → **0**（24 组 ≥80%；harness/channels 97.2% / harness/chat 96.3%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run typecheck` → **0**（192 源文件零问题）。
+- 根 `pixi run gates` → **0**（注释门 / 同步测试棘轮 / noqa 冻结 / 沙盒漂移 / 红探针门 / 文档真相 / 断言棘轮 / 导出面 / prose-pin 全过）。
+- `cd backend && pixi run gen-examples` → **0** 连续两次；三件套 sha256 两次完全一致（幂等，无 env 键新增）。
+- 前端未改动，按任务书略过。
+- **反向实证**（逐条临时还原实现 → 目标用例变红 → 复原）：
+  - 还原心流调用（`record_inbound(state, message.text, now)`）与批次守卫（`if not merged.text:`）→ `test_empty_text_media_burst_keeps_buffer_clean_and_merges_real_text` **1 failed**（`assert ['', '', ''] == []`——空条目进入缓冲）；复原后两文件 33 passed。
+  - 还原 QQ 归一 / 丢弃条件（`attachments and not _has_user_text` / `not text.strip() and not attachments`）→ `test_qq_webhook.py` **2 failed**（CQ 字符串纯图片、纯 face 段未以空文本投递）；复原后三文件 73 passed。
+
+**剩余**：无（本切片范围）；复审由主 Agent 后续执行。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。

@@ -12,7 +12,9 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from packages.harness.channels.channel_models import (
+    ChannelAttachmentKind,
     ChannelDeliveryResultModel,
+    ChannelMessageAttachment,
     ChannelType,
     InboundMessageModel,
     OutboundMessageModel,
@@ -161,6 +163,23 @@ def _flow_settings(**overrides: Any) -> FlowGateSettings:
     payload: dict[str, Any] = {"enabled": True}
     payload.update(overrides)
     return FlowGateSettings(**payload)
+
+
+def _media_inbound(message_id: str) -> InboundMessageModel:
+    """构造仅附件入站消息（空文本 + image 附件——纯图形态）。"""
+    return InboundMessageModel(
+        channel=ChannelType.TELEGRAM,
+        chat_id="10086",
+        message_id=message_id,
+        sender_id="7",
+        text="",
+        attachments=[
+            ChannelMessageAttachment(
+                kind=ChannelAttachmentKind.IMAGE,
+                url="https://example.test/image.jpg",
+            )
+        ],
+    )
 
 
 def _router(
@@ -477,3 +496,72 @@ async def test_pending_batch_recovered_after_grace() -> None:
     clock.now += 20_000
     await router.handle_inbound(_inbound("第二条"))
     assert len(scheduler.jobs) == 2
+
+
+async def test_single_empty_text_media_skips_generation_without_fallback() -> None:
+    """单条纯媒体空文本（立即裁决路径）：跳过生成、不排程、不发兜底。"""
+    service = FakeChatService()
+    adapter = FakeAdapter()
+    scheduler = FakeScheduler()
+    router = _router(
+        service=service,
+        adapter=adapter,
+        clock=FakeClock(),
+        rhythm=FakeRhythm(),
+        scheduler=scheduler,
+        settings=_flow_settings(min_reply_gap_ms=0),
+    )
+    result = await router.handle_inbound(_media_inbound("m1"))
+    assert result.message_ids == []
+    assert service.reply_calls == []
+    assert adapter.sent == []
+    assert scheduler.jobs == []
+    assert router.empty_text_skip_count == 1
+
+
+async def test_empty_text_media_burst_keeps_buffer_clean_and_merges_real_text() -> None:
+    """连发纯媒体空文本：批次触发后无生成 / 无兜底、缓冲无空条目，到达与
+    积压照常推进；随后真实文本合并为净文本（无前导换行）。"""
+    service = FakeChatService()
+    adapter = FakeAdapter()
+    scheduler = FakeScheduler()
+    clock = FakeClock()
+    router = _router(
+        service=service,
+        adapter=adapter,
+        clock=clock,
+        rhythm=FakeRhythm(),
+        scheduler=scheduler,
+        settings=_flow_settings(
+            burst_count=2,
+            burst_window_ms=4000,
+            merge_quiet_ms=0,
+            merge_max_messages=5,
+            min_reply_gap_ms=0,
+            backlog_defer_threshold=8,
+        ),
+    )
+    for message_id in ("m1", "m2", "m3"):
+        clock.now += 100
+        await router.handle_inbound(_media_inbound(message_id))
+    key = "channel:telegram:10086"
+    state = router.flow_state_for(key)
+    assert state is not None
+    assert state.buffered_texts == []
+    assert state.backlog_count == 3
+    assert len(state.recent_arrival_ms) == 3
+    assert service.reply_calls == []
+    assert adapter.sent == []
+    assert len(scheduler.jobs) == 1
+    await scheduler.run_last()
+    assert service.reply_calls == []
+    assert adapter.sent == []
+    state = router.flow_state_for(key)
+    assert state is not None
+    assert state.pending is False
+    clock.now += 100
+    await router.handle_inbound(_inbound("真实文本", message_id="m4"))
+    assert len(scheduler.jobs) == 2
+    await scheduler.run_last()
+    assert service.reply_calls[-1]["text"] == "真实文本"
+    assert adapter.sent[-1].text == "echo:真实文本"

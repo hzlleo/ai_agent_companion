@@ -13,7 +13,9 @@
       （HTTP 层确认语义）；
     - 协议 v2 附件提取：image / record 段 → 附件（url 源 / base64://
       剥前缀 / file:// path 源）；无引用媒体段跳过；CQ 码字符串形态
-      维持占位符降级（提取边界）；非媒体段不产附件。
+      维持占位符降级（提取边界）；非媒体段不产附件；
+    - 非文本内容归一：无用户文本但含 CQ 码 / 非 text 段（两种 wire 形态
+      一致）→ ``text=""`` 投递；混合文本保留占位符；仅空 text 段丢弃。
 """
 
 from __future__ import annotations
@@ -473,3 +475,45 @@ class TestAttachmentExtractionV2:
             ChannelAttachmentKind.IMAGE,
             ChannelAttachmentKind.AUDIO,
         ]
+
+
+class TestNonTextNormalization:
+    async def test_cq_string_pure_image_routed_with_empty_text(self) -> None:
+        """CQ 字符串纯图片（无用户文本）：text="" 投递（占位符不冒充用户话语）。"""
+        router = FakeRouter()
+        await process_webhook_event(_message_event(message="[CQ:image,file=x.jpg]"), router)
+        assert len(router.handled) == 1
+        assert router.handled[0].text == ""
+        assert router.handled[0].attachments == []
+
+    async def test_pure_face_segment_routed_with_empty_text(self) -> None:
+        """纯 face 段（无用户文本、无可提取附件）：text="" 投递（no-op 收录）。"""
+        router = FakeRouter()
+        await process_webhook_event(
+            _message_event(message=[{"type": "face", "data": {"id": "4"}}]), router
+        )
+        assert len(router.handled) == 1
+        assert router.handled[0].text == ""
+        assert router.handled[0].attachments == []
+
+    async def test_mixed_text_and_face_keeps_placeholder(self) -> None:
+        """混合文本 + face：用户文本保留并携带占位符进入生成面。"""
+        router = FakeRouter()
+        await process_webhook_event(
+            _message_event(
+                message=[
+                    {"type": "text", "data": {"text": "你好"}},
+                    {"type": "face", "data": {"id": "4"}},
+                ]
+            ),
+            router,
+        )
+        assert router.handled[0].text == "你好[表情]"
+
+    async def test_empty_text_segment_without_non_text_skipped(self) -> None:
+        """仅空 text 段（无非文本内容）：丢弃（无可投递内容）。"""
+        router = FakeRouter()
+        await process_webhook_event(
+            _message_event(message=[{"type": "text", "data": {"text": ""}}]), router
+        )
+        assert router.handled == []

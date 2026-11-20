@@ -25,8 +25,10 @@
         ↓ ChannelRouter.handle_inbound（恒不抛——单消息错误隔离铁律）
 
 仅附件入站（纯图片 / 纯表情，无用户字面文本）：占位符文本是人格可见面
-的降级形态，不代表用户说了话——归一为 ``text=""`` 投递（附件照常搭载，
-路由器跳过生成并保留表情收录）；只有既无文本又无已知附件时才丢弃。
+的降级形态，不代表用户说了话——只要消息含非文本内容（CQ 码或非 text
+段，两种 wire 形态一致），就归一为 ``text=""`` 投递（附件照常搭载，
+路由器跳过生成并保留表情收录）；既无用户文本也无任何非文本内容时才
+丢弃。
 
 隔离铁律：**本处理器恒不抛异常**——任何单事件失败（载荷非法 / 字段
 缺失 / 路由器内部异常）只进日志，向 HTTP 层返回确认语义（调用方
@@ -217,6 +219,25 @@ def _has_user_text(message: list[Ob11MessageSegmentModel] | str) -> bool:
     )
 
 
+def _has_non_text_content(message: list[Ob11MessageSegmentModel] | str) -> bool:
+    """消息是否含非文本内容（CQ 码 / 非 text 段——纯媒体形态判定）。
+
+    与 :func:`_has_user_text` 成对使用：无用户字面文本但含非文本内容时
+    归一为 ``text=""`` 投递（占位符不冒充用户话语，路由器据此跳过生成）；
+    两者皆无才是真正无可投递内容的消息。
+
+    Args:
+        message: OneBot v11 消息内容（段数组或 CQ 码字符串）。
+
+    Returns:
+        True = CQ 码字符串形态存在 ``[CQ:type,...]`` 码，或段数组形态
+        存在 ``type != "text"`` 的段。
+    """
+    if isinstance(message, str):
+        return _CQ_CODE_RE.search(message) is not None
+    return any(segment.type != "text" for segment in message)
+
+
 def _attachment_from_segment(segment: Ob11MessageSegmentModel) -> ChannelMessageAttachment | None:
     """单一媒体段 → 通道中立附件（无可用引用形态返回 None）。
 
@@ -303,13 +324,17 @@ async def process_webhook_event(payload: dict[str, Any], router: ChannelRouter) 
     if not _DEDUP_WINDOW.remember(event.message_id):
         logger.debug("QQ webhook 消息重复投递（去重跳过）: message_id={}", event.message_id)
         return
+    has_non_text_content = _has_non_text_content(event.message)
     text = flatten_message_text(event.message)
     attachments = extract_message_attachments(event.message)
-    if attachments and not _has_user_text(event.message):
+    if not _has_user_text(event.message) and has_non_text_content:
+        # 占位文本不算用户文本：纯媒体（两种 wire 形态一致）以空文本
+        # 投递——路由器跳过生成，无可提取附件时按 no-op 收录。
         text = ""
-    if not text.strip() and not attachments:
+    if not text.strip() and not has_non_text_content:
         logger.debug(
-            "QQ webhook 消息无文本且无附件（跳过路由）: message_id={}", event.message_id
+            "QQ webhook 消息无用户文本且无非文本内容（跳过路由）: message_id={}",
+            event.message_id,
         )
         return
     if event.message_type == "group":
