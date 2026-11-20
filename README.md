@@ -53,7 +53,7 @@ pixi install                # 安装根环境
 cd backend && pixi install  # 安装后端环境
 cd .. && pixi run test-all  # 后端全量测试
 cd backend && pixi run chat # 控制台与当前人格对话
-cd ../frontend && pixi install && pixi run install  # 前端环境（Node 22 + npm 依赖）
+cd ../frontend && pixi install && pixi run install  # 前端环境（必须经 pixi 提供 Node 22；勿直接 npm）
 pixi run dev                # 前端开发服务器（5173，连本机后端 8000）
 ```
 

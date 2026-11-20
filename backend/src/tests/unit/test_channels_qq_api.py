@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from typing import Any
@@ -266,3 +267,65 @@ class TestRouterNotAssembled:
             )
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
+
+
+class _BlockingRouter:
+    """fake 路由器——入站处理被闸门占住（验证 ack 不等待路由完成）。"""
+
+    def __init__(self) -> None:
+        self.handled: list[InboundMessageModel] = []
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def handle_inbound(self, message: InboundMessageModel) -> ChannelDeliveryResultModel:
+        self.started.set()
+        await self.release.wait()
+        self.handled.append(message)
+        return ChannelDeliveryResultModel(
+            channel=ChannelType.QQ, chat_id=message.chat_id, message_ids=["1"]
+        )
+
+
+async def _wait_until(predicate: Any) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 5.0
+    while not predicate():
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise TimeoutError("等待条件超时")
+        await asyncio.wait_for(asyncio.sleep(0), timeout=remaining)
+
+
+class TestQueuedAck:
+    """runner 装配形态：端点只入队并立即确认（不等待 LLM 回合）。"""
+
+    async def test_ack_returned_before_slow_route_completes(self) -> None:
+        """慢路由器占住 worker 时 POST 仍立即 200，随后后台完成路由。"""
+        from packages.harness.channels.qq.qq_runner import QqWebhookRunner
+
+        router = _BlockingRouter()
+        runner = QqWebhookRunner(router=router)
+        app = FastAPI(docs_url=None, redoc_url=None)
+        app.include_router(qq_channels_router)
+        register_exception_handlers(app)
+        app.state.channels_qq_runner = runner
+        task = asyncio.create_task(runner.run())
+        transport = ASGITransport(app=app)
+        try:
+            async with AsyncClient(transport=transport, base_url="http://test") as async_client:
+                response = await async_client.post(
+                    "/api/v1/channels/qq/webhook",
+                    json=_message_event(message_id=7001),
+                    headers=_auth_headers(),
+                )
+            assert response.status_code == 200
+            assert response.json() == {"status": "ok"}
+            assert router.handled == []
+            await asyncio.wait_for(router.started.wait(), timeout=5.0)
+            router.release.set()
+            await _wait_until(lambda: len(router.handled) == 1)
+            assert router.handled[0].chat_id == "private:10086"
+        finally:
+            router.release.set()
+            runner.request_stop()
+            await asyncio.wait_for(task, timeout=5.0)

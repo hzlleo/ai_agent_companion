@@ -18,6 +18,7 @@
 
 ```
 chat_by_role(role, messages, params)
+    ↓ ⓪ LLM_DAILY_BUDGET_* 日预算闸                 超限 → RATE_LIMITED（不落用量）
     ↓ ① config.model_resolver.resolve(role)           角色解析（未绑定 → MODEL_NOT_FOUND）
     ↓ ② config.llm_wire.build_llm_wire_config(entry)  wire 构建（密钥解析收口：api_key_env → LLM_API_KEY 兜底 → 空串）
     ↓ ③ pools.entry_gate(entry)                        熔断预检（open → LLM_REQUEST_FAILED）+ per-entry 信号量
@@ -42,6 +43,8 @@ gateway = LlmGateway(
     pool_manager=None,        # None = pools 全局单例（调用时读取；未装配 fail loud INTERNAL_ERROR）
     settings=None,            # None = config 全局单例（llm 兜底密钥 + llm_request_timeout_seconds）
     usage_recorder=wire_default_usage_recorder(),  # None = 未接线（零记录）
+    usage_counter=wire_default_usage_counter(),    # None = 零预算门禁（0 = 不限）
+    clock=now_ms,             # 预算日桶 / 时延统计时钟（测试可注入）
     retry_attempts=3,         # 传输重试总次数上限（含首次）
     retry_wait_seconds=0.5,   # 指数退避基数秒（Retry-After 缺失时）
     retry_after_max_seconds=30.0,  # Retry-After 等待封顶
@@ -54,7 +57,7 @@ gateway = LlmGateway(
 app 装配从 `Settings.llm.top_logprobs` / `Settings.llm.prompt_logprobs`
 读取后传入网关（env `LLM_TOP_LOGPROBS` / `LLM_PROMPT_LOGPROBS`）。
 
-`wire_default_usage_recorder()` 是 llm → usage 的唯一接线点（函数体内惰性 import——llm 模块导入期零耦合；app 装配调用）。
+`wire_default_usage_recorder()` / `wire_default_usage_counter()` 是 llm → usage 的仅有两个接线点（函数体内惰性 import——llm 模块导入期零耦合；app 装配调用）。
 
 ## 亲密通道（roles:intimate）
 
@@ -445,6 +448,28 @@ prompt_logprobs；端点未回传 / 旧端点缺失时对应字段为 ``None``�
 | `request_id` | str \| None | 请求追踪 ID（显式参数 → 上下文变量 → None） |
 | `error_code` | str \| None | 失败错误码（成功为 None） |
 
+## 日预算闸与慢调用观测
+
+**日预算（`LLM_DAILY_BUDGET_GLOBAL` / `LLM_DAILY_BUDGET_PERSONA`，默认 0 = 不限）**：
+调用前（角色解析 / 条目门控 / 传输之前）按 persona 档先行、global 档其后判定；
+超限抛既有 `RATE_LIMITED`（429），`details` 含 `scope` / `used` / `limit`（persona
+档另含 `persona_id`），且**不落用量行**（被预算拒绝的调用不计入预算，避免自我
+强化耗尽）。计数口径为当日 UTC 日桶内的 usage 行（全 purpose，含失败行）——本闸
+是模型调用总量闸；`persona_id` 缺失（系统调用）只受 global 档约束。
+
+**软竞态（锁定决策）**：计数经 usage 表查询（DB 口径），跨 worker 各自查询同一张
+表，结果**近似**全局一致——并发请求可能同时读到同一剩余额度并同时放行（最多
+超出并发数条）。预算不是计费级精确配额；逐条强一致需要 Redis 式原子计数，本工
+程 NO Redis 决策下不引入。计数查询异常按普通业务异常上抛（fail loud，不静默放行）。
+
+**今后扩展工作台（本批未实现）**：ASR / TTS / voiceprint 的独立预算不在本批——
+它们与 LLM 调用共用全 purpose 计数口径（见 LEDGER §6 边界记录）；需要分面预算时
+在 usage 域按 purpose 增加过滤面即可，不改变本闸语义。
+
+**慢调用观测**：成功调用时延 ≥ `SLOW_CALL_WARN_MS`（代码常量 10s）落一条 WARN，
+字段为 `entry` / `model` / `purpose` / `latency_ms`（不打印消息内容）。仅观测，
+不重试、不中断、不计失败。
+
 ## 用量发射语义
 
 - 成功 / 失败路径**均落账**（失败 tokens 为 0，调用计数 + 时延仍有观测价值）；流式以末块 usage 为准（无则零用量）；
@@ -548,7 +573,7 @@ config.yaml 是 LLM 注册表**唯一真源**：`/api/v1/models` 管理面对注
 
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_llm_models.py` / `test_llm_client.py` / `test_llm_gateway.py` / `test_llm_embeddings.py` / `test_llm_logprobs.py`（5 份）；
+- 测试位置：`src/tests/unit/test_llm_models.py` / `test_llm_client.py` / `test_llm_gateway.py` / `test_llm_embeddings.py` / `test_llm_logprobs.py`（5 份；预算与慢调用用例在 gateway 文件内）；
 - 全部 `async def test_`；HTTP 一律 `httpx.MockTransport`（零真实出站）；网关经注入解析器 + 隔离 Settings 的真实 PoolManager（共享 client 替换为 MockTransport）；重试等待零 sleep（Retry-After 0 / 等待策略直测）；熔断 open 经预开熔断器确定性触发；embeddings 面覆盖请求形态 / index 归位 / 数量与序号契约 / purpose=embed 用量发射 / persona 解析序 / 角色未绑定；
 - 默认接线全链测试：gateway → `wire_default_usage_recorder` → usage 服务 → 共享 SQLite 引擎（`test_llm_gateway.py::test_default_usage_recorder_full_chain`）；
 - 覆盖率（`pixi run tests-unit` 实测）：harness/llm 组 **95%**（client 95% / gateway 100% / llm_models 100%）；

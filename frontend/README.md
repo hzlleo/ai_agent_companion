@@ -95,7 +95,9 @@ frontend/
 
 ## Pixi 命令
 
-全部质量命令经 pixi 执行（保证 Node 版本一致）：
+全部质量命令必须经 pixi 执行（`pixi install` 提供 Node.js 22；`package.json` 的
+`engines` 与 `.npmrc` 的 `engine-strict=true` 拒绝其它 Node 大版本——直接 `npm`
+在非 22 的环境下会失败）：
 
 | 命令 | 说明 |
 | --- | --- |
@@ -108,6 +110,17 @@ frontend/
 | `pixi run lint` | `tsc --noEmit` + `eslint src/`（strict-type-checked） |
 | `pixi run typecheck` | 仅 `tsc --noEmit` |
 | `pixi run preview` | 本地预览生产包 |
+
+## 构建体积基线（决策）
+
+生产构建实测（R3 限流/背压切片）：单 chunk `dist/assets/index-*.js` **717.44 KB**（gzip
+**213.91 KB**）、CSS 23.26 KB（gzip 5.28 KB）；审计环境构建耗时 6.16s，本机复跑
+3.61s（随负载波动）。Vite 的 `>500 kB` 提示为既有已知项。
+
+**决策**：维持单 chunk（管理台为内部工具、首屏依赖集中，路由级拆包收益低于
+多请求开销与缓存碎片成本）。**触发条件**：单 chunk 超过 **1 MB**（minified）或
+首屏 LCP 在部署机实测明显退化时，再引入路由级 `lazy()` 拆包——先拆
+`pages/realtime` 与 `pages/memories` 两个最重路由，保留共享 vendor chunk。
 
 ## 开发工作流（与后端联调）
 

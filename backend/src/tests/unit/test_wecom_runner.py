@@ -799,3 +799,43 @@ class TestAttachmentFailureSurfaces:
         assert result.attachment_results[0].ok is False
         assert "私网" in (result.attachment_results[0].error or "")
         assert requests == []
+
+
+class TestPeriodicObservation:
+    """队列观测 INFO（伪时钟驱动；仅积压或丢弃增量时输出）。"""
+
+    async def test_stats_logged_after_interval_with_backlog(self) -> None:
+        """推进到间隔点且有积压：INFO 含深度与丢弃增量。"""
+        from packages.harness.channels.wecom.wecom_runner import WECOM_STATS_INTERVAL_MS
+
+        clock = _Clock()
+        runner = _runner(client=FakeWeComClient(), router=FakeRouter(), clock=clock)
+        await runner._handle_callback(_text_frame(msgid="obs-1"))
+        captured: list[str] = []
+        handler_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+        try:
+            clock.advance_ms(WECOM_STATS_INTERVAL_MS)
+            await runner._handle_callback(_text_frame(msgid="obs-2"))
+        finally:
+            logger.remove(handler_id)
+        assert any(
+            "企微入站队列观测" in message
+            and "pending=2" in message
+            and "dropped_delta=0" in message
+            for message in captured
+        )
+
+    async def test_stats_silent_without_backlog_or_drop(self) -> None:
+        """空队列且无丢弃：间隔到达也静默。"""
+        from packages.harness.channels.wecom.wecom_runner import WECOM_STATS_INTERVAL_MS
+
+        clock = _Clock()
+        runner = _runner(client=FakeWeComClient(), router=FakeRouter(), clock=clock)
+        captured: list[str] = []
+        handler_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+        try:
+            clock.advance_ms(WECOM_STATS_INTERVAL_MS)
+            runner._maybe_log_stats()
+        finally:
+            logger.remove(handler_id)
+        assert not any("企微入站队列观测" in message for message in captured)

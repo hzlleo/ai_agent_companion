@@ -545,6 +545,7 @@ class RealtimeVoiceSettings(BaseSettings):
         partial_min_speech_ms: 中途转写的最短已积累语音（低于不送）。
         sentence_max_chars: 助手文本单句上限（超过在标点 / 空格处硬切）。
         tts_chunk_bytes: 下行 TTS 音频分片字节数（WAV 字节流分片）。
+        tts_queue_max: 逐句 TTS 队列上限（溢出策略：丢最旧句并计数）。
         audio_queue_max_chunks: 音频入队上限（溢出策略：丢最旧块并计数）。
         audio_batch_max_chunks: 单次批量出队块数上限。
         max_session_ms: 单会话最长时长（到时关闭）。
@@ -552,6 +553,8 @@ class RealtimeVoiceSettings(BaseSettings):
         heartbeat_interval_ms: 心跳建议间隔（ready 公告；服务端按空闲超时
             判定，不强制客户端按该间隔发送）。
         barge_in_enabled: 打断开关（False = 用户新语音不打断播放）。
+        max_sessions: 进程内并发会话上限（超限以 1013 拒绝——进程级，
+            多 worker 部署时每进程各自计数）。
     """
 
     enabled: bool = Field(default=False, description="实时语音总闸（False = WS 端点拒绝连接）")
@@ -589,6 +592,9 @@ class RealtimeVoiceSettings(BaseSettings):
     tts_chunk_bytes: int = Field(
         default=16384, ge=1024, le=1048576, description="下行 TTS 音频分片字节数"
     )
+    tts_queue_max: int = Field(
+        default=32, ge=1, le=4096, description="逐句 TTS 队列上限（句；溢出丢最旧）"
+    )
     audio_queue_max_chunks: int = Field(
         default=64, ge=1, le=4096, description="音频入队上限（块；溢出丢最旧）"
     )
@@ -605,6 +611,9 @@ class RealtimeVoiceSettings(BaseSettings):
         default=15000, ge=1000, le=600000, description="心跳建议间隔（毫秒）"
     )
     barge_in_enabled: bool = Field(default=True, description="打断开关")
+    max_sessions: int = Field(
+        default=2, ge=1, description="进程内并发会话上限（超限 1013 拒绝）"
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="REALTIME_VOICE_",
@@ -680,6 +689,7 @@ class RealtimeSessionMetricsModel(BaseModel):
         generations: 发起的回复生成轮次。
         generation_failures: 回复生成失败次数。
         tts_sentences: 送 TTS 的句子数。
+        tts_chunks_dropped: TTS 队列溢出丢弃的最旧句数。
         tts_failures: TTS 调用失败次数。
         audio_chunks_sent: 下行音频分片数。
         interruptions: 打断次数。
@@ -701,6 +711,7 @@ class RealtimeSessionMetricsModel(BaseModel):
     generations: int = Field(default=0, ge=0, description="回复生成轮次")
     generation_failures: int = Field(default=0, ge=0, description="生成失败次数")
     tts_sentences: int = Field(default=0, ge=0, description="送 TTS 句子数")
+    tts_chunks_dropped: int = Field(default=0, ge=0, description="TTS 队列溢出丢弃句数")
     tts_failures: int = Field(default=0, ge=0, description="TTS 失败次数")
     audio_chunks_sent: int = Field(default=0, ge=0, description="下行音频分片数")
     interruptions: int = Field(default=0, ge=0, description="打断次数")

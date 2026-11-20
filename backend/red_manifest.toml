@@ -243,3 +243,10 @@ symbol = "packages.harness.channels.outbound_guard:validate_http_url"
 tests = [
     "tests/unit/test_outbound_guard.py::test_missing_host_rejected",
 ]
+
+[[probes]]
+name = "qq-runner-removal"
+symbol = "packages.harness.channels.qq.qq_runner:QqWebhookRunner"
+tests = [
+    "tests/unit/test_qq_runner.py::TestQueueBackpressure::test_queue_overflow_drops_counts_and_logs",
+]

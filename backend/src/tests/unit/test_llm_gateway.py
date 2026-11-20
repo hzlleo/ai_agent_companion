@@ -752,3 +752,195 @@ async def test_default_usage_recorder_full_chain(shared_db_engine: AsyncEngine) 
         assert record.error_code is None
     finally:
         db_engine_holder.reset()
+
+
+# ---------------------------------------------------------------------------
+# 日预算门禁 / 慢调用观测
+# ---------------------------------------------------------------------------
+
+
+class _RecordingCounter:
+    """假预算计数面（记录调用并返回脚本化行数）。"""
+
+    def __init__(self, counts: dict[str | None, int], *, forbidden: bool = False) -> None:
+        self.counts = counts
+        self.calls: list[tuple[str | None, int]] = []
+        self.forbidden = forbidden
+
+    async def __call__(self, persona_id: str | None, day_start_ms: int) -> int:
+        if self.forbidden:
+            raise AssertionError("0 = 不限定，不应发生计数查询")
+        self.calls.append((persona_id, day_start_ms))
+        return self.counts.get(persona_id, 0)
+
+
+class _StepClock:
+    """按调用序返回预置时刻的时钟（慢调用阈值判定）。"""
+
+    def __init__(self, steps: list[int]) -> None:
+        self.steps = steps
+        self.calls = 0
+
+    def __call__(self) -> int:
+        index = min(self.calls, len(self.steps) - 1)
+        self.calls += 1
+        return self.steps[index]
+
+
+async def _budget_gateway(
+    *,
+    llm: LlmEndpointConfig,
+    counter: Any,
+    clock: Any = None,
+) -> tuple[LlmGateway, PoolManager, list[httpx.Request]]:
+    """构造带预算计数面 / 可注入时钟的网关（MockTransport 零出站）。"""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return _ok_response()
+
+    manager = await _make_pool_manager(handler)
+    kwargs: dict[str, Any] = {}
+    if clock is not None:
+        kwargs["clock"] = clock
+    gateway = LlmGateway(
+        resolver=ModelResolver([_entry("main-chat", roles=("chat",))]),
+        pool_manager=manager,
+        settings=build_isolated_settings(pools=PoolsConfig(cb_fail_max=2), llm=llm),
+        usage_counter=counter,
+        retry_attempts=1,
+        retry_wait_seconds=0.0,
+        **kwargs,
+    )
+    return gateway, manager, captured
+
+
+async def test_persona_budget_exceeded_rejected_before_call() -> None:
+    """persona 档超限：调用前拒绝（RATE_LIMITED + details），零出站。"""
+    counter = _RecordingCounter({"7": 2})
+    gateway, manager, captured = await _budget_gateway(
+        llm=LlmEndpointConfig(daily_budget_persona=2), counter=counter
+    )
+    try:
+        with pytest.raises(BusinessException) as excinfo:
+            await gateway.chat_by_role("chat", _messages(), persona_id="7")
+    finally:
+        await manager.stop()
+    assert excinfo.value.code == ErrorCode.RATE_LIMITED
+    assert excinfo.value.details == {"scope": "persona", "used": 2, "limit": 2, "persona_id": "7"}
+    assert captured == []
+    assert counter.calls[0][0] == "7"
+    assert counter.calls[0][1] % 86_400_000 == 0
+
+
+async def test_global_budget_exceeded_rejected_without_persona_context() -> None:
+    """无人格上下文：persona 档跳过，global 档超限即拒。"""
+    counter = _RecordingCounter({None: 3})
+    gateway, manager, captured = await _budget_gateway(
+        llm=LlmEndpointConfig(daily_budget_global=3), counter=counter
+    )
+    try:
+        with pytest.raises(BusinessException) as excinfo:
+            await gateway.chat_by_role("chat", _messages())
+    finally:
+        await manager.stop()
+    assert excinfo.value.code == ErrorCode.RATE_LIMITED
+    assert excinfo.value.details == {"scope": "global", "used": 3, "limit": 3}
+    assert captured == []
+    assert [call[0] for call in counter.calls] == [None]
+
+
+async def test_budget_below_limit_allows_and_equal_limit_rejects() -> None:
+    """used = limit-1 放行（调用后恰好等于上限）；used = limit 拒绝。"""
+    allowed = _RecordingCounter({"7": 1})
+    gateway, manager, captured = await _budget_gateway(
+        llm=LlmEndpointConfig(daily_budget_persona=2), counter=allowed
+    )
+    try:
+        response = await gateway.chat_by_role("chat", _messages(), persona_id="7")
+    finally:
+        await manager.stop()
+    assert response.content == "回复内容"
+    assert len(captured) == 1
+
+    rejected = _RecordingCounter({"7": 2})
+    gateway, manager, captured = await _budget_gateway(
+        llm=LlmEndpointConfig(daily_budget_persona=2), counter=rejected
+    )
+    try:
+        with pytest.raises(BusinessException):
+            await gateway.chat_by_role("chat", _messages(), persona_id="7")
+    finally:
+        await manager.stop()
+    assert captured == []
+
+
+async def test_zero_budgets_mean_unlimited_without_counting() -> None:
+    """两档 0 = 不限：不起计数查询，调用照常。"""
+    counter = _RecordingCounter({}, forbidden=True)
+    gateway, manager, captured = await _budget_gateway(
+        llm=LlmEndpointConfig(daily_budget_global=0, daily_budget_persona=0),
+        counter=counter,
+    )
+    try:
+        response = await gateway.chat_by_role("chat", _messages(), persona_id="7")
+    finally:
+        await manager.stop()
+    assert response.content == "回复内容"
+    assert len(captured) == 1
+    assert counter.calls == []
+
+
+async def test_stream_budget_rejected_on_first_iteration() -> None:
+    """流式路径：首个迭代步前即拒绝（不触达端点）。"""
+    counter = _RecordingCounter({"7": 2})
+    gateway, manager, captured = await _budget_gateway(
+        llm=LlmEndpointConfig(daily_budget_persona=2), counter=counter
+    )
+    stream = gateway.stream_by_role("chat", _messages(), persona_id="7")
+    try:
+        with pytest.raises(BusinessException) as excinfo:
+            await stream.__anext__()
+    finally:
+        await manager.stop()
+    assert excinfo.value.code == ErrorCode.RATE_LIMITED
+    assert captured == []
+
+
+async def test_slow_call_warn_threshold_triggers_and_stays_silent_below() -> None:
+    """慢调用 WARN：≥10s 触发（含 purpose / entry / 耗时），<10s 不触发。"""
+    from loguru import logger
+
+    base = 1_731_000_000_000
+    slow_clock = _StepClock([base, base + 11_000, base + 11_000])
+    gateway, manager, _captured = await _budget_gateway(
+        llm=LlmEndpointConfig(), counter=_RecordingCounter({}), clock=slow_clock
+    )
+    captured_logs: list[str] = []
+    handler_id = logger.add(lambda message: captured_logs.append(str(message)), level="WARNING")
+    try:
+        await gateway.chat_by_role("chat", _messages())
+    finally:
+        logger.remove(handler_id)
+        await manager.stop()
+    assert any(
+        "LLM 慢调用" in message
+        and "entry=main-chat" in message
+        and "purpose=chat" in message
+        and "latency_ms=11000" in message
+        for message in captured_logs
+    )
+
+    fast_clock = _StepClock([base, base + 9_999, base + 9_999])
+    gateway, manager, _captured = await _budget_gateway(
+        llm=LlmEndpointConfig(), counter=_RecordingCounter({}), clock=fast_clock
+    )
+    captured_logs.clear()
+    handler_id = logger.add(lambda message: captured_logs.append(str(message)), level="WARNING")
+    try:
+        await gateway.chat_by_role("chat", _messages())
+    finally:
+        logger.remove(handler_id)
+        await manager.stop()
+    assert not any("LLM 慢调用" in message for message in captured_logs)
