@@ -533,9 +533,9 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 ### 里程碑：R2 全部批次交付并逐批通过 Oracle 深审
 
 - 批次清单与结论：注入防御、logprobs 置信度、亲密补强（R2b+ 四切片）、R2c 记忆与关系（含修复）、R2d 心流/群聊/声纹/表情包（含修复）、R2e 企微/抖音/Canvas（含修复）、R2f 实时语音（含修复）、加固门禁（Tier-1+Tier-2，含复审残留）、补审 R2a 通道底座与记忆域（含残留）——全部经 Oracle 明确判定无问题（PASS），修复循环见各自小节的命令与证据。
-- 合并状态：PR#18 至 PR#31 已全部合并入 main（当前 `a4bf3e1`），工作区 clean；每批验收证据在 `docs/evidence/`（按 sha8 对应）。
-- 未决事项：审计 A 已执行（实现/架构）：**2×P1 + 3×P2，已修复并复审**（复审结果以本节末尾「审计 A 修复」记录为准）；审计 B（测试/纪律）：**1×P1 + 4×P2，已修复**（证据见 §5「全约束审计 B 修复」，待复审）；审计 C（文档/注释/提示词/配置）尚未执行。R3 在所有审计与终局交叉复核 ALL CLEAN 之前不启动。
-- 恢复指引：从干净 main 起分支执行审计 B→C→终局复核；审计提示词口径见本会话记录（覆盖 19 条硬约束），修复分支命名沿用 `feat/<范围>-review-fixes`。
+- 合并状态：PR#18 至 PR#33 已全部合并入 main（`e95f5fe`），工作区 clean；每批验收证据在 `docs/evidence/`（按 sha8 对应）。
+- 未决事项：无。审计 A（实现/架构，2×P1+3×P2）、审计 B（测试/纪律，1×P1+4×P2）、审计 C（文档/注释/提示词/配置，4×P1+3×P2）均已执行、修复并经 Oracle 复审通过（记录见 §5 各小节）；终局交叉复核提出的 1 条台账过期句已在本次修正，复审在该修正提交上执行。R3 启动条件 = 终局交叉复核 PASS（本段即该状态）。
+- 恢复指引：R2 归档于 main `e95f5fe`；新工作从该点起分支，修复分支命名沿用 `feat/<范围>-review-fixes`；审计提示词口径见本会话记录（覆盖 19 条硬约束）。
 
 ### 已完成切片：全约束审计 A 修复（2×P1 + 3×P2，本分支工作区）
 
@@ -723,6 +723,14 @@ scripts / docs / docker / models；排 `__pycache__` / `.pixi` / `node_modules` 
   `MP3` 不命中）；还原文件后 → **0**（violations=0）。
 
 **剩余**：无（本切片范围）。
+
+### 已完成切片：终局交叉复核（跨审计无回归）
+
+- 复核方式：单只读会话在同一棵树（`89d5312`，后合入 `e95f5fe`）上核验审计 A/B/C 全部闭合项同时成立、无交互回归，并复跑全链。
+- 实测：`tests-all` 2875 passed / `coverage-gates` 24 组 ≥80% / `lint` / `typecheck` 192 文件 / `conftest-env` 196/196（豁免 0）/ 根 gates 全链 exit 0（断言棘轮 8283 asserts·602 raises 无下降、红探针门、导出面、文档真相、prose-pin 尾标记齐）/ `gen-examples` 连跑两次工作树零差异 / `verify-slice --hash-only` = `c1fddaf8`（646 文件）与 canonical 证据一致。
+- 交叉点核验：conftest `LOG_TEXT_FORMAT=""` 经空串→None 不改变默认日志行为；注释元数据门只扫 docstring 与 COMMENT token（字符串字面量不在面内，prompts 模板与示例注释零误伤，豁免仅检查器自身）；loader 白名单与示例 search 节闭环互洽；`router_fakes` 重构后三套用例 20/14/9 不变。
+- R2 不变量抽查 8/8 在树：synthetic 恒跳过、密度锚点、64KiB 块上限与池 LIFO 关闭序、关系摘要注入、亲密通道路由、梦境上限与重入窗、0018 复合索引、voiceprint 同意闸。
+- 结论：唯一 finding 为本文件上方「审计 C 尚未执行」过期句（P2，已按本切片修正并提交复审）；除此之外复核会话判定全部通过。
 
 ## 6. 遗留与部署台账（非阻塞）
 
