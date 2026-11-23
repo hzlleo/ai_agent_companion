@@ -860,7 +860,7 @@ MATCH = 代码与报告要求一致；已记录偏离 = 实现或口径与报告
    合计 338=310/28/0），并声明本表为唯一口径来源；§5.3 补「符合性合计」行，
    注明 R3-1 的 8 项核验 PASS 不并入 MATCH 计数。
 4. **P2 bench-core 不 hermetic**：`_make_vad_feed_case` 把
-   `RealtimeVoiceSettings` 全部 20 个字段显式传参（补齐 12 个），用例输入
+   `RealtimeVoiceSettings` 全部 21 个字段显式传参（补齐 12 个），用例输入
    不再受进程环境 / `.env` 影响；`main()` 增加与 `api_smoke` 同款
    `ValidationError` 折叠（延迟导入判定、单行 loc/msg/type 摘要、exit 1，
    其余异常原样上抛）；模块 docstring 的 Exit 契约同步。`scripts/bench_core.py`
