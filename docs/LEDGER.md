@@ -95,12 +95,12 @@
 | R3-2 限流与背压 | QQ 入站有界 / 实时语音 TTS 队列与会话帽 / LLM 日预算闸 / 多 worker 语义 / 最小观测面 / 前端 Node 护栏与构建体积基线（P1×1 + P2×7；复审 6×P2 闭环） | ✅ merged（PR #36；证据 `fe261c9a`；PR body 引用的 `0276c1a5` 为首提交树证据，终态以 `fe261c9a` 为准） |
 | R3-3 性能基线 | `bench_core.py` 6 项纯函数微基准 + `api_smoke.py` 4 端点进程内冒烟 + 门禁链落位（复审 4×P2 闭环；终局复核 7×P2 闭环） | ✅ merged（PR #37 → main `3f313a6`；评审 head `66b14b3`，终态含 `ecb7714`/`ee9381a`；canonical 证据 `16b07c7c`，历史 `bc71f261`） |
 
-| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（PoC 门，Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-3 本分支工作区（R4-1 / R4-2 已合并；其余切片待开工） |
+| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（PoC 门，Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 本分支工作区（R4-1 / R4-2 / R4-3 已合并；其余切片待开工） |
 
 **当前分支状态**：
 - main：`3f313a6`（PR#34–#37 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
 - `feat/r3-perf`：R3-3 性能基线，已合并（PR #37），可删除。
-- R4：已开工（R4-3 本分支；R4-1 / R4-2 已合并），后续切片待排期。
+- R4：已开工（R4-4 本分支；R4-1 / R4-2 / R4-3 已合并），后续切片待排期。
 - 历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入 main，可删除；工作区 clean。
 
 ## 4. 全部拍板记录（原文语义）
@@ -178,9 +178,9 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 2950 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 3123 passed）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
-cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖/sandbox-drift；当前 mypy 195 文件零问题）
+cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖 220/220/sandbox-drift；当前 mypy 204 文件零问题）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 11 用例（迁移链/并发唯一键/行锁/混合检索）
 cd frontend && pixi run test / coverage / lint / build   # 675 passed（高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
 cd frontend && pixi run build && pixi run bundle-check     # 体积门禁（需先 build）；PASS 尾标记 total=389799 lazy=25
@@ -1320,10 +1320,99 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
    命令与日志见 `docs/evidence/`）；根 `gates` / 前端 `bundle-check` /
    `gen-examples` 幂等均 0。
 
+### 已完成切片：R4-4 SmsForwarder 短信 / 通知转发通道（仅入站，本分支工作区）
+
+**已完成**：
+1. **协议与安全**（`app/api/channels_sms_forwarder.py`）：公开路由
+   `POST /api/v1/channels/sms-forwarder`，加入 `main.py` 豁免清单与
+   README 保护面；鉴权接受 `Authorization: Bearer` /
+   `X-SmsForwarder-Token` / `X-Sms-Forwarder-Token` / `?token=` 四形态，
+   与 `SMS_FORWARDER_TOKEN`（SecretStr）恒时比较——缺失 401、值不符 403，
+   且鉴权先于体解析 / 去重登记（被拒不消耗去重）。仅接受
+   `application/json`；64 KiB 体上限；非 JSON / 非对象 / 深嵌套 / 空体均
+   受控 400；字段级非法按隔离确认（200 不进 4xx）。
+2. **归一与语义**（`channels/sms_forwarder/sms_models.py`）：kind 归一
+   （短信默认接收；notification 由 `SMS_FORWARDER_NOTIFICATIONS_ENABLED`
+   决定）；发送者按手机号 / 联系名归一（`+86` / `0086` / `86` 中国码前缀
+   归一、分隔符剥离），会话键 `sms:<sender>`，发送者不作人格 ID；
+   `synthetic=False`、`is_group_chat=False`；默认 `peer` 落档，仅
+   `SMS_FORWARDER_OWNER_NUMBERS` 命中时 `is_owner=True`；空正文丢弃；
+   时间戳秒级 ×1000 / 毫秒原样 / 非法或缺失回落服务端时钟。
+3. **有界与幂等**（`channels/sms_forwarder/sms_runner.py`）：仿 QQ runner
+   的 webhook 校验 + 去重登记 + 有界队列（容量 64 / worker 2，代码常量
+   非 env）后立即 200；队列满丢弃不登记去重（手机端重投可恢复），ERROR
+   含去重键 / chat_id / message_id / 深度 / 累计；不可路由事件不登记；
+   去重按 msgid 常驻 FIFO（1024）或「发送者 + 正文」内容哈希 + 120s 时间
+   窗；停机 `request_stop` → 取消 worker → 清空队列（零残留）；未装配
+   runner 的嵌入形态保留 `process_sms_forwarder_payload` 直调回落。
+4. **渠道配置与四表面**：`SmsForwarderChannelSettings`
+   （`SMS_FORWARDER_ENABLED` 默认 false / `SMS_FORWARDER_TOKEN` /
+   `SMS_FORWARDER_NOTIFICATIONS_ENABLED` 默认 false /
+   `SMS_FORWARDER_OWNER_NUMBERS`）；`.env.example` 与 config.md 分节表由
+   生成器重出；Wizard 新增 `SMS_FORWARDER_` 前缀步骤；conftest 四键硬覆盖
+   （conftest-env 门 220/220）；`ChannelType` 增 `SMS_FORWARDER` 成员；
+   `InboundMessageModel` additive 增 `is_owner`（既有私聊默认 True 保持零
+   变化，群聊仍 peer）；`health` 与默认关闭形态零影响。
+5. **出站边界**：锁定仅入站——`SmsForwarderAdapter.send_message` 恒空
+   投递结果、不发起平台调用；人格回复仍生成并落会话 / 记忆，手机端由用户
+   自行阅读或回复。`config.yaml` 不承载通道配置（env 面专属）。
+6. **测试**（80 例，全异步、伪时钟、零真网）：`test_sms_forwarder_models.py`
+   （载荷变体 / 别名 / kind 开关 / 空正文 / 时间戳矩阵 / 发送者与属主 /
+   msgid 与内容去重窗 / 直调路径去重与异常隔离）、
+   `test_sms_forwarder_runner.py`（过载丢弃与重投恢复 / 去重 / 通知门 /
+   属主落档 / 停机零残留 / worker 隔离 / 周期观测）、
+   `test_channels_sms_forwarder_api.py`（鉴权矩阵 / 四 token 形态 / 被拒
+   不消耗去重 / Content-Type 与体校验 / 立即 ack / 未装配确认丢弃）、
+   `test_sms_forwarder_settings.py`（默认 / env / SecretStr / 生产
+   fail-closed）、`test_sms_forwarder_adapter.py`（仅入站空投递）、
+   `test_app_sms_forwarder_lifespan.py`（装配 / 停机复位 / 出站丢弃）、
+   `test_channel_router_owner_flag.py`（is_owner=False 私聊按 peer）。
+7. **文档与门禁产物**：channels.md 新增 SmsForwarder 整节（部署 / token /
+   完整 JSON 示例 / 字段表 / 链路 / 去重队列丢弃 / 仅入站 / 群聊不适用）；
+   config.md 键表由生成器同步；docs/backend/README 保护面与 channels 模块
+   状态；root README 特性与快速开始一句；红探针 4 条（3 个 harness 文件 +
+   1 个 API）；surface 豁免清单新增 `SmsForwarderAckDTO`（41/41）。
+8. **证据纪律**：最终树跑 `cd backend && pixi run verify-slice -- --slice
+   r4-4-sms-forwarder` → 0，canonical 证据包
+   `docs/evidence/r4-4-sms-forwarder-60a4ced6.json`（sha8=`60a4ced6`；
+   中间树 `e994abcc` 为同一实现的通过证据，留档）。
+
+**设计取舍 / 偏离**：
+- 仓库没有可复用的通用有界 runner 基类（QQ / 企微各自持有同范式实现，
+  队列元素与解析面不同）；本切片沿用同一范式实现，未抽象共享基类——
+  避免为一个消费者改公共面。
+- 未引入 `SMS_FORWARDER_PATH`：路由静态注册，路径配置会引入动态挂载复杂度，
+  当前无实际需要（避免死配置）。
+- token 按任务指定以 `SMS_FORWARDER_TOKEN` 直接配置字段承载（SecretStr），
+  并扩展 `auth_policy.ensure_auth_policy`：`ENV=prod` 且通道启用时空 token
+  拒绝启动；非 prod 保持「空 = 鉴权关闭」，与既有通道一致。
+- 内容去重窗口 120s 的已知边界：无 msgid 时同发送者 + 同正文在窗口内会被
+  视为重投；需要区分真实重复短信时，手机端模板应携带 `msgid`。
+- 既有 `test_channels_models.py` 的 `ChannelType` 值域断言同步追加
+  `sms_forwarder`（枚举扩展的必要同步，语义未变）。
+- 无迁移、无新依赖；前端未动（未跑前端链）。
+- 复审归主 Agent。
+
+**实测（本机，命令 + 退出码；最终树）**：
+- `cd backend && pixi run tests-all` → 0：3123 passed。
+- `cd backend && pixi run coverage-gates` → 0：24 组 ≥80%
+  （harness/channels 97.4%、app/api 84.2%）。
+- `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0
+  （Success: no issues found in 204 source files）。
+- `cd backend && pixi run gen-examples` → 0；复跑三件套 sha256 不变（幂等）。
+- 根 `pixi run gates` → 0（comment-gates / sync-test-ratchet / noqa-freeze /
+  conftest-env 220/220 / sandbox-drift 38 项 / red-probe 203 源文件 16 探针 /
+  docs-truth / assertion-freeze / surface-check 41/41 / bench 自检与门禁 /
+  api-smoke 自检 / prose-pin）。
+- `cd backend && pixi run verify-slice -- --slice r4-4-sms-forwarder` → 0
+  （5 步全 PASS：tests-all=3123 / coverage-gates=24 / typecheck=204；
+   canonical `60a4ced6`）。
+- 前端未动；无迁移，未跑 SeekDB 真引擎套件。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
-- SmsForwarder 短信通道（D3 记账推迟）；WhatsApp/其他平台未列入 R2。
+- SmsForwarder 短信 / 通知转发通道已交付（默认关闭、仅入站；部署侧配置 `SMS_FORWARDER_*` 并在手机端配置 Webhook 与 token）；WhatsApp Cloud API（R4-5）等其余通道未开工。
 - 声纹（PIPL 合规）与表情包素材法律边界提示义务已随 R2d-2 交付（默认关闭，部署侧按需配置 `VOICEPRINT_*` / `STICKER_*` 并起说话人向量服务）。
 - 预算边界（R3-2 → R4-2 已分面）：LLM 日预算只计 LLM 用途行；ASR / TTS / voiceprint 各自独立预算（按 purpose 计数，见 [usage.md](backend/usage.md#分面日预算asr--tts--voiceprint)）。
 - 实时语音（R2f）遗留：AEC/移动端已由 R4-3 前置（浏览器 AEC/Worklet），残余：真实设备验证、真流式供应商连通验证（双轨默认关闭；步骤见 docs/backend/realtime-voice.md「部署侧一次性真机验证」）；实时语音轮次不注入工具面（需要搜索/沙盒走文字通道）。

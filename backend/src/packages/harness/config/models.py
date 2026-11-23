@@ -22,7 +22,9 @@
     - ``LlmEndpointConfig``  —— LLM 默认端点 env 面（env_prefix=``LLM_``）
     - ``ChannelsSettings``   —— 通道域分节（``Settings.channels``；telegram
       子模型 env_prefix=``TELEGRAM_``；qq 子模型 env_prefix=``QQ_``；
-      wecom 子模型 env_prefix=``WECOM_``——企业微信智能机器人长连接）
+      wecom 子模型 env_prefix=``WECOM_``——企业微信智能机器人长连接；
+      douyin 子模型 env_prefix=``DOUYIN_``；sms_forwarder 子模型
+      env_prefix=``SMS_FORWARDER_``——手机端转发的短信 / 通知入站）
     - ``DutySettings``       —— 值班轮分节（``Settings.duty``；env_prefix=
       ``DUTY_``——duty 域）
     - ``DreamScheduleSettings`` —— 梦境调度分节（``Settings.dream_schedule``；
@@ -87,6 +89,7 @@ __all__ = [
     "SeekDBSettings",
     "TelegramSettings",
     "QqChannelSettings",
+    "SmsForwarderChannelSettings",
     "ChannelsSettings",
     "DutySettings",
     "DreamScheduleSettings",
@@ -1061,19 +1064,80 @@ class DouyinChannelSettings(BaseSettings):
         return self
 
 
+class SmsForwarderChannelSettings(BaseSettings):
+    """SmsForwarder 短信 / 通知转发通道配置（env_prefix=``SMS_FORWARDER_``）。
+
+    入站通道：手机端 SmsForwarder 应用把短信 / 通知以 HTTP POST 转发到
+    ``/api/v1/channels/sms-forwarder``；手机端在自定义请求头或查询参数里
+    携带与 ``token`` 相同的鉴权值。锁定决策：``enabled=False``（默认）——
+    零配置开发可用、测试 hermetic；``enabled=True`` 时 app lifespan 装配
+    入站 runner（有界队列 + 固定 worker）与仅入站适配器。
+
+    语义边界（与通道中立路由器的衔接）：
+
+        - **仅入站**：SmsForwarder 的主动控制 API 并非所有部署形态都可用，
+          本通道不做出站发送。适配器发送面返回空投递结果；人格回复仍照常
+          生成并写入会话 / 记忆，供后续回合引用，手机端由用户自行阅读或
+          回复（后续扩展可接主动控制 API）。
+        - **短信默认接收、通知默认忽略**：``notifications_enabled=False``
+          时 ``kind=notification`` 的转发按不可路由事件确认丢弃（不登记
+          去重——手机端重投仍有意义）；短信（``kind=SMS`` / 缺省）恒接收。
+        - **发送者不是人格身份**：手机号 / 联系名只作为会话键与来源标识；
+          默认来源分级为 ``peer``（第三方发送者），仅当发送者命中
+          ``owner_numbers`` 时才按主人来源落档。
+        - **鉴权**：``token`` 非空时要求请求携带同一 token（常量时间比较）；
+          空 = 开发 / 测试形态鉴权关闭。``ENV=prod`` 且本通道启用时空 token
+          拒绝启动（见
+          :func:`packages.harness.config.auth_policy.ensure_auth_policy`）。
+
+    Attributes:
+        enabled: 是否启用 SmsForwarder 入站通道（False = 不装配 runner /
+            适配器；webhook 端点照常确认并丢弃）。
+        token: 入站校验 token（SecretStr——repr 不泄露；空 = 鉴权关闭）。
+            手机端以 ``Authorization: Bearer`` / ``X-SmsForwarder-Token``
+            请求头或 ``?token=`` 查询参数携带同一值。
+        notifications_enabled: 是否接收 ``kind=notification`` 的转发
+            （False = 仅短信；通知事件确认丢弃）。
+        owner_numbers: 属主号码 / 联系名清单（逗号分隔；空 = 全部发送者
+            按 peer 落档）。命中时该会话的入站来源分级为 owner。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用 SmsForwarder 入站通道")
+    token: SecretStr = Field(
+        default=SecretStr(""),
+        description="入站校验 token（空 = 鉴权关闭；手机端以请求头或查询参数携带同一值）",
+    )
+    notifications_enabled: bool = Field(
+        default=False,
+        description="是否接收 kind=notification 的转发（False = 仅短信；通知事件确认丢弃）",
+    )
+    owner_numbers: str = Field(
+        default="",
+        description="属主号码 / 联系名清单（逗号分隔；空 = 全部发送者按 peer 落档）",
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="SMS_FORWARDER_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class ChannelsSettings(BaseModel):
     """通道域配置分节（``Settings.channels``——多平台通道聚合容器）。
 
-    当前含 telegram、qq（NapCat / OneBot v11）、企业微信智能机器人长连接与
-    抖音 web 四个子模型；多通道扩展（B站等）在此追加同级子模型（各自独立
-    env_prefix 的 ``BaseSettings``——本工程约定：env 面子配置为
-    BaseSettings，聚合容器为普通 BaseModel）。
+    当前含 telegram、qq（NapCat / OneBot v11）、企业微信智能机器人长连接、
+    抖音 web 与 SmsForwarder 短信 / 通知转发五个子模型；多通道扩展（B站等）
+    在此追加同级子模型（各自独立 env_prefix 的 ``BaseSettings``——本工程
+    约定：env 面子配置为 BaseSettings，聚合容器为普通 BaseModel）。
 
     Attributes:
         telegram: Telegram 通道配置（默认关闭）。
         qq: QQ 通道配置（默认关闭——NapCat OneBot v11）。
         wecom: 企业微信智能机器人长连接配置（默认关闭）。
         douyin: 抖音 web 通道配置（默认关闭——浏览器 sidecar 底座）。
+        sms_forwarder: SmsForwarder 短信 / 通知转发配置（默认关闭；仅入站）。
     """
 
     telegram: TelegramSettings = Field(
@@ -1085,6 +1149,10 @@ class ChannelsSettings(BaseModel):
     )
     douyin: DouyinChannelSettings = Field(
         default_factory=DouyinChannelSettings, description="抖音 web 通道配置"
+    )
+    sms_forwarder: SmsForwarderChannelSettings = Field(
+        default_factory=SmsForwarderChannelSettings,
+        description="SmsForwarder 短信 / 通知转发配置（仅入站）",
     )
 
 

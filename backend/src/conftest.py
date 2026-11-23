@@ -216,6 +216,16 @@ os.environ["DOUYIN_MAX_MESSAGES_PER_POLL"] = "20"
 os.environ["DOUYIN_BACKOFF_BASE_SECONDS"] = "2.0"
 os.environ["DOUYIN_BACKOFF_MAX_SECONDS"] = "60.0"
 
+# --- SmsForwarder 短信 / 通知转发通道（SMS_FORWARDER_ 前缀 →
+#     SmsForwarderChannelSettings；默认关闭 → 测试零真实手机端 / 零后台任务；
+#     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试。token
+#     直接配置（SecretStr）——非空 = 测试默认开启入站鉴权，鉴权矩阵按需
+#     覆写；属主清单默认空 = 全部发送者按 peer 落档） ---
+os.environ["SMS_FORWARDER_ENABLED"] = "false"
+os.environ["SMS_FORWARDER_TOKEN"] = "test-only-sms-forwarder-token"
+os.environ["SMS_FORWARDER_NOTIFICATIONS_ENABLED"] = "false"
+os.environ["SMS_FORWARDER_OWNER_NUMBERS"] = ""
+
 # --- 值班轮（DUTY_ 前缀 → DutySettings；默认关闭 → 测试零调度副作用；
 #     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试） ---
 os.environ["DUTY_ENABLED"] = "false"

@@ -285,3 +285,31 @@ symbol = "packages.harness.voice.tts_stream_client:CosyVoiceStreamClient"
 tests = [
     "tests/unit/test_voice_stream_clients.py::test_tts_stream_yields_fragments_in_order_and_completes",
 ]
+
+[[probes]]
+name = "sms-forwarder-payload-parse-removal"
+symbol = "packages.harness.channels.sms_forwarder.sms_models:parse_sms_forwarder_payload"
+tests = [
+    "tests/unit/test_sms_forwarder_models.py::test_sms_payload_routes_with_normalized_chat_key",
+]
+
+[[probes]]
+name = "sms-forwarder-runner-removal"
+symbol = "packages.harness.channels.sms_forwarder.sms_runner:SmsForwarderWebhookRunner"
+tests = [
+    "tests/unit/test_sms_forwarder_runner.py::TestQueueBackpressure::test_queue_overflow_drops_counts_and_logs",
+]
+
+[[probes]]
+name = "sms-forwarder-adapter-removal"
+symbol = "packages.harness.channels.sms_forwarder.sms_adapter:SmsForwarderAdapter"
+tests = [
+    "tests/unit/test_sms_forwarder_adapter.py::test_outbound_is_dropped_with_empty_delivery_result",
+]
+
+[[probes]]
+name = "sms-forwarder-webhook-route-removal"
+symbol = "app.api.channels_sms_forwarder:receive_sms_forwarder_webhook"
+tests = [
+    "tests/unit/test_channels_sms_forwarder_api.py::TestHappyPath::test_accepted_payload_returns_ok_shape",
+]

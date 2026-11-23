@@ -60,6 +60,7 @@ _STEP_DEFINITIONS: list[tuple[str, list[str]]] = [
     ("QQ 通道配置", ["QQ_"]),
     ("企业微信智能机器人通道配置", ["WECOM_"]),
     ("抖音 web 通道配置", ["DOUYIN_"]),
+    ("SmsForwarder 短信转发通道配置", ["SMS_FORWARDER_"]),
     ("值班轮配置", ["DUTY_"]),
     ("梦境调度配置", ["DREAM_SCHEDULE_"]),
     ("中央调度器配置", ["SCHEDULER_"]),

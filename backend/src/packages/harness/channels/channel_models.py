@@ -16,8 +16,8 @@
       形态），通道层统一 ``str`` 承载（平台适配器负责双向归一）；
     - **时间一律 epoch 毫秒**（``core.time_utils.now_ms``——Telegram wire
       层的 epoch 秒在 runner 映射时 ×1000 归一）；
-    - ``ChannelType`` 为 StrEnum 值域（telegram / qq / wecom / douyin——多通道
-      扩展在此追加成员，B站等后续通道同点追加）。
+    - ``ChannelType`` 为 StrEnum 值域（telegram / qq / wecom / douyin /
+      sms_forwarder——多通道扩展在此追加成员，B站等后续通道同点追加）。
 
 协议 v2（附件 / 静默 / 合成事件——additive 扩展，v1 形态缺省保持）：
 
@@ -73,7 +73,7 @@ ATTACHMENT_BASE64_SIZE_GUIDE_BYTES: Final[int] = 10 * 1024 * 1024
 
 
 class ChannelType(StrEnum):
-    """通道类型值域（telegram / qq / wecom / douyin；后续通道同点追加）。
+    """通道类型值域（telegram / qq / wecom / douyin / sms_forwarder）。
 
     继承 ``StrEnum`` 保证与字符串比较兼容——``ChannelType.TELEGRAM ==
     "telegram"`` 为 ``True``（与 core ``ErrorCode`` 同约定）。
@@ -83,6 +83,7 @@ class ChannelType(StrEnum):
     QQ = "qq"
     WECOM = "wecom"
     DOUYIN = "douyin"
+    SMS_FORWARDER = "sms_forwarder"
 
 
 class ChannelContextModel(BaseModel):
@@ -191,8 +192,12 @@ class InboundMessageModel(BaseModel):
         attachments: 消息附件（v2——缺省空列表 = v1 纯文本形态；由平台
             runner / webhook 提取，供未来消费者（贴纸 / 语音）消费，
             当前回复循环纯文本）。
-        is_group_chat: 群聊标记（provenance 分级依据——群聊消息按
-            ``peer`` 落档、私聊按 ``owner``；缺省 False 保持 v1 形态）。
+        is_group_chat: 群聊标记（群聊消息按 ``peer`` 落档；缺省 False
+            保持 v1 形态）。
+        is_owner: 私聊发送者是否为主人（缺省 True——既有私聊通道维持
+            ``owner`` 落档）。第三方转发通道（SmsForwarder）默认置 False
+            按 ``peer`` 落档；配置命中属主清单时置 True。群聊下恒按
+            ``peer`` 处理（该字段不参与群聊分级）。
         synthetic: 是否机器生成事件（v2——True = heartflow / mood 等
             事件上浮面而非人类消息；缺省 False = 人类消息）。
         silent: 是否无通知上下文（v2——平台上报「该消息在免通知语境
@@ -212,7 +217,11 @@ class InboundMessageModel(BaseModel):
         default=False, description="是否机器生成事件（True = 事件上浮面非人类消息）"
     )
     silent: bool = Field(default=False, description="是否无通知上下文（平台上报标记位）")
-    is_group_chat: bool = Field(default=False, description="群聊标记（provenance 分级依据：群聊按 peer 落档）")
+    is_group_chat: bool = Field(default=False, description="群聊标记（群聊按 peer 落档）")
+    is_owner: bool = Field(
+        default=True,
+        description="私聊发送者是否为主人（False = 第三方转发按 peer 落档；群聊不消费）",
+    )
 
 
 class OutboundMessageModel(BaseModel):
