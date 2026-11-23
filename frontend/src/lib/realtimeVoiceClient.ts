@@ -5,15 +5,24 @@
  * - `RealtimeVoiceClient`：连接、start / audio_chunk / end / barge_in /
  *   barge_in_ack / ping 上行，下行 JSON 解析后交给页面回调；收到服务端
  *   `closed` 即关闭套接字并停止心跳。socketFactory 可注入（测试零网络）。
- * - `MicrophoneCapture`：getUserMedia → AudioContext → ScriptProcessor 采集，
- *   降采样 16kHz、100ms 成帧、base64 上行；采集上下文 / getUserMedia 均可
- *   注入（jsdom 无 Web Audio 时页面注入 fake 或降级报错）。
+ * - `MicrophoneCapture`：getUserMedia（AEC / 降噪 / 自动增益全开并回读
+ *   实际生效值）→ AudioWorklet 采集（加载失败回退 ScriptProcessor）→
+ *   降采样 16kHz、100ms 成帧、base64 上行；采集上下文 / getUserMedia /
+ *   worklet 模块 URL / 建节点工厂均可注入（测试零真实音频设备）。移动端
+ *   后台切换经 `pause` / `resume` 暂停与恢复采集（WS 会话不重连）。
  *
  * 失败语义：环境不支持 Web Audio / 麦克风被拒 → `onError` 回调中文提示，
  * 页面保留会话并提示用户（不静默）。
  */
 
-import { PcmFrameChunker, TARGET_SAMPLE_RATE, downsampleTo16k, pcm16ToBase64 } from '@/lib/realtimeAudio'
+import {
+  CAPTURE_WORKLET_NAME,
+  PcmFrameChunker,
+  TARGET_SAMPLE_RATE,
+  downsampleTo16k,
+  pcm16ToBase64,
+} from '@/lib/realtimeAudio'
+import captureWorkletModuleUrl from '@/lib/realtimeCaptureWorklet.ts?worker&url'
 import type { RealtimeDownlinkMessage, RealtimeUplinkMessage } from '@/types/realtimeVoice'
 
 /** 套接字就绪态常量（与浏览器 WebSocket.OPEN 同值）。 */
@@ -244,14 +253,29 @@ export interface RealtimeCaptureContextLike {
     inputChannels: number,
     outputChannels: number,
   ): RealtimeScriptProcessorLike
+  audioWorklet?: { addModule(url: string): Promise<void> }
   createGain?(): { gain: { value: number }; connect(target: unknown): void }
   resume?(): Promise<void>
   close?(): Promise<void>
 }
 
+/** 音频轨道实测设置（getSettings 回读——能力是否真正生效）。 */
+export interface RealtimeTrackSettingsLike {
+  echoCancellation?: boolean
+  noiseSuppression?: boolean
+  autoGainControl?: boolean
+}
+
+/** 音频轨道最小契约（停止 + 可选实测设置回读）。 */
+export interface RealtimeAudioTrackLike {
+  stop(): void
+  getSettings?(): RealtimeTrackSettingsLike
+}
+
 /** 麦克风媒体流最小契约。 */
 export interface RealtimeMediaStreamLike {
-  getTracks(): Array<{ stop(): void }>
+  getTracks(): RealtimeAudioTrackLike[]
+  getAudioTracks?(): RealtimeAudioTrackLike[]
 }
 
 /** ScriptProcessor 节点最小契约。 */
@@ -263,6 +287,29 @@ export interface RealtimeScriptProcessorLike {
   disconnect(): void
 }
 
+/** AudioWorklet 节点最小契约（port 回传定长采样块）。 */
+export interface RealtimeWorkletNodeLike {
+  port: { onmessage: ((event: { data: unknown }) => void) | null }
+  connect(target: unknown): void
+  disconnect(): void
+}
+
+/** 采集能力实测值（浏览器实际生效的约束——未回读字段按未生效处理）。 */
+export interface RealtimeCaptureCapabilities {
+  echoCancellation: boolean
+  noiseSuppression: boolean
+  autoGainControl: boolean
+}
+
+/** 采集约束（锁定决策：AEC / 降噪 / 自动增益全开；服务端公告 aec=false 时仍按此采集）。 */
+export const REALTIME_AUDIO_CONSTRAINTS: MediaStreamConstraints = {
+  audio: {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  },
+}
+
 /** 采集注入项（测试以 fake 上下文 / fake getUserMedia 驱动）。 */
 export interface MicrophoneCaptureOptions {
   onFrameBase64: (payload: string) => void
@@ -270,16 +317,41 @@ export interface MicrophoneCaptureOptions {
   audioContextFactory?: () => RealtimeCaptureContextLike
   getUserMedia?: (constraints: MediaStreamConstraints) => Promise<RealtimeMediaStreamLike>
   frameSamples?: number
+  workletModuleUrl?: string
+  workletNodeFactory?: (context: RealtimeCaptureContextLike) => RealtimeWorkletNodeLike
 }
 
 /** 页面依赖的采集能力（fake 可满足同一契约）。 */
 export interface MicrophoneCaptureLike {
   start(): Promise<void>
   stop(): Promise<void>
+  pause?(): Promise<void>
+  resume?(): Promise<void>
+  getCapabilities?(): RealtimeCaptureCapabilities | null
+  isPaused?(): boolean
+}
+
+/** 读实际生效的音频约束（无 getSettings 的轨道按未生效处理）。 */
+function readCaptureCapabilities(stream: RealtimeMediaStreamLike): RealtimeCaptureCapabilities {
+  const tracks = stream.getAudioTracks?.() ?? stream.getTracks()
+  const settings = tracks[0]?.getSettings?.() ?? {}
+  return {
+    echoCancellation: settings.echoCancellation === true,
+    noiseSuppression: settings.noiseSuppression === true,
+    autoGainControl: settings.autoGainControl === true,
+  }
 }
 
 /**
  * 麦克风采集器（16kHz 单声道 100ms 帧 base64 回调）。
+ *
+ * 采集链路（锁定顺序）：`getUserMedia`（AEC / 降噪 / 自动增益全开并回读
+ * 实际生效值）→ 优先 `AudioWorklet`（模块加载失败 / 建节点失败回退
+ * `ScriptProcessor`）→ 降采样 16kHz → 100ms 成帧 → base64 回调。两条
+ * 采集路径的输出语义一致（帧长 / 采样率 / 心跳不受影响）。
+ *
+ * 移动端边界：`pause` 断开节点并停止轨道（保留 WS 会话，不丢会话状态），
+ * `resume` 重新申请媒体流恢复采集——后台切换后由页面在可见 / 触摸时调用。
  *
  * Args 见 `MicrophoneCaptureOptions`；`start` 建流并挂采集回调，`stop`
  * 断开节点、停轨、关上下文（幂等——未启动时 stop 为空操作）。
@@ -289,21 +361,42 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
   private context: RealtimeCaptureContextLike | null = null
   private stream: RealtimeMediaStreamLike | null = null
   private processor: RealtimeScriptProcessorLike | null = null
+  private workletNode: RealtimeWorkletNodeLike | null = null
   private sourceNode: {
     connect(target: unknown): void
     disconnect(): void
   } | null = null
   private chunker: PcmFrameChunker | null = null
+  private capabilities: RealtimeCaptureCapabilities | null = null
+  private paused = false
+  private starting: Promise<void> | null = null
 
   constructor(options: MicrophoneCaptureOptions) {
     this.options = options
   }
 
-  /** 启动采集（权限被拒 / 环境不支持 → onError + 不抛）。 */
+  /** 启动采集（权限被拒 / 环境不支持 → onError + 不抛；在途调用复用同一链路）。 */
   async start(): Promise<void> {
     if (this.context !== null) {
       return
     }
+    const inflight = this.starting
+    if (inflight !== null) {
+      await inflight
+      return
+    }
+    const task = this.startInternal()
+    this.starting = task
+    try {
+      await task
+    } finally {
+      if (this.starting === task) {
+        this.starting = null
+      }
+    }
+  }
+
+  private async startInternal(): Promise<void> {
     try {
       const getUserMedia =
         this.options.getUserMedia ??
@@ -325,33 +418,30 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
           }
           return new Context() as unknown as RealtimeCaptureContextLike
         })
-      const stream = await getUserMedia({ audio: true })
+      const stream = await getUserMedia(REALTIME_AUDIO_CONSTRAINTS)
+      this.capabilities = readCaptureCapabilities(stream)
       const context = audioContextFactory()
       await context.resume?.()
       const sourceNode = context.createMediaStreamSource(stream)
-      const processor = context.createScriptProcessor(4096, 1, 1)
       const chunker = new PcmFrameChunker((pcm) => {
         this.options.onFrameBase64(pcm16ToBase64(pcm))
       }, this.options.frameSamples)
-      processor.onaudioprocess = (event) => {
-        const input = event.inputBuffer.getChannelData(0)
-        const resampled = downsampleTo16k(input, context.sampleRate)
-        chunker.push(resampled)
+      const usingWorklet = await this.tryStartWorklet(context, chunker)
+      if (!usingWorklet) {
+        const processor = context.createScriptProcessor(4096, 1, 1)
+        processor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0)
+          const resampled = downsampleTo16k(input, context.sampleRate)
+          chunker.push(resampled)
+        }
+        this.processor = processor
       }
-      if (context.createGain !== undefined) {
-        const silent = context.createGain()
-        silent.gain.value = 0
-        processor.connect(silent)
-        silent.connect(context.destination)
-      } else {
-        processor.connect(context.destination)
-      }
-      sourceNode.connect(processor)
+      this.connectOutput(context, sourceNode)
       this.context = context
       this.stream = stream
-      this.processor = processor
       this.sourceNode = sourceNode
       this.chunker = chunker
+      this.paused = false
     } catch (error) {
       this.options.onError?.(
         error instanceof Error ? error.message : '麦克风采集启动失败',
@@ -361,8 +451,118 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
 
   /** 停止采集（幂等）。 */
   async stop(): Promise<void> {
+    await this.teardown()
+    this.capabilities = null
+    this.paused = false
+  }
+
+  /** 暂停采集（移动端后台切换——保留 WS 会话与页面状态）。 */
+  async pause(): Promise<void> {
+    if (this.context === null) {
+      this.paused = true
+      return
+    }
+    await this.teardown()
+    this.paused = true
+  }
+
+  /** 恢复采集（重新申请媒体流；会话不重连、不丢状态；失败保持暂停态）。 */
+  async resume(): Promise<void> {
+    if (this.context !== null) {
+      this.paused = false
+      return
+    }
+    await this.start()
+  }
+
+  /** 实际生效的采集能力（启动成功后可用；未回读字段为 false）。 */
+  getCapabilities(): RealtimeCaptureCapabilities | null {
+    return this.capabilities
+  }
+
+  /** 是否处于暂停态（页面展示恢复提示用）。 */
+  isPaused(): boolean {
+    return this.paused
+  }
+
+  private async tryStartWorklet(
+    context: RealtimeCaptureContextLike,
+    chunker: PcmFrameChunker,
+  ): Promise<boolean> {
+    const worklet = context.audioWorklet
+    const moduleUrl = this.options.workletModuleUrl ?? captureWorkletModuleUrl
+    if (worklet === undefined || moduleUrl === '') {
+      return false
+    }
+    try {
+      await worklet.addModule(moduleUrl)
+      const node = this.createWorkletNode(context)
+      node.port.onmessage = (event) => {
+        const data = event.data
+        if (data instanceof Float32Array) {
+          chunker.push(downsampleTo16k(data, context.sampleRate))
+        }
+      }
+      this.workletNode = node
+      return true
+    } catch {
+      this.workletNode = null
+      return false
+    }
+  }
+
+  private createWorkletNode(context: RealtimeCaptureContextLike): RealtimeWorkletNodeLike {
+    const factory = this.options.workletNodeFactory
+    if (factory !== undefined) {
+      return factory(context)
+    }
+    const NodeCtor = (globalThis as { AudioWorkletNode?: typeof AudioWorkletNode })
+      .AudioWorkletNode
+    if (NodeCtor === undefined) {
+      throw new Error('当前环境不支持 AudioWorklet（AudioWorkletNode 不可用）')
+    }
+    return new NodeCtor(context as unknown as BaseAudioContext, CAPTURE_WORKLET_NAME, {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+    }) as unknown as RealtimeWorkletNodeLike
+  }
+
+  private connectOutput(
+    context: RealtimeCaptureContextLike,
+    sourceNode: { connect(target: unknown): void },
+  ): void {
+    if (this.workletNode !== null) {
+      sourceNode.connect(this.workletNode)
+      if (context.createGain !== undefined) {
+        const silent = context.createGain()
+        silent.gain.value = 0
+        this.workletNode.connect(silent)
+        silent.connect(context.destination)
+      } else {
+        this.workletNode.connect(context.destination)
+      }
+      return
+    }
+    const processor = this.processor
+    if (processor === null) {
+      return
+    }
+    if (context.createGain !== undefined) {
+      const silent = context.createGain()
+      silent.gain.value = 0
+      processor.connect(silent)
+      silent.connect(context.destination)
+    } else {
+      processor.connect(context.destination)
+    }
+    sourceNode.connect(processor)
+  }
+
+  private async teardown(): Promise<void> {
     this.chunker?.flush()
     this.processor?.disconnect()
+    this.workletNode?.disconnect()
     this.sourceNode?.disconnect()
     for (const track of this.stream?.getTracks() ?? []) {
       track.stop()
@@ -371,6 +571,7 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
     this.context = null
     this.stream = null
     this.processor = null
+    this.workletNode = null
     this.sourceNode = null
     this.chunker = null
   }

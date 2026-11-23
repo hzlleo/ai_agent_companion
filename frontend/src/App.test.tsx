@@ -1,9 +1,13 @@
 import { describe, expect, it, beforeEach } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { configure, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
 import App from './App'
 import { BACKEND_ORIGIN, errorResult, server } from '@/test/server'
+
+// 懒加载路由 chunk 在并行 worker / 覆盖率插桩下首求值可能超过默认 1s；
+// 仅本文件统一放宽查询等待，断言内容不变。
+configure({ asyncUtilTimeout: 5000 })
 
 /** 渲染完整应用（browser router + QueryClient + Toast，RTL 自动清理）。 */
 function renderApp(): void {
@@ -43,10 +47,10 @@ describe('App', () => {
   it('用量与模型路由渲染真实页面', async () => {
     window.history.replaceState({}, '', '/usage')
     renderApp()
-    expect(await screen.findByRole('heading', { name: '用量观测' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '用量观测' }, { timeout: 5000 })).toBeInTheDocument()
     window.history.replaceState({}, '', '/models')
     renderApp()
-    expect(await screen.findByRole('heading', { name: '模型注册表' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '模型注册表' }, { timeout: 5000 })).toBeInTheDocument()
   })
 
   it.each([
@@ -56,13 +60,19 @@ describe('App', () => {
     ['/stickers', 'heading', '表情包库'],
     ['/canvas', 'heading', '画布'],
     ['/realtime', 'text', '实时语音会话'],
-  ] as const)('路由 %s 经懒加载渲染页面', async (route, kind, label) => {
-    window.history.replaceState({}, '', route)
-    renderApp()
-    const rendered =
-      kind === 'heading' ? await screen.findByRole('heading', { name: label }) : await screen.findByText(label)
-    expect(rendered).toBeInTheDocument()
-  })
+  ] as const)(
+    '路由 %s 经懒加载渲染页面',
+    { timeout: 5000 },
+    async (route, kind, label) => {
+      window.history.replaceState({}, '', route)
+      renderApp()
+      const rendered =
+        kind === 'heading'
+          ? await screen.findByRole('heading', { name: label })
+          : await screen.findByText(label)
+      expect(rendered).toBeInTheDocument()
+    },
+  )
 
   it('未知路由兜底回 /personas', async () => {
     window.history.replaceState({}, '', '/not-exist')

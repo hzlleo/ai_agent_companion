@@ -4,12 +4,24 @@
 
     上行音频帧 → 背压队列（批量出队 / 溢出丢最旧）→ VAD 切段
         ↓ 语段就绪（或强制切段）→ 派生转写任务（音频工人只投递）
-    VoiceService.transcribe（真实取材：Qwen3-ASR 批量端点——无流式通道）
+    VoiceService.transcribe（批量为主、流式双轨可开（默认关闭）；关闭时走
+        Qwen3-ASR 批量端点）
         ↓ final_transcript（中途 partial 由节流的中途批量转写产生）
     ChatService.stream_reply（人格组装 / 注入防御 / 关系摘要——流式增量）
         ↓ 句切（标点 / 长度上限）
-    VoiceService.synthesize（CosyVoice 逐句合成——无流式音频通道）
+    VoiceService.synthesize（批量为主、流式双轨可开（默认关闭）；关闭时走
+        CosyVoice 逐句合成）
         ↓ WAV 字节按块 base64 下行（audio_chunk）
+
+双轨取材（R4-3 增强；开关默认关闭）：``VOICE_ASR_STREAMING_ENABLED`` /
+``VOICE_TTS_STREAMING_ENABLED`` 为真且客户端已装配时，转写走真流式通道
+（语段起点后台握手、握手窗口音频进有界缓冲回放、进行中事件即下行
+``partial_transcript``、切段后收尾取最终稿），合成走逐句流式通道（分片在
+服务端缓冲，整句收尾后按既有 ``audio_chunk`` WAV 契约下行）。任一环节
+失败（握手失败 / 中途断流 / 收尾失败 / 空音频）→ 本会话降级回既有批量
+路径：一次告警 + 指标计数（``stream_asr_fallbacks`` /
+``stream_tts_fallbacks``），会话与后续轮次不中断。开关关闭时零握手、
+零额外连接——批量主链行为与 R2f 完全一致。
 
 转写与 VAD 并发：切段后转写以独立任务执行（登记进统一任务集合），音频
 工人只做切段投递——转写窗口内 VAD 照常收帧、起说与打断判定不受影响。
@@ -27,7 +39,10 @@ interrupted + state(listening)。取消语义安全边界（文档化决策）�
       不会出现「半句音频」；
     - 在途转写任务不随打断取消（已说完的语段仍应产出 final_transcript
       与回复）；所有派生任务经统一任务集合登记并在关闭时 cancel + gather，
-      会话关闭后任务集合为空（无泄漏）。
+      会话关闭后任务集合为空（无泄漏）；
+    - 双轨连接随打断 / 关闭一并取消：流式 ASR 句柄与流式 TTS 生成器
+      （``synthesize_stream`` 的 ``aclose``）都在同一条取消链上收敛——连接
+      零残留，未收齐的句子不产生半句音频。
 
 资源与并发：
 
@@ -68,6 +83,7 @@ from packages.harness.config.models import VoiceSettings
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.time_utils import now_ms
 from packages.harness.persona.dtos import PersonaRecordDTO
+from packages.harness.voice.asr_stream_client import AsrStreamHandleFace
 from packages.harness.voice.realtime_audio import iter_byte_chunks, pcm16_to_wav
 from packages.harness.voice.realtime_models import (
     AUDIO_CHUNK_TOO_LARGE_ERROR_TYPE,
@@ -113,6 +129,7 @@ from packages.harness.voice.realtime_vad import (
     VadEventModel,
     build_vad_config,
 )
+from packages.harness.voice.voice_models import TtsResultModel
 from packages.harness.voice.voice_service import VoiceService
 
 __all__ = [
@@ -131,6 +148,10 @@ _DEFAULT_WATCHDOG_TICK_SECONDS: float = 0.25
 _AUDIO_CHUNK_OVERSIZE_ERROR_TYPES: frozenset[str] = frozenset(
     {AUDIO_CHUNK_TOO_LARGE_ERROR_TYPE, "string_too_long"}
 )
+
+#: 流式识别握手窗口内的音频帧缓冲上限（帧；5 秒 @100ms 帧——握手期间的
+#: 前导音不丢，超过上限丢弃最旧帧；握手完成后按序回放）。
+_STREAM_CONNECT_BUFFER_FRAMES: int = 50
 
 #: 会话内单帧时间戳推进函数类型（伪时钟测试注入）。
 type ClockFace = Callable[[], int]
@@ -257,6 +278,13 @@ class RealtimeVoiceSession:
         self._transcribe_tasks: set[asyncio.Task[None]] = set()
         self._task_failure_count = 0
         self._last_partial_voiced_ms = 0
+        self._stream_asr: AsrStreamHandleFace | None = None
+        self._stream_asr_segment_id: str | None = None
+        self._stream_asr_pending: list[bytes] | None = None
+        self._stream_asr_unavailable = False
+        self._tts_stream_unavailable = False
+        self._stream_asr_fallback_warned = False
+        self._tts_stream_fallback_warned = False
 
     # ------------------------------------------------------------------
     # 观测面（装配层 / 测试断言）
@@ -286,6 +314,16 @@ class RealtimeVoiceSession:
     def task_failure_count(self) -> int:
         """派生任务异常计数（done 回调检索面——异常不再悬空未取）。"""
         return self._task_failure_count
+
+    @property
+    def _stream_asr_enabled(self) -> bool:
+        """流式识别是否接入（能力可用且本会话未降级）。"""
+        return self._voice.streaming_asr_available and not self._stream_asr_unavailable
+
+    @property
+    def _tts_stream_enabled(self) -> bool:
+        """流式合成是否接入（能力可用且本会话未降级）。"""
+        return self._voice.streaming_tts_available and not self._tts_stream_unavailable
 
     # ------------------------------------------------------------------
     # 主循环
@@ -503,6 +541,9 @@ class RealtimeVoiceSession:
                 asr_enabled=True,
                 tts_enabled=tts_enabled,
                 barge_in_enabled=self._settings.barge_in_enabled,
+                aec=self._settings.aec_enabled,
+                streaming_asr=self._stream_asr_enabled,
+                streaming_tts=self._tts_stream_enabled,
                 vad=RealtimeVadPublicSettingsModel(
                     speech_rms_threshold=self._settings.vad_speech_rms_threshold,
                     silence_rms_threshold=self._settings.vad_silence_rms_threshold,
@@ -522,11 +563,14 @@ class RealtimeVoiceSession:
         await self._advance(RealtimeStateEvent.START)
         self._audio_task = self._spawn(self._audio_worker())
         logger.info(
-            "实时语音会话已建立: session_id={}, persona_id={}, tts_enabled={}, barge_in={}",
+            "实时语音会话已建立: session_id={}, persona_id={}, tts_enabled={}, barge_in={}, "
+            "streaming_asr={}, streaming_tts={}",
             self._session_id,
             self._persona.id if self._persona is not None else None,
             tts_enabled,
             self._settings.barge_in_enabled,
+            self._stream_asr_enabled,
+            self._tts_stream_enabled,
         )
 
     # ------------------------------------------------------------------
@@ -584,6 +628,7 @@ class RealtimeVoiceSession:
                     result = self._vad.feed(frame, now)
                     for event in result.events:
                         await self._handle_vad_event(event, now)
+                    await self._feed_stream_asr(frame)
                     self._schedule_partial(now)
                 await asyncio.sleep(0)
         except asyncio.CancelledError:
@@ -623,11 +668,20 @@ class RealtimeVoiceSession:
                 RealtimeSessionPhase.SPEAKING,
             ):
                 await self._trigger_barge_in(RealtimeBargeInReason.VAD)
+            if (
+                self._stream_asr is not None
+                and self._stream_asr_segment_id != self._current_segment_id
+            ):
+                # 上一语段的连接未收敛（异常路径残留）：起新段前先取消，避免
+                # 新语段音频喂进旧连接（其 finish 永不发生）。
+                await self._cancel_stream_asr("stale_segment")
             await self._advance(RealtimeStateEvent.SPEECH_START)
+            self._start_stream_asr_if_available(self._current_segment_id)
             return
         if event.kind is VadEventKind.SEGMENT_DISCARDED:
             self._metrics.segments_discarded += 1
             self._current_segment_id = None
+            await self._cancel_stream_asr("segment_discarded")
             logger.debug(
                 "实时语音短语音丢弃: session_id={}, voiced_ms={}",
                 self._session_id,
@@ -654,12 +708,21 @@ class RealtimeVoiceSession:
         if forced:
             self._metrics.segments_forced += 1
         pcm = event.pcm16 or b""
+        stream_handle = self._take_stream_asr(segment_id)
         if not pcm:
+            await self._cancel_handle(stream_handle)
             await self._advance(RealtimeStateEvent.TURN_DONE)
             return
-        task = self._spawn(
-            self._transcribe_segment(segment_id, pcm, event.duration_ms or 0)
-        )
+        if stream_handle is not None:
+            task = self._spawn(
+                self._finish_stream_segment(
+                    segment_id, stream_handle, pcm, event.duration_ms or 0
+                )
+            )
+        else:
+            task = self._spawn(
+                self._transcribe_segment(segment_id, pcm, event.duration_ms or 0)
+            )
         self._transcribe_tasks.add(task)
         task.add_done_callback(self._transcribe_tasks.discard)
 
@@ -710,30 +773,19 @@ class RealtimeVoiceSession:
                 recoverable=True,
             )
             return
-        text = result.text.strip()
-        if not text:
-            # 空转写（端点未识别出文字）不是「生成中」——直接收尾回聆听。
-            await self._advance(RealtimeStateEvent.TURN_DONE)
-            return
-        self._metrics.final_transcripts += 1
-        await self._send(
-            RealtimeFinalTranscriptMessageModel(
-                ts_ms=self._clock(),
-                segment_id=segment_id,
-                text=text,
-                duration_ms=duration_ms,
-                language=result.language,
-            )
+        await self._deliver_transcript(
+            segment_id=segment_id,
+            text=result.text,
+            language=result.language,
+            duration_ms=duration_ms,
         )
-        await self._advance(RealtimeStateEvent.ASR_DONE)
-        self._request_generation(text)
 
     # ------------------------------------------------------------------
-    # 中途转写（节流——真实取材为批量 ASR 的中途调用）
+    # 中途转写（节流——批量兜底路径的中途调用；流式开启时 partial 由流式事件直出）
     # ------------------------------------------------------------------
 
     def _schedule_partial(self, now_ms_value: int) -> None:
-        """按语音进度节流调度中途转写（无流式 ASR 端点时的 partial 来源）。
+        """按语音进度节流调度中途转写（批量路径的 partial 来源；流式通道开启时由流式事件直出）。
 
         节流按**已积累语音时长**计量（而非墙钟）：批量收帧节奏不影响
         节流口径，伪时钟测试与生产同规则。``now_ms_value`` 仅用于事件
@@ -744,6 +796,8 @@ class RealtimeVoiceSession:
         """
         del now_ms_value
         if self._settings.partial_transcript_interval_ms <= 0:
+            return
+        if self._stream_asr is not None or self._stream_asr_pending is not None:
             return
         if self._partial_task is not None or not self._vad.speaking:
             return
@@ -800,6 +854,262 @@ class RealtimeVoiceSession:
             return
         self._partial_task = None
         await self._cancel_task(task)
+
+    # ------------------------------------------------------------------
+    # 流式识别（双轨——开关开且客户端可用；失败即回退批量，会话不中断）
+    # ------------------------------------------------------------------
+
+    def _start_stream_asr_if_available(self, segment_id: str | None) -> None:
+        """语段起点拉起流式识别握手（后台任务——音频工人不阻塞）。
+
+        握手期间的音频帧进有界缓冲（``_STREAM_CONNECT_BUFFER_FRAMES``），
+        握手成功后按序回放——前导音不丢；握手失败 / 超时的音频仍由 VAD
+        语段缓冲承载，切段后走既有批量转写。
+
+        Args:
+            segment_id: 当前语段标识（None = 未起段，跳过）。
+        """
+        if segment_id is None or not self._stream_asr_enabled:
+            return
+        if self._stream_asr is not None or self._stream_asr_pending is not None:
+            return
+        self._stream_asr_pending = []
+        self._spawn(self._open_stream_asr(segment_id))
+
+    async def _open_stream_asr(self, segment_id: str) -> None:
+        """建立流式识别连接并回放握手窗口缓冲帧（失败一次降级批量）。
+
+        Args:
+            segment_id: 拉起握手时的语段标识（语段已切则立即取消该连接）。
+        """
+
+        async def _on_partial(text: str) -> None:
+            """把进行中转写下行（语段已切则丢弃）。"""
+            await self._deliver_stream_partial(segment_id, text)
+
+        try:
+            handle = await self._voice.open_asr_stream(
+                sample_rate_hz=self._settings.sample_rate_hz,
+                on_partial=_on_partial,
+                persona=self._persona,
+            )
+        except BusinessException as exc:
+            if exc.code == ErrorCode.RATE_LIMITED:
+                # 预算拒绝不是通道故障：不清可用性、不计数、不告警；该语段
+                # 按 R4-2 语义走批量并由批量闸拒绝收尾（realtime-voice.md）。
+                self._stream_asr_pending = None
+                return
+            await self._degrade_stream_asr(f"握手失败({exc.code})")
+            return
+        except Exception:
+            logger.opt(exception=True).warning(
+                "流式识别握手异常（回退批量）: session_id={}", self._session_id
+            )
+            await self._degrade_stream_asr("握手异常")
+            return
+        buffered = self._stream_asr_pending or []
+        self._stream_asr_pending = None
+        if self._current_segment_id != segment_id:
+            await self._cancel_handle(handle)
+            return
+        self._stream_asr = handle
+        self._stream_asr_segment_id = segment_id
+        self._metrics.stream_asr_connections += 1
+        for frame in buffered:
+            await self._feed_stream_asr(frame)
+        logger.debug(
+            "流式识别连接已建立: session_id={}, segment_id={}, buffered_frames={}",
+            self._session_id,
+            segment_id,
+            len(buffered),
+        )
+
+    async def _feed_stream_asr(self, frame: bytes) -> None:
+        """把一帧 PCM16 喂给流式识别（握手窗口内进缓冲；失败即降级）。
+
+        Args:
+            frame: 上行 PCM16 帧。
+        """
+        handle = self._stream_asr
+        if handle is None:
+            pending = self._stream_asr_pending
+            if pending is None:
+                return
+            if len(pending) >= _STREAM_CONNECT_BUFFER_FRAMES:
+                pending.pop(0)
+            pending.append(frame)
+            return
+        try:
+            await handle.feed(frame)
+        except BusinessException as exc:
+            await self._degrade_stream_asr(f"喂帧失败({exc.code})")
+            return
+        except Exception:
+            logger.opt(exception=True).warning(
+                "流式识别喂帧异常（回退批量）: session_id={}", self._session_id
+            )
+            await self._degrade_stream_asr("喂帧异常")
+            return
+        self._metrics.stream_asr_frames_dropped = handle.frames_dropped
+
+    async def _deliver_stream_partial(self, segment_id: str, text: str) -> None:
+        """下行进行中转写（真增量——流式通道的 partial 来源）。
+
+        Args:
+            segment_id: 该 partial 所属语段。
+            text: 进行中转写文本。
+        """
+        stripped = text.strip()
+        if not stripped or self._current_segment_id != segment_id:
+            return
+        self._metrics.partial_transcripts += 1
+        await self._send(
+            RealtimePartialTranscriptMessageModel(
+                ts_ms=self._clock(), segment_id=segment_id, text=stripped
+            )
+        )
+
+    def _take_stream_asr(self, segment_id: str) -> AsrStreamHandleFace | None:
+        """切段时取走该语段的流式连接（不匹配则不交付）。
+
+        Args:
+            segment_id: 刚切分的语段标识。
+
+        Returns:
+            该语段的流式连接句柄；无 / 不匹配返回 None。
+        """
+        handle = self._stream_asr
+        if handle is None:
+            return None
+        if self._stream_asr_segment_id != segment_id:
+            return None
+        self._stream_asr = None
+        self._stream_asr_segment_id = None
+        return handle
+
+    async def _finish_stream_segment(
+        self,
+        segment_id: str,
+        handle: AsrStreamHandleFace,
+        pcm: bytes,
+        duration_ms: int,
+    ) -> None:
+        """收尾流式识别并进入生成（失败回退该语段的批量转写）。
+
+        Args:
+            segment_id: 语段标识。
+            handle: 该语段的流式连接句柄。
+            pcm: 语段 PCM16 字节（回退批量转写用）。
+            duration_ms: 语段有效语音时长（毫秒）。
+        """
+        try:
+            result = await handle.finish()
+        except asyncio.CancelledError:
+            raise
+        except BusinessException as exc:
+            await self._degrade_stream_asr(f"收尾失败({exc.code})")
+            await self._transcribe_segment(segment_id, pcm, duration_ms)
+            return
+        except Exception:
+            logger.opt(exception=True).warning(
+                "流式识别收尾异常（回退批量）: session_id={}, segment_id={}",
+                self._session_id,
+                segment_id,
+            )
+            await self._degrade_stream_asr("收尾异常")
+            await self._transcribe_segment(segment_id, pcm, duration_ms)
+            return
+        await self._deliver_transcript(
+            segment_id=segment_id,
+            text=result.text,
+            language=result.language,
+            duration_ms=duration_ms,
+        )
+
+    async def _degrade_stream_asr(self, reason: str) -> None:
+        """本会话降级流式识别（一次告警 + 指标计数；进行中连接取消）。
+
+        Args:
+            reason: 降级原因（诊断面）。
+        """
+        self._stream_asr_unavailable = True
+        self._stream_asr_pending = None
+        handle = self._stream_asr
+        self._stream_asr = None
+        self._stream_asr_segment_id = None
+        self._metrics.stream_asr_fallbacks += 1
+        if not self._stream_asr_fallback_warned:
+            self._stream_asr_fallback_warned = True
+            logger.warning(
+                "实时语音流式识别不可用，本会话回退批量转写: session_id={}, reason={}",
+                self._session_id,
+                reason,
+            )
+        await self._cancel_handle(handle)
+
+    async def _cancel_stream_asr(self, reason: str) -> None:
+        """取消进行中的流式识别连接（切段丢弃 / 打断 / 关闭路径）。
+
+        Args:
+            reason: 取消原因（诊断面）。
+        """
+        self._stream_asr_pending = None
+        handle = self._stream_asr
+        self._stream_asr = None
+        self._stream_asr_segment_id = None
+        if handle is not None:
+            logger.debug(
+                "流式识别连接取消: session_id={}, reason={}", self._session_id, reason
+            )
+        await self._cancel_handle(handle)
+
+    @staticmethod
+    async def _cancel_handle(handle: AsrStreamHandleFace | None) -> None:
+        """尽力取消连接句柄（None 跳过；异常仅调试记录）。
+
+        Args:
+            handle: 待取消句柄。
+        """
+        if handle is None:
+            return
+        try:
+            await handle.cancel()
+        except Exception:
+            logger.opt(exception=True).debug("流式识别连接取消失败（忽略）")
+
+    async def _deliver_transcript(
+        self,
+        *,
+        segment_id: str,
+        text: str,
+        language: str | None,
+        duration_ms: int,
+    ) -> None:
+        """下行最终转写并进入生成（批量 / 流式两条取材路径共用）。
+
+        Args:
+            segment_id: 语段标识。
+            text: 转写文本（空 = 端点未识别出文字）。
+            language: 识别语言（None = 端点未回传）。
+            duration_ms: 语段有效语音时长（毫秒）。
+        """
+        stripped = text.strip()
+        if not stripped:
+            # 空转写（端点未识别出文字）不是「生成中」——直接收尾回聆听。
+            await self._advance(RealtimeStateEvent.TURN_DONE)
+            return
+        self._metrics.final_transcripts += 1
+        await self._send(
+            RealtimeFinalTranscriptMessageModel(
+                ts_ms=self._clock(),
+                segment_id=segment_id,
+                text=stripped,
+                duration_ms=duration_ms,
+                language=language,
+            )
+        )
+        await self._advance(RealtimeStateEvent.ASR_DONE)
+        self._request_generation(stripped)
 
     # ------------------------------------------------------------------
     # 回复生成 / 句切 / 逐句 TTS
@@ -973,7 +1283,7 @@ class RealtimeVoiceSession:
             job: 逐句作业。
         """
         try:
-            result = await self._voice.synthesize(job.text, persona=self._persona)
+            result = await self._synthesize_job_result(job)
         except asyncio.CancelledError:
             self._tts_pending = max(0, self._tts_pending - 1)
             raise
@@ -1016,6 +1326,91 @@ class RealtimeVoiceSession:
         self._tts_pending = max(0, self._tts_pending - 1)
         await self._maybe_finish_turn()
 
+    async def _synthesize_job_result(self, job: TtsSentenceJobModel) -> TtsResultModel:
+        """按通道开关取合成结果（流式优先；失败 / 不可用回退整句批量）。
+
+        Args:
+            job: 逐句作业。
+
+        Returns:
+            合成结果（WAV 容器音频——wire 契约不变）。
+
+        Raises:
+            BusinessException: 两条通道都失败（``RATE_LIMITED`` / LLM 调用失败）。
+        """
+        if self._tts_stream_enabled:
+            pcm = await self._stream_sentence_pcm(job)
+            if pcm is not None:
+                self._metrics.stream_tts_sentences += 1
+                return TtsResultModel(
+                    audio=pcm16_to_wav(
+                        pcm, self._voice.streaming_tts_sample_rate_hz, 1
+                    ),
+                    content_type="audio/wav",
+                    latency_ms=0,
+                )
+        return await self._voice.synthesize(job.text, persona=self._persona)
+
+    async def _stream_sentence_pcm(self, job: TtsSentenceJobModel) -> bytes | None:
+        """流式合成一句并返回 PCM16 全集（失败降级返回 None）。
+
+        分片只在整句收尾后封装下行（半句音频永不下发）；中途取消
+        （barge-in）经生成器 ``aclose`` 关闭连接，无残留。
+
+        Args:
+            job: 逐句作业。
+
+        Returns:
+            整句 PCM16 字节；流式失败 / 空结果返回 None（调用方回退批量）。
+
+        Raises:
+            BusinessException: 预算拒绝（``RATE_LIMITED``——不再回退批量，
+                避免重复计数查询与掩盖真实拒绝）。
+        """
+        fragments: list[bytes] = []
+        stream = self._voice.synthesize_stream(job.text, persona=self._persona)
+        try:
+            async for fragment in stream:
+                if fragment:
+                    fragments.append(fragment)
+        except asyncio.CancelledError:
+            raise
+        except BusinessException as exc:
+            if str(exc.code) == str(ErrorCode.RATE_LIMITED):
+                raise
+            await self._degrade_stream_tts(f"合成失败({exc.code})")
+            return None
+        except Exception:
+            logger.opt(exception=True).warning(
+                "流式合成异常（回退批量）: session_id={}, turn_id={}",
+                self._session_id,
+                job.turn_id,
+            )
+            await self._degrade_stream_tts("合成异常")
+            return None
+        finally:
+            await stream.aclose()
+        if not fragments:
+            await self._degrade_stream_tts("空音频")
+            return None
+        return b"".join(fragments)
+
+    async def _degrade_stream_tts(self, reason: str) -> None:
+        """本会话降级流式合成（一次告警 + 指标计数；后续句走批量）。
+
+        Args:
+            reason: 降级原因（诊断面）。
+        """
+        self._tts_stream_unavailable = True
+        self._metrics.stream_tts_fallbacks += 1
+        if not self._tts_stream_fallback_warned:
+            self._tts_stream_fallback_warned = True
+            logger.warning(
+                "实时语音流式合成不可用，本会话回退整句批量合成: session_id={}, reason={}",
+                self._session_id,
+                reason,
+            )
+
     async def _maybe_finish_turn(self) -> None:
         """轮次收尾判定（生成结束且逐句队列清空 → 回到聆听 / 启动排队轮次）。"""
         if self._current_turn_id is None:
@@ -1054,6 +1449,7 @@ class RealtimeVoiceSession:
         generation_task = self._generation_task
         tts_task = self._tts_task
         await self._cancel_partial()
+        await self._cancel_stream_asr("barge_in")
         dropped_sentences = await self._cancel_inflight_turn(drop_pending=False)
         self._metrics.interruptions += 1
         await self._send(
@@ -1253,6 +1649,7 @@ class RealtimeVoiceSession:
         self._closing = True
         self._close_reason = reason
         self._close_event.set()
+        await self._cancel_stream_asr("session_close")
         await self._send_closed(reason, self._close_detail)
         current = asyncio.current_task()
         stale = [task for task in self._tasks if task is not current]
@@ -1270,7 +1667,9 @@ class RealtimeVoiceSession:
             "实时语音会话已关闭: session_id={}, reason={}, audio_chunks={}, dropped={}, "
             "rejected={}, segments={}, partials={}, finals={}, generations={}, "
             "tts_sentences={}, tts_dropped={}, audio_chunks_sent={}, interruptions={}, "
-            "asr_failures={}, tts_failures={}, generation_failures={}, duration_ms={}",
+            "asr_failures={}, tts_failures={}, generation_failures={}, "
+            "stream_asr_conn={}, stream_asr_fallback={}, stream_tts_sentences={}, "
+            "stream_tts_fallback={}, duration_ms={}",
             self._session_id,
             reason.value,
             snapshot.audio_chunks_received,
@@ -1287,6 +1686,10 @@ class RealtimeVoiceSession:
             snapshot.asr_failures,
             snapshot.tts_failures,
             snapshot.generation_failures,
+            snapshot.stream_asr_connections,
+            snapshot.stream_asr_fallbacks,
+            snapshot.stream_tts_sentences,
+            snapshot.stream_tts_fallbacks,
             self._clock() - snapshot.started_ms,
         )
 

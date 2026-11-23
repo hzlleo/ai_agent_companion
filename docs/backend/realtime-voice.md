@@ -6,23 +6,27 @@
 
 ## 能力与取材边界（实际实现依据）
 
-| 环节 | 实际取材 | 说明 |
+| 环节 | 批量取材（默认，开关关） | 流式取材（R4-3 增强，开关开且握手成功） |
 |---|---|---|
-| 转写 | 既有 `VoiceService.transcribe` → Qwen3-ASR **批量** audio 端点 | 该端点无流式通道；切段后整段上传转写。**中途 partial 转写**由节流的中途批量转写产生（同一语段的已积累音频在节流间隔到达时上传一次，结果作为 `partial_transcript` 下行；最终稿以切段后的完整音频转写为准） |
-| 合成 | 既有 `VoiceService.synthesize` → CosyVoice **整句** WAV | 该端点返回完整 WAV 字节，无流式音频；服务端按句合成后按固定字节数分片下行（`audio_chunk`），客户端按 `turn_id + sentence_index` 聚合收齐后解码——半句音频永不下发（未闭合句不进合成队列） |
-| 打断 | 服务端任务取消 + 下行 `interrupted` / `state(listening)` | 播放停止由客户端收到 `interrupted` 后立即执行（并回 `barge_in_ack`）；服务端同时取消生成任务与逐句合成任务、清空未合成句队列、丢弃未闭合句缓冲 |
-| 回声消除（AEC） | **未做**（浏览器侧依赖系统/耳机） | 外放场景下麦克风可能拾取 TTS 输出触发误打断——部署建议耳机或浏览器 AEC 平台能力，见「边界」 |
+| 转写 | `VoiceService.transcribe` → Qwen3-ASR 批量 audio 端点；**中途 partial** 由节流的中途批量转写产生（最终稿以切段完整音频转写为准） | `VoiceService.open_asr_stream` → Qwen3-ASR 实时事件族；语段起点后台握手、握手窗口音频有界缓冲回放，**partial 为真增量**（服务端 partial 事件即时下行），切段后 `finish` 取最终稿进入生成 |
+| 合成 | `VoiceService.synthesize` → CosyVoice 整句 WAV（按字节分片下发，半句永不下发） | `VoiceService.synthesize_stream` → CosyVoice 逐分片 PCM16 流；会话层整句缓冲后用既有 `pcm16_to_wav` 封装，再按既有 `audio_chunk` WAV 契约分片下行（wire 与前端解码路径不变） |
+| 打断 | 服务端任务取消 + 下行 `interrupted` / `state(listening)`；取消生成与逐句合成、清空未合成句队列 | 同左，**并额外取消在途流式 ASR 连接与流式 TTS 连接**（生成器 `aclose` → 发 `tts.cancel` 并关闭；ASR 句柄 `cancel`）——双轨连接零残留 |
+| 回声消除（AEC） | 前端 `getUserMedia` 固定请求 `echoCancellation` / `noiseSuppression` / `autoGainControl` 全开并回读实际生效值；`ready.aec` 公告服务端期望 | 同左（服务端公告 `aec=false` 仅用于调试环境显式降级展示） |
+| 移动端采集 | `AudioWorklet` 优先（模块加载 / 建节点失败回退 `ScriptProcessor`），后台切换暂停采集、前台 / 点击恢复（WS 会话不重连） | 同左（与转写 / 合成通道选择无关） |
+
+流式通道默认关闭；开关开启但握手失败 / 中途断流 / 收尾失败时，本会话**自动回退**上列批量列（一次告警 + 指标计数），会话不中断。
 
 ## 模块一览
 
 | 模块 | 职责 | 关键导出 |
 |---|---|---|
-| `realtime_models.py` | 协议 / 配置 / 指标 Model Classes（Unit 文件）：上下行判别联合、VAD 公开参数、会话上限、`REALTIME_VOICE_` 配置与不变式、指标快照、传输与回复生成面协议 | `REALTIME_INBOUND_ADAPTER` / `REALTIME_OUTBOUND_ADAPTER` / `RealtimeVoiceSettings` / `RealtimeTransportFace` / `RealtimeChatFace` / `RealtimeSessionMetricsModel` |
+| `realtime_models.py` | 协议 / 配置 / 指标 Model Classes（Unit 文件）：上下行判别联合、VAD 公开参数、会话上限与 ready 能力字段（aec / streaming_asr / streaming_tts）、`REALTIME_VOICE_` 配置与不变式、指标快照（含流式连接 / 回退计数）、传输与回复生成面协议 | `REALTIME_INBOUND_ADAPTER` / `REALTIME_OUTBOUND_ADAPTER` / `RealtimeVoiceSettings` / `RealtimeTransportFace` / `RealtimeChatFace` / `RealtimeSessionMetricsModel` |
 | `realtime_vad.py` | 能量/静音窗口 VAD（双阈值滞回 + 起说防抖 + 最短语音 + 单段上限），帧时长累加计时（不读系统时钟） | `EnergyVad` / `build_vad_config` / `VadEventModel` |
 | `realtime_state.py` | 相位迁移表（idle → listening → thinking → speaking → listening，含打断 / 超时 / 错误 / 关闭） | `RealtimeVoiceStateMachine` / `RealtimeStateEvent` / `RealtimeTransitionModel` |
 | `realtime_sentence.py` | 助手文本句切（标点 / 收尾符号 / 长度上限 / 流式累积） | `split_assistant_sentences` / `SentenceAccumulator` |
 | `realtime_audio.py` | PCM16 能量 / WAV 封装 / 字节分片 / 时长换算 | `compute_rms_normalized` / `pcm16_to_wav` / `iter_byte_chunks` |
-| `realtime_session.py` | 会话引擎：收发循环 / 背压队列 / VAD 事件处理 / 转写 / 生成 / 逐句 TTS / 打断 / 看门狗 / 优雅关闭 / 指标日志 | `RealtimeVoiceSession` / `ChatSessionStreamAdapter` |
+| `realtime_session.py` | 会话引擎：收发循环 / 背压队列 / VAD 事件处理 / 双轨转写与合成（流式优先 + 失败回退）/ 生成 / 打断 / 看门狗 / 优雅关闭 / 指标日志 | `RealtimeVoiceSession` / `ChatSessionStreamAdapter` |
+| `asr_stream_client.py` / `tts_stream_client.py` / `stream_models.py` / `stream_transport.py` | 流式通道客户端 / 传输契约（见 [voice.md](voice.md#模块一览)） | `Qwen3AsrStreamClient` / `CosyVoiceStreamClient` / `VoiceStreamTransportFace` |
 | `app/api/realtime_voice.py` | WS 端点（只做 API 层）：准入（鉴权 / 总闸 / 人格解析）、ChatService 与语音服务装配、Starlette 传输适配 | `realtime_voice_websocket` / `StarletteRealtimeTransport` |
 
 依赖方向：`voice.realtime_* → voice（服务门面 / 客户端契约）、chat（ChatService 流式）、config、core、persona、pools`；app 层仅装配与适配，协议语义全部在 harness（`app/` 只做 API 层的硬约束）。
@@ -39,14 +43,18 @@ EnergyVad（起说防抖 / 语音态 / 静音窗 / 单段上限）
     ↓ speech_start（播放中 → barge-in，见下文时序）
     ↓ segment_ready / segment_forced（PCM16 + 有效语音时长）
 转写任务（音频工人只投递；转写期间 VAD / 打断判定继续）
-    ↓ VoiceService.transcribe → Qwen3-ASR（批量端点）
-    ↓ final_transcript（下行；中途 partial 由节流批量转写产生）
+    ├─ 流式开（握手成功）：VoiceService.open_asr_stream → 实时事件族
+    │    ↓ partial 事件即时下行 partial_transcript（真增量）
+    │    ↓ 切段 → handle.finish → final_transcript
+    └─ 流式关 / 失败回退：VoiceService.transcribe → Qwen3-ASR（批量端点）
+         ↓ final_transcript（中途 partial 由节流批量转写产生）
 ChatService.stream_reply（人格正典 / 宪章 / 注入防御 / 关系进展 / 情绪块 / 合规守卫配置）
     ↓ assistant_text 增量（下行）
 SentenceAccumulator（标点 / 收尾符号 / 长度上限）
     ↓ 已闭合句
-VoiceService.synthesize → CosyVoice（整句 WAV）
-    ↓ audio_chunk 分片（base64 WAV，turn_id + sentence_index + seq）
+VoiceService.synthesize_stream → CosyVoice 流式（PCM16 分片→整句 WAV 封装）
+    └─ 失败回退：VoiceService.synthesize → CosyVoice（整句 WAV）
+    ↓ audio_chunk 分片（base64 WAV，turn_id + sentence_index + seq——两轨同契约）
     ↓ state（speaking）→ 客户端聚合收齐后 decodeAudioData 串行播放
     ↓ 全部句播完 → state（listening）
 ```
@@ -78,6 +86,9 @@ VoiceService.synthesize → CosyVoice（整句 WAV）
   "asr_enabled": true,
   "tts_enabled": true,
   "barge_in_enabled": true,
+  "aec": true,
+  "streaming_asr": true,
+  "streaming_tts": true,
   "vad": {
     "speech_rms_threshold": 0.06,
     "silence_rms_threshold": 0.03,
@@ -107,6 +118,9 @@ VoiceService.synthesize → CosyVoice（整句 WAV）
 | `audio_format` | str | 下行音频格式（恒 `wav`——TTS 端点契约） |
 | `asr_enabled` / `tts_enabled` | bool | 能力可用性（ASR 关闭时整会话拒绝；TTS 关闭 = 仅文本字幕） |
 | `barge_in_enabled` | bool | 打断开关（关闭时按钮禁用、新语音不打断播放） |
+| `aec` | bool | 服务端 AEC 期望（True = 客户端采集须开启回声消除；False 仅调试降级公告——前端仍按实际生效值展示） |
+| `streaming_asr` | bool | 流式识别通道可用性（True = partial 为真增量；False = 节流中途批量转写） |
+| `streaming_tts` | bool | 流式合成通道可用性（True = 逐句流式合成；False = 整句批量合成） |
 | `vad.*` | — | 公开的 VAD 参数（与配置同源，客户端可本地预判） |
 | `limits.*` | — | 会话资源上限（时长 / 空闲 / 心跳建议 / 队列 / 单句字符上限） |
 
@@ -200,7 +214,9 @@ VoiceService.synthesize → CosyVoice（整句 WAV）
     │ 或客户端 barge_in（手动按钮）
     ↓
 服务端：取消在途生成任务（ChatService.stream_reply 生成器关闭——半截回合不入历史）
-    ↓ 取消逐句 TTS 任务（在途 synthesize 请求取消）
+    ↓ 取消逐句 TTS 任务（在途 synthesize / synthesize_stream 取消；流式生成器
+    │  aclose → 发 tts.cancel 并关闭连接——barge-in 同时取消流式 TTS 连接）
+    ↓ 取消在途流式 ASR 连接（session.cancel + 关闭，零残留）
     ↓ 清空未合成句队列（丢弃句数落指标日志）
     ↓ 丢弃未闭合句缓冲（未闭合句从不合成 → 无半句音频）
     ↓ 下行 interrupted（interruption_id / turn_id / reason）
@@ -209,7 +225,19 @@ VoiceService.synthesize → CosyVoice（整句 WAV）
 客户端：清空播放队列（停止在播音源 + 作废在途解码）→ 上行 barge_in_ack
 ```
 
-安全边界（锁定）：打断后生成 / 合成 / 中途转写任务全部 cancel + gather，任务集合只剩仍在转写已说完语段的任务（其结果照常产出 final_transcript 与回复）；会话关闭后任务集合为空。被取消的生成轮次不写入助手回合（与既有 `stream_reply` 半截不入历史的语义一致）。
+安全边界（锁定）：打断后生成 / 合成 / 中途转写任务全部 cancel + gather，任务集合只剩仍在转写已说完语段的任务（其结果照常产出 final_transcript 与回复）；会话关闭后任务集合为空。被取消的生成轮次不写入助手回合（与既有 `stream_reply` 半截不入历史的语义一致）。双轨连接（流式 ASR 句柄 / 流式 TTS 生成器）在同一条取消链上收敛——连接零残留，未收齐的句子不产生半句音频。
+
+## 流式通道失败与回退（R4-3）
+
+| 触发 | 观测 | 行为 |
+|---|---|---|
+| ASR 流式握手失败 / 超时 | 指标 `stream_asr_fallbacks` + 一次 warning（含 reason） | 本会话降级批量转写；进行中连接取消；会话与后续语段照常 |
+| ASR 流式中途断流 / 收尾失败 | 同上 | 当前语段回退批量转写；成功后继续会话 |
+| TTS 流式握手 / 分片失败 / 空音频 | 指标 `stream_tts_fallbacks` + 一次 warning | 当前句回退整句批量合成（音频照常下发）；后续句走批量 |
+| 预算拒绝（`RATE_LIMITED`） | 既有可恢复 error | 零建连、零出站；ASR 段 / TTS 句按 R4-2 语义收尾，不再重复回退查询 |
+| 开关关闭 | 零额外连接 | 批量主链（R2f 行为）完全不变 |
+
+回退不改变 wire 契约：客户端只看到正常的 `partial_transcript` / `final_transcript` / `audio_chunk`——无法区分本次用的是哪条轨（可观测性在服务端指标与日志）。
 
 ## 并发、背压与资源上限
 
@@ -276,8 +304,9 @@ ASR 段按可恢复 `error` 收尾并回到聆听；TTS 句按可恢复 `error` 
 | `REALTIME_VOICE_IDLE_TIMEOUT_MS` | `60000` | 空闲超时（须短于最大时长） |
 | `REALTIME_VOICE_HEARTBEAT_INTERVAL_MS` | `15000` | 心跳建议间隔 |
 | `REALTIME_VOICE_BARGE_IN_ENABLED` | `true` | 打断开关 |
+| `REALTIME_VOICE_AEC_ENABLED` | `true` | ready 公告的 AEC 期望（False = `aec=false`，仅供无 AEC 调试环境） |
 
-TTS 音色 / 模型沿用既有 `VOICE_TTS_*`（人格 `voice_profile` 绑定生效），ASR 语言沿用 `VOICE_ASR_LANGUAGE`，本分节不重复。
+TTS 音色 / 模型沿用既有 `VOICE_TTS_*`（人格 `voice_profile` 绑定生效），ASR 语言沿用 `VOICE_ASR_LANGUAGE`，本分节不重复。流式通道的开关 / 端点 / 模型 / 超时在 `VOICE_ASR_STREAMING_*` / `VOICE_TTS_STREAMING_*` 分节（默认关闭，键表与协议面见 [voice.md](voice.md#流式-astts-r4-3默认关闭部署侧可选启用)）。
 
 `.env` 片段（模板由 `pixi run gen-examples` 从配置模型生成，键面以 `backend/.env.example` 为真源）：
 
@@ -297,7 +326,9 @@ VOICE_TTS_ENABLED=true
 
 ## 前端面板（`frontend/src/pages/realtime/RealtimeVoicePage.tsx`）
 
-路由 `/realtime`（侧栏「实时语音」）。功能：开始 / 停止、麦克风采集（16kHz PCM 分块上行）、流式播放下行（句级聚合解码串行播放）、实时字幕（partial / final / 助手增量与定稿）、打断按钮、状态徽章与错误提示、会话参数展示。注入面（`createClient` / `createCapture` / `createPlayback`）供测试替身装配；无 Web Audio 环境降级为仅字幕。
+路由 `/realtime`（侧栏「实时语音」）。功能：开始 / 停止、麦克风采集（AEC / 降噪 / 自动增益全开并回读实际生效值；AudioWorklet 优先、ScriptProcessor 回退）、流式播放下行（句级聚合解码串行播放）、实时字幕（partial / final / 助手增量与定稿）、打断按钮、状态徽章与错误提示、会话参数与能力展示（流式识别 / 流式合成 / 回声消除态）。注入面（`createClient` / `createCapture` / `createPlayback`）供测试替身装配；无 Web Audio 环境降级为仅字幕。
+
+移动端边界：页面进入后台（`visibilitychange` hidden）暂停采集（断开节点 / 停轨 / 关上下文，WS 会话不重连）；回到前台自动恢复，浏览器要求用户手势时由页面点击（`pointerdown`）触发恢复——恢复后重新申请媒体流，会话状态与字幕不丢。
 
 协议地址经 `buildRealtimeVoiceUrl` 构造（http→ws / https→wss，携带已保存 owner token 与可选 `persona_id`）。
 
@@ -322,7 +353,9 @@ VOICE_TTS_ENABLED=true
 - 会话端到端：ready 字段、完整轮次（转写 → 文本 → 音频 → 回聆听）、中途转写节流、强制切段、手动 / VAD 打断（任务集合清空、无泄漏）、打断关闭态、转写任务挂起时 VAD 打断仍生效、关闭取消挂起转写、背压丢最旧块、TTS 队列溢满丢最旧句与关闭清零、超限音频块拒绝后会话继续、空闲 / 最大时长、end 尾段冲刷、end 排空被关闭事件抢占、关闭 wire 顺序（state(closed) → closed）、ASR / 生成 / TTS 失败可恢复、ASR / TTS 会话中途预算超限可恢复（`RATE_LIMITED`）、TTS 关闭降级、传输断开、心跳应答、协议对称性、真实 `ChatService` 适配；WS 准入并发帽（两连通过 / 第三连 1013 / 结束释放后新连可用）；
 - 端点：路由挂载、总闸 / 鉴权 / 人格解析拒绝面、真实人格与聊天会话落库、传输适配（文本 / 二进制 / 断开 / 幂等关闭）。
 
-前端：`api/realtimeVoice.test.ts`、`lib/realtimeAudio.test.ts`、`lib/realtimeVoiceClient.test.ts`、`pages/realtime/RealtimeVoicePage.test.tsx`。
+R4-3 增补：`test_voice_stream_clients.py`（协议编解码 / 事件映射 / 取消 / 断流 / 超时 / 心跳——fake 传输）、`test_voice_stream_transport.py`（回环真实 WebSocket 帧透传 / 关闭码）、`test_voice_service_streaming.py`（双轨门控 / 预算拒绝零建连 / 计次口径 / 取消不落行）、`test_realtime_session_streaming.py`（流式 partial→final→生成 / 三种失败回退 / barge-in 取消双轨 / 关闭零残留 / ready 能力字段）、`test_probe_voice_streaming.py`（探测脚本 PASS / SKIP / FAIL 三态）。
+
+前端：`api/realtimeVoice.test.ts`、`lib/realtimeAudio.test.ts`、`lib/realtimeVoiceClient.test.ts`、`lib/realtimeCapture.test.ts`（worklet 块切分 / 加载失败回退 ScriptProcessor / AEC 约束与实测值 / 暂停恢复）、`pages/realtime/RealtimeVoicePage.test.tsx`、`pages/realtime/RealtimeVoicePage.capabilities.test.tsx`（能力展示 / AEC 降级提示 / 后台暂停与点击恢复）。
 
 ## 边界（未做项，见 LEDGER §6）
 
@@ -330,9 +363,9 @@ VOICE_TTS_ENABLED=true
 
 转写任务化：切段后转写经独立任务执行，音频工人只投递——转写窗口内 VAD、起说与打断判定持续工作，不会因 ASR 在途而停摆。多段转写可并行，转写结果按完成序进入生成队列（不按语段序号重排）；因此同一说话人两段近似同时完成时，先完成者先回复，客户端应据 `segment_id` 对齐字幕与轮次。
 
-- **AEC / 回声消除**：未实现；外放场景可能自触发打断，建议耳机或浏览器平台 AEC。
-- **移动端优化**：未做（ScriptProcessor 采集、下行 WAV 解码）；移动浏览器后台切走时连接可能被系统挂起。
-- **ASR / TTS 真流式**：既有服务端点无流式通道；partial 转写来自节流中途批量调用，TTS 音频为整句 WAV 分片（客户端整句解码后播放，句内不可边收边播）。
-- **真实供应商验证**：部署侧一次性执行（见上节）。
+- **AEC / 回声消除**：前端已固定请求浏览器 AEC / 降噪 / 自动增益并回读实际生效值（未生效时提示佩戴耳机）；服务端不做软件回声消除——平台未提供 AEC 的浏览器仍可能自触发打断。
+- **移动端优化**：采集已优先 AudioWorklet 并支持后台暂停 / 前台或点击恢复；移动浏览器后台挂起期间上行暂停是预期行为（会话保留）。下行仍为整句 WAV（客户端整句解码播放，句内不可边收边播）。
+- **ASR / TTS 真流式**：需部署侧启用流式端点并开启开关（默认关闭）；开关关闭 / 握手失败时回退节流中途批量转写与整句 WAV 分片（与 R2f 一致）。
+- **真实供应商验证**：部署侧一次性执行（见上节与 [voice.md](voice.md#部署探测脚本流式通道一次性连通性验证不入门禁)）。
 - **工具调用**：实时语音轮次不注入工具面（低延迟优先）；需要工具（搜索 / 沙盒）的场景走文字通道。
 - **合规强化重试**：流式路径沿用既有「流式不重试」边界（助手腔检测与重试只发生在非流式 `reply`）。

@@ -1111,6 +1111,15 @@ class TtsSettings(BaseSettings):
             计数，跨 worker 近似一致——软竞态）。
         daily_budget_persona: 单人格每日 TTS 合成调用数上限（0 = 不限；
             有效上限 10,000；仅人格上下文调用受此档约束）。
+        streaming_enabled: 流式合成通道开关（``VOICE_TTS_STREAMING_ENABLED``
+            ——默认 false，关闭时走既有整句批量合成；两段式：能力总闸与
+            流式通道分离，关闭不影响批量主链）。
+        streaming_base_url: 流式合成 WebSocket 端点（部署契约见
+            harness/voice/tts_stream_client 模块 docstring）。
+        streaming_model: 流式合成握手的 model 字段值（部署侧模型名）。
+        streaming_timeout_seconds: 流式合成握手 / 分片等待超时秒数。
+        streaming_sample_rate_hz: 流式合成输出的 PCM16 采样率（Hz——下行
+            WAV 封装用；CosyVoice 流式解码缺省 24kHz）。
     """
 
     enabled: bool = Field(default=False, description="是否启用 TTS 语音合成")
@@ -1147,6 +1156,27 @@ class TtsSettings(BaseSettings):
             "仅人格上下文调用受约束）"
         ),
     )
+    streaming_enabled: bool = Field(
+        default=False,
+        description="流式合成通道开关（False = 走既有整句批量合成；失败自动回退批量）",
+    )
+    streaming_base_url: str = Field(
+        default="ws://127.0.0.1:9880/realtime",
+        min_length=1,
+        description="CosyVoice 流式合成 WebSocket 端点（部署契约见 tts_stream_client）",
+    )
+    streaming_model: str = Field(
+        default="cosyvoice3", min_length=1, description="流式合成握手 model 字段值"
+    )
+    streaming_timeout_seconds: float = Field(
+        default=10.0, gt=0, description="流式合成握手 / 分片等待超时（秒）"
+    )
+    streaming_sample_rate_hz: int = Field(
+        default=24000,
+        ge=8000,
+        le=48000,
+        description="流式合成输出 PCM16 采样率（Hz——下行 WAV 封装用）",
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="VOICE_TTS_",
@@ -1179,6 +1209,13 @@ class AsrSettings(BaseSettings):
             计数，跨 worker 近似一致——软竞态）。
         daily_budget_persona: 单人格每日 ASR 转写调用数上限（0 = 不限；
             有效上限 10,000；仅人格上下文调用受此档约束）。
+        streaming_enabled: 流式识别通道开关（``VOICE_ASR_STREAMING_ENABLED``
+            ——默认 false，关闭时走既有整段批量转写；失败自动回退批量）。
+        streaming_base_url: 流式识别 WebSocket 端点（部署契约见
+            harness/voice/asr_stream_client 模块 docstring——沿用语部分节
+            凭据，不重复鉴权键）。
+        streaming_model: 流式识别握手的 model 字段值（部署侧模型名）。
+        streaming_timeout_seconds: 流式识别握手 / 事件等待超时秒数。
     """
 
     enabled: bool = Field(default=False, description="是否启用 ASR 语音识别")
@@ -1219,6 +1256,23 @@ class AsrSettings(BaseSettings):
             "单人格每日 ASR 转写调用数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"
             "仅人格上下文调用受约束）"
         ),
+    )
+    streaming_enabled: bool = Field(
+        default=False,
+        description="流式识别通道开关（False = 走既有整段批量转写；失败自动回退批量）",
+    )
+    streaming_base_url: str = Field(
+        default="ws://127.0.0.1:8082/v1/realtime",
+        min_length=1,
+        description="Qwen3-ASR 流式识别 WebSocket 端点（部署契约见 asr_stream_client）",
+    )
+    streaming_model: str = Field(
+        default="qwen3-asr-flash-realtime",
+        min_length=1,
+        description="流式识别握手 model 字段值",
+    )
+    streaming_timeout_seconds: float = Field(
+        default=5.0, gt=0, description="流式识别握手 / 事件等待超时（秒）"
     )
 
     model_config = SettingsConfigDict(

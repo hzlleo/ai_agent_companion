@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { act, screen } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import RealtimeVoicePage from './RealtimeVoicePage'
 import { renderWithProviders } from '@/test/utils'
@@ -51,15 +51,34 @@ class FakeClient implements RealtimeVoiceClientLike {
 class FakeCapture implements MicrophoneCaptureLike {
   starts = 0
   stops = 0
+  resumes = 0
+  paused = false
+  resumeFails = false
   onFrame: ((payload: string) => void) | null = null
   onError: ((message: string) => void) | null = null
   start(): Promise<void> {
     this.starts += 1
+    this.paused = false
     return Promise.resolve()
   }
   stop(): Promise<void> {
     this.stops += 1
+    this.paused = false
     return Promise.resolve()
+  }
+  pause(): Promise<void> {
+    this.paused = true
+    return Promise.resolve()
+  }
+  resume(): Promise<void> {
+    this.resumes += 1
+    if (!this.resumeFails) {
+      this.paused = false
+    }
+    return Promise.resolve()
+  }
+  isPaused(): boolean {
+    return this.paused
   }
 }
 
@@ -86,6 +105,9 @@ const ready: RealtimeDownlinkMessage = {
   asr_enabled: true,
   tts_enabled: true,
   barge_in_enabled: true,
+  aec: true,
+  streaming_asr: true,
+  streaming_tts: true,
   vad: {
     speech_rms_threshold: 0.06,
     silence_rms_threshold: 0.03,
@@ -344,6 +366,40 @@ describe('RealtimeVoicePage', () => {
       })
     })
     expect(screen.getByText('测试字幕')).toBeInTheDocument()
+  })
+
+  it('恢复失败保持暂停提示；点击页面可再次恢复（会话不重连）', async () => {
+    const user = userEvent.setup()
+    const { view, client, capture } = renderPage()
+    await user.click(screen.getByRole('button', { name: /开始对话/ }))
+    act(() => {
+      client.emit(ready)
+    })
+    const setVisibility = (state: 'hidden' | 'visible') => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: state })
+    }
+    setVisibility('hidden')
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(screen.getByText(/音频采集已暂停/)).toBeInTheDocument()
+    capture.resumeFails = true
+    setVisibility('visible')
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await waitFor(() => expect(capture.resumes).toBe(1))
+    expect(capture.paused).toBe(true)
+    await waitFor(() => expect(screen.getByText(/音频采集已暂停/)).toBeInTheDocument())
+    capture.resumeFails = false
+    act(() => {
+      fireEvent.pointerDown(view.container.firstElementChild ?? document.body)
+    })
+    await waitFor(() => expect(capture.resumes).toBe(2))
+    expect(capture.paused).toBe(false)
+    await waitFor(() =>
+      expect(screen.queryByText(/音频采集已暂停/)).not.toBeInTheDocument(),
+    )
   })
 
   it('卸载时关闭客户端、停止采集并清空播放', async () => {

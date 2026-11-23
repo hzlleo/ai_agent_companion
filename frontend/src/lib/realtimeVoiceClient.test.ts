@@ -94,6 +94,9 @@ function readyMessage(overrides: Partial<RealtimeReadyMessage> = {}): RealtimeRe
     asr_enabled: true,
     tts_enabled: true,
     barge_in_enabled: true,
+    aec: true,
+    streaming_asr: false,
+    streaming_tts: false,
     vad: {
       speech_rms_threshold: 0.06,
       silence_rms_threshold: 0.03,

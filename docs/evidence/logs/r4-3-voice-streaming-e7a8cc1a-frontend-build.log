@@ -1,0 +1,42 @@
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/frontend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (build): npm run build: (构建前端生产包)
+
+> ai-agent-companion-frontend@0.1.0 build
+> tsc && vite build
+
+[36mvite v6.4.6 [32mbuilding for production...[36m[39m
+transforming...
+[32m✓[39m 1842 modules transformed.
+rendering chunks...
+computing gzip size...
+[2mdist/[22m[32mindex.html                                      [39m[1m[2m  0.42 kB[22m[1m[22m[2m │ gzip:   0.32 kB[22m
+[2mdist/[22m[2massets/[22m[32mrealtimeCaptureWorklet-fBrz89Ud.js       [39m[1m[2m  0.74 kB[22m[1m[22m
+[2mdist/[22m[32m.vite/manifest.json                             [39m[1m[2m  7.79 kB[22m[1m[22m[2m │ gzip:   1.12 kB[22m
+[2mdist/[22m[2massets/[22m[35mindex-CKfDQEcn.css                       [39m[1m[2m 23.34 kB[22m[1m[22m[2m │ gzip:   5.31 kB[22m
+[2mdist/[22m[2massets/[22m[36mplus-BrC8mLc-.js                         [39m[1m[2m  0.32 kB[22m[1m[22m[2m │ gzip:   0.25 kB[22m
+[2mdist/[22m[2massets/[22m[36mdatetime-BkCRdq40.js                     [39m[1m[2m  0.33 kB[22m[1m[22m[2m │ gzip:   0.23 kB[22m
+[2mdist/[22m[2massets/[22m[36marrow-left-BU0MWYqc.js                   [39m[1m[2m  0.33 kB[22m[1m[22m[2m │ gzip:   0.27 kB[22m
+[2mdist/[22m[2massets/[22m[36mTextarea-gtEpByRR.js                     [39m[1m[2m  0.52 kB[22m[1m[22m[2m │ gzip:   0.33 kB[22m
+[2mdist/[22m[2massets/[22m[36mtrash-2-8yVdWivS.js                      [39m[1m[2m  0.53 kB[22m[1m[22m[2m │ gzip:   0.34 kB[22m
+[2mdist/[22m[2massets/[22m[36merrorDetails-D1_rld8S.js                 [39m[1m[2m  0.63 kB[22m[1m[22m[2m │ gzip:   0.36 kB[22m
+[2mdist/[22m[2massets/[22m[36mCheckbox-B7cSmrbK.js                     [39m[1m[2m  0.80 kB[22m[1m[22m[2m │ gzip:   0.47 kB[22m
+[2mdist/[22m[2massets/[22m[36mConfirmDialog-DWCajzeV.js                [39m[1m[2m  0.92 kB[22m[1m[22m[2m │ gzip:   0.51 kB[22m
+[2mdist/[22m[2massets/[22m[36mTable-A1HQTlYw.js                        [39m[1m[2m  1.11 kB[22m[1m[22m[2m │ gzip:   0.44 kB[22m
+[2mdist/[22m[2massets/[22m[36mPersonaPicker-ROSzmxUt.js                [39m[1m[2m  1.15 kB[22m[1m[22m[2m │ gzip:   0.67 kB[22m
+[2mdist/[22m[2massets/[22m[36mBatchDeleteResultDialog-CrclO_Lu.js      [39m[1m[2m  1.70 kB[22m[1m[22m[2m │ gzip:   0.71 kB[22m
+[2mdist/[22m[2massets/[22m[36mPersonaImportConflictDialog-B-17QWSV.js  [39m[1m[2m  1.78 kB[22m[1m[22m[2m │ gzip:   0.97 kB[22m
+[2mdist/[22m[2massets/[22m[36musePersonasApi-C1-v-ZDB.js               [39m[1m[2m  5.75 kB[22m[1m[22m[2m │ gzip:   1.94 kB[22m
+[2mdist/[22m[2massets/[22m[36mPersonaPresetGallery-CsCa9yER.js         [39m[1m[2m  7.92 kB[22m[1m[22m[2m │ gzip:   3.50 kB[22m
+[2mdist/[22m[2massets/[22m[36mCanvasPage-CCJMk5FR.js                   [39m[1m[2m 10.08 kB[22m[1m[22m[2m │ gzip:   3.78 kB[22m
+[2mdist/[22m[2massets/[22m[36mUsagePage-B5JLtl7v.js                    [39m[1m[2m 10.62 kB[22m[1m[22m[2m │ gzip:   3.09 kB[22m
+[2mdist/[22m[2massets/[22m[36mStickersPage-r5kthOS7.js                 [39m[1m[2m 10.72 kB[22m[1m[22m[2m │ gzip:   4.12 kB[22m
+[2mdist/[22m[2massets/[22m[36museMutation-GienSkAr.js                  [39m[1m[2m 12.24 kB[22m[1m[22m[2m │ gzip:   4.09 kB[22m
+[2mdist/[22m[2massets/[22m[36mPersonaListPage-zK2obJb5.js              [39m[1m[2m 13.98 kB[22m[1m[22m[2m │ gzip:   4.80 kB[22m
+[2mdist/[22m[2massets/[22m[36mModelsPage-Bk63TEFX.js                   [39m[1m[2m 14.98 kB[22m[1m[22m[2m │ gzip:   4.91 kB[22m
+[2mdist/[22m[2massets/[22m[36mRealtimeVoicePage-D0J0PKNl.js            [39m[1m[2m 17.84 kB[22m[1m[22m[2m │ gzip:   6.89 kB[22m
+[2mdist/[22m[2massets/[22m[36museToast-CdLGzNvX.js                     [39m[1m[2m 41.60 kB[22m[1m[22m[2m │ gzip:  14.19 kB[22m
+[2mdist/[22m[2massets/[22m[36mPersonaFormPage-DVKHmvD2.js              [39m[1m[2m 53.81 kB[22m[1m[22m[2m │ gzip:  13.69 kB[22m
+[2mdist/[22m[2massets/[22m[36mclient-Ckg03QiH.js                       [39m[1m[2m 62.80 kB[22m[1m[22m[2m │ gzip:  23.89 kB[22m
+[2mdist/[22m[2massets/[22m[36mMemoriesPage-VPTDwJK3.js                 [39m[1m[2m 68.10 kB[22m[1m[22m[2m │ gzip:  16.41 kB[22m
+[2mdist/[22m[2massets/[22m[36mindex-05rVXnGu.js                        [39m[1m[2m389.80 kB[22m[1m[22m[2m │ gzip: 123.63 kB[22m
+[32m✓ built in 3.38s[39m
