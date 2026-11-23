@@ -498,13 +498,14 @@ class AsrStreamHandle:
         self._timeout = timeout_seconds
         self._heartbeat_interval = heartbeat_interval_seconds
         self._on_partial = on_partial
-        self._send_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=send_queue_max)
+        self._send_queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=send_queue_max)
         self._final_future: asyncio.Future[AsrResultModel] = (
             asyncio.get_running_loop().create_future()
         )
         self._failure_future: asyncio.Future[BusinessException] = (
             asyncio.get_running_loop().create_future()
         )
+        self._finish_sent = asyncio.Event()
         self._tasks: set[asyncio.Task[None]] = set()
         self._closed = False
         self._frames_dropped = 0
@@ -544,6 +545,9 @@ class AsrStreamHandle:
     async def finish(self) -> AsrResultModel:
         """提交音频并等待最终稿（成功后关闭连接）。
 
+        收尾事件由发送工人按队列顺序发出（先于哨兵入队的音频分片全部落地
+        后才发 ``commit`` / ``session.finish``）——本方法只投哨兵再等待。
+
         Returns:
             最终转写结果。
 
@@ -554,9 +558,9 @@ class AsrStreamHandle:
         self._raise_if_failed()
         if self._closed:
             raise self._call_error(reason="流式识别连接已关闭，无法收尾")
-        await self._send_event({"type": ASR_STREAM_EVENT_COMMIT})
-        await self._send_event({"type": ASR_STREAM_EVENT_FINISH})
+        self._enqueue_sentinel()
         try:
+            await self._wait_finish_sent()
             result = await self._wait_settled()
         except BusinessException:
             await self.cancel()
@@ -569,6 +573,27 @@ class AsrStreamHandle:
         if self._closed:
             return
         await self._shutdown(STREAM_CLOSE_NORMAL, "client_cancel", notify_cancel=True)
+
+    async def _wait_finish_sent(self) -> None:
+        """等待发送工人落完 ``commit`` / ``session.finish``（失败即上抛）。
+
+        服务端可能在收尾事件前就下发最终稿（协议宽松）；此时仍须等收尾
+        事件真实出站，避免 ``finish`` 提前关闭连接而丢弃收尾语义。
+
+        Raises:
+            BusinessException: 发送失败 / 收尾事件发送超时
+                （``LLM_CALL_FAILED``）。
+        """
+        try:
+            await asyncio.wait_for(self._finish_sent.wait(), timeout=self._timeout)
+        except TimeoutError as exc:
+            error = self._call_error(
+                reason="流式识别收尾事件发送超时",
+                close_code=self._transport.last_close_code,
+            )
+            self._fail(error)
+            raise error from exc
+        self._raise_if_failed()
 
     async def _wait_settled(self) -> AsrResultModel:
         """等待最终稿或失败（收尾等待超时硬约束）。
@@ -599,11 +624,29 @@ class AsrStreamHandle:
         await self._shutdown(STREAM_CLOSE_GOING_AWAY, "settle_timeout", notify_cancel=False)
         raise self._failure_future.result()
 
+    def _enqueue_sentinel(self) -> None:
+        """投递收尾哨兵（队列满时按既有口径丢最旧帧——哨兵不得被丢）。
+
+        哨兵排在所有已入队音频分片之后，发送工人读到它才会发 ``commit`` /
+        ``session.finish``，从而保证线上事件序与喂帧序一致（``finish`` 后
+        不再出现迟到的 append 事件）。
+        """
+        if self._send_queue.full():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._send_queue.get_nowait()
+            self._frames_dropped += 1
+        self._send_queue.put_nowait(None)
+
     async def _sender_loop(self) -> None:
-        """逐帧发送喂入的 PCM16（失败即标记连接失败）。"""
+        """逐帧发送喂入的 PCM16；哨兵处按固定序发 commit / session.finish。"""
         try:
             while not self._closed:
                 pcm16 = await self._send_queue.get()
+                if pcm16 is None:
+                    await self._send_event({"type": ASR_STREAM_EVENT_COMMIT})
+                    await self._send_event({"type": ASR_STREAM_EVENT_FINISH})
+                    self._finish_sent.set()
+                    continue
                 audio = base64.b64encode(pcm16).decode("ascii")
                 await self._transport.send(
                     build_text_frame(
@@ -759,6 +802,7 @@ class AsrStreamHandle:
         """
         if not self._failure_future.done():
             self._failure_future.set_result(error)
+        self._finish_sent.set()
 
     def _raise_if_failed(self) -> None:
         """已失败时上抛首个失败（调用方据此回退批量）。

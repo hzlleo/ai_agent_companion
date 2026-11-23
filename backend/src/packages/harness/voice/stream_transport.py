@@ -13,6 +13,11 @@ harness 客户端（ASR / TTS 流式）只依赖协议，不 import 本模块—
 协议层行为：
 
     - 连接建立有打开超时（``open_timeout`` 与调用方 ``wait_for`` 双保险）；
+      关闭握手有界（``close_timeout`` 缺省 = ``min(open_timeout, 1s)``，
+      对端不回关闭帧时也在一秒量级内返回）；
+    - ``websockets`` 协议异常（升级被拒 / 非法 URI / 连接已关闭等）统一
+      归一为 ``OSError``——客户端既有「``OSError`` → ``LLM_CALL_FAILED``」
+      映射据此生效；``receive`` 的对端关闭仍是 ``None`` 语义（不抛）；
     - 文本帧 / 二进制帧双向原样透传（不做任何 JSON 解析）；
     - 对端关闭（正常或异常）统一映射为 ``receive`` 返回 None——客户端据
       「是否已收到收尾事件」判定中途断流并回退批量主链；
@@ -26,7 +31,7 @@ import asyncio
 from typing import Any, Final, cast
 
 from websockets.asyncio.client import ClientConnection, connect
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from packages.harness.voice.stream_models import (
     VoiceStreamConnector,
@@ -40,6 +45,8 @@ __all__ = ["WebSocketStreamTransport", "make_websocket_connector"]
 
 #: 单帧上限（字节；None = 不限制——TTS 分片可能远大于 WebSocket 缺省 1 MiB）。
 _MAX_FRAME_BYTES: Final[int | None] = None
+#: 关闭握手缺省预算上限（秒——对端不回关闭帧时仍须有界返回）。
+_DEFAULT_CLOSE_TIMEOUT_SECONDS: Final[float] = 1.0
 
 
 def _close_code(exc: ConnectionClosed) -> int | None:
@@ -86,12 +93,18 @@ class WebSocketStreamTransport:
             frame: 待发送帧（载荷二选一已由模型校验）。
 
         Raises:
-            ConnectionClosed: 连接已关闭（客户端归一为业务异常）。
+            OSError: 连接已关闭 / 协议异常（客户端归一为业务异常）。
         """
-        if frame.kind == "text":
-            await self._connection.send(cast("str", frame.text))
-            return
-        await self._connection.send(cast("bytes", frame.data))
+        try:
+            if frame.kind == "text":
+                await self._connection.send(cast("str", frame.text))
+                return
+            await self._connection.send(cast("bytes", frame.data))
+        except WebSocketException as exc:
+            if isinstance(exc, ConnectionClosed):
+                self._closed = True
+                self._last_close_code = _close_code(exc)
+            raise OSError(str(exc)) from exc
 
     async def receive(self) -> VoiceStreamFrameModel | None:
         """接收下一帧（对端关闭返回 None）。
@@ -138,7 +151,7 @@ class WebSocketStreamTransport:
 
 
 def make_websocket_connector(
-    url: str, *, open_timeout_seconds: float
+    url: str, *, open_timeout_seconds: float, close_timeout_seconds: float | None = None
 ) -> VoiceStreamConnector:
     """构造绑定端点的连接工厂（每次调用建立一条新连接）。
 
@@ -146,25 +159,37 @@ def make_websocket_connector(
         url: WebSocket 端点（``ws://`` / ``wss://``——部署契约见各流式客户端
             模块 docstring）。
         open_timeout_seconds: 打开超时秒数（连接 + 升级握手）。
+        close_timeout_seconds: 关闭握手预算秒数（None = ``min(open_timeout,
+            1.0)``；测试可注入更小值）。
 
     Returns:
         可重复调用的异步连接工厂（返回已完成升级的传输面）。
 
     Raises:
         TimeoutError: 打开超时（由调用方映射为业务异常）。
-        OSError: 连接被拒 / 网络不可达。
+        OSError: 连接被拒 / 升级被拒 / 协议异常 / 网络不可达。
     """
+    close_timeout = (
+        close_timeout_seconds
+        if close_timeout_seconds is not None
+        else min(open_timeout_seconds, _DEFAULT_CLOSE_TIMEOUT_SECONDS)
+    )
 
     async def _connect() -> VoiceStreamTransportFace:
-        """建立一条连接并包装为传输面（打开超时经 ``wait_for`` 硬约束）。"""
+        """建立一条连接并包装为传输面（打开 / 关闭握手均硬约束）。"""
         pending: Any = connect(
             url,
             max_size=_MAX_FRAME_BYTES,
             open_timeout=open_timeout_seconds,
+            close_timeout=close_timeout,
         )
-        connection = cast("ClientConnection", await asyncio.wait_for(
-            pending, timeout=open_timeout_seconds
-        ))
+        try:
+            connection = cast(
+                "ClientConnection",
+                await asyncio.wait_for(pending, timeout=open_timeout_seconds),
+            )
+        except WebSocketException as exc:
+            raise OSError(str(exc)) from exc
         return WebSocketStreamTransport(connection)
 
     return _connect

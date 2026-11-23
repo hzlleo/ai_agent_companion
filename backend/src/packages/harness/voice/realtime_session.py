@@ -4,11 +4,13 @@
 
     上行音频帧 → 背压队列（批量出队 / 溢出丢最旧）→ VAD 切段
         ↓ 语段就绪（或强制切段）→ 派生转写任务（音频工人只投递）
-    VoiceService.transcribe（真实取材：Qwen3-ASR 批量端点——无流式通道）
+    VoiceService.transcribe（批量为主、流式双轨可开（默认关闭）；关闭时走
+        Qwen3-ASR 批量端点）
         ↓ final_transcript（中途 partial 由节流的中途批量转写产生）
     ChatService.stream_reply（人格组装 / 注入防御 / 关系摘要——流式增量）
         ↓ 句切（标点 / 长度上限）
-    VoiceService.synthesize（CosyVoice 逐句合成——无流式音频通道）
+    VoiceService.synthesize（批量为主、流式双轨可开（默认关闭）；关闭时走
+        CosyVoice 逐句合成）
         ↓ WAV 字节按块 base64 下行（audio_chunk）
 
 双轨取材（R4-3 增强；开关默认关闭）：``VOICE_ASR_STREAMING_ENABLED`` /
@@ -892,6 +894,11 @@ class RealtimeVoiceSession:
                 persona=self._persona,
             )
         except BusinessException as exc:
+            if exc.code == ErrorCode.RATE_LIMITED:
+                # 预算拒绝不是通道故障：不清可用性、不计数、不告警；该语段
+                # 按 R4-2 语义走批量并由批量闸拒绝收尾（realtime-voice.md）。
+                self._stream_asr_pending = None
+                return
             await self._degrade_stream_asr(f"握手失败({exc.code})")
             return
         except Exception:

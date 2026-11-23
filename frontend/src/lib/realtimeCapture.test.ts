@@ -135,13 +135,14 @@ function buildCapture(options: {
   workletNodeFactory?: () => RealtimeWorkletNodeLike
   useDefaultWorkletNode?: boolean
   frameSamples?: number
+  getUserMedia?: (constraints: MediaStreamConstraints) => Promise<RealtimeMediaStreamLike>
 }) {
   const frames: string[] = []
   const errors: string[] = []
   const constraintsSeen: MediaStreamConstraints[] = []
   const getUserMedia = vi.fn((constraints: MediaStreamConstraints) => {
     constraintsSeen.push(constraints)
-    return Promise.resolve(options.stream as RealtimeMediaStreamLike)
+    return options.getUserMedia?.(constraints) ?? Promise.resolve(options.stream)
   })
   const usesDefaultWorkletNode = options.useDefaultWorkletNode === true
   const capture = new MicrophoneCapture({
@@ -287,6 +288,55 @@ describe('MicrophoneCapture 移动端暂停 / 恢复', () => {
     await capture.resume()
     expect(capture.isPaused()).toBe(false)
     expect(getUserMedia).toHaveBeenCalledTimes(2)
+  })
+
+  it('resume 失败保持暂停态（恢复入口仍可用，不误报已恢复）', async () => {
+    const context = new FakeContext()
+    const stream = new FakeStream([new FakeTrack()])
+    let rejectNext = false
+    const { capture, errors } = buildCapture({
+      context,
+      stream,
+      getUserMedia: () =>
+        rejectNext
+          ? Promise.reject(new Error('麦克风权限被拒绝'))
+          : Promise.resolve(stream),
+    })
+    await capture.start()
+    await capture.pause()
+    rejectNext = true
+    await capture.resume()
+    expect(capture.isPaused()).toBe(true)
+    expect(errors).toEqual(['麦克风权限被拒绝'])
+  })
+
+  it('自动恢复在途时再次恢复：复用同一链路（getUserMedia 不翻倍）', async () => {
+    const context = new FakeContext()
+    const stream = new FakeStream([new FakeTrack()])
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let mediaCalls = 0
+    const { capture, getUserMedia } = buildCapture({
+      context,
+      stream,
+      getUserMedia: async () => {
+        mediaCalls += 1
+        if (mediaCalls > 1) {
+          await gate
+        }
+        return stream
+      },
+    })
+    await capture.start()
+    await capture.pause()
+    const auto = capture.resume()
+    const click = capture.resume()
+    release()
+    await Promise.all([auto, click])
+    expect(getUserMedia).toHaveBeenCalledTimes(2)
+    expect(capture.isPaused()).toBe(false)
   })
 
   it('stop 幂等：重复停止不抛、重复 start 不重复建流', async () => {

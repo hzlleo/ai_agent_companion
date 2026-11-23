@@ -369,16 +369,34 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
   private chunker: PcmFrameChunker | null = null
   private capabilities: RealtimeCaptureCapabilities | null = null
   private paused = false
+  private starting: Promise<void> | null = null
 
   constructor(options: MicrophoneCaptureOptions) {
     this.options = options
   }
 
-  /** 启动采集（权限被拒 / 环境不支持 → onError + 不抛）。 */
+  /** 启动采集（权限被拒 / 环境不支持 → onError + 不抛；在途调用复用同一链路）。 */
   async start(): Promise<void> {
     if (this.context !== null) {
       return
     }
+    const inflight = this.starting
+    if (inflight !== null) {
+      await inflight
+      return
+    }
+    const task = this.startInternal()
+    this.starting = task
+    try {
+      await task
+    } finally {
+      if (this.starting === task) {
+        this.starting = null
+      }
+    }
+  }
+
+  private async startInternal(): Promise<void> {
     try {
       const getUserMedia =
         this.options.getUserMedia ??
@@ -448,13 +466,12 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
     this.paused = true
   }
 
-  /** 恢复采集（重新申请媒体流；会话不重连、不丢状态）。 */
+  /** 恢复采集（重新申请媒体流；会话不重连、不丢状态；失败保持暂停态）。 */
   async resume(): Promise<void> {
     if (this.context !== null) {
       this.paused = false
       return
     }
-    this.paused = false
     await this.start()
   }
 

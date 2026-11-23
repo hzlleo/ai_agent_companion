@@ -8,6 +8,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import contextlib
+import hashlib
 from collections.abc import AsyncIterator
 
 import pytest
@@ -101,6 +104,76 @@ async def test_server_close_surfaces_close_code() -> None:
         transport = await connector()
         assert await asyncio.wait_for(transport.receive(), timeout=2.0) is None
         assert transport.last_close_code == 1001
+
+
+#: RFC 6455 握手接受键的固定 GUID。
+_WS_ACCEPT_GUID: str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+@contextlib.asynccontextmanager
+async def _silent_ws_peer() -> AsyncIterator[str]:
+    """只完成 HTTP 升级、从不回关闭帧的对端（关闭握手超时观测面）。
+
+    Yields:
+        ``ws://127.0.0.1:<port>/stream`` 端点。
+    """
+    release = asyncio.Event()
+
+    async def _handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        request = await reader.readuntil(b"\r\n\r\n")
+        key = next(
+            line.split(b":", 1)[1].strip()
+            for line in request.split(b"\r\n")
+            if line.lower().startswith(b"sec-websocket-key:")
+        )
+        accept = base64.b64encode(
+            hashlib.sha1(key + _WS_ACCEPT_GUID.encode("ascii")).digest()
+        )
+        writer.write(
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+            b"Connection: Upgrade\r\nSec-WebSocket-Accept: " + accept + b"\r\n\r\n"
+        )
+        await writer.drain()
+        try:
+            await release.wait()
+        finally:
+            writer.close()
+
+    server = await asyncio.start_server(_handler, "127.0.0.1", 0)
+    sockets = server.sockets
+    assert sockets
+    port = sockets[0].getsockname()[1]
+    try:
+        yield f"ws://127.0.0.1:{port}/stream"
+    finally:
+        release.set()
+        server.close()
+        await server.wait_closed()
+
+
+async def test_close_is_bounded_when_peer_ignores_close_handshake() -> None:
+    """对端不回关闭帧：close 在有界预算内返回（缺省 = min(open, 1s)）。"""
+    async with _silent_ws_peer() as url:
+        connector = make_websocket_connector(url, open_timeout_seconds=0.2)
+        transport = await connector()
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await transport.close(STREAM_CLOSE_NORMAL, "bye")
+        assert loop.time() - started < 0.5
+        assert await transport.receive() is None
+
+
+async def test_close_timeout_is_injectable_for_tests() -> None:
+    """关闭预算可注入更小值（不改变生产缺省上限）。"""
+    async with _silent_ws_peer() as url:
+        connector = make_websocket_connector(
+            url, open_timeout_seconds=2.0, close_timeout_seconds=0.05
+        )
+        transport = await connector()
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await transport.close(STREAM_CLOSE_NORMAL, "bye")
+        assert loop.time() - started < 0.5
 
 
 async def test_connection_refused_raises_os_error() -> None:

@@ -420,8 +420,9 @@ class VoiceService:
         """流式合成一句文本（逐分片产出 PCM16；预算闸先于建连）。
 
         计次口径（锁定）：每句流式合成成功计 1 次（与批量句级等价）——
-        仅在分片流正常收尾后落一行 usage；中途取消（barge-in）不落行；
-        被预算拒绝时零建连、零出站。
+        仅在分片流正常收尾且产出过至少一个非空分片后落一行 usage（空音频
+        回退批量，由批量路径独立记账——一句不得两行）；中途取消
+        （barge-in）不落行；被预算拒绝时零建连、零出站。
 
         Args:
             text: 待合成文本（1-500 字符——客户端边界校验）。
@@ -483,12 +484,16 @@ class VoiceService:
             speed=effective_speed,
             instruct_text=instruct_text,
         )
+        produced = False
         try:
             async for fragment in stream:
                 if fragment:
+                    produced = True
                     yield fragment
         finally:
             await stream.aclose()
+        if not produced:
+            return
         await emit_voice_usage(
             self._usage_recorder,
             purpose="tts",

@@ -549,8 +549,8 @@ class RealtimeVoiceSettings(BaseSettings):
         vad_silence_end_ms: 静音结束窗口（持续静音达到即切段）。
         vad_max_segment_ms: 单段语音上限（达到即强制切段送 ASR）。
         partial_transcript_interval_ms: 中途转写节流间隔（0 = 关闭中途
-            转写；真实 ASR 端点无流式通道，中途结果由节流的中途批量
-            转写产生）。
+            转写；批量为主、流式双轨可开（默认关闭）——开启时中途结果为
+            真增量，关闭时由节流的中途批量转写产生）。
         partial_min_speech_ms: 中途转写的最短已积累语音（低于不送）。
         sentence_max_chars: 助手文本单句上限（超过在标点 / 空格处硬切）。
         tts_chunk_bytes: 下行 TTS 音频分片字节数（WAV 字节流分片）。

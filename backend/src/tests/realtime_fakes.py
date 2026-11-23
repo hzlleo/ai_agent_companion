@@ -286,7 +286,11 @@ class FakeVoiceService(VoiceService):
         self.stream_sample_rate_hz_value = 16000
         self.asr_stream_error: BusinessException | None = None
         self.asr_stream_handle: FakeAsrStreamHandle | None = None
+        self.asr_stream_handles: list[FakeAsrStreamHandle] = []
         self.asr_stream_open_calls: list[int] = []
+        self.asr_stream_open_gate: asyncio.Event | None = None
+        self.asr_stream_open_started = asyncio.Event()
+        self.tts_stream_closed = 0
         self.on_partial_callback: Callable[[str], Awaitable[None]] | None = None
         self.tts_stream_fragments: list[bytes] = [b"\x01\x00" * 16]
         self.tts_stream_error: BusinessException | None = None
@@ -318,14 +322,18 @@ class FakeVoiceService(VoiceService):
         language: str | None = None,
         request_id: str | None = None,
     ) -> FakeAsrStreamHandle:
-        """假流式识别握手（按脚本抛错 / 返回可脚本化句柄）。"""
+        """假流式识别握手（按脚本抛错 / 门闩 / 返回可脚本化句柄）。"""
         self.asr_stream_open_calls.append(sample_rate_hz)
         self.on_partial_callback = on_partial
+        self.asr_stream_open_started.set()
+        if self.asr_stream_open_gate is not None:
+            await self.asr_stream_open_gate.wait()
         if self.asr_stream_error is not None:
             raise self.asr_stream_error
-        if self.asr_stream_handle is None:
-            self.asr_stream_handle = FakeAsrStreamHandle()
-        return self.asr_stream_handle
+        handle = FakeAsrStreamHandle()
+        self.asr_stream_handles.append(handle)
+        self.asr_stream_handle = handle
+        return handle
 
     async def push_partial(self, text: str) -> None:
         """投递一条进行中转写（经握手时登记的会话回调）。"""
@@ -346,12 +354,15 @@ class FakeVoiceService(VoiceService):
         self.tts_stream_started.set()
 
         async def _generate() -> AsyncGenerator[bytes, None]:
-            if self.tts_stream_gate is not None:
-                await self.tts_stream_gate.wait()
-            if self.tts_stream_error is not None:
-                raise self.tts_stream_error
-            for fragment in self.tts_stream_fragments:
-                yield fragment
+            try:
+                if self.tts_stream_gate is not None:
+                    await self.tts_stream_gate.wait()
+                if self.tts_stream_error is not None:
+                    raise self.tts_stream_error
+                for fragment in self.tts_stream_fragments:
+                    yield fragment
+            finally:
+                self.tts_stream_closed += 1
 
         return _generate()
 
@@ -503,6 +514,7 @@ class FakeAsrStreamHandle:
         self.finished = False
         self.feed_error: BusinessException | None = None
         self.finish_error: BusinessException | None = None
+        self.finish_gate: asyncio.Event | None = None
         self.result = AsrResultModel(text="流式转写", language="zh")
         self.cancel_count = 0
 
@@ -513,7 +525,9 @@ class FakeAsrStreamHandle:
         self.fed.append(pcm16)
 
     async def finish(self) -> AsrResultModel:
-        """收尾（返回脚本结果 / 注入故障）。"""
+        """收尾（返回脚本结果 / 注入故障 / 门闩阻塞）。"""
+        if self.finish_gate is not None:
+            await self.finish_gate.wait()
         self.finished = True
         if self.finish_error is not None:
             raise self.finish_error
@@ -553,7 +567,8 @@ class FakeStreamTransport:
         return self._last_close_code
 
     async def send(self, frame: VoiceStreamFrameModel) -> None:
-        """记录出站帧。"""
+        """记录出站帧（先让出事件循环——复现真实网络发送的并发窗口）。"""
+        await asyncio.sleep(0)
         self.sent.append(frame)
 
     async def receive(self) -> VoiceStreamFrameModel | None:

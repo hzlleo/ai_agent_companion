@@ -301,6 +301,20 @@ async def test_tts_stream_yields_fragments_and_records_one_row() -> None:
     assert recorder.events[0].provider == "cosyvoice"
 
 
+async def test_tts_stream_empty_audio_records_no_usage_row() -> None:
+    """空音频（零非空分片）：不落流式 usage 行（回退批量由批量路径记账）。"""
+    client = _FakeStreamTtsClient()
+    client.fragments = []
+    recorder = _UsageRecorder()
+    service = VoiceService(
+        settings=_settings(), tts_stream_client=client, usage_recorder=recorder
+    )
+    fragments = [fragment async for fragment in service.synthesize_stream("你好")]
+    assert fragments == []
+    assert client.closed == 1
+    assert recorder.events == []
+
+
 async def test_tts_stream_persona_profile_overrides_settings() -> None:
     """人格绑定优先于 settings 缺省（流式与批量同源解析）。"""
     client = _FakeStreamTtsClient()
