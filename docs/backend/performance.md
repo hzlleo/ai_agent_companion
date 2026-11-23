@@ -11,6 +11,9 @@
 同机负载漂移，跨机比较没有意义。基线文件随仓库提交，但任何结论都必须以
 同一台机器上重新测量的结果为准。
 
+本页另载**前端生产构建体积基线**与体积门禁（见文末「前端构建产物体积基线
+（R4-1）」）：前者是运行期延迟，后者是静态产物字节，两者同为可复跑回归面。
+
 ## 测量边界
 
 | 面 | 覆盖 | 明确不覆盖 |
@@ -141,3 +144,86 @@ LLM 信号量与熔断 / SeekDB 连接池）的装配与限值；本页记录的
 - `--gate` 只判定数量级回归，不替代 `tests-all` / `coverage-gates` 的正确性
   门禁；
 - 基线文件是纯数据（JSON），不引入新依赖、新 env 键或数据库迁移。
+
+## 前端构建产物体积基线（R4-1）
+
+管理台前端（`frontend/`）的生产构建体积是独立回归面：`pixi run bundle-check`
+解析 `dist/.vite/manifest.json`，把入口静态闭包（初始加载 JS）与路由级动态
+chunk 分开计量。构建产物由 `cd frontend && pixi run build` 生成
+（`vite.config.ts` 开启 `build.manifest`）；门禁不重复构建。
+
+### 阈值与触发条件
+
+- 初始加载 JS 总量上限 **1,000,000 字节**（1 MB）：超过即必须继续拆分；
+- 动态 chunk 下限 **3** 个：少于 3 个说明路由级拆分未生效；
+- dist 缺失 / manifest 缺失或不可解析 / manifest 引用的产物文件缺失均判失败；
+- 阈值常量的唯一来源是 `frontend/scripts/check_bundle_budget.mjs`
+  （`INITIAL_JS_BUDGET_BYTES` / `MIN_DYNAMIC_CHUNKS`），文档不复制数值口径之外
+  的判定逻辑。
+
+门禁输出末行为固定标记
+`[bundle-budget] PASS total=<初始 JS 字节> lazy=<动态 chunk 数>`；失败输出
+`[bundle-budget] FAIL reason=<原因码>` 并以非 0 退出。
+
+### 拆分前后基线（同机实测）
+
+R4-1 将全部路由页改为 `React.lazy` 独立分包，共享壳（`AppShell` /
+`ToastProvider` / 令牌门）保持 eager。实测对比：
+
+| 指标 | R4-1 前（单 chunk） | R4-1 后（路由级拆分） |
+|---|---:|---:|
+| 初始加载 JS | 717,443 B（gzip 214,006 B） | 389,799 B（gzip 123,614 B） |
+| 动态 chunk JS | 0 | 337,058 B / 25 个（gzip 109,646 B） |
+| JS 产物合计 | 717,443 B | 726,857 B（拆分共享模块开销 +9,414 B） |
+| CSS | 23,257 B（gzip 5,295 B） | 23,313 B（gzip 5,295 B） |
+| 构建耗时（Vite） | 15.63s（冷启动首跑） | 2.87s（热缓存复跑） |
+
+构建耗时随机器负载与缓存状态波动，只做同机观察、不作门禁；R3 审计环境记录
+的单 chunk 构建耗时为 6.16s。初始加载口径是 `index.html` 入口的静态闭包；
+路由页面 chunk 及其静态依赖在访问该路由时加载——以默认落地路由
+`/personas` 为例，其页面 chunk 与依赖合计使该次访问的 JS 总量约 533,138 B
+（gzip 176,104 B），仍低于 1 MB 预算。
+
+### 拆分后 chunk 明细（本机构建）
+
+| chunk | 字节 | gzip |
+|---|---:|---:|
+| `assets/index-DZsPJWg8.js`（入口，初始加载） | 389,799 | 123,614 |
+| `assets/MemoriesPage-D0NvqOe6.js` | 68,097 | 16,411 |
+| `assets/client-DwfNYENn.js`（页面共享依赖） | 62,804 | 23,885 |
+| `assets/PersonaFormPage-DWA5aepK.js` | 53,812 | 13,684 |
+| `assets/useToast-Dp62eppS.js`（页面共享依赖） | 41,598 | 14,192 |
+| `assets/ModelsPage-PFsEb5sw.js` | 14,981 | 4,904 |
+| `assets/RealtimeVoicePage-Bv6iIc2x.js` | 14,366 | 5,703 |
+| `assets/PersonaListPage-Co9BmVjX.js` | 13,984 | 4,801 |
+| `assets/useMutation-Cw6P5nWa.js`（页面共享依赖） | 12,240 | 4,091 |
+| `assets/StickersPage-C9YbEhNU.js` | 10,721 | 4,117 |
+| `assets/UsagePage-D57DtO3K.js` | 10,596 | 3,075 |
+| `assets/CanvasPage-CEt_f0ex.js` | 10,075 | 3,782 |
+| `assets/PersonaPresetGallery-DCeGXsdT.js` | 7,919 | 3,501 |
+| `assets/usePersonasApi-hdQ4FCnp.js` | 5,754 | 1,939 |
+| `assets/PersonaImportConflictDialog-DtYnUgKx.js` | 1,775 | 966 |
+| `assets/BatchDeleteResultDialog-BL9eLG_Y.js` | 1,698 | 705 |
+| `assets/PersonaPicker-DE7tV5jC.js` | 1,147 | 673 |
+| `assets/Table-BToeDHa9.js` | 1,111 | 439 |
+| `assets/ConfirmDialog-B5fbw8GT.js` | 923 | 515 |
+| `assets/Checkbox-DL9MqXdz.js` | 801 | 470 |
+| `assets/errorDetails-D1_rld8S.js` | 627 | 362 |
+| `assets/trash-2-n_-Exike.js` | 526 | 344 |
+| `assets/Textarea-0vX1sIBp.js` | 519 | 332 |
+| `assets/arrow-left-DR4JS0v5.js` | 333 | 268 |
+| `assets/datetime-BkCRdq40.js` | 329 | 230 |
+| `assets/plus-BcPs1wie.js` | 322 | 257 |
+
+文件名带内容哈希，本表是本次构建的快照；复跑时哈希与字节可能小幅变化，以
+`bundle-check` 的 `total` / `lazy` 尾标记为准。
+
+### 运行
+
+```bash
+cd frontend && pixi run build           # 生成 dist + manifest
+cd frontend && pixi run bundle-check    # 体积门禁（须先 build）
+```
+
+CI 的 `frontend` job 在 `Build` 步骤之后执行 `pixi run bundle-check`；本地全链
+为 `pixi run build && pixi run bundle-check`。

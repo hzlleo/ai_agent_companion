@@ -8,6 +8,7 @@
 #   cd frontend && pixi run install    # npm install（生成/更新 package-lock.json）
 #   cd frontend && pixi run dev        # 启动 Vite 开发服务（端口 5173）
 #   cd frontend && pixi run build      # 生产构建（tsc + vite build）
+#   cd frontend && pixi run bundle-check  # 构建体积门禁（需先 build）
 #   cd frontend && pixi run test       # vitest run（单次执行）
 #   cd frontend && pixi run coverage   # vitest run --coverage（≥80% 门禁）
 #   cd frontend && pixi run lint       # tsc --noEmit + eslint src/
@@ -34,6 +35,8 @@ install = { cmd = "npm install", description = "安装前端 npm 依赖" }
 dev = { cmd = "npm run dev", description = "启动 Vite 开发服务" }
 # 构建生产包（tsc + vite build）
 build = { cmd = "npm run build", description = "构建前端生产包" }
+# 构建体积门禁（读取现有 dist + manifest；须先 pixi run build）
+bundle-check = { cmd = "node scripts/check_bundle_budget.mjs", description = "构建体积门禁（初始 JS ≤1MB 且 ≥3 动态 chunk；需先 pixi run build）" }
 # TypeScript 类型检查 + ESLint 静态检查
 lint = { cmd = "npm run lint", description = "tsc --noEmit + eslint src/" }
 # 仅 TypeScript 类型检查

@@ -1,18 +1,30 @@
-import { useEffect, useState } from 'react'
+import { lazy, useEffect, useState, type ReactElement } from 'react'
 import { Navigate, Outlet, RouterProvider, createBrowserRouter, type RouteObject } from 'react-router-dom'
 import { onAuthRequired } from '@/api/auth'
 import { AdminTokenScreen } from '@/components/AdminTokenScreen'
 import { AppShell } from '@/components/AppShell'
+import { PageBoundary } from '@/components/PageBoundary'
 import { ToastProvider } from '@/components/ui/Toast'
-import PersonaListPage from '@/pages/personas/PersonaListPage'
-import PersonaFormPage from '@/pages/personas/PersonaFormPage'
-import PersonaPresetGallery from '@/pages/personas/PersonaPresetGallery'
-import MemoriesPage from '@/pages/memories/MemoriesPage'
-import UsagePage from '@/pages/usage/UsagePage'
-import ModelsPage from '@/pages/models/ModelsPage'
-import StickersPage from '@/pages/stickers/StickersPage'
-import CanvasPage from '@/pages/canvas/CanvasPage'
-import RealtimeVoicePage from '@/pages/realtime/RealtimeVoicePage'
+
+/** 路由页按模块独立分包：首屏只含共享壳与登录门，页面 chunk 按访问加载。 */
+const PersonaListPage = lazy(() => import('@/pages/personas/PersonaListPage'))
+const PersonaFormPage = lazy(() => import('@/pages/personas/PersonaFormPage'))
+const PersonaPresetGallery = lazy(() => import('@/pages/personas/PersonaPresetGallery'))
+const MemoriesPage = lazy(() => import('@/pages/memories/MemoriesPage'))
+const UsagePage = lazy(() => import('@/pages/usage/UsagePage'))
+const ModelsPage = lazy(() => import('@/pages/models/ModelsPage'))
+const StickersPage = lazy(() => import('@/pages/stickers/StickersPage'))
+const CanvasPage = lazy(() => import('@/pages/canvas/CanvasPage'))
+const RealtimeVoicePage = lazy(() => import('@/pages/realtime/RealtimeVoicePage'))
+
+/** 路由页元素：内容区加载态 / 失败态由 PageBoundary 统一承接；key 取路由路径，切换路由时重置失败态。 */
+function page(key: string, element: ReactElement) {
+  return (
+    <PageBoundary key={key}>
+      {element}
+    </PageBoundary>
+  )
+}
 
 /**
  * 应用路由（本工程约定）：
@@ -38,16 +50,16 @@ const routes: RouteObject[] = [
         element: <AppShell />,
         children: [
           { index: true, element: <Navigate to="/personas" replace /> },
-          { path: 'personas', element: <PersonaListPage /> },
-          { path: 'personas/presets', element: <PersonaPresetGallery /> },
-          { path: 'personas/new', element: <PersonaFormPage mode="create" /> },
-          { path: 'personas/:personaId/edit', element: <PersonaFormPage mode="edit" /> },
-          { path: 'memories', element: <MemoriesPage /> },
-          { path: 'usage', element: <UsagePage /> },
-          { path: 'models', element: <ModelsPage /> },
-          { path: 'stickers', element: <StickersPage /> },
-          { path: 'canvas', element: <CanvasPage /> },
-          { path: 'realtime', element: <RealtimeVoicePage /> },
+          { path: 'personas', element: page('personas', <PersonaListPage />) },
+          { path: 'personas/presets', element: page('personas/presets', <PersonaPresetGallery />) },
+          { path: 'personas/new', element: page('personas/new', <PersonaFormPage mode="create" />) },
+          { path: 'personas/:personaId/edit', element: page('personas/:personaId/edit', <PersonaFormPage mode="edit" />) },
+          { path: 'memories', element: page('memories', <MemoriesPage />) },
+          { path: 'usage', element: page('usage', <UsagePage />) },
+          { path: 'models', element: page('models', <ModelsPage />) },
+          { path: 'stickers', element: page('stickers', <StickersPage />) },
+          { path: 'canvas', element: page('canvas', <CanvasPage />) },
+          { path: 'realtime', element: page('realtime', <RealtimeVoicePage />) },
           { path: '*', element: <Navigate to="/personas" replace /> },
         ],
       },

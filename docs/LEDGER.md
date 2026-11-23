@@ -1038,6 +1038,40 @@ MATCH = 代码与报告要求一致；已记录偏离 = 实现或口径与报告
 - R2 不变量抽查 8/8 在树：synthetic 恒跳过、密度锚点、64KiB 块上限与池 LIFO 关闭序、关系摘要注入、亲密通道路由、梦境上限与重入窗、0018 复合索引、voiceprint 同意闸。
 - 结论：唯一 finding 为本文件上方「审计 C 尚未执行」过期句（P2，已按本切片修正并提交复审）；除此之外复核会话判定全部通过。
 
+### 已完成切片：R4-1 前端体积治理（本分支工作区）
+
+**已完成**：
+1. 路由级 lazy split：`frontend/src/App.tsx` 全部路由页改 `React.lazy` 独立分包，
+   共享壳（AppShell / ToastProvider / 令牌门）保持 eager；新增
+   `frontend/src/components/PageBoundary.tsx`（Suspense 加载态 + chunk 失败态错误
+   边界，侧栏导航在失败面保持可用）。
+2. 体积门禁：`frontend/scripts/check_bundle_budget.mjs`（纯 Node 内置，零新依赖）
+   解析 `dist/.vite/manifest.json`；失败条件为初始加载 JS >1,000,000 字节、动态
+   chunk <3、dist/manifest 缺失或解析失败。阈值常量单源在本脚本，文档见
+   [backend/performance.md](backend/performance.md)「前端构建产物体积基线（R4-1）」。
+3. 任务与 CI：`frontend/pixi.toml` 增 `bundle-check`（读取现有 dist，不重复构建）；
+   `.github/workflows/ci.yml` 的 frontend job 在 Build 之后执行 `pixi run bundle-check`。
+4. 测试：新增 PageBoundary 3 例与 App 路由懒加载 6 例；App.test 既有断言均为
+   `findBy*` / `waitFor`，无需同步断言改写；MSW 与页面级测试未改。
+5. 文档：frontend/README 命令表与构建基线节、performance.md 新基线表、根 README
+   性能基线行同步。
+
+**实测（本机，命令 + 退出码）**：
+- `cd frontend && pixi run test` → 0：86 files / 675 passed（基线 666 + 新增 9）。
+- `cd frontend && pixi run coverage` → 0：perFile ≥80% 全绿（statements 96.02% /
+  branches 92.22% / functions 95.58% / lines 96.23%）。
+- `cd frontend && pixi run lint` → 0（tsc --noEmit + eslint）。
+- `cd frontend && pixi run build` → 0：Vite 2.87s（热缓存复跑），产物见下。
+- `cd frontend && pixi run bundle-check` → 0：`[bundle-budget] PASS total=389799 lazy=25`。
+
+**拆分前后（本机同轮实测）**：单 chunk 717,443 B（gzip 214,006 B）→ 初始加载
+389,799 B（gzip 123,614 B）+ 25 个动态 chunk 337,058 B（gzip 109,646 B）；JS 产物
+合计 726,857 B（共享模块拆分开销 +9,414 B）。完整 chunk 表见
+[backend/performance.md](backend/performance.md)「前端构建产物体积基线（R4-1）」。
+
+**剩余 / 复审**：后端未改动（未复跑后端链）；chunk 明细与构建耗时为同机快照，
+复审归主 Agent。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。

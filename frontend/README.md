@@ -54,6 +54,7 @@ frontend/
 ├── package.json           # npm 依赖与 scripts
 ├── vite.config.ts         # Vite（@ → src 别名；5173 端口）
 ├── vitest.config.ts       # Vitest（jsdom + 覆盖率 perFile ≥80% 门禁）
+├── scripts/               # 构建体积门禁（check_bundle_budget.mjs，纯 Node 内置）
 ├── eslint.config.js       # ESLint 9 flat（strict-type-checked 全 error）
 ├── tsconfig.json          # TypeScript strict（noUncheckedIndexedAccess 等）
 └── src/
@@ -73,6 +74,7 @@ frontend/
     │   └── model-registry.ts # model-registry 域全部 wire 契约
     ├── components/
     │   ├── AppShell.tsx   # 侧边栏导航壳（人格/记忆/用量/模型）
+    │   ├── PageBoundary.tsx # 路由懒加载边界（加载态 + 失败态）
     │   ├── ConfirmDialog.tsx
     │   ├── PersonaPicker.tsx       # 目标人格选择器（admin 路由显式 persona_id）
     │   ├── BatchDeleteResultDialog.tsx # 批量删除部分成功结果（共享）
@@ -105,22 +107,28 @@ frontend/
 | `pixi run install` | `npm install`（依赖 + lockfile） |
 | `pixi run dev` | 启动 Vite 开发服务（端口 5173） |
 | `pixi run build` | 生产构建（`tsc && vite build`） |
+| `pixi run bundle-check` | 构建体积门禁（需先 `pixi run build`；初始 JS ≤1 MB 且 ≥3 动态 chunk） |
 | `pixi run test` | 运行测试（`vitest run`，单次执行） |
 | `pixi run coverage` | 测试 + 覆盖率（src/ 全模块 **perFile ≥80%** 门禁） |
 | `pixi run lint` | `tsc --noEmit` + `eslint src/`（strict-type-checked） |
 | `pixi run typecheck` | 仅 `tsc --noEmit` |
 | `pixi run preview` | 本地预览生产包 |
 
-## 构建体积基线（决策）
+## 构建体积基线与门禁（R4-1）
 
-生产构建实测（R3 限流/背压切片）：单 chunk `dist/assets/index-*.js` **717.44 KB**（gzip
-**213.91 KB**）、CSS 23.26 KB（gzip 5.28 KB）；审计环境构建耗时 6.16s，本机复跑
-3.61s（随负载波动）。Vite 的 `>500 kB` 提示为既有已知项。
+生产构建已按路由拆分：初始加载 JS `dist/assets/index-*.js` **389.80 KB**（gzip
+**123.61 KB**），25 个动态 chunk 合计 337.06 KB（gzip 109.65 KB），CSS 23.31 KB
+（gzip 5.30 KB）。完整 chunk 明细、构建耗时与测量口径见
+[docs/backend/performance.md「前端构建产物体积基线（R4-1）」](../docs/backend/performance.md#前端构建产物体积基线r4-1)。
 
-**决策**：维持单 chunk（管理台为内部工具、首屏依赖集中，路由级拆包收益低于
-多请求开销与缓存碎片成本）。**触发条件**：单 chunk 超过 **1 MB**（minified）或
-首屏 LCP 在部署机实测明显退化时，再引入路由级 `lazy()` 拆包——先拆
-`pages/realtime` 与 `pages/memories` 两个最重路由，保留共享 vendor chunk。
+**门禁**：`cd frontend && pixi run build && pixi run bundle-check`——初始加载 JS
+超过 **1 MB** 或动态 chunk 少于 **3** 个即失败；阈值常量只在
+`scripts/check_bundle_budget.mjs`。**触发条件**：初始加载 JS 超过 1 MB 必须继续
+拆分；新增路由页经 `React.lazy` 独立分包（共享壳 `AppShell` / `ToastProvider` /
+令牌门保持 eager），不得为了拆而拆。
+
+决策历史：R3 曾维持单 chunk（717.44 KB / gzip 213.91 KB）；R4-1 依实测改为
+路由级 `lazy()` + 体积门禁，初始加载 JS 降至 389.80 KB。
 
 ## 开发工作流（与后端联调）
 
