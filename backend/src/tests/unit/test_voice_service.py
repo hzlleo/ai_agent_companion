@@ -5,12 +5,13 @@
     - 参数解析优先级：请求参数 > persona.voice_profile > settings 缺省
       （speaker / speed / instruct_text 透传）；
     - enabled 门控：TTS / ASR 未启用 → CONFLICT（错误信息含 env 旗标名）；
-    - 用量发射：成功 / 失败行（purpose / model_entry / persona 绑定 /
-      真实时延 / status / error_code）；记录器异常不阻断主调用；
+    - 用量发射：仅成功行（purpose / model_entry / persona 绑定 /
+      真实时延 / status）；失败不落行；记录器异常不阻断主调用；
     - 客户端惰性构建：注入优先；缺省经公共池（未启动 → INTERNAL_ERROR；
       启动后经共享 client 瞬时构建——MockTransport 实证）；
     - 默认接线：wire_default_voice_usage_recorder → usage 域真实落库
-      （共享引擎 + engine holder 外部安装）。
+      （共享引擎 + engine holder 外部安装）；分面预算矩阵见
+      ``test_voice_budget.py``。
 """
 
 from __future__ import annotations
@@ -271,25 +272,25 @@ class TestSynthesizeUsage:
         assert event.error_code is None
         assert event.latency_ms >= 0
 
-    async def test_error_row_emitted_and_raised(self) -> None:
-        """失败行：status=error / error_code 携带；异常原样上抛。"""
+    async def test_failure_raises_without_usage_row(self) -> None:
+        """失败：异常原样上抛且不落行（预算口径只计成功调用）。"""
         recorder = RecordingRecorder()
         failure = BusinessException(
             code=ErrorCode.LLM_CALL_FAILED, message="语音合成失败"
         )
+        client = FakeTtsClient(error=failure)
         service = VoiceService(
-            tts_client=FakeTtsClient(error=failure),
+            tts_client=client,
             settings=_settings(),
             usage_recorder=recorder,
         )
         with pytest.raises(BusinessException) as exc_info:
             await service.synthesize("你好", persona=_persona())
         assert exc_info.value.code == ErrorCode.LLM_CALL_FAILED
-        assert len(recorder.events) == 1
-        event = recorder.events[0]
-        assert event.status == "error"
-        assert event.error_code == str(ErrorCode.LLM_CALL_FAILED)
-        assert event.latency_ms >= 0
+        assert exc_info.value.message == "语音合成失败"
+        assert exc_info.value.details is None
+        assert len(client.calls) == 1
+        assert recorder.events == []
 
     async def test_recorder_failure_never_breaks_call(self) -> None:
         """记录器异常：仅告警——合成结果照常返回（观测面不阻断）。"""

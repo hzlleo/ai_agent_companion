@@ -22,6 +22,7 @@ __all__ = [
     "UsageGroupBy",
     "UsageTimeBucket",
     "TIME_BUCKET_MS",
+    "LLM_BUDGET_PURPOSES",
 ]
 
 
@@ -35,6 +36,7 @@ class UsagePurpose(StrEnum):
     - ``embed``：向量化（记忆检索 / 语义嵌入）；
     - ``tts``：语音合成；
     - ``asr``：语音识别；
+    - ``voiceprint``：声纹向量提取（注册 / 校验的说话人向量服务调用）；
     - ``tool``：工具调用编排；
     - ``search``：联网搜索（web_search 能力面——Bocha / Zhipu
       provider 链路；预算按调用计数，token 恒 0/0）。
@@ -47,8 +49,23 @@ class UsagePurpose(StrEnum):
     EMBED = "embed"
     TTS = "tts"
     ASR = "asr"
+    VOICEPRINT = "voiceprint"
     TOOL = "tool"
     SEARCH = "search"
+
+
+#: LLM 日预算计入的 purpose 集合（模型调用总量闸；语音 / 声纹 / 搜索
+#: 各自独立预算，互不占用）。
+LLM_BUDGET_PURPOSES: frozenset[UsagePurpose] = frozenset(
+    {
+        UsagePurpose.CHAT,
+        UsagePurpose.DUTY,
+        UsagePurpose.DREAM,
+        UsagePurpose.LOOK_AT,
+        UsagePurpose.EMBED,
+        UsagePurpose.TOOL,
+    }
+)
 
 
 class UsageStatus(StrEnum):

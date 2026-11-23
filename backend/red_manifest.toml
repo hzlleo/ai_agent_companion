@@ -250,3 +250,10 @@ symbol = "packages.harness.channels.qq.qq_runner:QqWebhookRunner"
 tests = [
     "tests/unit/test_qq_runner.py::TestQueueBackpressure::test_queue_overflow_drops_counts_and_logs",
 ]
+
+[[probes]]
+name = "voice-budget-gate-removal"
+symbol = "packages.harness.voice.voice_budget:enforce_daily_budget"
+tests = [
+    "tests/unit/test_voice_budget.py::TestVoiceBudgetGate::test_tts_persona_exceeded_zero_outbound_zero_usage",
+]

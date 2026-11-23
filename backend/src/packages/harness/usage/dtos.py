@@ -45,6 +45,8 @@ class UsageFilterFields(BaseModel):
         persona_id: 人格 ID 过滤（None = 全人格——管理面口径）。
         model_entry: 模型条目名过滤（None = 全条目）。
         purpose: 调用用途过滤（None = 全用途）。
+        purposes: 调用用途集合过滤（None = 不限；与 ``purpose`` 同时
+            提供时按交集语义叠加——预算计数按 purpose 分面时消费）。
         status: 调用结果过滤（None = 全状态）。
     """
 
@@ -53,6 +55,9 @@ class UsageFilterFields(BaseModel):
     persona_id: str | None = Field(default=None, description="人格 ID 过滤")
     model_entry: str | None = Field(default=None, description="模型条目名过滤")
     purpose: UsagePurpose | None = Field(default=None, description="调用用途过滤")
+    purposes: tuple[UsagePurpose, ...] | None = Field(
+        default=None, description="调用用途集合过滤（预算分面计数）"
+    )
     status: UsageStatus | None = Field(default=None, description="调用结果过滤")
 
 

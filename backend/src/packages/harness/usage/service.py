@@ -87,6 +87,10 @@ def _filter_conditions(query: UsageFilterFields) -> list[ColumnElement[bool]]:
         conditions.append(UsageRecordRow.model_entry == query.model_entry)
     if query.purpose is not None:
         conditions.append(UsageRecordRow.purpose == query.purpose.value)
+    if query.purposes is not None:
+        conditions.append(
+            UsageRecordRow.purpose.in_([purpose.value for purpose in query.purposes])
+        )
     if query.status is not None:
         conditions.append(UsageRecordRow.status == query.status.value)
     return conditions

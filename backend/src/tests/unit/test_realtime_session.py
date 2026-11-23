@@ -754,6 +754,53 @@ async def test_tts_failure_skips_sentence_and_completes_turn() -> None:
     assert harness.session.metrics.tts_failures == 1
 
 
+async def test_asr_budget_exhausted_mid_session_is_recoverable() -> None:
+    """会话中途 ASR 预算超限：该段受控失败（可恢复 error），会话不中断。"""
+    harness = SessionHarness()
+    await harness.boot()
+    harness.voice.asr_error = BusinessException(
+        code=ErrorCode.RATE_LIMITED,
+        message="ASR 语音识别 每日预算已用尽（persona）: used=1, limit=1",
+        details={"scope": "persona", "used": 1, "limit": 1, "purpose": "asr"},
+    )
+    await harness.push_frames([loud_frame(), loud_frame(), silence_frame()])
+    await harness.wait_for_type("error")
+    error = harness.messages("error")[0]
+    assert error["recoverable"] is True
+    assert error["code"] == "RATE_LIMITED"
+    harness.voice.asr_error = None
+    await harness.push_frames([loud_frame(), loud_frame(), silence_frame()], start_seq=10)
+    await harness.wait_for_type("final_transcript")
+    await harness.finish_chat(["继续。"])
+    await _wait_state(harness, "listening")
+    await harness.request_end()
+    assert harness.session is not None
+    assert harness.session.metrics.asr_failures == 1
+
+
+async def test_tts_budget_exhausted_mid_session_skips_sentence_only() -> None:
+    """会话中途 TTS 预算超限：仅该句受控失败，回合与会话继续。"""
+    harness = SessionHarness()
+    await harness.boot()
+    harness.voice.tts_error = BusinessException(
+        code=ErrorCode.RATE_LIMITED,
+        message="TTS 语音合成 每日预算已用尽（global）: used=10, limit=10",
+        details={"scope": "global", "used": 10, "limit": 10, "purpose": "tts"},
+    )
+    await harness.push_frames([loud_frame(), loud_frame(), silence_frame()])
+    await harness.wait_for_type("final_transcript")
+    await harness.finish_chat(["这一句预算已用尽。"])
+    await harness.wait_for_type("error")
+    error = harness.messages("error")[0]
+    assert error["recoverable"] is True
+    assert error["code"] == "RATE_LIMITED"
+    assert harness.messages("audio_chunk") == []
+    await _wait_state(harness, "listening")
+    await harness.request_end()
+    assert harness.session is not None
+    assert harness.session.metrics.tts_failures == 1
+
+
 # ---------------------------------------------------------------------------
 # 回复生成面适配（真实 ChatService 委托）
 # ---------------------------------------------------------------------------

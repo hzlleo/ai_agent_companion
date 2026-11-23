@@ -13,7 +13,8 @@
 | `voice_models.py` | 语音域 Model Classes（Unit 文件）：TTS / ASR 请求与结果契约、人格语音绑定、用量事件、客户端注入面协议 | `TtsRequestModel` / `TtsResultModel` / `AsrResultModel` / `VoiceProfileModel` / `VoiceTtsRequestDTO` / `VoiceUsageEvent` / `TtsClientFace` / `AsrClientFace` |
 | `tts_client.py` | CosyVoice3 合成客户端（共享 httpx client 注入；部署契约持有方） | `CosyVoiceTtsClient` |
 | `asr_client.py` | Qwen3-ASR 转写客户端（OpenAI 兼容 multipart；共享 httpx client 注入） | `Qwen3AsrClient` |
-| `voice_service.py` | 编排门面（enabled 门控 + 人格绑定解析 + 惰性客户端构建 + 用量发射）+ 默认用量接线 | `VoiceService` / `VoiceUsageRecorder` / `wire_default_voice_usage_recorder` |
+| `voice_budget.py` | 分面日预算闸 / 计数 / 用量接线（ASR / TTS / voiceprint 共用；purpose 过滤 + 成功计量） | `enforce_daily_budget` / `wire_default_voice_usage_recorder` / `wire_default_voice_usage_counter` |
+| `voice_service.py` | 编排门面（enabled 门控 + 人格绑定解析 + 分面预算闸 + 惰性客户端构建 + 成功用量发射） | `VoiceService` / `VoiceUsageRecorder` / `VoiceBudgetCounter` |
 | `voiceprint_models.py` | 声纹域 Model Classes（Unit 文件）：`VOICEPRINT_` 配置面、注册 / 校验 / 同意 / 档案契约、PIPL 告知文本与版本常量 | `VoiceprintSettings` / `VoiceprintEnrollRequestDTO` / `VoiceprintVerifyResultModel` / `VoiceprintPrivacyNoticeDTO` / `render_privacy_notice` |
 | `voiceprint_orm.py` | 声纹样本 / 同意记录 ORM 行（PersonaMixin 人格作用域） | `VoiceprintSampleRow` / `VoiceprintConsentRow` |
 | `voiceprint_embedding.py` | 说话人向量 HTTP 客户端（可配置端点；共享池 client 注入） | `VoiceprintEmbeddingClient` |
@@ -28,18 +29,20 @@
     ↓ VoiceService.synthesize(text, persona)          ① enabled 门控
                                                       ② 参数解析（见下节优先级）
     ② persona.voice_profile（存在时覆盖 settings 缺省）
-    ③ VoiceService._resolve_tts_client（注入优先；
+    ③ TTS_DAILY_BUDGET_* 分面日预算闸（persona → global；
+       0/0 = 不限且零计数查询；超限 RATE_LIMITED 零出站）
+    ④ VoiceService._resolve_tts_client（注入优先；
        缺省经公共池共享 client 瞬时构建——零连接资源）
 CosyVoiceTtsClient（tts_client.py）
     ↓ POST {base_url}/tts  JSON {text, speaker, speed[, instruct_text]}
     ↓ ← 200 audio/wav 字节（Content-Type 校验）
 TtsResultModel（audio: bytes + content_type + latency_ms——内存字节形态）
-    ↓ ④ 用量发射（成功 / 失败均落账）
+    ↓ ⑤ 仅成功路径用量发射（失败 / 被拒不落行）
 usage 域（wire_default_voice_usage_recorder → UsageCreateDTO）
     → ff_usage_records（purpose="tts"，token 0/0/0，真实时延，persona 绑定）
 ```
 
-ASR 同构（`VoiceService.transcribe(audio, filename, persona)` → `Qwen3AsrClient` → `POST {base_url}/v1/audio/transcriptions` multipart → `AsrResultModel` → usage 行 `purpose="asr"`）。用量语义（锁定决策）：**语音调用无 token 语义**——input / output / total 恒 0 落账（调用计数 + 真实时延仍有观测价值；`UsagePurpose` 枚举 tts / asr 成员为既有预留，本域消费）。用量发射恒不阻断主调用（记录器异常仅告警——与 llm 网关同契约）。
+ASR 同构（`VoiceService.transcribe(audio, filename, persona)` → `ASR_DAILY_BUDGET_*` 分面闸 → `Qwen3AsrClient` → `POST {base_url}/v1/audio/transcriptions` multipart → `AsrResultModel` → 成功 usage 行 `purpose="asr"`）。用量语义（锁定决策）：**语音调用无 token 语义**——input / output / total 恒 0 落账（调用计数 + 真实时延仍有观测价值；`UsagePurpose` 枚举 tts / asr 成员本域消费）。**仅成功后落账**：出站失败不记、被预算拒绝不记；用量发射恒不阻断主调用（记录器异常仅告警——与 llm 网关同契约）。分面预算单位 / 软竞态 / 错误 details 见 [usage.md](usage.md#分面日预算asr--tts--voiceprint)。
 
 ### 大输出边界（文档化决策）
 
@@ -71,12 +74,16 @@ ASR 端点对 multipart 请求体设大小上限（`VOICE_ASR_MAX_UPLOAD_BYTES`�
 | `VOICE_TTS_REQUEST_TIMEOUT_SECONDS` | `30` | 单次合成请求超时（音频合成耗时显著长于普通 API） |
 | `VOICE_TTS_DEFAULT_SPEAKER` | `中文女` | 缺省发音人（无人格绑定时回落） |
 | `VOICE_TTS_DEFAULT_SPEED` | `1.0` | 缺省语速（0.5-2.0） |
+| `TTS_DAILY_BUDGET_GLOBAL` | `0` | 全局每日 TTS 合成调用数上限（0 = 不限；有效上限 10,000） |
+| `TTS_DAILY_BUDGET_PERSONA` | `0` | 单人格每日 TTS 合成调用数上限（0 = 不限；有效上限 10,000） |
 | `VOICE_ASR_ENABLED` | `false` | ASR 转写开关 |
 | `VOICE_ASR_BASE_URL` | `http://127.0.0.1:8082` | Qwen3-ASR 服务基础 URL |
 | `VOICE_ASR_MODEL_ENTRY` | `qwen3-asr-0.6b` | 用量记账条目名（兼 multipart `model` 字段值） |
 | `VOICE_ASR_REQUEST_TIMEOUT_SECONDS` | `60` | 单次转写请求超时（音频上传 + 转写） |
 | `VOICE_ASR_LANGUAGE` | （空） | 缺省语言提示（空 = 端点自动检测；请求级参数覆盖） |
 | `VOICE_ASR_MAX_UPLOAD_BYTES` | `26214400` | ASR 上传请求体上限（字节，25MB——超限 422；量级依据见上节） |
+| `ASR_DAILY_BUDGET_GLOBAL` | `0` | 全局每日 ASR 转写调用数上限（0 = 不限；有效上限 10,000） |
+| `ASR_DAILY_BUDGET_PERSONA` | `0` | 单人格每日 ASR 转写调用数上限（0 = 不限；有效上限 10,000） |
 
 键面以 `.env.example`（`pixi run gen-examples` 生成）为真源，本表为语义说明。
 
@@ -225,7 +232,8 @@ POST /api/v1/voiceprints/{sender_id}/enroll
     ↓ ④ 批量门槛：样本数 ≥ VOICEPRINT_MIN_SAMPLES、≤ MAX_BATCH_SAMPLES、
     │            档案累计 ≤ MAX_SAMPLES
     ↓ ⑤ 逐样本校验（MIME 白名单 / base64 / 字节上限 / 时长 / 采样率 / 哈希去重）
-    ↓ ⑥ 向量提取（VOICEPRINT_EMBEDDING_PATH，共享 HTTP 池）→ 维度一致性
+    ↓ ⑥ 每样本 VOICEPRINT_DAILY_BUDGET_* 闸 → 向量提取（共享 HTTP 池）→ 维度一致性
+    │   （中途超限：整体回滚本批文件与样本行；已成功出站调用各留一行用量）
     ↓ ⑦ 样本原子落盘（临时文件 + fsync + os.replace）+ 行插入（逐样本部分成功）
     ↓ ⑧ 返回注册结果与档案聚合
 
@@ -233,7 +241,7 @@ POST /api/v1/voiceprints/{sender_id}/verify
     ↓ ①-③ 同上（校验同样要求同意）
     ↓ ④ 短音频拒识：duration_ms < VOICEPRINT_MIN_VERIFY_DURATION_MS
     ↓ ⑤ 保存期清理 → 无样本 → matched=false（no_samples）
-    ↓ ⑥ 查询向量 → 档案向量均值 → 余弦相似度
+    ↓ ⑥ VOICEPRINT_DAILY_BUDGET_* 闸 → 查询向量 → 档案向量均值 → 余弦相似度
     ↓ ⑦ matched = similarity ≥ VOICEPRINT_SIMILARITY_THRESHOLD
 ```
 
@@ -321,6 +329,7 @@ Content-Type: multipart/form-data
 | 同意文本版本不一致 / 样本条数越界 / 校验音频非法 | `VALIDATION_ERROR` | 422 |
 | 无有效同意时撤回 | `NOT_FOUND` | 404 |
 | 向量提供方传输 / 非 200 / 响应契约破坏 | `LLM_CALL_FAILED` | 503 |
+| 日预算超限（注册 / 校验出站前拒绝；注册已写文件回滚） | `RATE_LIMITED` | 429 |
 
 ### Settings（`VOICEPRINT_` env 面——默认关闭）
 
@@ -341,9 +350,11 @@ Content-Type: multipart/form-data
 | `VOICEPRINT_MAX_BATCH_SAMPLES` | `20` | 单次注册请求样本条数上限 |
 | `VOICEPRINT_RETENTION_DAYS` | `365` | 样本与向量最长保存天数 |
 | `VOICEPRINT_STORAGE_DIR` | `data/voiceprints` | 样本文件落盘根目录 |
+| `VOICEPRINT_DAILY_BUDGET_GLOBAL` | `0` | 全局每日声纹向量提取调用数上限（0 = 不限；有效上限 10,000） |
+| `VOICEPRINT_DAILY_BUDGET_PERSONA` | `0` | 单人格每日声纹向量提取调用数上限（0 = 不限；有效上限 10,000） |
 
 ## 测试
 
-`src/tests/unit/test_voice_{settings,clients,service,api}.py` + `test_persona_voice_profile.py` + `test_chat_cli_voice.py`（82 例）：客户端 MockTransport（请求形状 / multipart 体 / 内容类型校验 / 超时 / 错误映射）、服务（优先级 / 用量含错误行 / disabled / 惰性构建 / 默认接线真实落库）、人格绑定全链路 round-trip（服务 / DTO / API）、API（ASGI + 处理器直调双面：字节响应 + 头 / multipart 解析 / 校验 400 / 上传上限字节精确边界）、CLI（旗标开关 / 人格绑定 / 失败存活 / 旗标透传）。迁移 `000000000006` 经 scratch SQLite `alembic upgrade head` → `downgrade -1` → 再 upgrade 实证（升列 / 降列 / 复升三态）。
+`src/tests/unit/test_voice_{settings,clients,service,api}.py` + `test_persona_voice_profile.py` + `test_chat_cli_voice.py`（82 例）：客户端 MockTransport（请求形状 / multipart 体 / 内容类型校验 / 超时 / 错误映射）、服务（优先级 / 仅成功用量行 / 分面预算闸 / disabled / 惰性构建 / 默认接线真实落库）、人格绑定全链路 round-trip（服务 / DTO / API）、API（ASGI + 处理器直调双面：字节响应 + 头 / multipart 解析 / 校验 400 / 上传上限字节精确边界）、CLI（旗标开关 / 人格绑定 / 失败存活 / 旗标透传）。迁移 `000000000006` 经 scratch SQLite `alembic upgrade head` → `downgrade -1` → 再 upgrade 实证（升列 / 降列 / 复升三态）。
 
-声纹测试：`src/tests/unit/test_voiceprint_service.py`（同意闸 / 注册门槛与逐样本拒收 / 重复哈希 / 向量维度 / 时长与采样率 / 短音频拒识 / 命中与阈值下 / 撤回清样本留凭证 / 删除幂等 / 保存期清理 / 人格 × 发送者隔离）、`test_voiceprint_embedding.py`（multipart 请求形状 / 两种响应形态 / 传输与非 200 / 向量非法）、`test_voiceprint_api.py`（告知 / 同意 / 注册 / 档案 / 校验 / 撤回 / 删除 / 人格解析 404 / 请求体校验）；迁移 `000000000016` 经 scratch SQLite round-trip（`test_migration_voiceprint_sticker.py`）与 SeekDB 真引擎迁移链（`integration_seekdb/test_migration_chain.py`）双面验证。
+声纹测试：`src/tests/unit/test_voiceprint_service.py`（同意闸 / 注册门槛与逐样本拒收 / 重复哈希 / 向量维度 / 时长与采样率 / 短音频拒识 / 命中与阈值下 / 撤回清样本留凭证 / 删除幂等 / 保存期清理 / 人格 × 发送者隔离）、`test_voiceprint_embedding.py`（multipart 请求形状 / 两种响应形态 / 传输与非 200 / 向量非法）、`test_voiceprint_api.py`（告知 / 同意 / 注册 / 档案 / 校验 / 撤回 / 删除 / 人格解析 404 / 请求体校验）、`test_voice_budget.py`（三组分面预算矩阵 / purpose 隔离 / 记账口径 / 声纹中途超限回滚）；迁移 `000000000016` 经 scratch SQLite round-trip（`test_migration_voiceprint_sticker.py`）与 SeekDB 真引擎迁移链（`integration_seekdb/test_migration_chain.py`）双面验证。

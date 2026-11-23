@@ -59,6 +59,7 @@ from packages.harness.voice.realtime_session import (
 )
 from packages.harness.voice.voice_service import (
     VoiceService,
+    wire_default_voice_usage_counter,
     wire_default_voice_usage_recorder,
 )
 
@@ -303,7 +304,10 @@ async def realtime_voice_websocket(websocket: WebSocket) -> None:
             realtime_settings=realtime_settings,
             voice_settings=settings.voice,
             chat=chat,
-            voice_service=VoiceService(usage_recorder=wire_default_voice_usage_recorder()),
+            voice_service=VoiceService(
+                usage_recorder=wire_default_voice_usage_recorder(),
+                usage_counter=wire_default_voice_usage_counter(),
+            ),
             persona=persona,
         )
         await session.run()

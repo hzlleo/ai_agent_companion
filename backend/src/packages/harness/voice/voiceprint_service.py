@@ -58,10 +58,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.harness.config.models import settings as global_settings
 from packages.harness.core import time_utils
+from packages.harness.core.context import persona_id_var, request_id_var
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.file_utils import unlink_missing_ok, write_bytes_atomic
 from packages.harness.core.thread_pool import run_blocking_ops
 from packages.harness.pools.manager import get_pool_manager
+from packages.harness.voice.voice_budget import (
+    DailyBudgetLimits,
+    VoiceBudgetCounter,
+    VoiceUsageRecorder,
+    emit_voice_usage,
+    enforce_daily_budget,
+)
 from packages.harness.voice.voiceprint_embedding import VoiceprintEmbeddingClient
 from packages.harness.voice.voiceprint_models import (
     VOICEPRINT_AUDIO_MIME_ALLOWLIST,
@@ -103,14 +111,18 @@ VOICEPRINT_MIME_EXTENSIONS: Final[dict[str, str]] = {
     "audio/x-m4a": ".m4a",
 }
 
+#: 声纹用量行的 provider 值（说话人向量服务）。
+_VOICEPRINT_PROVIDER: Final[str] = "voiceprint-embedding"
+
 
 class VoiceprintService:
     """声纹服务（注册 / 校验 / 档案读取 / 删除 / 同意 / 过期清理）。
 
     构造注入（测试 / 装配友好）：settings / embedding / storage_root /
-    clock 均可显式覆盖；缺省 settings 读全局单例、embedding 经公共池瞬时
-    构建、storage_root 取 settings.storage_dir。服务自身无状态（Session
-    逐次注入），可安全跨请求共享。
+    usage_recorder / usage_counter / clock 均可显式覆盖；缺省 settings 读
+    全局单例、embedding 经公共池瞬时构建、storage_root 取
+    settings.storage_dir。服务自身无状态（Session 逐次注入），可安全跨
+    请求共享。
     """
 
     def __init__(
@@ -119,6 +131,8 @@ class VoiceprintService:
         settings: VoiceprintSettings | None = None,
         embedding: VoiceprintEmbeddingFace | None = None,
         storage_root: Path | None = None,
+        usage_recorder: VoiceUsageRecorder | None = None,
+        usage_counter: VoiceBudgetCounter | None = None,
         clock: Callable[[], int] = time_utils.now_ms,
     ) -> None:
         """初始化服务。
@@ -127,11 +141,17 @@ class VoiceprintService:
             settings: 声纹配置（None = 全局 settings.voiceprint）。
             embedding: 向量提供方（None = 调用时经公共池瞬时构建）。
             storage_root: 样本落盘根目录（None = settings.storage_dir）。
-            clock: 时钟（epoch 毫秒——保存期截止与同意时间轴）。
+            usage_recorder: 用量记录器（None = 未接线——零记录，装配时经
+                wire_default_voice_usage_recorder 绑定）。
+            usage_counter: 分面预算计数面（None = 零预算门禁——纯编排 /
+                测试形态；装配时经 wire_default_voice_usage_counter 绑定）。
+            clock: 时钟（epoch 毫秒——保存期截止 / 同意时间轴 / 预算日桶）。
         """
         self._settings = settings
         self._embedding = embedding
         self._storage_root = storage_root
+        self._usage_recorder = usage_recorder
+        self._usage_counter = usage_counter
         self._clock = clock
 
     # ------------------------------------------------------------------
@@ -254,7 +274,8 @@ class VoiceprintService:
         Raises:
             BusinessException: 功能未启用 / 无有效同意（``CONFLICT``）；
                 样本条数低于注册下限 / 高于单批上限 / 超出档案容量
-                （``VALIDATION_ERROR``）；向量提供方失败
+                （``VALIDATION_ERROR``）；日预算超限（``RATE_LIMITED``
+                ——已写文件回滚清理）；向量提供方失败
                 （``LLM_CALL_FAILED``）。
         """
         settings = self._require_available()
@@ -318,8 +339,8 @@ class VoiceprintService:
                     )
                     continue
                 extension = VOICEPRINT_MIME_EXTENSIONS[sample.content_type.lower()]
-                vector = await self._resolve_embedding().embed(
-                    audio, f"voiceprint{extension}", sample.content_type
+                vector = await self._embed_with_budget(
+                    settings, audio, f"voiceprint{extension}", sample.content_type
                 )
                 if embedding_dim is None:
                     embedding_dim = len(vector)
@@ -409,8 +430,9 @@ class VoiceprintService:
 
         Raises:
             BusinessException: 功能未启用 / 无有效同意（``CONFLICT``）；
-                音频载荷 / 类型 / 大小非法（``VALIDATION_ERROR``）；向量
-                提供方失败（``LLM_CALL_FAILED``）。
+                音频载荷 / 类型 / 大小非法（``VALIDATION_ERROR``）；日预算
+                超限（``RATE_LIMITED``——零出站零记账）；向量提供方失败
+                （``LLM_CALL_FAILED``）。
         """
         settings = self._require_available()
         await self._require_active_consent(session, sender_id)
@@ -445,8 +467,8 @@ class VoiceprintService:
                 reason=VoiceprintVerifyReason.NO_SAMPLES,
             )
         extension = VOICEPRINT_MIME_EXTENSIONS[dto.sample.content_type.lower()]
-        vector = await self._resolve_embedding().embed(
-            audio, f"voiceprint-query{extension}", dto.sample.content_type
+        vector = await self._embed_with_budget(
+            settings, audio, f"voiceprint-query{extension}", dto.sample.content_type
         )
         aggregate = _aggregate_vectors([json.loads(row.embedding) for row in rows])
         similarity = _cosine_similarity(vector, aggregate)
@@ -720,6 +742,58 @@ class VoiceprintService:
                 f"采样率 {sample.sample_rate_hz}Hz 低于下限 {settings.min_sample_rate_hz}Hz",
             )
         return audio, None, ""
+
+    async def _embed_with_budget(
+        self,
+        settings: VoiceprintSettings,
+        audio: bytes,
+        filename: str,
+        content_type: str,
+    ) -> list[float]:
+        """经分面预算闸执行一次向量提取，并在成功后记录用量。
+
+        每次真实出站调用独立判定 / 记录（注册批量的逐样本循环共用本
+        方法——单样本被预算拒绝时整体回滚由调用方异常路径承担）。
+
+        Args:
+            settings: 声纹配置（预算上限与记账条目来源）。
+            audio: 音频字节。
+            filename: 向量服务 filename 字段。
+            content_type: 音频 MIME。
+
+        Returns:
+            说话人向量。
+
+        Raises:
+            BusinessException: 日预算超限（``RATE_LIMITED``——details 含
+                scope / used / limit / purpose，零出站零记账）；向量
+                提供方失败（``LLM_CALL_FAILED``——失败不记账）。
+        """
+        persona_id = persona_id_var.get()
+        await enforce_daily_budget(
+            purpose="voiceprint",
+            label="声纹向量提取",
+            limits=DailyBudgetLimits(
+                global_limit=settings.daily_budget_global,
+                persona_limit=settings.daily_budget_persona,
+            ),
+            persona_id=persona_id,
+            counter=self._usage_counter,
+            clock=self._clock,
+        )
+        started_ms = self._clock()
+        vector = await self._resolve_embedding().embed(audio, filename, content_type)
+        await emit_voice_usage(
+            self._usage_recorder,
+            purpose="voiceprint",
+            model_entry=settings.embedding_model,
+            provider=_VOICEPRINT_PROVIDER,
+            persona_id=persona_id,
+            request_id=request_id_var.get(),
+            ts_ms=started_ms,
+            latency_ms=max(0, self._clock() - started_ms),
+        )
+        return vector
 
     def _resolve_embedding(self) -> VoiceprintEmbeddingFace:
         """取向量提供方（注入优先；缺省经公共池共享 client 瞬时构建）。

@@ -95,12 +95,12 @@
 | R3-2 限流与背压 | QQ 入站有界 / 实时语音 TTS 队列与会话帽 / LLM 日预算闸 / 多 worker 语义 / 最小观测面 / 前端 Node 护栏与构建体积基线（P1×1 + P2×7；复审 6×P2 闭环） | ✅ merged（PR #36；证据 `fe261c9a`；PR body 引用的 `0276c1a5` 为首提交树证据，终态以 `fe261c9a` 为准） |
 | R3-3 性能基线 | `bench_core.py` 6 项纯函数微基准 + `api_smoke.py` 4 端点进程内冒烟 + 门禁链落位（复审 4×P2 闭环；终局复核 7×P2 闭环） | ✅ merged（PR #37 → main `3f313a6`；评审 head `66b14b3`，终态含 `ecb7714`/`ee9381a`；canonical 证据 `16b07c7c`，历史 `bc71f261`） |
 
-| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（PoC 门，Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-1 本分支工作区（其余切片待开工） |
+| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（PoC 门，Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-2 本分支工作区（R4-1 已合并；其余切片待开工） |
 
 **当前分支状态**：
 - main：`3f313a6`（PR#34–#37 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
 - `feat/r3-perf`：R3-3 性能基线，已合并（PR #37），可删除。
-- R4：已开工（R4-1 本分支），后续切片待排期。
+- R4：已开工（R4-2 本分支；R4-1 已合并），后续切片待排期。
 - 历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入 main，可删除；工作区 clean。
 
 ## 4. 全部拍板记录（原文语义）
@@ -1111,12 +1111,78 @@ cd frontend && pixi run test                             # 0；86 files / 675 pa
 
 gzip 复算命令（对任一产物目录）：`node -e 'const {gzipSync}=require("node:zlib"),{readFileSync}=require("node:fs");console.log(gzipSync(readFileSync("<file>")).length)'`。
 
+### 已完成切片：R4-2 预算分面（ASR / TTS / voiceprint 独立日预算，本分支工作区）
+
+**已完成**：
+1. **计量与值域**：`UsagePurpose` 增 `voiceprint`（`asr` / `tts` 既有）；
+   三域均按**调用次数**计量（每次真实出站调用成功后 1 行，token 恒 0）：
+   TTS 每句 / 每次合成、ASR 每次转写（含实时语音切段与中途转写）、声纹
+   每样本向量提取 / 每次校验。persona 上下文存在时带 `persona_id`；**失败
+   与被预算拒绝的调用不落行**（不消耗预算、不自我强化）。既有 LLM 记账
+   语义不变（成功 / 失败均落账）。
+2. **配置面**：`TTS_DAILY_BUDGET_GLOBAL/PERSONA`（`TtsSettings`，构造
+   alias + `populate_by_name`）、`ASR_DAILY_BUDGET_GLOBAL/PERSONA`
+   （`AsrSettings`）、`VOICEPRINT_DAILY_BUDGET_GLOBAL/PERSONA`
+   （`VoiceprintSettings`）；均 0..10,000（计数页帽 50×200），默认 0 = 不限。
+   `.env.example` / config.md env 分节表由生成器重出；Wizard 步骤前缀补
+   `TTS_` / `ASR_`；conftest 六键硬覆盖。
+3. **闸门与错误**：新增 `packages/harness/voice/voice_budget.py`
+   （persona→global 判定、0/0 零查询、purpose 强制过滤、10,000 页帽、
+   `RATE_LIMITED` details 含 scope/used/limit/purpose[/persona_id]）；TTS /
+   ASR 在 `VoiceService` 出站客户端调用前接入；声纹在 `VoiceprintService`
+   每次 `embed` 前接入（注册批量中途超限沿用既有回滚：本批文件 + 样本行
+   清理，已成功调用各留一行）。实时语音会话中途超限：ASR 段 / TTS 句按
+   既有可恢复 error 面收尾（`code=RATE_LIMITED`），会话继续。
+4. **预算计数隔离**：`wire_default_voice_usage_counter()` 按 purpose 查询；
+   `wire_default_usage_counter()`（LLM）改用 `LLM_BUDGET_PURPOSES` 收窄到
+   chat/duty/dream/look_at/embed/tool——LLM 与语音 / 声纹行双向不占用
+   （`UsageQueryDTO.purposes` 集合过滤轴；`purpose` 单轴行为不变）。
+5. **接线**：voice API / realtime WS / voiceprints API / chat CLI 全部装配
+   默认计数 + 成功记录器；无新增依赖、无迁移（`purpose` 列 VARCHAR(16)
+   容得下 `voiceprint`，枚举为 DTO 值域校验，无 DDL）。
+6. **文档**：usage.md 新增「分面日预算」节（单位 / 口径 / 表结构引用 /
+   软竞态 / 错误示例 / 配置键表）；voice.md（链路 / 设置 / 声纹链路与错误
+   码）、realtime-voice.md（中途超限可恢复语义与错误行）、config.md（键表
+   / 多 worker 计数边界）、performance.md（预算查询成本一句）、llm.md
+   （LLM 计数收窄与分面边界）；根 README 未涉及后端预算，未改。
+7. **测试**：`test_voice_budget.py`（16 例：配置 env / 双档超限 / limit-1
+   放行 / 0 不限零查询 / 失败不记 / 活 SQLite purpose 隔离 / 成功恰一行且
+   被拒不新增 / 声纹注册与校验超限零出站 / 批量中途回滚 / 每次 embed 恰
+   一行）；`test_realtime_session.py` 增 2 例（ASR / TTS 中途 `RATE_LIMITED`
+   可恢复、会话继续）；`test_voice_service.py` 失败行断言改为「不落行」。
+   活 SQLite 全异步、伪时钟 / 脚本计数，无真实等待。
+
+**计量口径（每 purpose 一行说明）**：`tts` = 每次 TTS 合成调用成功；`asr`
+= 每次 ASR 转写调用成功；`voiceprint` = 每次说话人向量提取调用成功。三域
+均不记录失败 / 被拒调用；LLM 用途维持成功 / 失败双路径记账。
+
+**实测（本机，命令 + 退出码）**：
+- `cd backend && pixi run tests-all` → 0：2980 passed（基线 2962 + 新增 18）。
+- `cd backend && pixi run coverage-gates` → 0：24 组全部 ≥80%（voice 95.7% /
+  usage 99.5% / llm 99.0%）。
+- `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0（Success: no
+  issues found）。
+- `cd backend && pixi run gen-examples` → 0（三件套重出，幂等复跑无差异）。
+- 根 `pixi run gates` → 0（注释门 / 同步测试棘轮 / noqa 冻结 / conftest-env
+  206/206 / 沙盒漂移 / 红探针 8 条 / 文档真相 / 断言棘轮 / surface-check /
+  bench 自检与门禁 / prose-pin）。
+- `cd backend && pixi run export-dto-schemas` → 0（前端 contract fixture 同步
+  `UsageFilterFields.purposes` 字段）；`test_dto_schema_fixture.py` → 0。
+- 活 SeekDB：本切片无迁移，未跑（不涉）。
+
+**偏离 / 记录**：语音 / 声纹记账由「成功 + 失败双行」改为「仅成功行」（按
+R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；用量记录器 /
+计数接线从 `voice_service.py` 抽到 `voice_budget.py`（voice / voiceprint
+共用，`voice_service` 保留同名导出兼容 app / CLI 导入）；LLM 预算计数从
+全 purpose 收窄为 LLM 用途集合（分面隔离要求，见 llm.md）；`UsageQueryDTO`
+增集合过滤字段（前端 types 同步 `purposes` 与 `voiceprint` 枚举/标签，contract fixture 已重出）。复审归主 Agent。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
 - SmsForwarder 短信通道（D3 记账推迟）；WhatsApp/其他平台未列入 R2。
 - 声纹（PIPL 合规）与表情包素材法律边界提示义务已随 R2d-2 交付（默认关闭，部署侧按需配置 `VOICEPRINT_*` / `STICKER_*` 并起说话人向量服务）。
-- 预算边界（R3-2）：LLM 日预算为全模型调用总量闸（usage 全 purpose 行数）；ASR / TTS / voiceprint 的独立分面预算未实现——需要时在 usage 域按 purpose 增加过滤面，不改变现闸语义。
+- 预算边界（R3-2 → R4-2 已分面）：LLM 日预算只计 LLM 用途行；ASR / TTS / voiceprint 各自独立预算（按 purpose 计数，见 [usage.md](backend/usage.md#分面日预算asr--tts--voiceprint)）。
 - 实时语音（R2f）遗留：真实 ASR / TTS 连通性与首字/首音延迟需部署机一次性验证（步骤见 docs/backend/realtime-voice.md「部署侧一次性真机验证」）；AEC / 回声消除未做（外放可能自触发打断，建议耳机或浏览器平台 AEC）；移动端采集（ScriptProcessor）与后台挂起优化未做；ASR/TTS 服务端点无真流式通道（partial 为节流中途批量转写、句级音频整句解码后播放）；实时语音轮次不注入工具面（需要搜索/沙盒走文字通道）。
 - 已知部署机注意：开发机无 NVIDIA GPU（Iris Xe）；GPU/模型项一律在 Clevo 机执行。
 

@@ -9878,7 +9878,7 @@
           "type": "string"
         },
         "UsagePurpose": {
-          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排；\n- ``search``：联网搜索（web_search 能力面——Bocha / Zhipu\n  provider 链路；预算按调用计数，token 恒 0/0）。",
+          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``voiceprint``：声纹向量提取（注册 / 校验的说话人向量服务调用）；\n- ``tool``：工具调用编排；\n- ``search``：联网搜索（web_search 能力面——Bocha / Zhipu\n  provider 链路；预算按调用计数，token 恒 0/0）。",
           "enum": [
             "chat",
             "duty",
@@ -9887,6 +9887,7 @@
             "embed",
             "tts",
             "asr",
+            "voiceprint",
             "tool",
             "search"
           ],
@@ -9970,6 +9971,22 @@
           "default": null,
           "description": "调用用途过滤"
         },
+        "purposes": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/UsagePurpose"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "调用用途集合过滤（预算分面计数）",
+          "title": "Purposes"
+        },
         "start_ms": {
           "anyOf": [
             {
@@ -10017,7 +10034,7 @@
     "UsageFilterFields": {
       "$defs": {
         "UsagePurpose": {
-          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排；\n- ``search``：联网搜索（web_search 能力面——Bocha / Zhipu\n  provider 链路；预算按调用计数，token 恒 0/0）。",
+          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``voiceprint``：声纹向量提取（注册 / 校验的说话人向量服务调用）；\n- ``tool``：工具调用编排；\n- ``search``：联网搜索（web_search 能力面——Bocha / Zhipu\n  provider 链路；预算按调用计数，token 恒 0/0）。",
           "enum": [
             "chat",
             "duty",
@@ -10026,6 +10043,7 @@
             "embed",
             "tts",
             "asr",
+            "voiceprint",
             "tool",
             "search"
           ],
@@ -10042,7 +10060,7 @@
           "type": "string"
         }
       },
-      "description": "用量查询公共过滤面（记录查询与聚合查询共用的过滤字段）。\n\nAttributes:\n    start_ms: 范围起点（epoch 毫秒，含；None = 不限）。\n    end_ms: 范围终点（epoch 毫秒，不含；None = 不限）。\n    persona_id: 人格 ID 过滤（None = 全人格——管理面口径）。\n    model_entry: 模型条目名过滤（None = 全条目）。\n    purpose: 调用用途过滤（None = 全用途）。\n    status: 调用结果过滤（None = 全状态）。",
+      "description": "用量查询公共过滤面（记录查询与聚合查询共用的过滤字段）。\n\nAttributes:\n    start_ms: 范围起点（epoch 毫秒，含；None = 不限）。\n    end_ms: 范围终点（epoch 毫秒，不含；None = 不限）。\n    persona_id: 人格 ID 过滤（None = 全人格——管理面口径）。\n    model_entry: 模型条目名过滤（None = 全条目）。\n    purpose: 调用用途过滤（None = 全用途）。\n    purposes: 调用用途集合过滤（None = 不限；与 ``purpose`` 同时\n        提供时按交集语义叠加——预算计数按 purpose 分面时消费）。\n    status: 调用结果过滤（None = 全状态）。",
       "properties": {
         "end_ms": {
           "anyOf": [
@@ -10095,6 +10113,22 @@
           "default": null,
           "description": "调用用途过滤"
         },
+        "purposes": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/UsagePurpose"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "调用用途集合过滤（预算分面计数）",
+          "title": "Purposes"
+        },
         "start_ms": {
           "anyOf": [
             {
@@ -10127,7 +10161,7 @@
     "UsageQueryDTO": {
       "$defs": {
         "UsagePurpose": {
-          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排；\n- ``search``：联网搜索（web_search 能力面——Bocha / Zhipu\n  provider 链路；预算按调用计数，token 恒 0/0）。",
+          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``voiceprint``：声纹向量提取（注册 / 校验的说话人向量服务调用）；\n- ``tool``：工具调用编排；\n- ``search``：联网搜索（web_search 能力面——Bocha / Zhipu\n  provider 链路；预算按调用计数，token 恒 0/0）。",
           "enum": [
             "chat",
             "duty",
@@ -10136,6 +10170,7 @@
             "embed",
             "tts",
             "asr",
+            "voiceprint",
             "tool",
             "search"
           ],
@@ -10226,6 +10261,22 @@
           "default": null,
           "description": "调用用途过滤"
         },
+        "purposes": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/UsagePurpose"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "调用用途集合过滤（预算分面计数）",
+          "title": "Purposes"
+        },
         "start_ms": {
           "anyOf": [
             {
@@ -10258,7 +10309,7 @@
     "UsageRecordDTO": {
       "$defs": {
         "UsagePurpose": {
-          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``tool``：工具调用编排；\n- ``search``：联网搜索（web_search 能力面——Bocha / Zhipu\n  provider 链路；预算按调用计数，token 恒 0/0）。",
+          "description": "调用用途值域——用量记账的 purpose 轴。\n\n- ``chat``：主对话（日常陪聊、人格化回复）；\n- ``duty``：值班任务（日程提醒、例行巡检等结构化任务）；\n- ``dream``：梦境生成（记忆整理 / 梦境叙事写作）；\n- ``look_at``：多模态查看（图像理解）；\n- ``embed``：向量化（记忆检索 / 语义嵌入）；\n- ``tts``：语音合成；\n- ``asr``：语音识别；\n- ``voiceprint``：声纹向量提取（注册 / 校验的说话人向量服务调用）；\n- ``tool``：工具调用编排；\n- ``search``：联网搜索（web_search 能力面——Bocha / Zhipu\n  provider 链路；预算按调用计数，token 恒 0/0）。",
           "enum": [
             "chat",
             "duty",
@@ -10267,6 +10318,7 @@
             "embed",
             "tts",
             "asr",
+            "voiceprint",
             "tool",
             "search"
           ],

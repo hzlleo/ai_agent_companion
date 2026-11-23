@@ -20,6 +20,7 @@ export const PURPOSE_LABELS: Record<UsagePurpose, string> = {
   embed: '向量化',
   tts: '语音合成',
   asr: '语音识别',
+  voiceprint: '声纹提取',
   tool: '工具调用',
 }
 
