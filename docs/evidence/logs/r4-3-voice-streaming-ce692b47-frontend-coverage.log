@@ -11,8 +11,8 @@
 
  Test Files  88 passed (88)
       Tests  702 passed (702)
-   Start at  16:06:24
-   Duration  44.47s (transform 18.82s, setup 144.96s, import 63.46s, tests 249.45s, environment 249.17s)
+   Start at  17:22:36
+   Duration  44.65s (transform 17.49s, setup 147.55s, import 62.20s, tests 244.96s, environment 253.76s)
 
  % Coverage report from v8
 -------------------|---------|----------|---------|---------|-------------------

@@ -208,12 +208,12 @@ ok   frontend-eslint-disable: 0 ≤ 基线 0
 [bench_core] 本机实测（同机复跑为准，跨机绝对耗时不可比）
 用例                                                      median µs       p95 µs     基线 median µs       比值
 --------------------------------------------------------------------------------------------------------
-flow_gate.evaluate_flow_gate                                1.209        1.316            1.659     0.73
-persona.build_relationship_summary.200_facts              256.303      280.454          356.228     0.72
-persona.build_relationship_summary.empty_facts              2.238        3.105            2.943     0.76
-voice.split_assistant_sentences.long_text                 167.181      320.903          221.407     0.76
-voice.energy_vad.feed_60_frames                           545.806      649.440          720.510     0.76
-chat.render_relationship_block.synthetic                    2.530        5.092            3.482     0.73
+flow_gate.evaluate_flow_gate                                1.363        1.406            1.659     0.82
+persona.build_relationship_summary.200_facts              298.454      307.322          356.228     0.84
+persona.build_relationship_summary.empty_facts              2.526        2.594            2.943     0.86
+voice.split_assistant_sentences.long_text                 186.080      188.012          221.407     0.84
+voice.energy_vad.feed_60_frames                           620.890      636.274          720.510     0.86
+chat.render_relationship_block.synthetic                    3.004        3.027            3.482     0.86
 [bench_core] 门禁通过（6 项均在 median × 10 内）
 [bench_core] 完成模式=gate 用例=6 结果=PASS
  WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`

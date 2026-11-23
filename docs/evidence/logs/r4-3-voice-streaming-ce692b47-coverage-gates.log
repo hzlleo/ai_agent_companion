@@ -60,7 +60,7 @@ src/tests/unit/test_migration_voiceprint_sticker.py: 3 warnings
 _______________ coverage: platform linux, python 3.12.16-final-0 _______________
 
 Coverage JSON written to file /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/coverage.json
-3043 passed, 27 warnings in 125.95s (0:02:05)
+3043 passed, 27 warnings in 283.66s (0:04:43)
 [profile: backend]
 module                files  statements  covered  percent  gate(>=80)
 ---------------------------------------------------------------------

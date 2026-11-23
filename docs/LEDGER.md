@@ -1258,7 +1258,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
   （本机默认关闭：ASR SKIP / TTS SKIP）。
 - `cd backend && pixi run verify-slice -- --with-frontend --slice
   r4-3-voice-streaming` → 0（canonical 证据包
-  `docs/evidence/r4-3-voice-streaming-b83d6556.json`；历史 `740facd4` 为复审修复首轮树（App.test 查询超时未局部化）、`e7a8cc1a` 为复审前树、`942b5832` / `47b09cd0` 为复审中间树；失败的 `cafb22d7` 中间证据已删除；本切片无迁移，未跑 SeekDB 真引擎
+  `docs/evidence/r4-3-voice-streaming-ce692b47.json`；历史 `b83d6556`（复审修复首轮树）、`e7a8cc1a`（复审前树）与 `942b5832`（复审中间树）均为 PASS 并留档；失败的中间证据 `cafb22d7`（frontend-test）、`740facd4`（frontend-coverage）与 `47b09cd0`（frontend-lint）已删除；本切片无迁移，未跑 SeekDB 真引擎
   套件）。
 
 **偏离 / 记录**：
@@ -1277,7 +1277,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 - 未触碰 R4-2 预算语义（仅新增流式接线调用同一闸 / 同一记录器）；无迁移。
 - 复审归主 Agent。
 
-**复审修复（Oracle R4-3 P1×2 + P2×6 逐条闭环；canonical 证据 `b83d6556`）**：
+**复审修复（Oracle R4-3 P1×2 + P2×6 逐条闭环；canonical 证据 `ce692b47`）**：
 1. **P1-1 ASR 收尾帧序**：`finish()` 改向发送队列投哨兵，发送工人按队列序先发
    `input_audio_buffer.commit` 再发 `session.finish`（不再与在途 append 竞争）；
    `_wait_finish_sent` 保证收尾事件出站后才等待最终稿。证据：
@@ -1315,7 +1315,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
    收尾事件（final/completed）前任何对端关闭按失败处理并回退；1008/1011 属服务端
    语义，客户端不主动发送」。
 9. **验证**：`verify-slice -- --with-frontend --slice r4-3-voice-streaming` → 0，
-   sha8=`b83d6556`（9 步全 PASS：tests-all=3043 / coverage-gates=24 /
+   sha8=`ce692b47`（9 步全 PASS：tests-all=3043 / coverage-gates=24 /
    typecheck=200 / frontend-test=702 / frontend-coverage=96.08；
    命令与日志见 `docs/evidence/`）；根 `gates` / 前端 `bundle-check` /
    `gen-examples` 幂等均 0。
@@ -1327,6 +1327,8 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 - 声纹（PIPL 合规）与表情包素材法律边界提示义务已随 R2d-2 交付（默认关闭，部署侧按需配置 `VOICEPRINT_*` / `STICKER_*` 并起说话人向量服务）。
 - 预算边界（R3-2 → R4-2 已分面）：LLM 日预算只计 LLM 用途行；ASR / TTS / voiceprint 各自独立预算（按 purpose 计数，见 [usage.md](backend/usage.md#分面日预算asr--tts--voiceprint)）。
 - 实时语音（R2f）遗留：AEC/移动端已由 R4-3 前置（浏览器 AEC/Worklet），残余：真实设备验证、真流式供应商连通验证（双轨默认关闭；步骤见 docs/backend/realtime-voice.md「部署侧一次性真机验证」）；实时语音轮次不注入工具面（需要搜索/沙盒走文字通道）。
+- 流式 ASR 起始边界（R4-3 记录，后续排期）：流式通道从 SPEECH_START 帧起喂，VAD 防抖候选帧（默认 3 帧）仅入批量缓冲，流式最终稿可能缺句首约 200ms；`test_realtime_session_streaming.py` 的 `frames[1:]` 已固化该行为。
+- 流式收尾句柄（R4-3 记录，既有风险）：`finish()` 被外部取消时句柄未必收口（非会话路径，代码走读发现），后续排期补用例与收口。
 - 已知部署机注意：开发机无 NVIDIA GPU（Iris Xe）；GPU/模型项一律在 Clevo 机执行。
 
 ## 7. 恢复指引（新会话首读）
