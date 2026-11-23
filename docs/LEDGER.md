@@ -91,13 +91,14 @@
 | R2d 心流社交 | R2d-1 心流门控（`FLOW_` env 面——判定矩阵 / 连发合并 / 延迟批次经调度器 / 关系与节律输入）+ 群聊多人格（`GROUP_PERSONA_` env 面——轮转 / 冷却 / 重复抑制 / 人格会话归属）；R2d-2 声纹（`VOICEPRINT_` env 面——PIPL 告知 / 同意记录 / 注册 / 校验 / 撤回删除 / 保存期）+ 表情包库与 VLM 标注（`STICKER_` env 面——哈希去重 / 来源授权备注 / 标注状态机 / 通道附件 v2 收发桥 / 前端面板），迁移 0016 | ✅ merged（PR #16；复审修复 PR #29）；全门禁与证据见第 5 节 |
 | R2e 通道扩展 | R2e-1 企微智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 去重 / 回复上下文 / 文本分段 / 素材分片上传 / 配置面 / 装配 / 文档）；R2e-2 抖音 web 通道（浏览器 sidecar 底座：页面采集 / 发送脚本、去重、synthetic、图片附件、指数退避、配置面、装配、文档）+ 画布产物面（迁移 0017 / 服务 / API / 沙箱预览面板 / 导出）；余项：GUI 微信容器化（PoC 门——部署机未跑） | 🔄 R2e-1 ✅ merged（PR #16 的 WeCom 提交）；R2e-2 ✅ merged（PR #17；复审修复 PR #30）；GUI 微信容器化 ⏳（部署机 PoC 门，见第 6 节） |
 | R2f 实时语音 | 实时语音全双工会话：WS 协议 + 相位状态机 + 能量/静音 VAD 切段 + 切段转写（节流中途字幕）+ 人格回复句切与逐句 TTS 分片下行 + barge-in（取消在途生成/合成 + 清空队列）+ 会话资源上限（背压/空闲/最大时长/优雅关闭）+ `REALTIME_VOICE_` env 面 + 管理台实时字幕面板 | ✅ merged（PR #18；复审修复 PR #31）；溢出项与验证数值见第 5 节 |
-| R3 | 安全/防穿透/性能深度审计版（独立版本）：admin 鉴权已前置完成，余项：提示注入纵深/SSRF/SeekDB DSL 注入/密钥治理/限流背压/性能基线 | ⏳ |
+| R3-1 安全纵深 | 提示注入纵深 / SSRF 对称 / 密钥与鉴权治理 / base64 载荷上限 / 日志掩码（P1×2 + P2×5） | ✅ merged（PR #35；证据 `e8232b42`） |
+| R3-2 限流与背压 | QQ 入站有界 / 实时语音 TTS 队列与会话帽 / LLM 日预算闸 / 多 worker 语义 / 最小观测面 / 前端 Node 护栏与构建体积基线（P1×1 + P2×7；复审 6×P2 闭环） | ✅ merged（PR #36；证据 `fe261c9a`；PR body 引用的 `0276c1a5` 为首提交树证据，终态以 `fe261c9a` 为准） |
+| R3-3 性能基线 | `bench_core.py` 6 项纯函数微基准 + `api_smoke.py` 4 端点进程内冒烟 + 门禁链落位（复审 4×P2 闭环；终局复核 7×P2 闭环） | 🔄 PR #37 open（评审 head `66b14b3`；canonical 证据 `16b07c7c`，历史 `bc71f261`） |
 
 **当前分支状态**：
-- main：PR#18–#33 已全部并入（`e95f5fe`）；更早切片分别归档于 `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
-- `feat/audit-a-fixes`：三批全约束审计修复，已并入 main（PR #33）。
-- `docs/final-cross-review-ledger`：台账终局修正（本分支），待合并；合并后 main 再前移一次。
-- 本机工作区 clean；历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入，可删除。
+- main：`df2ca2d`（PR#34–#36 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
+- `feat/r3-perf`：R3-3 性能基线（PR #37 open），本机工作区为当前复核面。
+- 历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入 main，可删除；工作区 clean。
 
 ## 4. 全部拍板记录（原文语义）
 
@@ -586,11 +587,11 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
   - 还原心流调用（`record_inbound(state, message.text, now)`）与批次守卫（`if not merged.text:`）→ `test_empty_text_media_burst_keeps_buffer_clean_and_merges_real_text` **1 failed**（`assert ['', '', ''] == []`——空条目进入缓冲）；复原后两文件 33 passed。
   - 还原 QQ 归一 / 丢弃条件（`attachments and not _has_user_text` / `not text.strip() and not attachments`）→ `test_qq_webhook.py` **2 failed**（CQ 字符串纯图片、纯 face 段未以空文本投递）；复原后三文件 73 passed。
 
-**剩余**：无（本切片范围）；复审由主 Agent 后续执行。
+**剩余**：无（本切片范围）；该批复审已执行并随 PR #33 合入 main。
 
-### 已完成切片：R3-1 安全修复（P1×2 + P2×5，本分支工作区）
+### 已完成切片：R3-1 安全修复（P1×2 + P2×5，已合并 PR #35）
 
-**已完成**（逐条闭环，分支 `feat/r3-security`；复审由主 Agent 后续执行）：
+**已完成**（逐条闭环，分支 `feat/r3-security` 已并入 main）：
 
 1. **P1 群聊 peer 写入长期指令污染受信层**：`IntentShortcutService.try_shortcut` 新增仅关键字 `sender_provenance`（默认 `owner`，既有直调不变），`ChatService.reply` 透传真实来源；DIRECTIVE 捕获副作用改为仅 `owner` 执行，群聊统一按 `peer` 处理（群内主人发言同样不写指令，只回附和文案）。`chat/service.py` 的 `IntentShortcutFace` 协议与 docstring 同步。docs：`persona.md` 长期指令来源收口、`defense.md` 受信层表与攻击面矩阵、`intent.md` DIRECTIVE 行、`chat.md` 意图快径节。测试：`test_intent_directive.py` 新增 peer 不建指令仍回复 / owner 经真实 `DirectivesService` 建指令两例；`test_intent_shortcut_wiring.py` 新增 peer 来源透传一例。
 2. **P1 生产 fail-closed 鉴权**：新增 `RuntimeEnv` 枚举（`local`/`dev`/`test`/`prod`）与独立纯函数 `packages/harness/config/auth_policy.py::ensure_auth_policy`（`ENV=prod` 时空管理面 token 拒绝启动；QQ 通道启用时空入站 token 拒绝启动）；`app/middleware/admin_auth` 的 `resolve_admin_token` 迁入该模块并保持导出面；`startup_app_state` 在组件装配前调用。docs：`README.md` 认证节改写为「R3 起生产强制」、`config.md` ENV 枚举说明、`channels.md` QQ token 行与部署要点、`.env.example` 经生成器同步（无新增 env 键）。测试：`test_auth_policy.py` prod+空拒绝 / prod+非空通过 / dev+空通过 / prod+QQ 启用+空 webhook 拒绝 / startup 接线五例。
@@ -616,11 +617,13 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **偏离与决策**：共享异常处理器把 pydantic `RequestValidationError` 归一为 HTTP **400**（既有契约），新增 base64 超帽 API 用例按 400 断言而非 FastAPI 默认 422；DTO 长度帽按代码默认字节帽精确推导（未加 padding），运行期把 `max_upload_bytes` 调到默认以上不会扩展 wire 上限（docstring 已注明），服务层精确字节校验保持；`ENV` 收紧为 `RuntimeEnv` 枚举后，`local`/`dev`/`test`/`prod` 之外的值在配置解析期被拒绝。
 
-**剩余**：无（本切片范围）；复审由主 Agent 后续执行。
+**剩余**：无（本切片范围）。
 
-### 已完成切片：R3-2 限流/背压修复（P1×1 + P2×7，本分支工作区）
+**终态**：已合并 PR #35，验收证据包 `docs/evidence/r3-security-e8232b42.json`（`verify-slice -- --slice r3-security` → **0**）。深审复审对本切片 8 项逐条核验，结论为 **8 项逐一核验 PASS**——该切片走「逐条核验」口径，不产生 MATCH / 偏离 / VIOLATION 三分类计数，故不计入 §5.4 符合性统计的 MATCH 列。
 
-**已完成**（逐条闭环，分支 `feat/r3-security`；复审由主 Agent 后续执行）：
+### 已完成切片：R3-2 限流/背压修复（P1×1 + P2×7，已合并 PR #36）
+
+**已完成**（逐条闭环，分支 `feat/r3-security` 已并入 main）：
 
 1. **P1 QQ 入站有界化**：新增 `channels/qq/qq_runner.py`（`QqWebhookRunner`——容量 64 / worker 2 / 去重窗 1024 均为代码常量非 env，与企微 runner 同风格）；`qq_webhook.py` 拆出纯解析面 `parse_webhook_event`（不可路由事件返回 None、不登记去重），`process_webhook_event` 保留单事件直调语义（去重 + 路由，恒不抛）。端点改为 `runner.submit(payload)` 后**立即 200**（runner 未装配的嵌入形态回落直调）；队列满丢弃并计 `dropped_inbound`（ERROR 含 message_id / 队列深度 / 累计丢弃，不登记去重）；lifespan 装配 runner + 托管任务，停机 `request_stop` → cancel worker → 清空队列（槽位复位）。测试：`test_qq_runner.py` 10 例（容量满丢弃/计数/日志、丢弃不登记去重与重投恢复、重复吸收、不可路由不登记、worker 消费、停机零残留、周期观测三态）+ `test_channels_qq_api.py` 慢路由下立即确认 + `test_app_qq_channels_lifespan.py` 装配/停机槽位。
 2. **P2 实时语音 TTS 队列有界**：`REALTIME_VOICE_TTS_QUEUE_MAX`（默认 32，≥1）→ 队列 maxsize；满时丢最旧句并计 `tts_chunks_dropped`（与音频队列同策略），关闭指标日志新增 `tts_dropped=`。测试：`test_realtime_session.py` 满/丢最旧顺序/计数/关闭清零与 `tts_queue_max=0` 拒绝。
@@ -652,9 +655,9 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 - **WS 并发帽为进程内计数**：多 worker 部署每进程独立（config.md 已写明）；强全局上限需跨进程存储，本工程 NO Redis 决策下不引入。
 - **周期观测只在有事件入站时检查节流点**：空闲期无 ticker 任务，无积压可报；有积压时下一条入站即触发（与「仅当 pending>0 或 dropped 有增量」一致）。
 
-**剩余**：无（本切片范围）；复审由主 Agent 后续执行。
+**剩余**：无（本切片范围）。
 
-**复审修复（Oracle 深审本切片后 6×P2 逐条闭环；复审结论由主 Agent 执行）**：
+**复审修复（Oracle 深审本切片后 6×P2 逐条闭环）**：
 
 1. **P2 预算 >10,000 静默失效**：`LlmEndpointConfig.daily_budget_global` / `daily_budget_persona` 增 `le=10_000`（计数页帽 50×200 为有效上限，超出则预算永远无法触发）；字段说明与 `docs/backend/llm.md`、`docs/backend/config.md` 注明「有效上限 10,000（计数页帽 50×200）」，`.env.example` 经生成器重出。测试：`test_config_settings.py` 新增上限校验（10,000 通过 / 10,001 双档拒绝）。
 2. **P2 计数器分页零测试**：`test_llm_gateway.py` 新增 `wire_default_usage_counter` 分页用例 4 例（共享 SQLite + ORM 批量灌行）：201 行跨页累计 = 201（200+1 且尾页终止）、恰好 200 行 = 200、空库 = 0、10,200 行按页帽截断 = 10,000。
@@ -671,6 +674,8 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 - 根 `pixi run gates` → **0**（注释门 violations=0；同步测试棘轮通过；noqa/type:ignore 基线 0；conftest env 200/200、豁免 0；沙盒漂移 38 项一致；红探针门 194 源文件 / 探针 7 条；文档真相；断言棘轮；导出面 102 引用·62 登记·40 豁免 + env 键面 701 行；prose-pin 报告）。
 - `cd backend && pixi run conftest-env` → **0**（登记表 200 / 硬覆盖 200 / 豁免 0）。
 - `cd backend && pixi run gen-examples` 连跑两次 → 两次均 **0**；三件套 sha256 运行前 / 第一次 / 第二次完全一致（幂等，无 env 键新增）。
+
+**终态**：已合并 PR #36，验收证据包 `docs/evidence/r3-backpressure-fe261c9a.json`（`verify-slice -- --slice r3-backpressure` → **0**）。深审复审对本切片 21 个计划点的三分类结果为 **MATCH 16 / 已记录偏离 5 / VIOLATION 0**，偏离项均为上列「偏离与决策」与复审修复中已记录的口径取舍；明细并入 §5.4 符合性统计，无未闭环项。
 
 ### 5.1 死代码处置（审计 B 抽样：5 个零引用公共符号）
 
@@ -800,6 +805,119 @@ persona 过滤的产物列表查询，临时 SQLite 上存在行集扫描与逐�
   `pixi run typecheck` → **0**（195 files）；`pixi run conftest-env` → **0**
   （登记表 200 / 硬覆盖 200 / 豁免 0）；根 `pixi run gates` → **0**；
   `pixi run gen-examples` → **0** 且三件套 sha256 前后一致（幂等）。
+
+**符合性合计**：R3 三切片合计 338 个计划点 = MATCH 310 / 已记录偏离 28 /
+VIOLATION 0（逐项明细见 §5.4；R3-1 的复审为 8 项逐一核验 PASS，走核验口径，
+不计入 MATCH 列）。
+
+**canonical 证据**：`docs/evidence/r3-perf-16b07c7c.json`
+（`verify-slice -- --slice r3-perf` → **0**，5 步 PASS：tests-all=2962 /
+coverage-gates=24 / typecheck=195）；`758a3ee1` / `bc71f261` 为前序源码树的
+历史证据，只在复核历史时引用。
+
+### 5.4 R3 符合性统计
+
+R3 三切片的计划点与三分类核验结果。计划点 = 审计 / 复审报告列出的条目数；
+MATCH = 代码与报告要求一致；已记录偏离 = 实现或口径与报告字面不同、但已在
+台账记明理由并经复审接受；VIOLATION = 未被接受的不一致。
+
+| 切片 / 审计面 | 计划点 | MATCH | 已记录偏离 | VIOLATION |
+|---|---:|---:|---:|---:|
+| R3 安全审计 C1（提示注入纵深） | 108 | 96 | 12 | 0 |
+| R3 安全审计 C2（SSRF / 出站守卫） | 81 | 79 | 2 | 0 |
+| R3 安全审计 C3（SeekDB DSL 注入） | 50 | 43 | 7 | 0 |
+| R3 安全审计 C4（密钥与鉴权治理） | 62 | 60 | 2 | 0 |
+| R3-2 复审计划点 | 21 | 16 | 5 | 0 |
+| R3-3 复审计划点 | 16 | 16 | 0 | 0 |
+| **合计** | **338** | **310** | **28** | **0** |
+
+口径说明：
+
+- C1–C4 是 R3 安全审计面（提示注入 / SSRF / SeekDB DSL / 密钥与鉴权）的计划
+  点三分类结果；R3-1 切片另有「8 项逐一核验 PASS」的复审结论，那是切片复审
+  口径、不产生 MATCH 计数，因此不重复计入上表。
+- R3-2 的 5 个已记录偏离指预算计数口径、QQ 直调回落、WS 进程内计数、周期
+  观测触发点与「恰好等于上限」语义，均在 §5 对应「偏离与决策」段记明。
+- 本表是 R3 符合性口径的唯一来源；此前任何与本表不符的写法（例如把计划点
+  写成 301、或把 MATCH / 偏离写成别的合计）一律以本表为准。
+
+### 已完成切片：R3 终局复核修复（P2×7 逐条闭环，本分支工作区）
+
+**已完成**（逐条闭环，分支 `feat/r3-perf`；定位来自 R3 终局交叉复核，
+该复核结论为无 P0/P1、7×P2）：
+
+1. **P2 台账 §3 过期**：R3 行拆为三切片状态（R3-1 ✅ PR #35 / 证据
+   `e8232b42`；R3-2 ✅ PR #36 / 证据 `fe261c9a`，PR body 引用的 `0276c1a5`
+   标为首提交树证据；R3-3 PR #37 open / canonical 证据 `16b07c7c`）；「当前
+   分支状态」改为 main `df2ca2d`（PR#34–#36 已并入）、补 `feat/r3-perf`
+   （PR #37 open）、删除 `docs/final-cross-review-ledger` 待合并句。
+2. **P2 台账 §5 收口**：R3-1 / R3-2 两段各补「终态」行（合并 PR 编号、证据
+   包路径、复审结论）；段内「本分支工作区」「复审由主 Agent 后续执行」一律
+   改为已完成事实。R3-1 终态口径为「8 项逐一核验 PASS」，R3-2 为
+   MATCH 16 / 已记录偏离 5 / VIOLATION 0。
+3. **P2 符合性合计口径**：新增 §5.4「R3 符合性统计」表（C1 108=96/12/0、
+   C2 81=79/2/0、C3 50=43/7/0、C4 62=60/2/0、R3-2 21=16/5/0、R3-3 16=16/0/0、
+   合计 338=310/28/0），并声明本表为唯一口径来源；§5.3 补「符合性合计」行，
+   注明 R3-1 的 8 项核验 PASS 不并入 MATCH 计数。
+4. **P2 bench-core 不 hermetic**：`_make_vad_feed_case` 把
+   `RealtimeVoiceSettings` 全部 20 个字段显式传参（补齐 12 个），用例输入
+   不再受进程环境 / `.env` 影响；`main()` 增加与 `api_smoke` 同款
+   `ValidationError` 折叠（延迟导入判定、单行 loc/msg/type 摘要、exit 1，
+   其余异常原样上抛）；模块 docstring 的 Exit 契约同步。`scripts/bench_core.py`
+   的 `_print_table` 标题行顺带去掉无效 f-string 前缀（ruff F541）。
+5. **P2 断言棘轮基线**：`--update` 重建 `scripts/.assertion_baseline.json`，
+   并入 7 份既有基线外测试文件与本切片新增的 1 份——基线 190→198 文件、
+   asserts 8012→8451、raises 593→622。
+6. **P2 R3-3 自动化守卫**：新增 `backend/src/tests/unit/test_perf_scripts.py`
+   （5 例全异步）——importlib 从 `<repo>/scripts` 加载两脚本并注册
+   `sys.modules`，覆盖注册表/基线键集双向一致、`MAX_RATIO` 与基线 `max_ratio`
+   同源、`_write_json_atomic` 成功与目标为目录的失败形态（`OSError` / 目标
+   原样 / 无 `.tmp`）、`ValidationError` 折叠输出单行且含 loc/msg/type、
+   `api_smoke` 端点表为四项且与 `docs/backend/performance.md` 端点表一致；
+   不触网、不建库、不等待、不依赖 chdir。
+7. **P2 门禁链文案**：根 `pixi.toml` 的 gates 用法头与
+   `scripts/verify_slice.py` 的 gates 步骤 description 补「性能基线（bench
+   self-check/gate + api-smoke self-check）」，链序与任务定义不变。
+
+**验证**（主 Agent 实跑，命令与退出码）：
+
+- `cd backend && pixi run tests-all` → **0**（**2962 passed**；基线 2957 +
+  新增 5 例）。
+- `cd backend && pixi run coverage-gates` → **0**（2962 passed；24 组 ≥80%）。
+- `cd backend && pixi run lint` → **0**（`All checks passed!`）；`pixi run
+  typecheck` → **0**（`Success: no issues found in 195 source files`）。
+- `cd backend && pixi run conftest-env` → **0**（登记表 200 / 硬覆盖 200 /
+  豁免 0）。
+- 根 `pixi run gates` → **0**（注释门 files=226 / violations=0 / hints=33；
+  同步测试棘轮 0 回升；noqa 冻结 scripts 7≤基线 7；沙盒漂移 38 项；红探针门
+  194 源文件 / 7 探针；文档真相；断言棘轮 198 文件·8451 asserts·622 raises；
+  导出面 102 引用·62 登记·40 豁免 + env 键面 701 行；bench-core
+  --self-check/--gate PASS；api-smoke --self-check；prose-pin 报告完成）。
+- `cd backend && pixi run gen-examples` 连跑两次 → **0 / 0**；三件套 sha256
+  运行前 / 第一次 / 第二次完全一致（幂等，无 env 键新增）。
+- `cd backend && pixi run bench-core --self-check` → **0**（6 项与基线键集
+  一致）；`pixi run bench-core --gate` → **0**（6 项 median 均在基线 ×10 内）；
+  `pixi run api-smoke --self-check` → **0**（4 端点与基线键集一致）；
+  `pixi run api-smoke --gate` → **0**（4 端点均 200，p95 均在基线 ×10 内）。
+- **hermetic 实证**：`REALTIME_VOICE_TTS_QUEUE_MAX=0 pixi run bench-core
+  --gate` → **0**（全字段显式传参压过环境非法值）；`FLOW_BURST_COUNT=99`
+  与 `REALTIME_VOICE_SAMPLE_RATE_HZ=1` 同命令 → **0 / 0**，输出中
+  `Traceback` 计数 0。`FLOW_BURST_COUNT=99 pixi run api-smoke --gate` → **1**
+  （单行「非本次冒烟相关环境变量取值非法……burst_count: Input should be less
+  than or equal to 20（type=less_than_equal）」，无 traceback——既有折叠行为
+  不变）。
+- **断言棘轮反证实证**：从 `test_outbound_guard.py` 临时删除一条
+  `assert "http/https" in exc_info.value.message` 后
+  `pixi run python ../scripts/assertion_freeze.py --enforce` → **1**
+  （`test_outbound_guard.py: assert 9 < 基线 10`）；还原后 → **0**
+  （198 文件 / 8451 asserts / 622 raises）。
+- `cd backend && pixi run pytest src/tests/unit/test_perf_scripts.py -q
+  --asyncio-mode=auto` → **0**（**5 passed**）。
+- `cd backend && pixi run verify-slice -- --slice r3-perf` → **0**；canonical
+  证据包 `docs/evidence/r3-perf-16b07c7c.json`（5 步全 PASS：tests-all=2962 /
+  coverage-gates=24 / typecheck=195）。
+
+**剩余**：无（本切片范围）。
 
 ### 已完成切片：全约束审计 B 修复（P1×1 + P2×4，本分支工作区）
 

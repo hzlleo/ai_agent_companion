@@ -2,9 +2,9 @@
   "version": 1,
   "note": "单元测试断言基线——计数只降不升；再生成: python scripts/assertion_freeze.py --update",
   "totals": {
-    "asserts": 8012,
-    "raises": 593,
-    "files": 190
+    "asserts": 8451,
+    "raises": 622,
+    "files": 198
   },
   "files": {
     "backend/src/tests/unit/test_admin_auth.py": {
@@ -48,14 +48,14 @@
       "digest": "5b551e604033864721afc3a2128c851a6e05680cbbeb07e66696c7964d2c4308"
     },
     "backend/src/tests/unit/test_app_qq_channels_lifespan.py": {
-      "asserts": 28,
+      "asserts": 35,
       "raises": 1,
-      "digest": "0c0fda867f72a2fb0596e45c1107c16d2de4191261270de7399cced5e010e637"
+      "digest": "4ec643a5325d7cdfec71c6039dd932ea9d1b961f51ffb895173ac0119290b965"
     },
     "backend/src/tests/unit/test_app_realtime_voice.py": {
-      "asserts": 29,
+      "asserts": 36,
       "raises": 0,
-      "digest": "483aabf4645cc17fbe2cdfbd311e98cc03ba83627ae0ab17cb5daef0caa112df"
+      "digest": "a8155a17f0a49177216ddb0ea1eccc1312595503b69c1846002d5bb7bf9eb73e"
     },
     "backend/src/tests/unit/test_app_reminders_lifespan.py": {
       "asserts": 12,
@@ -77,6 +77,21 @@
       "raises": 0,
       "digest": "336abcda2bc3fb00ed44907977eb6432348f43e6b7ea89331a9d238944771321"
     },
+    "backend/src/tests/unit/test_auth_policy.py": {
+      "asserts": 5,
+      "raises": 2,
+      "digest": "7de6d31d90e06f4258e28c3bbda087f1e8da42a806a4d31469b5bd37c930f8f2"
+    },
+    "backend/src/tests/unit/test_auth_surface_docs.py": {
+      "asserts": 3,
+      "raises": 0,
+      "digest": "5ed9e2ef4bf4392ea0b951b60931c1bf7a4c5d4d81a33d51e66746def6655ce1"
+    },
+    "backend/src/tests/unit/test_base64_payload_bounds.py": {
+      "asserts": 8,
+      "raises": 4,
+      "digest": "29f656932b93751cb94c3d76e2c41fba2e2b34c9b359626ad54ac01e3380eaf8"
+    },
     "backend/src/tests/unit/test_canvas_api.py": {
       "asserts": 29,
       "raises": 0,
@@ -88,14 +103,14 @@
       "digest": "1f2a8e737c0d10febed7e42502289175a25df81f1d427085b24ba98a1d7c0476"
     },
     "backend/src/tests/unit/test_channel_router.py": {
-      "asserts": 57,
+      "asserts": 63,
       "raises": 0,
-      "digest": "844b29fc040344b9d8ec5a929ea0a5499befff45526fc1387302bd7683f15786"
+      "digest": "e9c81857fc044f7b30eb6e130e55759b312e0c7b01d7bf5946c354fda267a868"
     },
     "backend/src/tests/unit/test_channel_router_flow.py": {
-      "asserts": 29,
+      "asserts": 62,
       "raises": 0,
-      "digest": "ac557fff2080d7a9971914b45ebd44410b3fd8d88996f45f8f7913d8a20e4469"
+      "digest": "430df6eaae4e729332b4bb9bca1b8e81e27ec35e663ebd3f3b18316abb4f293e"
     },
     "backend/src/tests/unit/test_channel_router_group.py": {
       "asserts": 25,
@@ -103,19 +118,19 @@
       "digest": "2d86cd82611b5a3c1f1af83aa5c30c8431a3073c74ac7b284478cd3b2a47ee1a"
     },
     "backend/src/tests/unit/test_channel_router_sticker.py": {
-      "asserts": 13,
+      "asserts": 18,
       "raises": 0,
-      "digest": "7f1632dde7a1adc2906d63c258a67377213929a878221419d9bbb245e1d305c6"
+      "digest": "4551d9bf4986973f7c65ef2dba7e9b2da7bf61eb46ac2837e69accd383bdb4fa"
     },
     "backend/src/tests/unit/test_channels_models.py": {
-      "asserts": 52,
+      "asserts": 53,
       "raises": 9,
-      "digest": "3d40f1a34a846df72822652b4feb53193fd4a5ba5914fb17060f6ba5ac2380bd"
+      "digest": "f76d4f5d80b2b921defef194c48f12353a43d09f410c715c2ccaa87987c49b46"
     },
     "backend/src/tests/unit/test_channels_qq_api.py": {
-      "asserts": 31,
+      "asserts": 35,
       "raises": 0,
-      "digest": "7d9027af29333e5b6ddeb44cf83cf35c9ecd7e283ae0c9d4d371867c0c7524f3"
+      "digest": "8d33de1aed0dc06a86920d106961cbab7a205e1cd9c2fef4de0a627f440c7686"
     },
     "backend/src/tests/unit/test_channels_settings.py": {
       "asserts": 28,
@@ -148,9 +163,9 @@
       "digest": "019607470d3ad3963cb137c7c0132f6aee825e92e7ede4706f3b1a9061af9455"
     },
     "backend/src/tests/unit/test_chat_emotion.py": {
-      "asserts": 33,
+      "asserts": 43,
       "raises": 0,
-      "digest": "3fcab4767e9c1f0303f6addf1cd3b8c48bcade33f4af66c2e74286743a27deb7"
+      "digest": "c13e97cc7511619ae8795ed8f5be44f7abc8da716de06ad29ffad2d368cab966"
     },
     "backend/src/tests/unit/test_chat_facts.py": {
       "asserts": 14,
@@ -200,7 +215,7 @@
     "backend/src/tests/unit/test_chat_tool_loop.py": {
       "asserts": 43,
       "raises": 4,
-      "digest": "dce44b4bd2120a1ee0a0bc9922e7259db769fcbc188e268923af29fad8cbcd62"
+      "digest": "84403c39c51e5ceff05a4b2383f795bb10daf3bd99c69d989fa585fd4e493198"
     },
     "backend/src/tests/unit/test_chat_world_book.py": {
       "asserts": 42,
@@ -213,9 +228,9 @@
       "digest": "3a36ece6799e4e934e9300d6d47eea324e2744e5a089a5362f0a7633254f8e92"
     },
     "backend/src/tests/unit/test_config_examples_generation.py": {
-      "asserts": 10,
+      "asserts": 16,
       "raises": 0,
-      "digest": "ae1c68184a6509eae586de719082394d1e9fcf2543f1e7adc134c864ee8ecace"
+      "digest": "8e776f98825c8154b09f4d697e6295a574817f45d033b1cd4eb6d987fe2bbc38"
     },
     "backend/src/tests/unit/test_config_llm_wire.py": {
       "asserts": 14,
@@ -223,9 +238,9 @@
       "digest": "613fbb0755cc9043a843c6d7769cbca3f9eaf47541a4f432c6f3f1d35e81533f"
     },
     "backend/src/tests/unit/test_config_loader.py": {
-      "asserts": 36,
+      "asserts": 39,
       "raises": 8,
-      "digest": "bc347ffdffb35319c8d602c8fe06f59660aa9366292422e77601460a0beeec83"
+      "digest": "8c8d4127c26b7376cd591c4e7cba32830cdc5de0d47c3d73c7d505c6d900368d"
     },
     "backend/src/tests/unit/test_config_model_entry.py": {
       "asserts": 31,
@@ -248,14 +263,19 @@
       "digest": "96c51f30e3a15373bb64aefcc7089d4b788b58d00e0f3929feb959f161449f21"
     },
     "backend/src/tests/unit/test_config_settings.py": {
-      "asserts": 72,
-      "raises": 4,
-      "digest": "f54968c21792eef5b0408e66b9344a5ee672bff37f672894593d54d9dd52254e"
+      "asserts": 76,
+      "raises": 6,
+      "digest": "2b7a8ac4d83fd04db0fd741fd0dc677b087046a036a93132dfce02c37fd22251"
     },
     "backend/src/tests/unit/test_config_wizard.py": {
       "asserts": 134,
       "raises": 5,
       "digest": "7e305dee79329b85868e42ac9999d2134ebd645de594e18160e62264aac60dbe"
+    },
+    "backend/src/tests/unit/test_conftest_env_hardening.py": {
+      "asserts": 16,
+      "raises": 0,
+      "digest": "afc0176c50a89effc736346a3ad25be41dda670f8b5ad922c66e38da14f26f0b"
     },
     "backend/src/tests/unit/test_core_background_tasks.py": {
       "asserts": 52,
@@ -293,9 +313,9 @@
       "digest": "22820f04e22cdbbcdb2a7cb997b9f0f3cd579a180b3d49477980f40db46f70f7"
     },
     "backend/src/tests/unit/test_core_logging.py": {
-      "asserts": 100,
+      "asserts": 101,
       "raises": 2,
-      "digest": "0d173770d15cb6a3b6c92f4f8fc4b1092d33f42afbf83d9591ffb321ef9666b8"
+      "digest": "9a6898dd0818f2abd9ffb4febaac1a93217999e26ad41b28c934946aca6f19fe"
     },
     "backend/src/tests/unit/test_core_memory_api.py": {
       "asserts": 25,
@@ -373,14 +393,14 @@
       "digest": "5ba1b681242336fb74d34e86eb99a43f338a901bb0deee831d3f73ec1a8da845"
     },
     "backend/src/tests/unit/test_dreaming.py": {
-      "asserts": 241,
+      "asserts": 251,
       "raises": 7,
-      "digest": "5bd3f0c105ebe6252a6080b81feea10d1e2d8f8215dc9c377983294fd3ce5126"
+      "digest": "e8e1fb7f8327bdacec84b15e5baddcbccadb81ce02fb36bae7e5de5c86c2f42d"
     },
     "backend/src/tests/unit/test_dreaming_prompts.py": {
-      "asserts": 50,
+      "asserts": 63,
       "raises": 1,
-      "digest": "07f9faedeb89a0166328f6eadeb7955fccb7e63a8739916acd8d03fb622367b2"
+      "digest": "208a68aaa5e2dd9bd9bc3f2828270ad55b1dc432a70faecdec7e50407a818ee1"
     },
     "backend/src/tests/unit/test_dreaming_skills.py": {
       "asserts": 45,
@@ -418,14 +438,14 @@
       "digest": "07c5e251f3de96a512e32383a5a28365394fc198d7fc5d6121f7f9c7a7f965ef"
     },
     "backend/src/tests/unit/test_facts_service.py": {
-      "asserts": 61,
-      "raises": 8,
-      "digest": "c665bd4c8a7819d6c5e1f22918437ef6df5d12199a27f21bb08967cfa1d07d38"
+      "asserts": 76,
+      "raises": 9,
+      "digest": "78d1688972a000feba2a87f7897473fa20d740805f960ee2d2270ac2bdb47296"
     },
     "backend/src/tests/unit/test_flow_gate.py": {
-      "asserts": 49,
+      "asserts": 67,
       "raises": 0,
-      "digest": "871d232aaf1548af47aec7d94e68100958a854a093efeb386027155559e51ba1"
+      "digest": "d37f210070533bed920a044f2c0532f274d40d94d0ab58ca14e4dc62dc539b98"
     },
     "backend/src/tests/unit/test_injection_guard.py": {
       "asserts": 28,
@@ -433,9 +453,9 @@
       "digest": "5692c5c225490a67c0c9903e7c801670b590b17ad8f949369cfc29f9a5a890ee"
     },
     "backend/src/tests/unit/test_intent_directive.py": {
-      "asserts": 23,
+      "asserts": 30,
       "raises": 0,
-      "digest": "06615ae4665f36c5593427bb5cebd2a7f2dd1980f2db8ccbfa68d1dcb5cc105f"
+      "digest": "f2adad810b70e74f7c789e49c6fd12ba9e408a7087037f72df54a8b4dd71e9a4"
     },
     "backend/src/tests/unit/test_intent_matcher.py": {
       "asserts": 42,
@@ -448,9 +468,9 @@
       "digest": "6e7227554f4ab535ce40c2704ab3135289f4ba8f529a726fb43c1dcd08236091"
     },
     "backend/src/tests/unit/test_intent_shortcut_wiring.py": {
-      "asserts": 36,
+      "asserts": 37,
       "raises": 1,
-      "digest": "9941c2acc6b3e3aabb53ec0730648078cbbe5e917939d72a2034a8eaa2d7fbda"
+      "digest": "c13c5eca9382babfe58b60639d4478a672608bf05a74e7e40659358479dcf7b3"
     },
     "backend/src/tests/unit/test_llm_client.py": {
       "asserts": 80,
@@ -463,14 +483,14 @@
       "digest": "f56ff661677a024b599060b45b9ec68aff17c06a2c1b729aa88079a5ac025904"
     },
     "backend/src/tests/unit/test_llm_embeddings.py": {
-      "asserts": 43,
-      "raises": 7,
-      "digest": "c54755b2a356330ffe7b8834a35cfdf524b17f26701dce535aefa916d9548165"
+      "asserts": 49,
+      "raises": 8,
+      "digest": "fc15f5169e7a2a5c3dfafdb32c8cb37c10a62cacf4a1f07ac05f9bf4f4f6461c"
     },
     "backend/src/tests/unit/test_llm_gateway.py": {
-      "asserts": 99,
-      "raises": 11,
-      "digest": "5ee33f957193e08d7e0fc5a9795143f2ddb266ffb2c57ee2db4e1f502d906f3f"
+      "asserts": 122,
+      "raises": 15,
+      "digest": "dffcd07d577388ca472702a7cf91f1fda96bbfb55b3ed07670d9ac6f1d940530"
     },
     "backend/src/tests/unit/test_llm_intimate_channel.py": {
       "asserts": 75,
@@ -627,10 +647,20 @@
       "raises": 0,
       "digest": "bf0d62cde557daf91ddf3523eea3d58f11b34365c42c8efd07ff8da8a97252eb"
     },
+    "backend/src/tests/unit/test_outbound_guard.py": {
+      "asserts": 10,
+      "raises": 4,
+      "digest": "9a62f43fa7d5fa695e990918d13fc04648ff94aa12187eef0e6615008a89c86a"
+    },
     "backend/src/tests/unit/test_output_protocol.py": {
       "asserts": 52,
       "raises": 0,
       "digest": "00d0f7c12ca3c185986d61eaff5958cf1b72d3983744a271f4335ac0c4c51878"
+    },
+    "backend/src/tests/unit/test_perf_scripts.py": {
+      "asserts": 22,
+      "raises": 2,
+      "digest": "511f7125533b51b7427449cc2fac71649a0725c630e24f4ed616a3d2eef90e06"
     },
     "backend/src/tests/unit/test_persona_api.py": {
       "asserts": 152,
@@ -658,9 +688,9 @@
       "digest": "5c80cf3be4505cf86d1ded3d2d6dc2949848b066792c2224994cabc78ffe6550"
     },
     "backend/src/tests/unit/test_persona_service.py": {
-      "asserts": 141,
-      "raises": 24,
-      "digest": "23a74007a538925b02d9590a2ba7e1059b04260a6ffd1b43e43227b15516e46c"
+      "asserts": 147,
+      "raises": 25,
+      "digest": "fc82e14a595f7e99a19a2b59148f9b26b1eebb59f75d7d93cf08a30ef0b1dc9d"
     },
     "backend/src/tests/unit/test_persona_trait_library.py": {
       "asserts": 100,
@@ -702,15 +732,20 @@
       "raises": 14,
       "digest": "6c1cff848ca9c75d150b1e448fbb7f3afacb460c7f0c7d0aad45e221a4a6ab0f"
     },
+    "backend/src/tests/unit/test_qq_runner.py": {
+      "asserts": 42,
+      "raises": 0,
+      "digest": "8419f1d53f37453ee2e20668e4c2232e1b92aec64d736b669fb542a20897312e"
+    },
     "backend/src/tests/unit/test_qq_settings.py": {
       "asserts": 21,
       "raises": 3,
       "digest": "43dc02b68c2946ba215ae49f7834b53a8af2ad00260e52b7673ee15c0f339e44"
     },
     "backend/src/tests/unit/test_qq_webhook.py": {
-      "asserts": 60,
+      "asserts": 75,
       "raises": 1,
-      "digest": "5a02abc67b9a007b78e4b8ef88a9e8d82ac79f92e15c0d0909771972f1e888c1"
+      "digest": "42d40f3f8c83933543ba0deca4cf192927121ec8ea927d54524cc2e071e29431"
     },
     "backend/src/tests/unit/test_realtime_audio.py": {
       "asserts": 16,
@@ -718,9 +753,9 @@
       "digest": "bb83cea515f10afed00b33488e38f1310e2fa55ab26579b40cb90939e19c924d"
     },
     "backend/src/tests/unit/test_realtime_models.py": {
-      "asserts": 31,
-      "raises": 10,
-      "digest": "b53bc4773346fe8d935e7f58c6bf934c60a541810c8f09bac53c5fe197d8528c"
+      "asserts": 37,
+      "raises": 13,
+      "digest": "73b7b83f2812d17b759bf28cb8b6ff36f5ddfc289abdfe864353a2c2a06d92d6"
     },
     "backend/src/tests/unit/test_realtime_sentence.py": {
       "asserts": 24,
@@ -728,9 +763,9 @@
       "digest": "cb1717d6c5289982f992015ddceb03037d455db0c0aa8505b07d0b91e62a643c"
     },
     "backend/src/tests/unit/test_realtime_session.py": {
-      "asserts": 120,
-      "raises": 1,
-      "digest": "ca497bb766a14c4c58b012b6f4f0ffe345546f7e748e71a78cda39801cd536b9"
+      "asserts": 165,
+      "raises": 2,
+      "digest": "75379b807449a88940e71e51bbef5b18007a0d5cc0db75873a865568d131e51d"
     },
     "backend/src/tests/unit/test_realtime_state.py": {
       "asserts": 25,
@@ -823,14 +858,19 @@
       "digest": "b8314bf467e41cac220395ee8ae6deb78a212ec6c297fcc04d6a597b8e7dc0e0"
     },
     "backend/src/tests/unit/test_skills_service.py": {
-      "asserts": 68,
+      "asserts": 71,
       "raises": 8,
-      "digest": "2ab21f433e0290cb54867c07204a78c3a266c6e228ffb46839e154c76323ac1e"
+      "digest": "5abcc424a2dd286d4401592b31a7d5f1a618ddceb83d4b970f990f1d0f1b6346"
     },
     "backend/src/tests/unit/test_sticker_api.py": {
-      "asserts": 29,
+      "asserts": 30,
       "raises": 0,
-      "digest": "6075eff2c50c59b536d0b049544e083ece06f3495240a3a52967b924ccb62fdd"
+      "digest": "934eb6b4b97e37479090a05b03735d8edea1143d2ddd717227ded36bf3fa6fc2"
+    },
+    "backend/src/tests/unit/test_sticker_bridge.py": {
+      "asserts": 15,
+      "raises": 0,
+      "digest": "6036ce20fc0602b15a2679042fb69091f1a406ff79378708f1d069ad6da5563a"
     },
     "backend/src/tests/unit/test_sticker_prompts.py": {
       "asserts": 7,
@@ -838,19 +878,19 @@
       "digest": "d5c9e094f3a0080e4b3d716bd86fa6b3b5bf2b306c14b2a45a4179c2b791fd33"
     },
     "backend/src/tests/unit/test_sticker_service.py": {
-      "asserts": 71,
+      "asserts": 80,
       "raises": 8,
-      "digest": "92b2ff70255409bd98755b27293b6c8a1be4c19c8ab71d02db0870e687188b92"
+      "digest": "cbf6ac5f4e1ae4823c53563ab47f4b214eb1124ab60b9cfc0ba7d2803fbea482"
     },
     "backend/src/tests/unit/test_tg_client.py": {
-      "asserts": 83,
-      "raises": 19,
-      "digest": "993d948225f2ba18fdb6b1616848d213084b22eab74204573daf95ce95147249"
+      "asserts": 100,
+      "raises": 21,
+      "digest": "c66306f6b84ce128fb0a32ee40efa957cc573fb89d9d1c72414b136dd6773e55"
     },
     "backend/src/tests/unit/test_tg_runner.py": {
-      "asserts": 96,
+      "asserts": 100,
       "raises": 2,
-      "digest": "d6efe35ef5dbc00ffb8166497a99edf96ae4237c3ed012ca46bde2a6b48eea44"
+      "digest": "ffa61798402a031bb11ff1a339a37eafa77626096fa6718951e15e0ff5c63702"
     },
     "backend/src/tests/unit/test_tools_browser_sidecar_client.py": {
       "asserts": 41,
@@ -923,9 +963,9 @@
       "digest": "b58487c81673c8375ce09a4a1e433ba25319f5197ddc9389df32ec8192dc8dcf"
     },
     "backend/src/tests/unit/test_voiceprint_api.py": {
-      "asserts": 20,
+      "asserts": 21,
       "raises": 0,
-      "digest": "9e2b39e5b881cc4cbabc055b414cea624d1be71e7d077979396257552ae9cee1"
+      "digest": "120f47ecb9a00605f29073b2cdd45744aac4f75f5e1b6cc692d1db1d9e55bb9f"
     },
     "backend/src/tests/unit/test_voiceprint_embedding.py": {
       "asserts": 18,
@@ -933,14 +973,14 @@
       "digest": "abdf8542eb3d6471fdae9d8d3e501b7cd9eb3505cf6d095da268898ad5507f1b"
     },
     "backend/src/tests/unit/test_voiceprint_service.py": {
-      "asserts": 62,
-      "raises": 10,
-      "digest": "9bb082c94add7470717380747034c8bd1a7164a323e73a23f7c54b292848f762"
+      "asserts": 72,
+      "raises": 11,
+      "digest": "8d77de35b86e6e933d0afd28425b683975260f96568e35a816b0be7bd1635924"
     },
     "backend/src/tests/unit/test_wecom_client.py": {
-      "asserts": 51,
-      "raises": 12,
-      "digest": "fc819563bc41e8e90f811a045983dccc829a65555874771f6b248eeb827e6c86"
+      "asserts": 57,
+      "raises": 13,
+      "digest": "ec66d78a0e1ed10f92c83eb196e8e74f0890d191c7348031e2604d23765df9bc"
     },
     "backend/src/tests/unit/test_wecom_models.py": {
       "asserts": 85,
@@ -948,9 +988,9 @@
       "digest": "40bffa77f8f062860b81ff01fc327d9cf7fff93ba3a04601b57a9ec9a2ac817e"
     },
     "backend/src/tests/unit/test_wecom_runner.py": {
-      "asserts": 68,
+      "asserts": 83,
       "raises": 1,
-      "digest": "113df7575a82b05574ec97b52a96bda342c5251d81cfd26288268369d2313cf0"
+      "digest": "b5c77bd3010b47ff339d7a07e081fd183f6091d6447f8224c2f4c1e258b61aa9"
     },
     "backend/src/tests/unit/test_wecom_settings.py": {
       "asserts": 31,

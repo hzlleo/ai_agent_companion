@@ -4,7 +4,9 @@
 用途：给聊天门控 / 关系摘要派生 / 语音句切与 VAD / 关系块渲染这类高频
 纯函数建立**可重复、无外部依赖**的耗时基线。测量全部在本进程内完成：
 ``time.perf_counter_ns`` 计时、预热后多轮取样、报告 median / p95 微秒；
-不等待、不联网、不碰数据库、不读真实配置（各用例显式构造配置对象）。
+不等待、不联网、不碰数据库、不读真实配置——各用例显式构造配置对象，且
+配置模型的每一个字段都显式传参（初始化参数优先级高于进程环境），因此开发者
+shell / ``.env`` 里的同名变量既不改变被测输入，也不会让本脚本拒跑。
 
 模式（互斥）：
 
@@ -30,7 +32,9 @@
 
 Exit:
     0 = 报告 / 门禁通过 / 自检通过 / 基线更新成功；
-    1 = 门禁超限或自检键集不一致；
+    1 = 门禁超限、自检键集不一致，或被导入模块 / 构造用例模型时的
+        ``ValidationError``——打印单行受控错误（含首个错误字段摘要），
+        不展开 traceback；
     2 = 参数错误 / 基线缺失或损坏。
 """
 
@@ -252,6 +256,11 @@ def _make_sentence_split_case() -> Callable[[], None]:
 def _make_vad_feed_case() -> Callable[[], None]:
     """构造 VAD 逐帧喂入用例（合成 60 帧：起说 + 语音 + 静音切段）。
 
+    配置逐字段显式传参：初始化参数优先级高于进程环境，缺任一个字段就等于
+    让该字段从开发者环境解析——输入随机器漂移，或非法值让测量路径抛
+    校验错误。因此这里把 ``RealtimeVoiceSettings`` 的全部字段按模型默认口径
+    写死（含与 VAD 无关的下行字段），测量输入只由本函数决定。
+
     Returns:
         执行一次完整合成帧序列喂入的可调用对象。
     """
@@ -271,6 +280,18 @@ def _make_vad_feed_case() -> Callable[[], None]:
         vad_min_speech_ms=300,
         vad_silence_end_ms=700,
         vad_max_segment_ms=15000,
+        partial_transcript_interval_ms=800,
+        partial_min_speech_ms=600,
+        sentence_max_chars=80,
+        tts_chunk_bytes=16384,
+        tts_queue_max=32,
+        audio_queue_max_chunks=64,
+        audio_batch_max_chunks=8,
+        max_session_ms=600000,
+        idle_timeout_ms=60000,
+        heartbeat_interval_ms=15000,
+        barge_in_enabled=True,
+        max_sessions=2,
     )
     config = build_vad_config(settings)
     speech_frame = struct.pack("<h", 16_384) * 320
@@ -537,7 +558,7 @@ def _print_table(
         baseline: 基线（None = 无对照）。
     """
     header = f"{'用例':<52} {'median µs':>12} {'p95 µs':>12} {'基线 median µs':>16} {'比值':>8}"
-    print(f"[bench_core] 本机实测（同机复跑为准，跨机绝对耗时不可比）")
+    print("[bench_core] 本机实测（同机复跑为准，跨机绝对耗时不可比）")
     print(header)
     print("-" * len(header))
     for item in measurements:
@@ -633,6 +654,49 @@ def _report() -> int:
     return 0
 
 
+def _is_config_validation_error(exc: BaseException) -> bool:
+    """判定异常是否为 pydantic 配置校验错误。
+
+    延迟导入 pydantic，保持脚本模块导入期只依赖标准库。
+
+    Args:
+        exc: 捕获到的异常。
+
+    Returns:
+        True = 该异常是 ``pydantic.ValidationError``。
+    """
+    from pydantic import ValidationError
+
+    return isinstance(exc, ValidationError)
+
+
+def _format_config_validation_error(exc: BaseException) -> str:
+    """把配置校验错误折叠为单行受控提示（不展开 traceback）。
+
+    Args:
+        exc: ``pydantic.ValidationError`` 实例。
+
+    Returns:
+        含首个错误字段摘要的单行错误文本（字段路径 + 校验消息 + 错误类型）。
+    """
+    collector = getattr(exc, "errors", None)
+    raw_errors = collector() if callable(collector) else []
+    if raw_errors:
+        first = raw_errors[0]
+        location = ".".join(str(part) for part in first.get("loc", ())) or "<root>"
+        detail = (
+            f"{location}: {first.get('msg', exc)}"
+            f"（type={first.get('type', 'unknown')}）"
+        )
+    else:
+        detail = str(exc)
+    return (
+        "[bench_core] 非本次基准相关环境变量取值非法"
+        f"（导入期或构造用例模型校验失败）：{detail}"
+        "——请清理 / 修正该环境变量后重跑（与真实 app 启动失败同源）"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI 入口（模式互斥）。
 
@@ -654,17 +718,23 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--self-check", action="store_true", help="只校验注册表与基线键集一致（不跑计时）")
     args = parser.parse_args(argv)
 
-    if args.self_check:
-        return _self_check()
-    if args.update:
-        measurements = _measure_all()
-        _print_table(measurements, None)
-        _write_baseline(measurements)
-        print(f"[bench_core] 完成模式=update 用例={len(measurements)}")
-        return 0
-    if args.gate:
-        return _gate()
-    return _report()
+    try:
+        if args.self_check:
+            return _self_check()
+        if args.update:
+            measurements = _measure_all()
+            _print_table(measurements, None)
+            _write_baseline(measurements)
+            print(f"[bench_core] 完成模式=update 用例={len(measurements)}")
+            return 0
+        if args.gate:
+            return _gate()
+        return _report()
+    except Exception as exc:
+        if not _is_config_validation_error(exc):
+            raise
+        print(_format_config_validation_error(exc), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
