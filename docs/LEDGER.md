@@ -93,11 +93,12 @@
 | R2f 实时语音 | 实时语音全双工会话：WS 协议 + 相位状态机 + 能量/静音 VAD 切段 + 切段转写（节流中途字幕）+ 人格回复句切与逐句 TTS 分片下行 + barge-in（取消在途生成/合成 + 清空队列）+ 会话资源上限（背压/空闲/最大时长/优雅关闭）+ `REALTIME_VOICE_` env 面 + 管理台实时字幕面板 | ✅ merged（PR #18；复审修复 PR #31）；溢出项与验证数值见第 5 节 |
 | R3-1 安全纵深 | 提示注入纵深 / SSRF 对称 / 密钥与鉴权治理 / base64 载荷上限 / 日志掩码（P1×2 + P2×5） | ✅ merged（PR #35；证据 `e8232b42`） |
 | R3-2 限流与背压 | QQ 入站有界 / 实时语音 TTS 队列与会话帽 / LLM 日预算闸 / 多 worker 语义 / 最小观测面 / 前端 Node 护栏与构建体积基线（P1×1 + P2×7；复审 6×P2 闭环） | ✅ merged（PR #36；证据 `fe261c9a`；PR body 引用的 `0276c1a5` 为首提交树证据，终态以 `fe261c9a` 为准） |
-| R3-3 性能基线 | `bench_core.py` 6 项纯函数微基准 + `api_smoke.py` 4 端点进程内冒烟 + 门禁链落位（复审 4×P2 闭环；终局复核 7×P2 闭环） | 🔄 PR #37 open（评审 head `66b14b3`；canonical 证据 `16b07c7c`，历史 `bc71f261`） |
+| R3-3 性能基线 | `bench_core.py` 6 项纯函数微基准 + `api_smoke.py` 4 端点进程内冒烟 + 门禁链落位（复审 4×P2 闭环；终局复核 7×P2 闭环） | ✅ merged（PR #37 → main `3f313a6`；评审 head `66b14b3`，终态含 `ecb7714`/`ee9381a`；canonical 证据 `16b07c7c`，历史 `bc71f261`） |
 
 **当前分支状态**：
-- main：`df2ca2d`（PR#34–#36 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
-- `feat/r3-perf`：R3-3 性能基线（PR #37 open），本机工作区为当前复核面。
+- main：`3f313a6`（PR#34–#37 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
+- `feat/r3-perf`：R3-3 性能基线，已合并（PR #37），可删除。
+- R4：范围待拍板，未开工。
 - 历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入 main，可删除；工作区 clean。
 
 ## 4. 全部拍板记录（原文语义）
