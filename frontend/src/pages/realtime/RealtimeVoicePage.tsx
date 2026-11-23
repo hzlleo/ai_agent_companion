@@ -8,8 +8,12 @@
  *
  * 交互语义（与后端协议同口径）：
  * - 只有收到 `ready` 后才启动麦克风采集（采样率 / 声道以服务端公告为准）；
+ * - 采集约束固定全开 AEC / 降噪 / 自动增益，并回读实际生效值——未生效时
+ *   提示建议佩戴耳机（服务端 `ready.aec=false` 时同样展示降级）；
  * - 期间的上行音频由服务端 VAD 切段；`interrupted` 到达时立即清空本地播放
  *   并回 `barge_in_ack`；
+ * - 移动端边界：页面进入后台暂停采集（会话不重连），回到前台 / 点击页面
+ *   时恢复采集（浏览器要求用户手势时由点击触发）；
  * - 可恢复 `error` 保留会话（提示条），不可恢复 `error` / `closed` 停止采集
  *   并展示结束态。
  */
@@ -27,6 +31,7 @@ import {
   MicrophoneCapture,
   RealtimeVoiceClient,
   type MicrophoneCaptureLike,
+  type RealtimeCaptureCapabilities,
   type RealtimeClientHandlers,
   type RealtimeVoiceClientLike,
 } from '@/lib/realtimeVoiceClient'
@@ -140,7 +145,13 @@ export default function RealtimeVoicePage(props: RealtimeVoicePageProps = {}) {
     ttsEnabled: boolean
     bargeInEnabled: boolean
     idleTimeoutMs: number
+    aecAnnounced: boolean
+    streamingAsr: boolean
+    streamingTts: boolean
   } | null>(null)
+  const [captureCapabilities, setCaptureCapabilities] =
+    useState<RealtimeCaptureCapabilities | null>(null)
+  const [capturePaused, setCapturePaused] = useState(false)
   const clientRef = useRef<RealtimeVoiceClientLike | null>(null)
   const captureRef = useRef<MicrophoneCaptureLike | null>(null)
   const playbackRef = useRef<RealtimePlaybackQueue | null>(null)
@@ -166,6 +177,9 @@ export default function RealtimeVoicePage(props: RealtimeVoicePageProps = {}) {
             ttsEnabled: message.tts_enabled,
             bargeInEnabled: message.barge_in_enabled,
             idleTimeoutMs: message.limits.idle_timeout_ms,
+            aecAnnounced: message.aec,
+            streamingAsr: message.streaming_asr,
+            streamingTts: message.streaming_tts,
           })
           setNotice(
             message.tts_enabled
@@ -173,7 +187,18 @@ export default function RealtimeVoicePage(props: RealtimeVoicePageProps = {}) {
               : '会话已就绪（TTS 未启用，仅显示字幕）',
           )
           setStatusSafe('listening')
-          void captureRef.current?.start()
+          const capture = captureRef.current
+          void (async () => {
+            await capture?.start()
+            const capabilities = capture?.getCapabilities?.() ?? null
+            setCaptureCapabilities(capabilities)
+            if (capabilities !== null && !capabilities.echoCancellation) {
+              setNotice('浏览器未生效回声消除（AEC），外放场景建议佩戴耳机')
+            }
+            if (capture?.isPaused?.() === true) {
+              setCapturePaused(true)
+            }
+          })()
           return
         }
         case 'partial_transcript': {
@@ -251,10 +276,40 @@ export default function RealtimeVoicePage(props: RealtimeVoicePageProps = {}) {
     [setStatusSafe, stopCapture],
   )
 
+  const resumeCapture = useCallback(async () => {
+    const capture = captureRef.current
+    if (capture === null) {
+      return
+    }
+    await capture.resume?.()
+    setCapturePaused(capture.isPaused?.() ?? false)
+    const capabilities = capture.getCapabilities?.() ?? null
+    setCaptureCapabilities(capabilities)
+  }, [])
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      const capture = captureRef.current
+      if (capture === null) {
+        return
+      }
+      if (document.visibilityState === 'hidden') {
+        void capture.pause?.()
+        setCapturePaused(true)
+        return
+      }
+      void resumeCapture()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [resumeCapture])
+
   const handleStart = useCallback(() => {
     setError(null)
     setNotice(null)
     setTranscripts([])
+    setCaptureCapabilities(null)
+    setCapturePaused(false)
     setStatusSafe('connecting')
     const createPlayback = props.createPlayback ?? defaultCreatePlayback
     playbackRef.current = createPlayback((message) => setError(message))
@@ -284,6 +339,7 @@ export default function RealtimeVoicePage(props: RealtimeVoicePageProps = {}) {
   const handleStop = useCallback(() => {
     clientRef.current?.end()
     void stopCapture()
+    setCapturePaused(false)
     playbackRef.current?.interrupt()
     setStatusSafe('closed')
     setNotice('会话已结束')
@@ -311,7 +367,14 @@ export default function RealtimeVoicePage(props: RealtimeVoicePageProps = {}) {
   const meta = STATUS_META[status]
 
   return (
-    <div className="space-y-4 p-6">
+    <div
+      className="space-y-4 p-6"
+      onPointerDown={() => {
+        if (capturePaused) {
+          void resumeCapture()
+        }
+      }}
+    >
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <CardTitle>实时语音会话</CardTitle>
@@ -343,8 +406,27 @@ export default function RealtimeVoicePage(props: RealtimeVoicePageProps = {}) {
             <p className="text-xs text-[var(--color-text-secondary)]">
               上行 {sessionInfo.sampleRateHz} Hz 单声道 ／ 下行{' '}
               {sessionInfo.ttsEnabled ? '语音播报' : '仅字幕'} ／ 空闲超时{' '}
-              {Math.round(sessionInfo.idleTimeoutMs / 1000)} 秒
+              {Math.round(sessionInfo.idleTimeoutMs / 1000)} 秒 ／ 流式识别{' '}
+              {sessionInfo.streamingAsr ? '开' : '关'} ／ 流式合成{' '}
+              {sessionInfo.streamingTts ? '开' : '关'} ／ 回声消除{' '}
+              {sessionInfo.aecAnnounced && (captureCapabilities?.echoCancellation ?? true)
+                ? '开'
+                : '降级'}
             </p>
+          ) : null}
+          {capturePaused ? (
+            <Alert variant="info">
+              <AlertDescription>
+                音频采集已暂停（页面在后台或被系统挂起），点击页面或回到前台即可恢复（会话保持）。
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {captureCapabilities !== null && !captureCapabilities.noiseSuppression ? (
+            <Alert variant="info">
+              <AlertDescription>
+                浏览器未生效降噪，嘈杂环境下识别准确率可能下降。
+              </AlertDescription>
+            </Alert>
           ) : null}
           {notice !== null ? (
             <Alert variant="info">

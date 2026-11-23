@@ -6,6 +6,17 @@
 
 全双工实时会话（WS 协议 / VAD 切段 / 逐句播报 / 打断）建立在本域服务之上，独立建档见 [realtime-voice.md](realtime-voice.md)。
 
+**双轨取材（R4-3）**：除上列批量客户端外，本域另有两个**流式通道客户端**（真流式 ASR / TTS，默认关闭、开关开启且握手成功才启用，失败自动回退批量主链）：
+
+| 通道 | 客户端 | 传输 | 默认 |
+|---|---|---|---|
+| 批量 ASR | `asr_client.py`（OpenAI 兼容 multipart） | 共享 httpx 池 | 关（`VOICE_ASR_ENABLED`） |
+| 流式 ASR | `asr_stream_client.py`（实时转写事件族 WS） | 注入传输（生产 = `stream_transport.py` 的 websockets 适配） | 关（`VOICE_ASR_STREAMING_ENABLED`） |
+| 批量 TTS | `tts_client.py`（POST /tts → WAV） | 共享 httpx 池 | 关（`VOICE_TTS_ENABLED`） |
+| 流式 TTS | `tts_stream_client.py`（逐分片 PCM16 WS） | 注入传输（同上） | 关（`VOICE_TTS_STREAMING_ENABLED`） |
+
+流式与批量**同源分面**：段 / 句的计次口径、预算闸与用量行语义与 R4-2 完全一致（见下「流式连接计次口径」）；流式通道的任何失败都不消费批量预算、也不阻断批量主链。
+
 ## 模块一览
 
 | 模块 | 职责 | 关键导出 |
@@ -13,8 +24,12 @@
 | `voice_models.py` | 语音域 Model Classes（Unit 文件）：TTS / ASR 请求与结果契约、人格语音绑定、用量事件、客户端注入面协议 | `TtsRequestModel` / `TtsResultModel` / `AsrResultModel` / `VoiceProfileModel` / `VoiceTtsRequestDTO` / `VoiceUsageEvent` / `TtsClientFace` / `AsrClientFace` |
 | `tts_client.py` | CosyVoice3 合成客户端（共享 httpx client 注入；部署契约持有方） | `CosyVoiceTtsClient` |
 | `asr_client.py` | Qwen3-ASR 转写客户端（OpenAI 兼容 multipart；共享 httpx client 注入） | `Qwen3AsrClient` |
+| `stream_models.py` | 流式通道传输面契约（帧模型 / 协议 / 关闭码语义 / 连接工厂类型——公开面零裸 dict） | `VoiceStreamFrameModel` / `VoiceStreamTransportFace` / `VoiceStreamConnector` |
+| `stream_transport.py` | 流式通道真实 WebSocket 传输（websockets 运行时依赖，仅装配层 / 探测脚本消费） | `WebSocketStreamTransport` / `make_websocket_connector` |
+| `asr_stream_client.py` | Qwen3-ASR 实时识别客户端（握手 / 喂帧 / partial+final / finish / cancel / 保活与超时 / 错误映射） | `Qwen3AsrStreamClient` / `AsrStreamHandle` / `AsrStreamClientFace` |
+| `tts_stream_client.py` | CosyVoice 流式合成客户端（文本 → PCM16 分片流；barge-in 取消关闭连接） | `CosyVoiceStreamClient` / `TtsStreamClientFace` |
 | `voice_budget.py` | 分面日预算闸 / 计数 / 用量接线（ASR / TTS / voiceprint 共用；purpose 过滤 + 成功计量） | `enforce_daily_budget` / `wire_default_voice_usage_recorder` / `wire_default_voice_usage_counter` |
-| `voice_service.py` | 编排门面（enabled 门控 + 人格绑定解析 + 分面预算闸 + 惰性客户端构建 + 成功用量发射） | `VoiceService` / `VoiceUsageRecorder` / `VoiceBudgetCounter` |
+| `voice_service.py` | 编排门面（enabled 门控 + 人格绑定解析 + 分面预算闸 + 惰性客户端构建 + 成功用量发射 + 双轨流式通道（`open_asr_stream` / `synthesize_stream`）） | `VoiceService` / `VoiceUsageRecorder` / `VoiceBudgetCounter` |
 | `voiceprint_models.py` | 声纹域 Model Classes（Unit 文件）：`VOICEPRINT_` 配置面、注册 / 校验 / 同意 / 档案契约、PIPL 告知文本与版本常量 | `VoiceprintSettings` / `VoiceprintEnrollRequestDTO` / `VoiceprintVerifyResultModel` / `VoiceprintPrivacyNoticeDTO` / `render_privacy_notice` |
 | `voiceprint_orm.py` | 声纹样本 / 同意记录 ORM 行（PersonaMixin 人格作用域） | `VoiceprintSampleRow` / `VoiceprintConsentRow` |
 | `voiceprint_embedding.py` | 说话人向量 HTTP 客户端（可配置端点；共享池 client 注入） | `VoiceprintEmbeddingClient` |
@@ -42,7 +57,22 @@ usage 域（wire_default_voice_usage_recorder → UsageCreateDTO）
     → ff_usage_records（purpose="tts"，token 0/0/0，真实时延，persona 绑定）
 ```
 
-ASR 同构（`VoiceService.transcribe(audio, filename, persona)` → `ASR_DAILY_BUDGET_*` 分面闸 → `Qwen3AsrClient` → `POST {base_url}/v1/audio/transcriptions` multipart → `AsrResultModel` → 成功 usage 行 `purpose="asr"`）。用量语义（锁定决策）：**语音调用无 token 语义**——input / output / total 恒 0 落账（调用计数 + 真实时延仍有观测价值；`UsagePurpose` 枚举 tts / asr 成员本域消费）。**仅成功后落账**：出站失败不记、被预算拒绝不记；用量发射恒不阻断主调用（记录器异常仅告警——与 llm 网关同契约）。分面预算单位 / 软竞态 / 错误 details 见 [usage.md](usage.md#分面日预算asr--tts--voiceprint)。
+ASR 同构（`VoiceService.transcribe(audio, filename, persona)` → `ASR_DAILY_BUDGET_*` 分面闸 → `Qwen3AsrClient` → `POST {base_url}/v1/audio/transcriptions` multipart → `AsrResultModel` → 成功 usage 行 `purpose="asr"`）。
+
+流式通道同构（双轨，见 [realtime-voice.md](realtime-voice.md)）：
+
+```
+VoiceService.open_asr_stream(sample_rate_hz, on_partial, persona)
+    ↓ ASR_DAILY_BUDGET_* 分面闸（被拒 → 零建连、零出站）
+    ↓ Qwen3AsrStreamClient.open（注入传输；握手超时 / 被拒 → LLM_CALL_FAILED）
+    ↓ 连接已开 → 计 1 次；finish / cancel 收尾时落 1 行 usage（purpose="asr"）
+Qwen3AsrStreamHandle（feed / finish / cancel——partial 由 on_partial 回调下行）
+
+VoiceService.synthesize_stream(text, persona)
+    ↓ TTS_DAILY_BUDGET_* 分面闸（被拒 → 零建连）
+    ↓ CosyVoiceStreamClient.synthesize_stream（PCM16 分片流）
+    ↓ 正常收尾 → 落 1 行 usage（purpose="tts"）；取消（barge-in）→ 不落行
+```用量语义（锁定决策）：**语音调用无 token 语义**——input / output / total 恒 0 落账（调用计数 + 真实时延仍有观测价值；`UsagePurpose` 枚举 tts / asr 成员本域消费）。**仅成功后落账**：出站失败不记、被预算拒绝不记；用量发射恒不阻断主调用（记录器异常仅告警——与 llm 网关同契约）。分面预算单位 / 软竞态 / 错误 details 见 [usage.md](usage.md#分面日预算asr--tts--voiceprint)。
 
 ### 大输出边界（文档化决策）
 
@@ -84,8 +114,34 @@ ASR 端点对 multipart 请求体设大小上限（`VOICE_ASR_MAX_UPLOAD_BYTES`�
 | `VOICE_ASR_MAX_UPLOAD_BYTES` | `26214400` | ASR 上传请求体上限（字节，25MB——超限 422；量级依据见上节） |
 | `ASR_DAILY_BUDGET_GLOBAL` | `0` | 全局每日 ASR 转写调用数上限（0 = 不限；有效上限 10,000） |
 | `ASR_DAILY_BUDGET_PERSONA` | `0` | 单人格每日 ASR 转写调用数上限（0 = 不限；有效上限 10,000） |
+| `VOICE_ASR_STREAMING_ENABLED` | `false` | 流式识别通道开关（False = 整段批量转写；失败自动回退批量） |
+| `VOICE_ASR_STREAMING_BASE_URL` | `ws://127.0.0.1:8082/v1/realtime` | 流式识别 WebSocket 端点（沿用语部分节凭据，不重复鉴权键） |
+| `VOICE_ASR_STREAMING_MODEL` | `qwen3-asr-flash-realtime` | 流式识别握手 model 字段值 |
+| `VOICE_ASR_STREAMING_TIMEOUT_SECONDS` | `5` | 流式识别握手 / 事件等待超时（秒） |
+| `VOICE_TTS_STREAMING_ENABLED` | `false` | 流式合成通道开关（False = 整句批量合成；失败自动回退批量） |
+| `VOICE_TTS_STREAMING_BASE_URL` | `ws://127.0.0.1:9880/realtime` | 流式合成 WebSocket 端点（同上凭据口径） |
+| `VOICE_TTS_STREAMING_MODEL` | `cosyvoice3` | 流式合成握手 model 字段值 |
+| `VOICE_TTS_STREAMING_TIMEOUT_SECONDS` | `10` | 流式合成握手 / 分片等待超时（秒） |
+| `VOICE_TTS_STREAMING_SAMPLE_RATE_HZ` | `24000` | 流式合成输出 PCM16 采样率（Hz——下行 WAV 封装依据） |
 
 键面以 `.env.example`（`pixi run gen-examples` 生成）为真源，本表为语义说明。
+
+## 部署探测脚本（流式通道一次性连通性验证，不入门禁）
+
+`scripts/probe_voice_streaming.py` 在部署机按生效配置对 ASR / TTS 流式端点做**最小握手与一帧往返**（ASR：握手 → 追加 100ms 探测音频 → 收尾；TTS：握手 → 取首分片 → 取消），逐子项输出结果：
+
+```
+cd backend && pixi run python ../scripts/probe_voice_streaming.py
+# 可选：--only asr|tts / --timeout 30
+```
+
+| 输出 | 含义 | 处置 |
+|---|---|---|
+| `PASS` | 握手 + 一帧往返成功 | 可开启对应 `*_STREAMING_ENABLED` |
+| `SKIP` | 未启用或端点未配置（无凭据） | 保持关闭即可——批量主链照常 |
+| `FAIL` | 连接 / 握手 / 往返失败（输出端点与原因） | **该子项降级**：关闭对应流式开关（或保持运行期自动回退批量）；不影响批量主链与会话 |
+
+退出码：0 = 无 FAIL；1 = 存在 FAIL；2 = 参数错误。脚本零真实模型推理依赖（只验协议连通性），但不入门禁链——本机 CI 全部单测走 fake 传输面。
 
 ## 管理 API（app/api/voice.py）
 
@@ -177,7 +233,44 @@ file: (filename, audio_bytes)    model: <model_id>    language?: str
 200 ← {"text": str, "duration_ms"?: int, "language"?: str}
 ```
 
-## 错误码映射（voice 域段——复用既有码表，core/errors.py 不动）
+### 流式 ASR / TTS（R4-3——默认关闭，部署侧可选启用）
+
+流式端点是**可选部署件**：不启用（`*_STREAMING_ENABLED=false`）时后端零 WebSocket 连接，批量主链不受影响。启用时按下列事件族契约部署（与 DashScope 实时协议同形的薄包装即可）：
+
+```
+# 流式 ASR（ws {VOICE_ASR_STREAMING_BASE_URL}）
+→ {"type":"session.update","session":{"model":str,"input_audio_format":"pcm16","sample_rate_hz":int,"language":str|null}}
+← {"type":"session.created"} / {"type":"session.updated"}
+→ {"type":"input_audio_buffer.append","audio":base64(pcm16)}
+→ {"type":"input_audio_buffer.commit"}
+→ {"type":"session.finish"}
+← {"type":"conversation.item.input_audio_transcription.text","text":str}        # partial
+← {"type":"conversation.item.input_audio_transcription.completed","transcript":str}
+← {"type":"session.finished"} / {"type":"error","error":{"code":str,"message":str}}
+→ {"type":"session.cancel"}                                                     # 取消（best-effort）
+
+# 流式 TTS（ws {VOICE_TTS_STREAMING_BASE_URL}）
+→ {"type":"tts.start","text":str,"speaker":str|null,"speed":float[,"instruct_text":str],"sample_rate_hz":int,"model":str}
+← {"type":"tts.started"}                                                        # 可选
+← {"type":"tts.delta","audio":base64(pcm16)}                                    # 顺序即播放序
+← {"type":"tts.completed"} / {"type":"error",...}
+→ {"type":"tts.cancel"}                                                         # barge-in（best-effort）
+```
+
+关闭码语义（客户端主动关闭）：`1000` 正常收尾 / `1001` 离开（收尾超时）/ `1002` 协议错误（握手失败）/ `1008` 策略违规 / `1011` 服务端内部错误；对端以 `1002` 及以上关闭一律按失败处理并回退批量。
+
+### 流式连接计次口径（锁定——与 R4-2 分面语义一致）
+
+| 事件 | 预算闸 | usage 行 |
+|---|---|---|
+| ASR 流式连接**开启成功** | 开启前判定（被拒 → 零建连、零出站） | 0 行（尚未收尾） |
+| ASR 流式连接收尾（finish 成功 / cancel 干净关闭） | — | **1 行**（`purpose="asr"`，provider `qwen3-asr`，token 0） |
+| ASR 连接 / 握手失败（未开启） | 开启前已判定 | 0 行（回退批量后按批量口径记账） |
+| TTS 每句流式合成成功收尾 | 每句判定（被拒 → 零建连） | **1 行**（`purpose="tts"`，与批量句级等价） |
+| TTS 流式中途取消（barge-in） | 已判定 | 0 行（与批量句级取消等价） |
+
+被拒调用不建连、不出站、不落行；流式失败回退批量时，批量路径按自身口径独立判定与记账（不重复计数）。
+
 
 503「依赖服务不可用」类与 LLM 端点同属远程模型服务依赖（usage 域亦将 tts / asr 与 chat / embed 并列为模型调用用途），故复用 `LLM_CALL_FAILED`；禁用态复用通用 `CONFLICT`（409）：
 

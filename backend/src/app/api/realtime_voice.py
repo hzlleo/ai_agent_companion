@@ -52,11 +52,14 @@ from packages.harness.persona.dtos import PersonaRecordDTO
 from packages.harness.persona.facts import FactsService
 from packages.harness.persona.service import PersonaService, bind_persona_context
 from packages.harness.persona.skills import SkillsService
+from packages.harness.voice.asr_stream_client import Qwen3AsrStreamClient
 from packages.harness.voice.realtime_models import RealtimeErrorMessageModel
 from packages.harness.voice.realtime_session import (
     ChatSessionStreamAdapter,
     RealtimeVoiceSession,
 )
+from packages.harness.voice.stream_transport import make_websocket_connector
+from packages.harness.voice.tts_stream_client import CosyVoiceStreamClient
 from packages.harness.voice.voice_service import (
     VoiceService,
     wire_default_voice_usage_counter,
@@ -238,6 +241,53 @@ async def _build_chat(websocket: WebSocket, persona: PersonaRecordDTO) -> ChatSe
     return ChatSessionStreamAdapter(chat_service, state)
 
 
+def _build_voice_service(settings: Settings) -> VoiceService:
+    """装配会话语音服务（批量默认接线 + 按开关构造流式客户端）。
+
+    流式客户端只在 ``VOICE_ASR_STREAMING_ENABLED`` / ``VOICE_TTS_STREAMING_ENABLED``
+    为真时构造（默认关闭 = 零 WebSocket 连接、零额外对象）；构造后若运行期
+    握手失败 / 中途断流，会话层自动回退既有批量路径（一次告警 + 指标计数）。
+
+    Args:
+        settings: 生效 Settings（流式端点 / 模型 / 超时来源）。
+
+    Returns:
+        绑定量 / 分面预算接线与流式通道的音频服务门面。
+    """
+    voice_settings = settings.voice
+    asr_stream_client: Qwen3AsrStreamClient | None = None
+    if voice_settings.asr.streaming_enabled:
+        asr_config = voice_settings.asr
+        asr_stream_client = Qwen3AsrStreamClient(
+            make_websocket_connector(
+                asr_config.streaming_base_url,
+                open_timeout_seconds=asr_config.streaming_timeout_seconds,
+            ),
+            endpoint=asr_config.streaming_base_url,
+            model=asr_config.streaming_model,
+            timeout_seconds=asr_config.streaming_timeout_seconds,
+        )
+    tts_stream_client: CosyVoiceStreamClient | None = None
+    if voice_settings.tts.streaming_enabled:
+        tts_config = voice_settings.tts
+        tts_stream_client = CosyVoiceStreamClient(
+            make_websocket_connector(
+                tts_config.streaming_base_url,
+                open_timeout_seconds=tts_config.streaming_timeout_seconds,
+            ),
+            endpoint=tts_config.streaming_base_url,
+            model=tts_config.streaming_model,
+            timeout_seconds=tts_config.streaming_timeout_seconds,
+            sample_rate_hz=tts_config.streaming_sample_rate_hz,
+        )
+    return VoiceService(
+        asr_stream_client=asr_stream_client,
+        tts_stream_client=tts_stream_client,
+        usage_recorder=wire_default_voice_usage_recorder(),
+        usage_counter=wire_default_voice_usage_counter(),
+    )
+
+
 @router.websocket("/ws")
 async def realtime_voice_websocket(websocket: WebSocket) -> None:
     """实时语音全双工会话端点（协议 / 状态机 / 编排全部在 harness）。
@@ -304,10 +354,7 @@ async def realtime_voice_websocket(websocket: WebSocket) -> None:
             realtime_settings=realtime_settings,
             voice_settings=settings.voice,
             chat=chat,
-            voice_service=VoiceService(
-                usage_recorder=wire_default_voice_usage_recorder(),
-                usage_counter=wire_default_voice_usage_counter(),
-            ),
+            voice_service=_build_voice_service(settings),
             persona=persona,
         )
         await session.run()

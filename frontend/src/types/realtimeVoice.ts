@@ -54,6 +54,12 @@ export interface RealtimeReadyMessage {
   asr_enabled: boolean
   tts_enabled: boolean
   barge_in_enabled: boolean
+  /** 服务端 AEC 期望（客户端采集须开启回声消除；false = 调试降级公告）。 */
+  aec: boolean
+  /** 流式识别通道可用性（true = partial 为真增量）。 */
+  streaming_asr: boolean
+  /** 流式合成通道可用性（true = 逐句流式合成）。 */
+  streaming_tts: boolean
   vad: RealtimeVadSettings
   limits: RealtimeSessionLimits
 }

@@ -158,6 +158,9 @@ async def test_outbound_ready_round_trip() -> None:
         asr_enabled=True,
         tts_enabled=False,
         barge_in_enabled=True,
+        aec=True,
+        streaming_asr=False,
+        streaming_tts=False,
         vad=RealtimeVadPublicSettingsModel(
             speech_rms_threshold=0.06,
             silence_rms_threshold=0.03,

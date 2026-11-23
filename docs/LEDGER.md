@@ -1177,6 +1177,103 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 全 purpose 收窄为 LLM 用途集合（分面隔离要求，见 llm.md）；`UsageQueryDTO`
 增集合过滤字段（前端 types 同步 `purposes` 与 `voiceprint` 枚举/标签，contract fixture 已重出）。复审归主 Agent。
 
+### 已完成切片：R4-3 实时语音增强（双轨流式 ASR/TTS + AEC + 移动端采集，本分支工作区）
+
+**已完成**：
+1. **流式 ASR 客户端**（`harness/voice/asr_stream_client.py`）：Qwen3-ASR 实时
+   事件族协议（session.update / append / commit / finish / cancel；partial+final
+   事件映射），传输注入（`stream_models.py` 帧模型 / 协议 / 关闭码语义），
+   握手、收尾、`finish` 超时、`cancel`、心跳保活、喂帧有界队列（溢出丢最旧
+   并计数）、错误统一映射 `LLM_CALL_FAILED`（details 含端点 / 模型 / 关闭码）。
+2. **流式 TTS 客户端**（`tts_stream_client.py`）：CosyVoice 流式 PCM16 分片
+   （tts.start / delta / completed / cancel），消费侧 `aclose` 即发 cancel 并
+   关闭连接（barge-in 安全边界）；参数校验复用批量请求模型；输出分片用既有
+   `pcm16_to_wav` 封装（wire 契约不变）。
+3. **真实 WebSocket 传输**（`stream_transport.py`）：websockets 运行时依赖
+   （uvicorn[standard] 既有，未新增工程依赖），打开超时 / 帧透传 / 对端关闭码
+   观测；仅装配层与探测脚本消费（harness 客户端保持注入面）。
+4. **会话双轨接线**（`realtime_session.py`）：开关开且客户端可用 → 语段起点
+   后台握手（握手窗口音频有界缓冲回放）、partial 为真增量、切段收尾取最终稿
+   进入生成；TTS 逐句流式合成后按既有 `audio_chunk` WAV 契约分片下行。握手
+   失败 / 中途断流 / 收尾失败 / 空音频 → 本会话降级批量（一次告警 + 指标
+   `stream_asr_fallbacks` / `stream_tts_fallbacks`），会话不中断。barge-in 同
+   时取消流式 TTS 连接（生成器 aclose）与生成、取消流式 ASR 句柄；关闭路径
+   双轨连接零残留（任务集合为空）。ready 增 `aec` / `streaming_asr` /
+   `streaming_tts` 能力字段与指标计数。
+5. **预算与计次口径（R4-2 语义不变）**：`VoiceService.open_asr_stream` /
+   `synthesize_stream` 先过分面预算闸（被拒零建连零出站零落行）；ASR 流式连接
+   成功开启计 1 次、收尾（finish / cancel）落 1 行；TTS 每句成功流式合成落 1
+   行，中途取消不落行；开启失败不落行（回退批量后按批量口径独立记账）。
+6. **配置面**：`VOICE_ASR_STREAMING_ENABLED/BASE_URL/MODEL/TIMEOUT_SECONDS`、
+   `VOICE_TTS_STREAMING_ENABLED/BASE_URL/MODEL/TIMEOUT_SECONDS/SAMPLE_RATE_HZ`
+   （全默认关闭；凭据沿用语部分节不重复）、`REALTIME_VOICE_AEC_ENABLED`（ready
+   公告）；`.env.example` / config.md 分节表由生成器重出，conftest 十键硬覆盖；
+   Wizard 经 `VOICE_ASR_` / `VOICE_TTS_` / `REALTIME_VOICE_` 既有前缀自动归组。
+7. **部署探测脚本**（`scripts/probe_voice_streaming.py`）：按生效配置对 ASR /
+   TTS 流式端点做最小握手与一帧往返，输出 PASS / SKIP（未启用 / 无凭据端点）/
+   FAIL（含端点与原因）；不入门禁链，失败则该子项降级、不影响批量主链。
+8. **前端 AEC 与移动端采集**：`getUserMedia` 固定全开 `echoCancellation` /
+   `noiseSuppression` / `autoGainControl` 并回读实际生效值（未生效提示，不阻断）；
+   采集优先 `AudioWorklet`（新增 `realtimeCaptureWorklet.ts` + Vite `?worker&url`
+   模块加载路径，块切分核心 `takeFixedBlocks` 可单测），加载 / 建节点失败回退
+   `ScriptProcessor`（16k PCM16 100ms 帧语义与心跳不变）；后台切换暂停采集、
+   前台 / 点击恢复（WS 会话不重连）；面板展示能力字段与降级态。
+9. **文档**：voice.md（双轨矩阵 / 协议面 / 探测脚本 / 降级与计次口径）、
+   realtime-voice.md（ready 能力字段 / partial 语义 / barge-in 时序 / 失败回退 /
+   AEC 与移动端边界）、config.md（键表说明）、frontend README（采集增强）、
+   LEDGER 本节。
+10. **测试**：`test_voice_stream_clients.py`（21 例：握手 / partial+final /
+    断流 / 超时 / 取消 / 队列溢出 / 心跳 / 非法载荷 / 连接失败）、
+    `test_voice_stream_transport.py`（5 例：回环真实 WS 帧透传 / 关闭码 /
+    连接拒绝）、`test_voice_service_streaming.py`（11 例：双轨门控 / 预算拒绝
+    零建连 / 计次口径 / 取消不落行 / 人格绑定）、`test_realtime_session_streaming.py`
+    （12 例：ready 能力字段 / 流式 partial→final→生成 / 三种失败回退 / 开关关 /
+    流式 TTS 成功与回退 / barge-in 取消双轨 / 关闭零残留）、
+    `test_probe_voice_streaming.py`（5 例：PASS / SKIP / FAIL / 超时受控）；
+    前端 `lib/realtimeCapture.test.ts`（18 例）、
+    `pages/realtime/RealtimeVoicePage.capabilities.test.tsx`（6 例）。全异步、
+    零真网（流式全 fake 传输；传输层用本机回环）、零真实音频设备。
+
+**计量口径（流式连接计次——锁定）**：ASR 流式连接开启成功计 1 次，收尾（finish
+成功 / cancel 干净关闭）落 1 行 `purpose="asr"`；开启失败不落行。TTS 每句流式
+合成成功收尾落 1 行 `purpose="tts"`（与批量句级等价），中途取消不落行。被预算
+拒绝时不建连、不出站、不落行；回退批量后按批量路径独立判定与记账（不重复计数）。
+
+**实测（本机，命令 + 退出码）**：
+- `cd backend && pixi run tests-all` → 0：3034 passed（基线 2980 + 新增 54）。
+- `cd backend && pixi run coverage-gates` → 0：24 组全部 ≥80%（voice 93.5%）。
+- `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0（Success: no issues
+  found in 200 source files）。
+- `cd backend && pixi run gen-examples` → 0（三件套重出，幂等复跑无差异）。
+- 根 `pixi run gates` → 0（注释门 / 同步测试棘轮 / noqa 冻结 / conftest-env
+  216/216 / 沙盒漂移 / 红探针 12 条覆盖 12 文件 / 文档真相 / 断言棘轮 /
+  surface-check / bench 自检与门禁 / api-smoke 自检 / prose-pin）。
+- `cd frontend && pixi run test` → 0：699 passed（基线 675 + 新增 24）；
+  `pixi run coverage` → 0（perFile ≥80%）；`pixi run lint` → 0；
+  `pixi run build` → 0（initial 389.80 KB，未触 1 MB 门）；
+  `pixi run bundle-check` → 0（PASS total=389799 lazy=25）。
+- `cd backend && pixi run python ../scripts/probe_voice_streaming.py` → 0
+  （本机默认关闭：ASR SKIP / TTS SKIP）。
+- `cd backend && pixi run verify-slice -- --with-frontend --slice
+  r4-3-voice-streaming` → 0（证据包 `docs/evidence/r4-3-voice-streaming-<sha8>.json`；
+  本切片无迁移，未跑 SeekDB 真引擎套件）。
+
+**偏离 / 记录**：
+- 流式 TTS 分片在**服务端整句缓冲后**按既有 `audio_chunk` WAV 契约下行（wire /
+  前端解码路径零变更，半句音频永不下发）；句内边收边播需改 wire 契约，留待后续。
+- 流式 ASR 语段起点握手在后台任务执行（音频工人不阻塞）；握手窗口音频进 50 帧
+  有界缓冲回放，超限丢最旧（前导音可能丢失，最终稿仍以完整落定音频为准）。
+- 新增 4 个 harness 源文件已登记红探针（`stream_models` / `stream_transport` /
+  `asr_stream_client` / `tts_stream_client`）。
+- 前端测试基建 `src/test/setup.ts` 将 Testing Library `asyncUtilTimeout` 放宽到
+  5s：覆盖率插桩 + 并行 worker 下懒加载路由首次求值超过 1s 默认等待（曾出现
+  「页面仍在加载态」的假失败；断言强度不变）。
+- `websockets` 未新加入 `pyproject.toml`（随 `uvicorn[standard]` 既有进入运行时，
+  `pixi.lock` 已锁，用户拍板「用既有 websockets 依赖」）；`stream_transport.py`
+  直接导入（缺包即 fail loud）。
+- 未触碰 R4-2 预算语义（仅新增流式接线调用同一闸 / 同一记录器）；无迁移。
+- 复审归主 Agent。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。

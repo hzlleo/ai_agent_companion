@@ -324,6 +324,12 @@ class RealtimeReadyMessageModel(BaseModel):
         asr_enabled: ASR 能力是否可用（不可用时整会话拒绝）。
         tts_enabled: TTS 能力是否可用（False = 仅文本字幕回复）。
         barge_in_enabled: 服务端是否启用打断。
+        aec: 服务端公告的回声消除期望（True = 客户端采集须开启浏览器 AEC；
+            前端据实际生效值展示降级提示，服务端不强制）。
+        streaming_asr: 流式识别通道是否可用（True = 转写走真流式 partial /
+            final；False = 既有节流中途批量转写 + 切段批量转写）。
+        streaming_tts: 流式合成通道是否可用（True = 逐句流式合成；False =
+            既有整句批量合成）。
         vad: 公开的 VAD 参数。
         limits: 公开的会话资源上限。
     """
@@ -338,6 +344,9 @@ class RealtimeReadyMessageModel(BaseModel):
     asr_enabled: bool = Field(description="ASR 可用性")
     tts_enabled: bool = Field(description="TTS 可用性")
     barge_in_enabled: bool = Field(description="打断功能开关")
+    aec: bool = Field(description="回声消除期望（客户端采集须开启 AEC）")
+    streaming_asr: bool = Field(description="流式识别通道可用性")
+    streaming_tts: bool = Field(description="流式合成通道可用性")
     vad: RealtimeVadPublicSettingsModel = Field(description="VAD 参数")
     limits: RealtimeSessionLimitsModel = Field(description="会话资源上限")
 
@@ -553,6 +562,8 @@ class RealtimeVoiceSettings(BaseSettings):
         heartbeat_interval_ms: 心跳建议间隔（ready 公告；服务端按空闲超时
             判定，不强制客户端按该间隔发送）。
         barge_in_enabled: 打断开关（False = 用户新语音不打断播放）。
+        aec_enabled: 回声消除期望公告开关（False = 公告 ``aec=false``，
+            供无 AEC 能力的调试环境显式降级；客户端仍按实际生效值展示）。
         max_sessions: 进程内并发会话上限（超限以 1013 拒绝——进程级，
             多 worker 部署时每进程各自计数）。
     """
@@ -611,6 +622,10 @@ class RealtimeVoiceSettings(BaseSettings):
         default=15000, ge=1000, le=600000, description="心跳建议间隔（毫秒）"
     )
     barge_in_enabled: bool = Field(default=True, description="打断开关")
+    aec_enabled: bool = Field(
+        default=True,
+        description="回声消除期望公告（False = ready 公告 aec=false——无 AEC 调试环境）",
+    )
     max_sessions: int = Field(
         default=2, ge=1, description="进程内并发会话上限（超限 1013 拒绝）"
     )
@@ -694,6 +709,11 @@ class RealtimeSessionMetricsModel(BaseModel):
         audio_chunks_sent: 下行音频分片数。
         interruptions: 打断次数。
         barge_in_acks: 客户端播放清空确认次数。
+        stream_asr_connections: 成功建立的流式识别连接数（流式通道）。
+        stream_asr_fallbacks: 流式识别回退批量次数（握手失败 / 中途断流）。
+        stream_asr_frames_dropped: 流式识别发送队列溢出丢弃的帧数。
+        stream_tts_sentences: 流式合成完成的句数（流式通道）。
+        stream_tts_fallbacks: 流式合成回退批量次数（握手失败 / 中途断流）。
         closed_reason: 关闭原因（未关闭为 None）。
     """
 
@@ -716,6 +736,13 @@ class RealtimeSessionMetricsModel(BaseModel):
     audio_chunks_sent: int = Field(default=0, ge=0, description="下行音频分片数")
     interruptions: int = Field(default=0, ge=0, description="打断次数")
     barge_in_acks: int = Field(default=0, ge=0, description="播放清空确认数")
+    stream_asr_connections: int = Field(default=0, ge=0, description="流式识别连接数")
+    stream_asr_fallbacks: int = Field(default=0, ge=0, description="流式识别回退次数")
+    stream_asr_frames_dropped: int = Field(
+        default=0, ge=0, description="流式识别发送队列丢弃帧数"
+    )
+    stream_tts_sentences: int = Field(default=0, ge=0, description="流式合成完成句数")
+    stream_tts_fallbacks: int = Field(default=0, ge=0, description="流式合成回退次数")
     closed_reason: RealtimeCloseReason | None = Field(default=None, description="关闭原因")
 
 

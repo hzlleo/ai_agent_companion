@@ -330,3 +330,41 @@ export function base64ToBytes(payload: string): Uint8Array {
   }
   return bytes
 }
+
+/**
+ * 定长块切分（纯函数）：把连续采样按 `blockSamples` 切块，返回满块与余量。
+ *
+ * AudioWorklet 采集线程用该函数按块回传（避免每 128 采样一条消息），
+ * 主线程再用 `downsampleTo16k` + `PcmFrameChunker` 保持既有 16k PCM16
+ * 分块与心跳语义。纯 TypedArray 运算，可脱离音频设备单测。
+ *
+ * @param buffer 上次遗留的未满块余量。
+ * @param chunk 新采样（任意长度）。
+ * @param blockSamples 单块采样数（>0）。
+ * @returns 满块列表与新的余量。
+ */
+export function takeFixedBlocks(
+  buffer: Float32Array,
+  chunk: Float32Array,
+  blockSamples: number,
+): { blocks: Float32Array[]; rest: Float32Array } {
+  if (blockSamples <= 0) {
+    return { blocks: [], rest: new Float32Array(buffer) }
+  }
+  const merged = new Float32Array(buffer.length + chunk.length)
+  merged.set(buffer, 0)
+  merged.set(chunk, buffer.length)
+  const blocks: Float32Array[] = []
+  let offset = 0
+  while (merged.length - offset >= blockSamples) {
+    blocks.push(merged.slice(offset, offset + blockSamples))
+    offset += blockSamples
+  }
+  return { blocks, rest: merged.slice(offset) }
+}
+
+/** AudioWorklet 单块回传采样数（48kHz 下约 20ms——消息频率与延迟折中）。 */
+export const CAPTURE_WORKLET_BLOCK_SAMPLES = 1024
+
+/** AudioWorklet 处理器注册名（worklet 文件与主线程共用）。 */
+export const CAPTURE_WORKLET_NAME = 'realtime-capture'

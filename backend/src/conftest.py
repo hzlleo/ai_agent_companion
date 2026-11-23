@@ -280,6 +280,18 @@ os.environ["ASR_DAILY_BUDGET_PERSONA"] = "0"
 # 上传上限（与生产默认同值——字节精确边界测试经 app.state.settings
 # 注入小上限隔离驱动，不依赖本全局值）
 os.environ["VOICE_ASR_MAX_UPLOAD_BYTES"] = "26214400"
+# 流式通道（双轨默认关闭——测试零真实 WebSocket 连接；流式用例经注入
+# fake 传输 / fake 客户端驱动，不依赖这些全局值，但硬覆盖防开发者 shell
+# 导出的真实端点 / 开关泄入裸构造）
+os.environ["VOICE_ASR_STREAMING_ENABLED"] = "false"
+os.environ["VOICE_ASR_STREAMING_BASE_URL"] = "ws://127.0.0.1:8082/v1/realtime"
+os.environ["VOICE_ASR_STREAMING_MODEL"] = "qwen3-asr-flash-realtime"
+os.environ["VOICE_ASR_STREAMING_TIMEOUT_SECONDS"] = "5.0"
+os.environ["VOICE_TTS_STREAMING_ENABLED"] = "false"
+os.environ["VOICE_TTS_STREAMING_BASE_URL"] = "ws://127.0.0.1:9880/realtime"
+os.environ["VOICE_TTS_STREAMING_MODEL"] = "cosyvoice3"
+os.environ["VOICE_TTS_STREAMING_TIMEOUT_SECONDS"] = "10.0"
+os.environ["VOICE_TTS_STREAMING_SAMPLE_RATE_HZ"] = "24000"
 
 # --- 实时语音全双工会话（REALTIME_VOICE_ 前缀 → RealtimeVoiceSettings；
 #     默认关闭 → WS 端点拒绝连接、零音频资源；S3 硬覆盖模式——开发者
@@ -305,6 +317,7 @@ os.environ["REALTIME_VOICE_MAX_SESSION_MS"] = "600000"
 os.environ["REALTIME_VOICE_IDLE_TIMEOUT_MS"] = "60000"
 os.environ["REALTIME_VOICE_HEARTBEAT_INTERVAL_MS"] = "15000"
 os.environ["REALTIME_VOICE_BARGE_IN_ENABLED"] = "true"
+os.environ["REALTIME_VOICE_AEC_ENABLED"] = "true"
 os.environ["REALTIME_VOICE_MAX_SESSIONS"] = "2"
 
 # --- 联网搜索（SEARCH_ 前缀 → WebSearchSettings；默认关闭 → 测试零真实

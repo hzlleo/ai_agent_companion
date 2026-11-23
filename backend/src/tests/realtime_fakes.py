@@ -18,13 +18,18 @@ import asyncio
 import base64
 import json
 from array import array
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 
 from packages.harness.config.models import AsrSettings, TtsSettings, VoiceSettings
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.persona.dtos import PersonaRecordDTO
 from packages.harness.voice.realtime_models import RealtimeVoiceSettings
+from packages.harness.voice.stream_models import (
+    VoiceStreamConnector,
+    VoiceStreamFrameModel,
+    VoiceStreamTransportFace,
+)
 from packages.harness.voice.voice_models import AsrResultModel, TtsResultModel
 from packages.harness.voice.voice_service import VoiceService
 
@@ -276,6 +281,79 @@ class FakeVoiceService(VoiceService):
         self.tts_gate: asyncio.Event | None = None
         self.tts_started = asyncio.Event()
         self.tts_calls: list[str] = []
+        self.stream_asr_enabled = False
+        self.stream_tts_enabled = False
+        self.stream_sample_rate_hz_value = 16000
+        self.asr_stream_error: BusinessException | None = None
+        self.asr_stream_handle: FakeAsrStreamHandle | None = None
+        self.asr_stream_open_calls: list[int] = []
+        self.on_partial_callback: Callable[[str], Awaitable[None]] | None = None
+        self.tts_stream_fragments: list[bytes] = [b"\x01\x00" * 16]
+        self.tts_stream_error: BusinessException | None = None
+        self.tts_stream_calls: list[str] = []
+        self.tts_stream_gate: asyncio.Event | None = None
+        self.tts_stream_started = asyncio.Event()
+
+    @property
+    def streaming_asr_available(self) -> bool:
+        """流式识别可用性（测试旋钮）。"""
+        return self.stream_asr_enabled
+
+    @property
+    def streaming_tts_available(self) -> bool:
+        """流式合成可用性（测试旋钮）。"""
+        return self.stream_tts_enabled
+
+    @property
+    def streaming_tts_sample_rate_hz(self) -> int:
+        """流式合成采样率（测试旋钮）。"""
+        return self.stream_sample_rate_hz_value
+
+    async def open_asr_stream(
+        self,
+        *,
+        sample_rate_hz: int,
+        on_partial: Callable[[str], Awaitable[None]],
+        persona: PersonaRecordDTO | None = None,
+        language: str | None = None,
+        request_id: str | None = None,
+    ) -> FakeAsrStreamHandle:
+        """假流式识别握手（按脚本抛错 / 返回可脚本化句柄）。"""
+        self.asr_stream_open_calls.append(sample_rate_hz)
+        self.on_partial_callback = on_partial
+        if self.asr_stream_error is not None:
+            raise self.asr_stream_error
+        if self.asr_stream_handle is None:
+            self.asr_stream_handle = FakeAsrStreamHandle()
+        return self.asr_stream_handle
+
+    async def push_partial(self, text: str) -> None:
+        """投递一条进行中转写（经握手时登记的会话回调）。"""
+        assert self.on_partial_callback is not None
+        await self.on_partial_callback(text)
+
+    def synthesize_stream(
+        self,
+        text: str,
+        *,
+        persona: PersonaRecordDTO | None = None,
+        speaker: str | None = None,
+        speed: float | None = None,
+        request_id: str | None = None,
+    ) -> AsyncGenerator[bytes, None]:
+        """假流式合成（逐分片产出；可注入门闩 / 故障）。"""
+        self.tts_stream_calls.append(text)
+        self.tts_stream_started.set()
+
+        async def _generate() -> AsyncGenerator[bytes, None]:
+            if self.tts_stream_gate is not None:
+                await self.tts_stream_gate.wait()
+            if self.tts_stream_error is not None:
+                raise self.tts_stream_error
+            for fragment in self.tts_stream_fragments:
+                yield fragment
+
+        return _generate()
 
     async def transcribe(
         self,
@@ -414,3 +492,140 @@ def tts_failure() -> BusinessException:
 async def parked_sleeper(_seconds: float) -> None:
     """挂起型休眠面：只在会话收尾取消时返回（非超时用例零 CPU / 零真实时序）。"""
     await asyncio.sleep(3600)
+
+
+class FakeAsrStreamHandle:
+    """脚本化流式识别连接句柄（喂帧记录 / 收尾结果 / 故障注入 / 取消记录）。"""
+
+    def __init__(self) -> None:
+        self.fed: list[bytes] = []
+        self.cancelled = False
+        self.finished = False
+        self.feed_error: BusinessException | None = None
+        self.finish_error: BusinessException | None = None
+        self.result = AsrResultModel(text="流式转写", language="zh")
+        self.cancel_count = 0
+
+    async def feed(self, pcm16: bytes) -> None:
+        """记录喂入帧（可注入故障）。"""
+        if self.feed_error is not None:
+            raise self.feed_error
+        self.fed.append(pcm16)
+
+    async def finish(self) -> AsrResultModel:
+        """收尾（返回脚本结果 / 注入故障）。"""
+        self.finished = True
+        if self.finish_error is not None:
+            raise self.finish_error
+        return self.result
+
+    async def cancel(self) -> None:
+        """记录取消（幂等计数——泄漏断言面）。"""
+        self.cancelled = True
+        self.cancel_count += 1
+
+    @property
+    def frames_dropped(self) -> int:
+        """发送队列丢弃帧数（fake 恒 0）。"""
+        return 0
+
+
+class FakeStreamTransport:
+    """内存双工语音流传输（背 web 服务端脚本 / 出站记录；零网络）。
+
+    用例经 :meth:`push_event` 投递服务端 JSON 事件，经 :meth:`push_close`
+    模拟对端关闭；出站文本帧按 JSON 解析记录（断言事件形状），空心跳只
+    计数。
+    """
+
+    def __init__(self) -> None:
+        self.inbound: asyncio.Queue[VoiceStreamFrameModel | None] = asyncio.Queue()
+        self.sent: list[VoiceStreamFrameModel] = []
+        self.pings = 0
+        self.closed: tuple[int, str] | None = None
+        self.close_calls = 0
+        self.fail_receive: Exception | None = None
+        self._last_close_code: int | None = None
+
+    @property
+    def last_close_code(self) -> int | None:
+        """最近一次对端关闭码。"""
+        return self._last_close_code
+
+    async def send(self, frame: VoiceStreamFrameModel) -> None:
+        """记录出站帧。"""
+        self.sent.append(frame)
+
+    async def receive(self) -> VoiceStreamFrameModel | None:
+        """取下一帧（None = 对端关闭）。"""
+        if self.fail_receive is not None:
+            raise self.fail_receive
+        return await self.inbound.get()
+
+    async def ping(self) -> None:
+        """计数保活。"""
+        self.pings += 1
+
+    async def close(self, code: int, reason: str) -> None:
+        """记录关闭（幂等——保留首个记录）。"""
+        self.close_calls += 1
+        if self.closed is None:
+            self.closed = (code, reason)
+
+    async def push_event(self, payload: dict[str, Any]) -> None:
+        """投递服务端 JSON 事件。"""
+        await self.inbound.put(
+            VoiceStreamFrameModel(kind="text", text=json.dumps(payload, ensure_ascii=False))
+        )
+
+    async def push_close(self, code: int = 1000) -> None:
+        """模拟对端关闭（记录关闭码后投递 None）。"""
+        self._last_close_code = code
+        await self.inbound.put(None)
+
+    def events(self) -> list[dict[str, Any]]:
+        """出站文本帧解析为事件字典序列。"""
+        return [
+            json.loads(frame.text or "{}") for frame in self.sent if frame.kind == "text"
+        ]
+
+    def events_of(self, event_type: str) -> list[dict[str, Any]]:
+        """按事件类型筛出出站事件。"""
+        return [event for event in self.events() if event.get("type") == event_type]
+
+
+def make_stream_connector(transport: FakeStreamTransport) -> VoiceStreamConnector:
+    """构造单连接 fake 工厂（重复调用返回同一传输——单句 / 单次握手用例）。
+
+    Args:
+        transport: 预置 fake 传输。
+
+    Returns:
+        异步连接工厂。
+    """
+
+    async def _connect() -> VoiceStreamTransportFace:
+        return transport
+
+    return _connect
+
+
+async def wait_until(
+    predicate: Callable[[], bool], *, timeout: float = 2.0, description: str = "条件"
+) -> None:
+    """等待条件成立（事件驱动轮询——零固定 sleep）。
+
+    Args:
+        predicate: 无参谓词。
+        timeout: 兜底超时秒数（测试预算，不参与业务时序）。
+        description: 超时报错描述。
+
+    Raises:
+        AssertionError: 超时仍未成立。
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not predicate():
+        if loop.time() >= deadline:
+            raise AssertionError(f"等待{description}超时")
+        await asyncio.sleep(0)

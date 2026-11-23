@@ -31,10 +31,18 @@
       与跨 worker 近似口径见 docs/backend/voice.md；
     - **用量发射恒不阻断主调用**：记录器异常仅告警（用量是观测面）；
     - **上下文轴**：persona_id / request_id 显式参数优先，缺省读
-      core.context 上下文变量（请求中间件已绑定则自动携带）。
+      core.context 上下文变量（请求中间件已绑定则自动携带）；
+    - **双轨流式通道**：``open_asr_stream`` / ``synthesize_stream`` 在既有
+      批量客户端之外提供真流式面（开关默认关闭；客户端由装配层按
+      ``VOICE_ASR_STREAMING_ENABLED`` / ``VOICE_TTS_STREAMING_ENABLED``
+      构造注入）。计次口径与批量分面同源：ASR 流式连接成功开启计 1 次、
+      收尾落 1 行；TTS 每句成功流式合成计 1 次——被预算拒绝时零建连、
+      零出站；失败不落行（调用方回退批量主链）。
 """
 
 from __future__ import annotations
+
+from collections.abc import AsyncGenerator, Awaitable, Callable
 
 import httpx
 
@@ -46,7 +54,12 @@ from packages.harness.core.time_utils import now_ms
 from packages.harness.persona.dtos import PersonaRecordDTO
 from packages.harness.pools.manager import get_pool_manager
 from packages.harness.voice.asr_client import Qwen3AsrClient
+from packages.harness.voice.asr_stream_client import (
+    AsrStreamClientFace,
+    AsrStreamHandleFace,
+)
 from packages.harness.voice.tts_client import CosyVoiceTtsClient
+from packages.harness.voice.tts_stream_client import TtsStreamClientFace
 from packages.harness.voice.voice_budget import (
     DailyBudgetLimits,
     VoiceBudgetCounter,
@@ -67,6 +80,9 @@ __all__ = [
     "VoiceService",
     "VoiceBudgetCounter",
     "VoiceUsageRecorder",
+    "AsrStreamClientFace",
+    "AsrStreamHandleFace",
+    "TtsStreamClientFace",
     "wire_default_voice_usage_counter",
     "wire_default_voice_usage_recorder",
 ]
@@ -90,6 +106,8 @@ class VoiceService:
         *,
         tts_client: TtsClientFace | None = None,
         asr_client: AsrClientFace | None = None,
+        asr_stream_client: AsrStreamClientFace | None = None,
+        tts_stream_client: TtsStreamClientFace | None = None,
         settings: Settings | None = None,
         usage_recorder: VoiceUsageRecorder | None = None,
         usage_counter: VoiceBudgetCounter | None = None,
@@ -99,6 +117,10 @@ class VoiceService:
         Args:
             tts_client: TTS 客户端（None = 调用时经公共池瞬时构建）。
             asr_client: ASR 客户端（None = 调用时经公共池瞬时构建）。
+            asr_stream_client: 流式 ASR 客户端（None = 流式通道不可用——
+                实时会话回退既有批量转写；装配层经设置开关构造真实客户端）。
+            tts_stream_client: 流式 TTS 客户端（None = 流式通道不可用——
+                实时会话回退既有整句批量合成）。
             settings: Settings（None = config 全局单例）。
             usage_recorder: 用量记录器（None = 未接线——零记录，装配时经
                 wire_default_voice_usage_recorder 绑定）。
@@ -107,6 +129,8 @@ class VoiceService:
         """
         self._tts_client = tts_client
         self._asr_client = asr_client
+        self._asr_stream_client = asr_stream_client
+        self._tts_stream_client = tts_stream_client
         self._settings = settings
         self._usage_recorder = usage_recorder
         self._usage_counter = usage_counter
@@ -267,6 +291,216 @@ class VoiceService:
         return result
 
     # ------------------------------------------------------------------
+    # 流式通道（双轨——开关与客户端可用性双门控；失败由调用方回退批量）
+    # ------------------------------------------------------------------
+
+    @property
+    def streaming_asr_available(self) -> bool:
+        """流式识别通道是否可用（开关 + 客户端注入 + 批量 ASR 启用）。
+
+        Returns:
+            True 表示实时会话可走真流式转写（partial 为真增量）。
+        """
+        settings = self._settings if self._settings is not None else global_settings
+        asr_settings = settings.voice.asr
+        return bool(
+            asr_settings.enabled
+            and asr_settings.streaming_enabled
+            and self._asr_stream_client is not None
+        )
+
+    @property
+    def streaming_tts_available(self) -> bool:
+        """流式合成通道是否可用（开关 + 客户端注入 + 批量 TTS 启用）。
+
+        Returns:
+            True 表示实时会话可按句流式合成。
+        """
+        settings = self._settings if self._settings is not None else global_settings
+        tts_settings = settings.voice.tts
+        return bool(
+            tts_settings.enabled
+            and tts_settings.streaming_enabled
+            and self._tts_stream_client is not None
+        )
+
+    @property
+    def streaming_tts_sample_rate_hz(self) -> int:
+        """流式合成输出 PCM16 采样率（会话层 WAV 封装依据）。
+
+        Returns:
+            配置的采样率（Hz）。
+        """
+        settings = self._settings if self._settings is not None else global_settings
+        return settings.voice.tts.streaming_sample_rate_hz
+
+    async def open_asr_stream(
+        self,
+        *,
+        sample_rate_hz: int,
+        on_partial: Callable[[str], Awaitable[None]],
+        persona: PersonaRecordDTO | None = None,
+        language: str | None = None,
+        request_id: str | None = None,
+    ) -> AsrStreamHandleFace:
+        """建立一条流式识别连接（预算闸先于建连；计量口径见类 docstring）。
+
+        计次口径（锁定，与 R4-2 分面语义一致）：连接**成功开启**计 1 次，
+        用量行在连接收尾（``finish`` 成功或 ``cancel``）时落账；开启失败
+        （握手失败 / 超时）不落行。被预算拒绝时**零建连、零出站**。
+
+        Args:
+            sample_rate_hz: 上行 PCM 采样率（Hz——客户端握手参数）。
+            on_partial: 进行中转写回调（会话层下发 ``partial_transcript``）。
+            persona: 人格记录（用量 persona 绑定）。
+            language: 语言提示（None = settings 缺省 / 端点自动检测）。
+            request_id: 请求追踪 ID（None = 读请求上下文）。
+
+        Returns:
+            已握手的流式识别连接句柄（用量计次包装）。
+
+        Raises:
+            BusinessException: ASR 未启用 / 流式通道未接通（``CONFLICT``）；
+                日预算超限（``RATE_LIMITED``——零建连）；连接 / 握手失败
+                （``LLM_CALL_FAILED``——调用方回退批量）。
+        """
+        settings = self._settings if self._settings is not None else global_settings
+        asr_settings = settings.voice.asr
+        if not asr_settings.enabled:
+            raise BusinessException(
+                code=ErrorCode.CONFLICT,
+                message="语音识别未启用（VOICE_ASR_ENABLED=true 时方可调用）",
+                details={"reason": "asr disabled", "env_flag": "VOICE_ASR_ENABLED"},
+            )
+        client = self._asr_stream_client
+        if client is None or not asr_settings.streaming_enabled:
+            raise BusinessException(
+                code=ErrorCode.CONFLICT,
+                message="流式语音识别通道未接通（VOICE_ASR_STREAMING_ENABLED / 客户端装配）",
+                details={"reason": "asr streaming unavailable", "mode": "streaming"},
+            )
+        effective_language = language if language is not None else asr_settings.language
+        resolved_persona = str(persona.id) if persona is not None else persona_id_var.get()
+        resolved_request_id = request_id if request_id is not None else request_id_var.get()
+        await enforce_daily_budget(
+            purpose="asr",
+            label="ASR 语音识别",
+            limits=DailyBudgetLimits(
+                global_limit=asr_settings.daily_budget_global,
+                persona_limit=asr_settings.daily_budget_persona,
+            ),
+            persona_id=resolved_persona,
+            counter=self._usage_counter,
+            clock=now_ms,
+        )
+        started_ms = now_ms()
+        handle = await client.open(
+            sample_rate_hz=sample_rate_hz,
+            language=effective_language,
+            on_partial=on_partial,
+        )
+        return _StreamAsrUsageHandle(
+            handle,
+            recorder=self._usage_recorder,
+            model_entry=asr_settings.model_entry,
+            persona_id=resolved_persona,
+            request_id=resolved_request_id,
+            started_ms=started_ms,
+        )
+
+    async def synthesize_stream(
+        self,
+        text: str,
+        *,
+        persona: PersonaRecordDTO | None = None,
+        speaker: str | None = None,
+        speed: float | None = None,
+        request_id: str | None = None,
+    ) -> AsyncGenerator[bytes, None]:
+        """流式合成一句文本（逐分片产出 PCM16；预算闸先于建连）。
+
+        计次口径（锁定）：每句流式合成成功计 1 次（与批量句级等价）——
+        仅在分片流正常收尾后落一行 usage；中途取消（barge-in）不落行；
+        被预算拒绝时零建连、零出站。
+
+        Args:
+            text: 待合成文本（1-500 字符——客户端边界校验）。
+            persona: 人格记录（None = 无人格绑定）。
+            speaker: 发音人显式覆盖（None = 人格绑定 / settings 缺省）。
+            speed: 语速显式覆盖（None = 人格绑定 / settings 缺省）。
+            request_id: 请求追踪 ID（None = 读请求上下文）。
+
+        Yields:
+            PCM16 分片（顺序即播放序；采样率见
+            :attr:`streaming_tts_sample_rate_hz`）。
+
+        Raises:
+            BusinessException: TTS 未启用 / 流式通道未接通（``CONFLICT``）；
+                日预算超限（``RATE_LIMITED``——零建连）；参数越界
+                （``VALIDATION_ERROR``）；连接 / 分片失败
+                （``LLM_CALL_FAILED``——调用方回退批量）。
+        """
+        settings = self._settings if self._settings is not None else global_settings
+        tts_settings = settings.voice.tts
+        if not tts_settings.enabled:
+            raise BusinessException(
+                code=ErrorCode.CONFLICT,
+                message="语音合成未启用（VOICE_TTS_ENABLED=true 时方可调用）",
+                details={"reason": "tts disabled", "env_flag": "VOICE_TTS_ENABLED"},
+            )
+        client = self._tts_stream_client
+        if client is None or not tts_settings.streaming_enabled:
+            raise BusinessException(
+                code=ErrorCode.CONFLICT,
+                message="流式语音合成通道未接通（VOICE_TTS_STREAMING_ENABLED / 客户端装配）",
+                details={"reason": "tts streaming unavailable", "mode": "streaming"},
+            )
+        profile = persona.voice_profile if persona is not None else None
+        effective_speaker = speaker if speaker is not None else (
+            profile.speaker if profile is not None else tts_settings.default_speaker
+        )
+        effective_speed = speed if speed is not None else (
+            profile.speed if profile is not None else tts_settings.default_speed
+        )
+        instruct_text = profile.instruct_text if profile is not None else None
+        resolved_persona = str(persona.id) if persona is not None else persona_id_var.get()
+        resolved_request_id = request_id if request_id is not None else request_id_var.get()
+        await enforce_daily_budget(
+            purpose="tts",
+            label="TTS 语音合成",
+            limits=DailyBudgetLimits(
+                global_limit=tts_settings.daily_budget_global,
+                persona_limit=tts_settings.daily_budget_persona,
+            ),
+            persona_id=resolved_persona,
+            counter=self._usage_counter,
+            clock=now_ms,
+        )
+        started_ms = now_ms()
+        stream = client.synthesize_stream(
+            text,
+            speaker=effective_speaker,
+            speed=effective_speed,
+            instruct_text=instruct_text,
+        )
+        try:
+            async for fragment in stream:
+                if fragment:
+                    yield fragment
+        finally:
+            await stream.aclose()
+        await emit_voice_usage(
+            self._usage_recorder,
+            purpose="tts",
+            model_entry=tts_settings.model_entry,
+            provider=_TTS_PROVIDER,
+            persona_id=resolved_persona,
+            request_id=resolved_request_id,
+            ts_ms=started_ms,
+            latency_ms=now_ms() - started_ms,
+        )
+
+    # ------------------------------------------------------------------
     # 内部——客户端解析 / 用量发射
     # ------------------------------------------------------------------
 
@@ -321,3 +555,95 @@ class VoiceService:
                 message="公共池未初始化，请先在 lifespan startup 中调用 pool_manager.start()",
             )
         return manager.get_http_client()
+
+
+class _StreamAsrUsageHandle:
+    """流式识别连接的用量计次包装（连接收尾时落一行 usage）。
+
+    计次口径（锁定）：连接成功开启计 1 次，收尾（``finish`` 成功或
+    ``cancel``）时落一行成功用量；开启失败不经过本包装（不落行）；
+    ``cancel`` 幂等——重复调用不重复记账。
+
+    Args:
+        handle: 已握手的流式识别连接句柄。
+        recorder: 用量记录器（None = 未接线——零记录）。
+        model_entry: 用量行模型条目名。
+        persona_id: 人格 ID（None = 系统调用）。
+        request_id: 请求追踪 ID。
+        started_ms: 连接开启时间（epoch 毫秒——时延计量起点）。
+    """
+
+    __slots__ = (
+        "_handle",
+        "_recorder",
+        "_model_entry",
+        "_persona_id",
+        "_request_id",
+        "_started_ms",
+        "_settled",
+    )
+
+    def __init__(
+        self,
+        handle: AsrStreamHandleFace,
+        *,
+        recorder: VoiceUsageRecorder | None,
+        model_entry: str,
+        persona_id: str | None,
+        request_id: str | None,
+        started_ms: int,
+    ) -> None:
+        self._handle = handle
+        self._recorder = recorder
+        self._model_entry = model_entry
+        self._persona_id = persona_id
+        self._request_id = request_id
+        self._started_ms = started_ms
+        self._settled = False
+
+    async def feed(self, pcm16: bytes) -> None:
+        """追加一帧 PCM16（委托底层连接）。
+
+        Args:
+            pcm16: 16 位小端单声道 PCM 字节。
+        """
+        await self._handle.feed(pcm16)
+
+    async def finish(self) -> AsrResultModel:
+        """提交并等待最终稿（成功后落一行用量）。
+
+        Returns:
+            最终转写结果。
+
+        Raises:
+            BusinessException: 收尾失败（``LLM_CALL_FAILED``——调用方回退批量）。
+        """
+        result = await self._handle.finish()
+        await self._settle()
+        return result
+
+    async def cancel(self) -> None:
+        """取消并关闭连接（落一行用量——连接已成功开启并干净收尾）。"""
+        await self._handle.cancel()
+        await self._settle()
+
+    @property
+    def frames_dropped(self) -> int:
+        """发送队列溢出丢弃的帧数（观测面）。"""
+        return self._handle.frames_dropped
+
+    async def _settle(self) -> None:
+        """落一行成功用量（幂等——首个收尾动作生效）。"""
+        if self._settled:
+            return
+        self._settled = True
+        await emit_voice_usage(
+            self._recorder,
+            purpose="asr",
+            model_entry=self._model_entry,
+            provider=_ASR_PROVIDER,
+            persona_id=self._persona_id,
+            request_id=self._request_id,
+            ts_ms=self._started_ms,
+            latency_ms=now_ms() - self._started_ms,
+        )

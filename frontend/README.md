@@ -89,7 +89,7 @@ frontend/
     │   ├── memories/             # 记忆模块（五页签：情景/策展/会话/检索/梦境）
     │   ├── usage/                # 用量模块（总览瓦片 + 聚合 + 记录表）
     │   └── models/               # 模型注册表模块（条目 + 角色绑定 + 409 守卫流）
-    ├── lib/               # cn / 时间格式化（epoch 毫秒 ↔ datetime-local）
+    ├── lib/               # cn / 时间格式化 / 实时语音（WS 客户端、采集 worklet、播放队列）
     ├── test/              # msw 服务器（四域默认 handlers）+ 共享渲染工具 + 契约漂移门禁（contract/）
     ├── App.tsx            # 路由 + ToastProvider
     └── main.tsx           # 入口（React Query Provider）
@@ -113,6 +113,29 @@ frontend/
 | `pixi run lint` | `tsc --noEmit` + `eslint src/`（strict-type-checked） |
 | `pixi run typecheck` | 仅 `tsc --noEmit` |
 | `pixi run preview` | 本地预览生产包 |
+
+## 实时语音采集与播放（R4-3 增强）
+
+`src/pages/realtime/` + `src/lib/realtimeVoiceClient.ts` / `realtimeAudio.ts` /
+`realtimeCaptureWorklet.ts` 承载全双工语音面板：
+
+- **采集约束（锁定）**：`getUserMedia` 固定请求 `echoCancellation` /
+  `noiseSuppression` / `autoGainControl` 全开；启动后经轨道 `getSettings()`
+  回读实际生效值（`MicrophoneCapture.getCapabilities()`），未生效时面板提示
+  佩戴耳机 / 识别率下降（不阻断会话）。
+- **采集路径**：优先 `AudioWorklet`（`realtimeCaptureWorklet.ts` 经 Vite
+  `?worker&url` 模块化加载，定长块回传；块切分核心 `takeFixedBlocks` 在
+  `realtimeAudio.ts` 内可单测）；模块加载 / 建节点失败回退 `ScriptProcessor`。
+  两条路径输出同为 16kHz PCM16 100ms 帧（既有心跳与后端协议不变）。
+- **移动端边界**：页面后台（`visibilitychange` hidden）暂停采集（断节点 /
+  停轨 / 关上下文，WS 会话不重连）；回到前台自动恢复，浏览器要求手势时由
+  页面点击触发恢复。
+- **能力公告**：`ready` 的 `aec` / `streaming_asr` / `streaming_tts` 字段
+  展示在会话参数行（流式 / 回声消除态）；两条流式通道由后端开关控制，前端
+  无需配置。
+- **工作线程覆盖率**：`realtimeCaptureWorklet.ts` 在音频渲染线程运行、jsdom
+  不执行，按 `vitest.config.ts` 注释排除（其核心逻辑由 `takeFixedBlocks`
+  单测覆盖）。
 
 ## 构建体积基线与门禁（R4-1）
 

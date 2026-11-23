@@ -257,3 +257,31 @@ symbol = "packages.harness.voice.voice_budget:enforce_daily_budget"
 tests = [
     "tests/unit/test_voice_budget.py::TestVoiceBudgetGate::test_tts_persona_exceeded_zero_outbound_zero_usage",
 ]
+
+[[probes]]
+name = "voice-stream-frame-model-removal"
+symbol = "packages.harness.voice.stream_models:VoiceStreamFrameModel"
+tests = [
+    "tests/unit/test_voice_stream_transport.py::test_text_and_binary_frames_round_trip",
+]
+
+[[probes]]
+name = "voice-stream-websocket-connector-removal"
+symbol = "packages.harness.voice.stream_transport:make_websocket_connector"
+tests = [
+    "tests/unit/test_voice_stream_transport.py::test_text_and_binary_frames_round_trip",
+]
+
+[[probes]]
+name = "voice-asr-stream-client-removal"
+symbol = "packages.harness.voice.asr_stream_client:Qwen3AsrStreamClient"
+tests = [
+    "tests/unit/test_voice_stream_clients.py::test_asr_partial_deltas_and_final_settle",
+]
+
+[[probes]]
+name = "voice-tts-stream-client-removal"
+symbol = "packages.harness.voice.tts_stream_client:CosyVoiceStreamClient"
+tests = [
+    "tests/unit/test_voice_stream_clients.py::test_tts_stream_yields_fragments_in_order_and_completes",
+]

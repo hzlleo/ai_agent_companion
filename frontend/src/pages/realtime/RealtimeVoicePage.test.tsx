@@ -86,6 +86,9 @@ const ready: RealtimeDownlinkMessage = {
   asr_enabled: true,
   tts_enabled: true,
   barge_in_enabled: true,
+  aec: true,
+  streaming_asr: true,
+  streaming_tts: true,
   vad: {
     speech_rms_threshold: 0.06,
     silence_rms_threshold: 0.03,

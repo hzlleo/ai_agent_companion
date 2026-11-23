@@ -24,6 +24,10 @@ export default defineConfig({
         'src/test/**',
         'src/main.tsx',
         'src/vite-env.d.ts',
+        // AudioWorklet 处理器在音频渲染线程运行（jsdom 不执行）——模块只做
+        // registerProcessor 注册；块切分核心 takeFixedBlocks 在
+        // realtimeAudio.ts 内被单测覆盖。
+        'src/lib/realtimeCaptureWorklet.ts',
         'src/**/*.test.{ts,tsx}',
         'src/**/__tests__/**',
       ],
