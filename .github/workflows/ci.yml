@@ -156,6 +156,11 @@ jobs:
       - name: Build (tsc + vite build)
         run: cd frontend && pixi run build
 
+      # 产物体积门禁（初始加载 JS ≤1MB 且至少 3 个路由级动态 chunk）。
+      # 复用上一步 dist：bundle-check 不重复构建，只解析 manifest。
+      - name: Bundle budget gate (initial JS <= 1MB, >= 3 lazy chunks)
+        run: cd frontend && pixi run bundle-check
+
   # ─── Tool sandbox: docker 隔离树（独立 pixi 工程） ──────────────────────────
   tool-sandbox:
     name: Tool sandbox (tests + lint + typecheck)

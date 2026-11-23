@@ -49,6 +49,21 @@ describe('App', () => {
     expect(await screen.findByRole('heading', { name: '模型注册表' })).toBeInTheDocument()
   })
 
+  it.each([
+    ['/personas/presets', 'heading', '预设画廊'],
+    ['/personas/new', 'heading', '新建人格'],
+    ['/personas/1/edit', 'heading', '编辑人格'],
+    ['/stickers', 'heading', '表情包库'],
+    ['/canvas', 'heading', '画布'],
+    ['/realtime', 'text', '实时语音会话'],
+  ] as const)('路由 %s 经懒加载渲染页面', async (route, kind, label) => {
+    window.history.replaceState({}, '', route)
+    renderApp()
+    const rendered =
+      kind === 'heading' ? await screen.findByRole('heading', { name: label }) : await screen.findByText(label)
+    expect(rendered).toBeInTheDocument()
+  })
+
   it('未知路由兜底回 /personas', async () => {
     window.history.replaceState({}, '', '/not-exist')
     renderApp()

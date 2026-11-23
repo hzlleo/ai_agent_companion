@@ -20,4 +20,9 @@ export default defineConfig({
   server: {
     port: 5173,
   },
+  build: {
+    // 体积门禁（scripts/check_bundle_budget.mjs）依赖 manifest 区分入口与
+    // 路由级动态 chunk；manifest 输出到 dist/.vite/manifest.json。
+    manifest: true,
+  },
 })
