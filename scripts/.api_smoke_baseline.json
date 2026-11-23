@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "max_ratio": 10.0,
+  "note": "ASGI 进程内只读端点 p50/p95 上限毫秒；门禁只按 p95 × max_ratio 判定；再生成: cd backend && pixi run api-smoke --update",
+  "endpoints": {
+    "GET /api/v1/health": {
+      "p50_ms": 0.534,
+      "p95_ms": 0.651
+    },
+    "GET /api/v1/models/entries": {
+      "p50_ms": 0.578,
+      "p95_ms": 0.648
+    },
+    "GET /api/v1/personas": {
+      "p50_ms": 3.098,
+      "p95_ms": 3.587
+    },
+    "GET /api/v1/canvas?persona_id": {
+      "p50_ms": 3.596,
+      "p95_ms": 5.184
+    }
+  }
+}

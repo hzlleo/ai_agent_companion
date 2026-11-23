@@ -6,7 +6,7 @@
 
 | 路径 | 内容 |
 |---|---|
-| [backend/](backend/README.md) | 后端模块文档（core / config / database / pools / llm / persona / memory / chat / usage / duty / channels / voice / multimodal / tools-sandbox …按模块逐份；safety 审批面规划中暂无文档） |
+| [backend/](backend/README.md) | 后端模块文档（core / config / database / pools / llm / persona / memory / chat / usage / duty / channels / voice / multimodal / tools-sandbox …按模块逐份；safety 审批面规划中暂无文档；性能基线见 [backend/performance.md](backend/performance.md)） |
 | [test-strategy/](test-strategy/README.md) | 测试策略（全异步 / 无真实配置 / 共享资源 / 覆盖率门 / 棘轮门） |
 | [models.md](models.md) | 模型子模组（ModelScope 源清单 / UA 覆写 / lfs 拉取 / 升级流程） |
 | [TASKBOOK_TEMPLATE.md](TASKBOOK_TEMPLATE.md) | 任务书模板（文件白名单 / 机器化 DoD / 六路接线矩阵 / 既有测试改动申报 / 反模式黑名单） |
@@ -35,6 +35,8 @@ Python 标准库，经 backend pixi 环境的 python 执行；基线与允许清
 | `scripts/check_chinese_comments.py` | 注释门（docstring 存在性 + 中文 + 切片/拍板编号残留 + Google 段落提示） | `cd backend && pixi run comment-gates` |
 | `scripts/check_coverage_per_module.py` | 按模块覆盖率门禁（≥80% enforce） | `cd backend && pixi run coverage-gates` |
 | `scripts/export_dto_schemas.py` | 后端 DTO JSON Schema fixture 导出（前端契约漂移门数据源） | `cd backend && pixi run export-dto-schemas` |
+| `scripts/bench_core.py` + `scripts/.bench_baseline.json` | 纯本地微基准：门控 / 关系摘要 / 句切 / VAD / 关系块渲染的 median / p95 基线；`--self-check` 只校验注册表与基线键集，`--gate` 按 median × 10 判红，`--update` 重建基线 | `cd backend && pixi run bench-core` / `--self-check` / `--gate` / `--update` |
+| `scripts/api_smoke.py` + `scripts/.api_smoke_baseline.json` | ASGI 进程内只读端点冒烟（隔离 Settings + 临时 SQLite）：四端点 p50 / p95 基线；`--self-check` 只校验端点与基线键集，`--gate` 按 p95 × 10 判红，`--update` 重建基线；`--gate` 建议在部署机手动跑 | `cd backend && pixi run api-smoke` / `--self-check` / `--gate` / `--update` |
 
 ## 路线图（历史规划——P0 至 P4 已全部落地，保留作交付历程记录）
 

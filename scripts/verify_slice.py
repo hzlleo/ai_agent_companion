@@ -168,7 +168,7 @@ def _base_steps() -> list[SliceStep]:
             cwd=".",
             argv=("pixi", "run", "gates"),
             summary_regex=r"\[prose_pin_check\] 报告完成",
-            description="根工程门禁链（注释 / 棘轮 / noqa / 漂移 / 红探针 / 文档真相 / 断言棘轮 / 导出面 / prose pin）",
+            description="根工程门禁链（注释 / 棘轮 / noqa / 漂移 / 红探针 / 文档真相 / 断言棘轮 / 导出面 / 性能基线（bench self-check+gate / api-smoke self-check） / prose pin）",
         ),
     ]
 
