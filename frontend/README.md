@@ -121,14 +121,18 @@ frontend/
 （gzip 5.30 KB）。完整 chunk 明细、构建耗时与测量口径见
 [docs/backend/performance.md「前端构建产物体积基线（R4-1）」](../docs/backend/performance.md#前端构建产物体积基线r4-1)。
 
+本节的 KB 为十进制换算（字节 ÷ 1000，四舍五入保留两位），与
+performance.md 的字节值一一对应、可复算；gzip 口径同为 Node `zlib.gzipSync`
+（默认参数），与 `scripts/check_bundle_budget.mjs` 的 `measure()` 同工具。
+
 **门禁**：`cd frontend && pixi run build && pixi run bundle-check`——初始加载 JS
 超过 **1 MB** 或动态 chunk 少于 **3** 个即失败；阈值常量只在
 `scripts/check_bundle_budget.mjs`。**触发条件**：初始加载 JS 超过 1 MB 必须继续
 拆分；新增路由页经 `React.lazy` 独立分包（共享壳 `AppShell` / `ToastProvider` /
 令牌门保持 eager），不得为了拆而拆。
 
-决策历史：R3 曾维持单 chunk（717.44 KB / gzip 213.91 KB）；R4-1 依实测改为
-路由级 `lazy()` + 体积门禁，初始加载 JS 降至 389.80 KB。
+决策历史：R3 曾维持单 chunk（717.44 KB / gzip 213.91 KB＝213,912 B）；R4-1 依实测
+改为路由级 `lazy()` + 体积门禁，初始加载 JS 降至 389.80 KB。
 
 ## 开发工作流（与后端联调）
 

@@ -95,12 +95,12 @@
 | R3-2 限流与背压 | QQ 入站有界 / 实时语音 TTS 队列与会话帽 / LLM 日预算闸 / 多 worker 语义 / 最小观测面 / 前端 Node 护栏与构建体积基线（P1×1 + P2×7；复审 6×P2 闭环） | ✅ merged（PR #36；证据 `fe261c9a`；PR body 引用的 `0276c1a5` 为首提交树证据，终态以 `fe261c9a` 为准） |
 | R3-3 性能基线 | `bench_core.py` 6 项纯函数微基准 + `api_smoke.py` 4 端点进程内冒烟 + 门禁链落位（复审 4×P2 闭环；终局复核 7×P2 闭环） | ✅ merged（PR #37 → main `3f313a6`；评审 head `66b14b3`，终态含 `ecb7714`/`ee9381a`；canonical 证据 `16b07c7c`，历史 `bc71f261`） |
 
-| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（PoC 门，Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | ⏳ 待开工（拍板已落档） |
+| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（PoC 门，Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-1 本分支工作区（其余切片待开工） |
 
 **当前分支状态**：
 - main：`3f313a6`（PR#34–#37 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
 - `feat/r3-perf`：R3-3 性能基线，已合并（PR #37），可删除。
-- R4：范围待拍板，未开工。
+- R4：已开工（R4-1 本分支），后续切片待排期。
 - 历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入 main，可删除；工作区 clean。
 
 ## 4. 全部拍板记录（原文语义）
@@ -182,7 +182,8 @@ cd backend && pixi run tests-all            # 全量后端测试（当前 2950 p
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
 cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖/sandbox-drift；当前 mypy 195 文件零问题）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 11 用例（迁移链/并发唯一键/行锁/混合检索）
-cd frontend && pixi run test / coverage / lint / build   # 666 passed（高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
+cd frontend && pixi run test / coverage / lint / build   # 675 passed（高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
+cd frontend && pixi run build && pixi run bundle-check     # 体积门禁（需先 build）；PASS 尾标记 total=389799 lazy=25
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
 根级：pixi run gen-examples（三件套再生成）、pixi run gates
 ```
@@ -1051,8 +1052,9 @@ MATCH = 代码与报告要求一致；已记录偏离 = 实现或口径与报告
    [backend/performance.md](backend/performance.md)「前端构建产物体积基线（R4-1）」。
 3. 任务与 CI：`frontend/pixi.toml` 增 `bundle-check`（读取现有 dist，不重复构建）；
    `.github/workflows/ci.yml` 的 frontend job 在 Build 之后执行 `pixi run bundle-check`。
-4. 测试：新增 PageBoundary 3 例与 App 路由懒加载 6 例；App.test 既有断言均为
-   `findBy*` / `waitFor`，无需同步断言改写；MSW 与页面级测试未改。
+4. 测试：新增 PageBoundary 3 例与 App 路由懒加载 6 例；App.test 既有同步断言
+   均位于同一懒加载页已 `await` 的 `findBy*` 之后（同页后续查询依赖已加载页），
+   无需改写；MSW 与页面级测试未改。
 5. 文档：frontend/README 命令表与构建基线节、performance.md 新基线表、根 README
    性能基线行同步。
 
@@ -1061,16 +1063,53 @@ MATCH = 代码与报告要求一致；已记录偏离 = 实现或口径与报告
 - `cd frontend && pixi run coverage` → 0：perFile ≥80% 全绿（statements 96.02% /
   branches 92.22% / functions 95.58% / lines 96.23%）。
 - `cd frontend && pixi run lint` → 0（tsc --noEmit + eslint）。
-- `cd frontend && pixi run build` → 0：Vite 2.87s（热缓存复跑），产物见下。
+- `cd frontend && pixi run build` → 0：Vite 自报 `✓ built in` 2.41s（暖缓存复跑；
+  同口径拆分前基线 5.96s），产物见下。
 - `cd frontend && pixi run bundle-check` → 0：`[bundle-budget] PASS total=389799 lazy=25`。
 
-**拆分前后（本机同轮实测）**：单 chunk 717,443 B（gzip 214,006 B）→ 初始加载
+**拆分前后（本机同轮实测）**：单 chunk 717,443 B（gzip 213,912 B）→ 初始加载
 389,799 B（gzip 123,614 B）+ 25 个动态 chunk 337,058 B（gzip 109,646 B）；JS 产物
-合计 726,857 B（共享模块拆分开销 +9,414 B）。完整 chunk 表见
+合计 726,857 B（共享模块拆分开销 +9,414 B）。gzip 均为 Node `zlib.gzipSync`
+（默认参数）对产物文件的计算结果（与 `check_bundle_budget.mjs` 的 `measure()`
+同工具），「前」列由 `git archive 01ac640 frontend` 临时树构建后同函数复算。
+完整 chunk 表见
 [backend/performance.md](backend/performance.md)「前端构建产物体积基线（R4-1）」。
 
 **剩余 / 复审**：后端未改动（未复跑后端链）；chunk 明细与构建耗时为同机快照，
 复审归主 Agent。
+
+**复审修复（Oracle 深审 `e1e119b`：符合性 12/12 MATCH、0 violation，4×P2 全为
+文档/注释口径；本条只记录闭环事项，复审结论归主 Agent）**：
+
+1. **gzip 口径统一**：`docs/backend/performance.md` 拆分前后表、本节拆分前后段与
+   `frontend/README.md` 决策历史统一为 Node `zlib.gzipSync`（默认参数）口径（与
+   `check_bundle_budget.mjs` 的 `measure()` 同工具）。「R4-1 前」不再引用旧数字，
+   由 `git archive 01ac640 frontend | tar -x -C /tmp/r4-before`、软链本仓
+   `frontend/node_modules` 与 `.pixi`、在临时树 `pixi run build` 后同函数复算：
+   单 chunk JS 717,443 B → gzip 213,912 B，CSS 23,257 B → gzip 5,276 B（原
+   214,006 B 与 README 213.91 KB 的互斥数字消除；213,912 ÷1000 四舍五入两位＝
+   213.91 KB）。CSS 前后真实差值写明为原始 +56 B、gzip +19 B（5,276 → 5,295）。
+   构建耗时改单一口径：Vite 自报 `✓ built in` 暖缓存复跑，前 5.96s / 后 2.41s；
+   冷启动与热跑不再并列。
+2. **同步断言理由纠正**：App.test 既有同步断言的实际条件是位于同一懒加载页已
+   `await` 的 `findBy*` 之后（同页后续查询依赖已加载页），非「既有断言均为
+   `findBy*`/`waitFor`」；675（基线 666 + 新增 9）与新 9 例事实不变。
+3. **台账数字同步**：§5 门禁命令块前端行改 `675 passed` 并补 `bundle-check` 行；
+   §3 R4 行状态改「🔄 R4-1 本分支工作区（其余切片待开工）」，「当前分支状态」改
+   「R4：已开工（R4-1 本分支），后续切片待排期」。
+4. **脚本头单源口径**：`frontend/scripts/check_bundle_budget.mjs` 头注释改为
+   「阈值常量唯一来源；文档可引用数值，不复写判定逻辑」，与 performance.md 阈值
+   节措辞一致，删除「不得在别处复写数值」的绝对句。
+
+修复后复跑（本机，命令 + 退出码）：
+
+```
+cd frontend && pixi run build && pixi run bundle-check   # 0；[bundle-budget] PASS total=389799 lazy=25
+cd frontend && pixi run test                             # 0；86 files / 675 passed
+根 pixi run gates                                        # 0；全链 exit 0（含文档真相/prose-pin 尾标记）
+```
+
+gzip 复算命令（对任一产物目录）：`node -e 'const {gzipSync}=require("node:zlib"),{readFileSync}=require("node:fs");console.log(gzipSync(readFileSync("<file>")).length)'`。
 
 ## 6. 遗留与部署台账（非阻塞）
 
