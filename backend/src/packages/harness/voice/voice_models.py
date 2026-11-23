@@ -155,7 +155,8 @@ class VoiceUsageEvent(BaseModel):
     Attributes:
         ts_ms: 调用发起时间（epoch 毫秒）。
         persona_id: 人格 ID（None = 系统调用——无人格上下文）。
-        purpose: 调用用途（恒 ``tts`` / ``asr``——usage 域枚举既有成员）。
+        purpose: 调用用途（``tts`` / ``asr`` / ``voiceprint``——usage 域
+            枚举成员）。
         model_entry: 模型条目名（settings.voice.tts/asr.model_entry）。
         provider: provider 类型（``cosyvoice`` / ``qwen3-asr``）。
         latency_ms: 端到端时延毫秒（含失败耗时）。

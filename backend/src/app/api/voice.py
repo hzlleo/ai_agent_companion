@@ -50,6 +50,7 @@ from packages.harness.persona.service import PersonaService
 from packages.harness.voice.voice_models import AsrResultModel, VoiceTtsRequestDTO
 from packages.harness.voice.voice_service import (
     VoiceService,
+    wire_default_voice_usage_counter,
     wire_default_voice_usage_recorder,
 )
 
@@ -58,7 +59,10 @@ router = APIRouter(prefix="/api/v1/voice", tags=["voice"])
 #: 人格服务实例（无状态——Session 逐请求注入，服务可安全共享）。
 persona_service = PersonaService()
 #: 语音服务实例（客户端调用时经公共池瞬时构建；用量默认接线）。
-voice_service = VoiceService(usage_recorder=wire_default_voice_usage_recorder())
+voice_service = VoiceService(
+    usage_recorder=wire_default_voice_usage_recorder(),
+    usage_counter=wire_default_voice_usage_counter(),
+)
 
 
 async def _resolve_persona(

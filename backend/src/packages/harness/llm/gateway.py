@@ -962,21 +962,23 @@ def wire_default_usage_recorder() -> UsageRecorder:
 def wire_default_usage_counter() -> UsageCounter:
     """装配默认预算计数面（绑定 usage 域查询——app 装配调用）。
 
-    计数口径 = 当日 UTC 日桶内的 usage 行（全 purpose、含失败行）：
-    本闸是模型调用总量闸，TTS / ASR / voiceprint 的独立预算不在本批
-    （边界见 docs/backend/llm.md）。跨 worker 各自查询同一张表，结果
-    近似全局一致（软竞态：并发请求可能同时通过同一剩余额度）。
+    计数口径 = 当日 UTC 日桶内的 **LLM 用途** usage 行（chat / duty /
+    dream / look_at / embed / tool；含失败行）：TTS / ASR / voiceprint /
+    search 各自独立预算，不占用本闸（边界见 docs/backend/llm.md）。
+    跨 worker 各自查询同一张表，结果近似全局一致（软竞态：并发请求可能
+    同时通过同一剩余额度）。
 
     Returns:
         ``(persona_id, day_start_ms) → 当日行数`` 的异步计数器。
     """
     from packages.harness.usage.dtos import UsageQueryDTO
+    from packages.harness.usage.models import LLM_BUDGET_PURPOSES
     from packages.harness.usage.service import UsageService
 
     service = UsageService()
 
     async def _count(persona_id: str | None, day_start_ms: int) -> int:
-        """游标分页统计当日行数（页数安全上限防异常膨胀）。"""
+        """游标分页统计当日 LLM 用途行数（页数安全上限防异常膨胀）。"""
         total = 0
         cursor: str | None = None
         for _ in range(_BUDGET_COUNT_PAGE_CAP):
@@ -984,6 +986,7 @@ def wire_default_usage_counter() -> UsageCounter:
                 UsageQueryDTO(
                     persona_id=persona_id,
                     start_ms=day_start_ms,
+                    purposes=tuple(LLM_BUDGET_PURPOSES),
                     cursor=cursor,
                     limit=_BUDGET_COUNT_PAGE_LIMIT,
                 )

@@ -82,6 +82,7 @@ from packages.harness.persona.service import PersonaService, bind_persona_contex
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
 from packages.harness.voice.voice_service import (
     VoiceService,
+    wire_default_voice_usage_counter,
     wire_default_voice_usage_recorder,
 )
 
@@ -321,7 +322,10 @@ async def run_chat_cli(
             resolved_voice_service = (
                 voice_service
                 if voice_service is not None
-                else VoiceService(usage_recorder=wire_default_voice_usage_recorder())
+                else VoiceService(
+                    usage_recorder=wire_default_voice_usage_recorder(),
+                    usage_counter=wire_default_voice_usage_counter(),
+                )
             )
         else:
             voice_disabled_hint = True

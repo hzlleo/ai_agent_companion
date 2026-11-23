@@ -33,6 +33,10 @@ from app.api.reminders import resolve_target_persona
 from packages.harness.core.dtos import ResultDTO
 from packages.harness.database.session import get_async_db
 from packages.harness.persona.service import bind_persona_context
+from packages.harness.voice.voice_budget import (
+    wire_default_voice_usage_counter,
+    wire_default_voice_usage_recorder,
+)
 from packages.harness.voice.voiceprint_models import (
     VoiceprintConsentGrantDTO,
     VoiceprintConsentRecordDTO,
@@ -50,7 +54,10 @@ from packages.harness.voice.voiceprint_service import VoiceprintService
 router = APIRouter(prefix="/api/v1/voiceprints", tags=["voiceprints"])
 
 #: 声纹服务实例（无状态——Session 逐请求注入，服务可安全共享）。
-voiceprint_service = VoiceprintService()
+voiceprint_service = VoiceprintService(
+    usage_recorder=wire_default_voice_usage_recorder(),
+    usage_counter=wire_default_voice_usage_counter(),
+)
 
 @router.get("/notice", response_model=ResultDTO[VoiceprintPrivacyNoticeDTO])
 async def get_privacy_notice() -> ResultDTO[VoiceprintPrivacyNoticeDTO]:

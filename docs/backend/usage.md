@@ -1,6 +1,6 @@
 # usage — token 用量域（含管理 API）
 
-`backend/src/packages/harness/usage/` 承载 token 用量记账：LLM / 辅助端点每次调用一行记录（成功 / 失败均落账），管理面多维聚合（按条目 / 用途 / 时间桶）。表名 `ff_usage_records`（本工程 `ff_` 前缀约定）。
+`backend/src/packages/harness/usage/` 承载 token 用量记账：LLM / 辅助端点每次调用一行记录（LLM 成功 / 失败均落账；语音与声纹仅**成功**调用落账，见「分面日预算」），管理面多维聚合（按条目 / 用途 / 时间桶）。表名 `ff_usage_records`（本工程 `ff_` 前缀约定）。
 
 ## 模块一览
 
@@ -51,10 +51,64 @@ llm 网关调用（chat_by_role / chat_for_entry / stream_by_role）
 
 ## 值域
 
-- `UsagePurpose`：`chat` / `duty` / `dream` / `look_at` / `embed`（与 config.ModelRole 一一对应）+ `tts` / `asr` / `tool`（语音与工具面已接线——tts / asr 经 voice 域 `wire_default_voice_usage_recorder` 默认接线落账；`tool` 为工具循环调用面的 purpose 值域成员，duty 工具循环当前按 `duty` 用途归账）+ `search`（联网搜索面——Bocha / Zhipu provider 链路按**调用行计数**预算，token 恒 0/0/0，成本经 `model_entry=provider 条目名` + `provider=kind` 维度观测；单次调用成本估算以 provider 计价页为准——Bocha web-search 与 Zhipu search_std 均为按次计费、无 token 计量，代码不硬编码价格）；
+- `UsagePurpose`：`chat` / `duty` / `dream` / `look_at` / `embed`（与 config.ModelRole 一一对应）+ `tts` / `asr` / `voiceprint`（语音与声纹面——tts / asr 经 voice 域 `wire_default_voice_usage_recorder` 接线，voiceprint 经同一接线记录声纹向量提取）+ `tool`（工具循环调用面的 purpose 值域成员，duty 工具循环当前按 `duty` 用途归账）+ `search`（联网搜索面——Bocha / Zhipu provider 链路按**调用行计数**预算，token 恒 0/0/0，成本经 `model_entry=provider 条目名` + `provider=kind` 维度观测；单次调用成本估算以 provider 计价页为准——Bocha web-search 与 Zhipu search_std 均为按次计费、无 token 计量，代码不硬编码价格）；
 - `UsageStatus`：`success` / `error`；
 - `UsageGroupBy`：`model_entry` / `purpose` / `time_bucket`；
 - `UsageTimeBucket`：`minute`（60_000ms）/ `hour`（3_600_000ms）/ `day`（86_400_000ms）——桶起点 = `floor(ts_ms / 桶宽) * 桶宽`（跨方言经 `floor` 归一整数除法语义）；**时间桶起点按 UTC 对齐**（epoch 毫秒整除口径，`day` 桶边界为 UTC 零点——与本地日界无关；如需按本地日界切桶再议）。
+
+## 分面日预算（ASR / TTS / voiceprint）
+
+**配置键**（三组独立分面，0 = 不限；有效上限 10,000——计数页帽 50×200，
+配置层 `le=10_000` 拒绝更大值）：
+
+| 分面 | 全局档 env | 人格档 env | 配置类 |
+|---|---|---|---|
+| TTS 语音合成 | `TTS_DAILY_BUDGET_GLOBAL` | `TTS_DAILY_BUDGET_PERSONA` | `TtsSettings`（`VOICE_TTS_` 分节） |
+| ASR 语音识别 | `ASR_DAILY_BUDGET_GLOBAL` | `ASR_DAILY_BUDGET_PERSONA` | `AsrSettings`（`VOICE_ASR_` 分节） |
+| 声纹向量提取 | `VOICEPRINT_DAILY_BUDGET_GLOBAL` | `VOICEPRINT_DAILY_BUDGET_PERSONA` | `VoiceprintSettings`（`VOICEPRINT_` 分节） |
+
+**计量单位与口径**：每次真实出站调用按 **1 次**计量——TTS 每句 / 每次合成
+请求 1 行、ASR 每次转写（含实时语音的切段 / 中途转写）1 行、声纹每个样本
+向量提取 / 每次校验 1 行；persona 上下文存在时写 `persona_id`，系统调用为
+NULL。**仅成功后写 usage 行**：出站失败不记、被预算拒绝的调用不记（不消耗
+预算、不自我强化耗尽）；token 三列恒 0（语音与向量提取无 token 语义），
+`model_entry` / `provider` / `latency_ms` 保留观测价值。既有 LLM 记账语义
+不变（成功 / 失败均落账）。
+
+**闸门位置与错误**：各出站客户端调用之前判定（persona 档先行、global 档
+其后；实时语音的逐段 ASR / 逐句 TTS 与声纹注册 / 校验逐次调用同样受控）。
+超限抛既有 `RATE_LIMITED`（429），`details` 形如：
+
+```json
+{
+  "scope": "persona",
+  "used": 20,
+  "limit": 20,
+  "purpose": "asr",
+  "persona_id": "persona-feiyu"
+}
+```
+
+被拒调用零出站、零 usage 行；`details` 不含音频 / 文本原文。两档均 0 时
+**不发起计数查询**。`persona_id` 缺失（系统调用）只受 global 档约束。
+
+**计数查询与软竞态**：计数经 usage 表查询（UTC 日桶、按 purpose + `status=success` 强制过滤
+——LLM / search / 其它分面行与历史失败行不计入；`UsageQueryDTO.purpose` 为分面过滤轴，
+`purposes` 集合轴供 LLM 总量闸收窄用途）。跨 worker 各自查询同一张表，结果
+**近似**全局一致：并发请求可能同时读到同一剩余额度并同时放行（最多超出
+并发数条）；逐条强一致需要 Redis 式原子计数，本工程 NO Redis 决策下不引入。
+计数查询异常按普通业务异常上抛（fail loud，不静默放行）。
+
+**实时语音会话中途超限**：该句 / 该段受控失败并下行可恢复 `error`
+（`code=RATE_LIMITED`），会话状态回到聆听继续服务——不关闭连接、不中断
+后续语段（见 [realtime-voice.md](realtime-voice.md)）。**声纹批量注册中途
+超限**：整体回滚本批已写样本文件与样本行（沿用校验失败回滚语义），已成功
+完成的出站调用各留一行用量（真实成本已发生）。
+
+**示例（运维核对）**：`TTS_DAILY_BUDGET_GLOBAL=500` 表示当日全部人格合计
+最多 500 次成功 TTS 合成；`TTS_DAILY_BUDGET_PERSONA=100` 表示单人格最多
+100 次。`ASR_*` / `VOICEPRINT_*` 同构、互不占用。管理面可按
+`purpose=tts|asr|voiceprint` 过滤 records / aggregates 核对当日消耗。
 
 ## UsageService API
 

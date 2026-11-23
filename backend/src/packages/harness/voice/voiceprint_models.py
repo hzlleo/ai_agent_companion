@@ -134,6 +134,11 @@ class VoiceprintSettings(BaseSettings):
         max_batch_samples: 单次注册请求的样本条数上限（资源面守卫）。
         retention_days: 样本 / 向量最长保存天数（到期由服务层清理）。
         storage_dir: 样本文件落盘根目录（相对路径按进程工作目录解析）。
+        daily_budget_global: 全局每日声纹向量提取调用数上限（0 = 不限；
+            有效上限 10,000——计数页帽 50 × 每页 200 行；按 usage 行
+            计数，跨 worker 近似一致——软竞态）。
+        daily_budget_persona: 单人格每日声纹向量提取调用数上限（0 =
+            不限；有效上限 10,000；仅人格上下文调用受此档约束）。
     """
 
     enabled: bool = Field(default=False, description="是否启用声纹识别")
@@ -176,6 +181,24 @@ class VoiceprintSettings(BaseSettings):
     )
     storage_dir: str = Field(
         default="data/voiceprints", min_length=1, description="样本文件落盘根目录"
+    )
+    daily_budget_global: int = Field(
+        default=0,
+        ge=0,
+        le=10_000,
+        description=(
+            "全局每日声纹向量提取调用数上限（0 = 不限；有效上限 10,000——"
+            "计数页帽 50×200；按 usage 行计数，跨 worker 近似一致）"
+        ),
+    )
+    daily_budget_persona: int = Field(
+        default=0,
+        ge=0,
+        le=10_000,
+        description=(
+            "单人格每日声纹向量提取调用数上限（0 = 不限；有效上限 10,000——"
+            "计数页帽 50×200；仅人格上下文调用受约束）"
+        ),
     )
 
     model_config = SettingsConfigDict(

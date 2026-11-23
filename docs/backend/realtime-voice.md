@@ -241,7 +241,15 @@ VoiceService.synthesize → CosyVoice（整句 WAV）
 | ASR 调用失败 | `LLM_CALL_FAILED` | true（回聆听，会话保留） |
 | 回复生成失败 | `LLM_CALL_FAILED` | true（回聆听，会话保留） |
 | TTS 单句失败 | `LLM_CALL_FAILED` | true（跳过该句，后续句继续） |
+| 会话中途 ASR 日预算超限 | `RATE_LIMITED` | true（该段受控失败，回聆听，会话保留） |
+| 会话中途 TTS 日预算超限 | `RATE_LIMITED` | true（跳过该句，会话与后续轮次继续） |
 | 引擎意外异常 | `INTERNAL_ERROR` | false（随后 `closed(internal_error)`） |
+
+分面日预算（`ASR_DAILY_BUDGET_*` / `TTS_DAILY_BUDGET_*`）在每次出站
+转写 / 合成前判定：会话中途超限不会关闭连接，也不会中断在途轮次——
+ASR 段按可恢复 `error` 收尾并回到聆听；TTS 句按可恢复 `error` 跳过并
+继续后续句 / 轮次。0 = 不限且零计数查询；单位 / 软竞态 / details 形状见
+[usage.md](usage.md#分面日预算asr--tts--voiceprint)。
 
 ## 配置（`REALTIME_VOICE_` env 面，默认关闭）
 
@@ -311,7 +319,7 @@ VOICE_TTS_ENABLED=true
 - VAD：单帧不触发 / 防抖起说 / 静音切段 / 短语音丢弃 / 句中停顿不切分 / 单段强制 / 冲刷 / 多段序列；
 - 状态机：合法边矩阵穷举 / 关闭事件全相位 / 非法边 / 吸收态 / 规则唯一性；
 - 句切与音频：标点保留 / 收尾符号 / 长度上限与停顿优先 / 硬切 / 流式累积；能量 / WAV 容器 / 分片拼接 / 时长；
-- 会话端到端：ready 字段、完整轮次（转写 → 文本 → 音频 → 回聆听）、中途转写节流、强制切段、手动 / VAD 打断（任务集合清空、无泄漏）、打断关闭态、转写任务挂起时 VAD 打断仍生效、关闭取消挂起转写、背压丢最旧块、TTS 队列溢满丢最旧句与关闭清零、超限音频块拒绝后会话继续、空闲 / 最大时长、end 尾段冲刷、end 排空被关闭事件抢占、关闭 wire 顺序（state(closed) → closed）、ASR / 生成 / TTS 失败可恢复、TTS 关闭降级、传输断开、心跳应答、协议对称性、真实 `ChatService` 适配；WS 准入并发帽（两连通过 / 第三连 1013 / 结束释放后新连可用）；
+- 会话端到端：ready 字段、完整轮次（转写 → 文本 → 音频 → 回聆听）、中途转写节流、强制切段、手动 / VAD 打断（任务集合清空、无泄漏）、打断关闭态、转写任务挂起时 VAD 打断仍生效、关闭取消挂起转写、背压丢最旧块、TTS 队列溢满丢最旧句与关闭清零、超限音频块拒绝后会话继续、空闲 / 最大时长、end 尾段冲刷、end 排空被关闭事件抢占、关闭 wire 顺序（state(closed) → closed）、ASR / 生成 / TTS 失败可恢复、ASR / TTS 会话中途预算超限可恢复（`RATE_LIMITED`）、TTS 关闭降级、传输断开、心跳应答、协议对称性、真实 `ChatService` 适配；WS 准入并发帽（两连通过 / 第三连 1013 / 结束释放后新连可用）；
 - 端点：路由挂载、总闸 / 鉴权 / 人格解析拒绝面、真实人格与聊天会话落库、传输适配（文本 / 二进制 / 断开 / 幂等关闭）。
 
 前端：`api/realtimeVoice.test.ts`、`lib/realtimeAudio.test.ts`、`lib/realtimeVoiceClient.test.ts`、`pages/realtime/RealtimeVoicePage.test.tsx`。

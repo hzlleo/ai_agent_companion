@@ -1,0 +1,2 @@
+✨ Pixi task (typecheck in default): mypy src/: (mypy 静态类型检查（严格模式）)
+Success: no issues found in 196 source files

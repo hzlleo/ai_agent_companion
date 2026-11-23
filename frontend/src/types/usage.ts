@@ -20,6 +20,7 @@ export type UsagePurpose =
   | 'embed'
   | 'tts'
   | 'asr'
+  | 'voiceprint'
   | 'tool'
 
 /** 调用结果值域。 */
@@ -117,6 +118,8 @@ export interface UsageFilterParams {
   model_entry?: string
   /** 调用用途过滤（undefined = 全用途）。 */
   purpose?: UsagePurpose
+  /** 多用途过滤集合（与 purpose 互斥使用；undefined = 不按集合过滤）。 */
+  purposes?: UsagePurpose[]
   /** 调用结果过滤（undefined = 全状态）。 */
   status?: UsageStatus
   /** 范围起点（epoch 毫秒，含）。 */

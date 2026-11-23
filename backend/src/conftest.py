@@ -268,11 +268,15 @@ os.environ["VOICE_TTS_MODEL_ENTRY"] = "cosyvoice3"
 os.environ["VOICE_TTS_REQUEST_TIMEOUT_SECONDS"] = "30"
 os.environ["VOICE_TTS_DEFAULT_SPEAKER"] = "中文女"
 os.environ["VOICE_TTS_DEFAULT_SPEED"] = "1.0"
+os.environ["TTS_DAILY_BUDGET_GLOBAL"] = "0"
+os.environ["TTS_DAILY_BUDGET_PERSONA"] = "0"
 os.environ["VOICE_ASR_ENABLED"] = "false"
 os.environ["VOICE_ASR_BASE_URL"] = "http://127.0.0.1:8082"
 os.environ["VOICE_ASR_MODEL_ENTRY"] = "qwen3-asr-0.6b"
 os.environ["VOICE_ASR_REQUEST_TIMEOUT_SECONDS"] = "60"
 os.environ["VOICE_ASR_LANGUAGE"] = ""
+os.environ["ASR_DAILY_BUDGET_GLOBAL"] = "0"
+os.environ["ASR_DAILY_BUDGET_PERSONA"] = "0"
 # 上传上限（与生产默认同值——字节精确边界测试经 app.state.settings
 # 注入小上限隔离驱动，不依赖本全局值）
 os.environ["VOICE_ASR_MAX_UPLOAD_BYTES"] = "26214400"
@@ -371,6 +375,8 @@ os.environ["VOICEPRINT_MAX_UPLOAD_BYTES"] = "10485760"
 os.environ["VOICEPRINT_MAX_BATCH_SAMPLES"] = "20"
 os.environ["VOICEPRINT_RETENTION_DAYS"] = "365"
 os.environ["VOICEPRINT_STORAGE_DIR"] = "data/voiceprints"
+os.environ["VOICEPRINT_DAILY_BUDGET_GLOBAL"] = "0"
+os.environ["VOICEPRINT_DAILY_BUDGET_PERSONA"] = "0"
 
 # --- 表情包库（STICKER_ 前缀 → StickerSettings；默认关闭 → 测试零文件落盘
 #     / 零通道桥副作用；S3 硬覆盖模式——裸构造 StickerSettings() 与 app 级

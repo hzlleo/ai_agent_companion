@@ -458,8 +458,10 @@ prompt_logprobs；端点未回传 / 旧端点缺失时对应字段为 ``None``�
 条目门控 / 传输之前；embed 在角色解析之前）；
 超限抛既有 `RATE_LIMITED`（429），`details` 含 `scope` / `used` / `limit`（persona
 档另含 `persona_id`），且**不落用量行**（被预算拒绝的调用不计入预算，避免自我
-强化耗尽）。计数口径为当日 UTC 日桶内的 usage 行（全 purpose，含失败行）——本闸
-是模型调用总量闸；`persona_id` 缺失（系统调用）只受 global 档约束。
+强化耗尽）。计数口径为当日 UTC 日桶内的 **LLM 用途** usage 行（chat / duty /
+dream / look_at / embed / tool；含失败行）——ASR / TTS / voiceprint / search 各自
+独立预算，不占用本闸（见 [usage.md](usage.md#分面日预算asr--tts--voiceprint)）；
+`persona_id` 缺失（系统调用）只受 global 档约束。
 
 **有效上限 10,000**（两档同）：计数走 usage 游标分页，页帽 50 × 每页 200 = 10,000 行
 封顶——配置层以 `le=10_000` 拒绝更大值，避免「预算永远不会触发」的静默失效。
@@ -469,9 +471,9 @@ prompt_logprobs；端点未回传 / 旧端点缺失时对应字段为 ``None``�
 超出并发数条）。预算不是计费级精确配额；逐条强一致需要 Redis 式原子计数，本工
 程 NO Redis 决策下不引入。计数查询异常按普通业务异常上抛（fail loud，不静默放行）。
 
-**今后扩展工作台（本批未实现）**：ASR / TTS / voiceprint 的独立预算不在本批——
-它们与 LLM 调用共用全 purpose 计数口径（见 LEDGER §6 边界记录）；需要分面预算时
-在 usage 域按 purpose 增加过滤面即可，不改变本闸语义。
+**分面边界（R4-2 起）**：LLM 计数经 `LLM_BUDGET_PURPOSES` 收窄到模型调用用途；
+ASR / TTS / voiceprint 由 voice 域独立闸按 purpose 计数，二者双向隔离（LLM 行不计入
+语音预算，语音行也不计入 LLM 预算）。计数分页页帽与 10,000 有效上限口径一致。
 
 **慢调用观测**：成功调用时延 ≥ `SLOW_CALL_WARN_MS`（代码常量 10s）落一条 WARN，
 字段为 `entry` / `model` / `purpose` / `latency_ms`（不打印消息内容）。仅观测，

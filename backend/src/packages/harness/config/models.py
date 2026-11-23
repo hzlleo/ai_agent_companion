@@ -1106,6 +1106,11 @@ class TtsSettings(BaseSettings):
         default_speaker: 缺省发音人（无人格 voice_profile 绑定时的回落
             值——CosyVoice 预置 speaker 名）。
         default_speed: 缺省语速（0.5-2.0；1.0 为自然语速）。
+        daily_budget_global: 全局每日 TTS 合成调用数上限（0 = 不限；
+            有效上限 10,000——计数页帽 50 × 每页 200 行；按 usage 行
+            计数，跨 worker 近似一致——软竞态）。
+        daily_budget_persona: 单人格每日 TTS 合成调用数上限（0 = 不限；
+            有效上限 10,000；仅人格上下文调用受此档约束）。
     """
 
     enabled: bool = Field(default=False, description="是否启用 TTS 语音合成")
@@ -1122,12 +1127,33 @@ class TtsSettings(BaseSettings):
         default="中文女", min_length=1, description="缺省发音人（CosyVoice 预置 speaker）"
     )
     default_speed: float = Field(default=1.0, ge=0.5, le=2.0, description="缺省语速（0.5-2.0）")
+    daily_budget_global: int = Field(
+        default=0,
+        ge=0,
+        le=10_000,
+        validation_alias="TTS_DAILY_BUDGET_GLOBAL",
+        description=(
+            "全局每日 TTS 合成调用数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"
+            "按 usage 行计数，跨 worker 近似一致）"
+        ),
+    )
+    daily_budget_persona: int = Field(
+        default=0,
+        ge=0,
+        le=10_000,
+        validation_alias="TTS_DAILY_BUDGET_PERSONA",
+        description=(
+            "单人格每日 TTS 合成调用数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"
+            "仅人格上下文调用受约束）"
+        ),
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="VOICE_TTS_",
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
 
@@ -1148,6 +1174,11 @@ class AsrSettings(BaseSettings):
         max_upload_bytes: ASR 上传请求体大小上限（字节；25MB 量级——
             音频载荷体积天然大于截图，与 look_at 图像 10MB 上限同为
             资源面守卫但量级不同）。
+        daily_budget_global: 全局每日 ASR 转写调用数上限（0 = 不限；
+            有效上限 10,000——计数页帽 50 × 每页 200 行；按 usage 行
+            计数，跨 worker 近似一致——软竞态）。
+        daily_budget_persona: 单人格每日 ASR 转写调用数上限（0 = 不限；
+            有效上限 10,000；仅人格上下文调用受此档约束）。
     """
 
     enabled: bool = Field(default=False, description="是否启用 ASR 语音识别")
@@ -1169,12 +1200,33 @@ class AsrSettings(BaseSettings):
         description="ASR 上传请求体上限（字节；25MB 量级——音频体积天然大于截图，"
         "与 look_at 图像 10MB 上限同为资源面守卫）",
     )
+    daily_budget_global: int = Field(
+        default=0,
+        ge=0,
+        le=10_000,
+        validation_alias="ASR_DAILY_BUDGET_GLOBAL",
+        description=(
+            "全局每日 ASR 转写调用数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"
+            "按 usage 行计数，跨 worker 近似一致）"
+        ),
+    )
+    daily_budget_persona: int = Field(
+        default=0,
+        ge=0,
+        le=10_000,
+        validation_alias="ASR_DAILY_BUDGET_PERSONA",
+        description=(
+            "单人格每日 ASR 转写调用数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"
+            "仅人格上下文调用受约束）"
+        ),
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="VOICE_ASR_",
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     @field_validator("language", mode="before")
