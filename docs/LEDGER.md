@@ -179,11 +179,11 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 3125 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 3268 passed）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
-cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖 220/220/sandbox-drift；当前 mypy 204 文件零问题）
+cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖 228/228/sandbox-drift；当前 mypy 210 文件零问题）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 11 用例（迁移链/并发唯一键/行锁/混合检索）
-cd frontend && pixi run test / coverage / lint / build   # 675 passed（高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
+cd frontend && pixi run test / coverage / lint / build   # 702 passed（build 2.52s；高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
 cd frontend && pixi run build && pixi run bundle-check     # 体积门禁（需先 build）；PASS 尾标记 total=389799 lazy=25
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
 根级：pixi run gen-examples（三件套再生成）、pixi run gates
@@ -1550,7 +1550,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
   surface-check 42/42 / bench 自检与门禁 / api-smoke 自检 / prose-pin）。
 - 红探针 `pixi run red-probe --all` → 0：23 条全部 RED（errors=0）——
   `phone-number-normalize-removal` failed=8、新增
-  `whatsapp-wa-id-normalize-removal` failed=1、其余各 failed=1。
+  `whatsapp-wa-id-normalize-removal` failed=1、其余 21 条各 ≥1（`flow-gate-removal`、`sticker-bridge-decode-removal`、`auth-policy-removal` 为 failed=2）。
 - `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0
   （5 步全 PASS：tests-all=3266 / coverage-gates=24 / lint / typecheck=210 /
   gates；证据 `docs/evidence/r4-5-whatsapp-1a50b8fc.json`，
@@ -1612,7 +1612,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
    → 0（canonical `1a50b8fc`，现为历史；`5547e269` 更早）。
 
 **复审修复（Oracle R4-5 第 2 轮复审 4×P2 + 台账项逐条闭环；canonical 证据
-`1c33f1fe`）**：
+`d90786ec`）**：
 1. **P2-1 属主解析回归钉**：`test_app_whatsapp_lifespan.py` 属主清单改
    `+86 138 0013 8000,妈妈`，断言 `_owner_numbers == {"8613800138000",
    "妈妈"}`；`test_channels_whatsapp_api.py` 直调路径补国家码属主用例
@@ -1653,8 +1653,26 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
    raises=671 / red-probe 209 源文件 23 探针 / surface-check 42/42）；
    `pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：
    tests-all=3268 / coverage-gates=24 / lint / typecheck=210 / gates；
-   canonical 证据 `docs/evidence/r4-5-whatsapp-1c33f1fe.json`，
-   sha8=`1c33f1fe`；`1a50b8fc` 为历史）。
+   canonical 证据 `docs/evidence/r4-5-whatsapp-d90786ec.json`，
+   sha8=`d90786ec`；`1c33f1fe`（第 3 轮备注收尾前树）与 `1a50b8fc` 为历史）。
+
+**复审备注收尾（第 3 轮复审 4 条备注 + 企微派发用例根修；canonical 证据
+`d90786ec`）**：
+1. **企微派发用例根修**：`test_wecom_client.py` 的「回调无处理器丢弃」分支由
+   单次 `asyncio.sleep(0)` 赌派发改为 loguru 事件门控（命中「企微回调无处理器」
+   即放行，1s 超时即红）——分支执行从抖动变为确定；连跑 5 轮稳定，`harness/
+   channels` 覆盖率稳定 97.4%（3185/3271）。原先 3183/3185 的覆盖率抖动即该
+   竞态的产物，非 R4-5 代码问题。
+2. **台账门禁头**：3268 passed / conftest 228/228 / mypy 210 / 前端 702 passed
+   （build 2.52s、bundle 389799·25）。
+3. **红探针计数表述**：其余 21 条各 ≥1，其中 `flow-gate-removal`、`sticker-
+   bridge-decode-removal`、`auth-policy-removal` 为 failed=2。
+4. **channels.md 测试面表**：补 runner「批内满队逐条计数与告警」与 API「直调
+   路径国家码属主命中」两条。
+5. 复跑：`pixi run tests-all` → 0（3268）；`coverage-gates` → 0（24 组）；
+   `lint` / `typecheck`（210）/ `conftest-env`（228/228）/ 根 `gates` → 0；
+   `verify-slice -- --slice r4-5-whatsapp` → 0（5 步；canonical
+   `docs/evidence/r4-5-whatsapp-d90786ec.json`，sha8=`d90786ec`，700 文件）。
 
 ## 6. 遗留与部署台账（非阻塞）
 

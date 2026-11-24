@@ -1769,8 +1769,8 @@ settings = build_isolated_settings(
 | `tests/douyin_fakes.py` | 共享 fake 基建：浏览器调用面（navigate 成败 / evaluate 脚本化队列）/ fake 路由器（逐消息异常注入）/ 记录式休眠闸门 |
 | `tests/unit/test_phone_numbers.py` | 发送者归一矩阵（SMS 中国码前缀口径 + WhatsApp 保国家码口径 / 分隔符 / 联系名小写 / 空值）/ 两侧属主清单解析（逗号分隔 / 空项跳过） |
 | `tests/unit/test_whatsapp_models.py` | 载荷模型化与归一：文本 / 媒体 caption 与占位 / 位置与按钮与交互回退 / 状态回执计数 / 缺字段丢弃 / 秒级与非法与非有限时间戳 / 含国家码 wa_id 的会话键与属主命中 / 非中国号码不变 / 多 entry 展平 / 服务窗边界 / wamid 去重 FIFO / 直调路径去重与异常隔离 |
-| `tests/unit/test_whatsapp_runner.py` | 有界队列过载丢弃（不登记去重）/ wamid 重复推送吸收 / 状态计数 / 多消息推送 / 服务窗入站登记 / 属主落档 / 停机零残留 / worker 隔离 / 周期观测 |
-| `tests/unit/test_channels_whatsapp_api.py` | GET hub 握手矩阵（mode / token / challenge / 恒时比较 / 空 token 关闭）；POST 签名矩阵（合法 / 篡改 / 缺失 / 错密钥 / 空密钥关闭 / 被拒不消耗去重）；非 JSON / 非法 JSON / 非对象 / 超限（声明与实读）/ Content-Length 缺失；chunked 逐块上限（超限即停 / 声明超限不读流）；恒 200 ack / runner 立即确认 / 未装配确认丢弃 |
+| `tests/unit/test_whatsapp_runner.py` | 有界队列过载丢弃（不登记去重）/ wamid 重复推送吸收 / 状态计数 / 多消息推送 / 服务窗入站登记 / 属主落档 / 停机零残留 / worker 隔离 / 周期观测 / 批内满队逐条计数与告警 |
+| `tests/unit/test_channels_whatsapp_api.py` | GET hub 握手矩阵（mode / token / challenge / 恒时比较 / 空 token 关闭）；POST 签名矩阵（合法 / 篡改 / 缺失 / 错密钥 / 空密钥关闭 / 被拒不消耗去重）；非 JSON / 非法 JSON / 非对象 / 超限（声明与实读）/ Content-Length 缺失；chunked 逐块上限（超限即停 / 声明超限不读流）；恒 200 ack / runner 立即确认 / 未装配确认丢弃 / 直调路径国家码属主命中 |
 | `tests/unit/test_whatsapp_adapter.py` | MockTransport 出站：wire 形状 / provider message_id / 出站 to 保留国家码 / 401 与 5xx 与超时与非法 JSON 映射 / 服务窗内放行与边界与超窗拒绝 / runner 入站更新服务窗 / grammar 校验 / 附件忽略 / 缺令牌与缺号码 ID |
 | `tests/unit/test_whatsapp_settings.py` | WHATSAPP_ env 面对齐 / 默认值 / SecretStr 不回显 / 聚合面 / 生产 fail-closed（四项凭据任一缺失） |
 | `tests/unit/test_app_whatsapp_lifespan.py` | WhatsApp enabled / disabled 装配 / 适配器与 runner 共享服务窗 / 属主清单接线 / 停机复位 / 窗口外受控拒绝且零 HTTP 请求（事件钩子记录） |

@@ -21,6 +21,7 @@ import json
 from typing import Any
 
 import pytest
+from loguru import logger
 
 from packages.harness.channels.wecom.wecom_client import (
     WeComConnectionState,
@@ -599,18 +600,26 @@ class TestFrameHandling:
         task = asyncio.create_task(client.run())
         try:
             await _wait_until(lambda: client.state is WeComConnectionState.READY)
-            connector.connections[0].push(
-                make_callback_frame(
-                    {
-                        "msgid": "m9",
-                        "chattype": "single",
-                        "from": {"userid": "u1"},
-                        "msgtype": "text",
-                        "text": {"content": "hi"},
-                    }
-                )
+            dropped = asyncio.Event()
+            handler_id = logger.add(
+                lambda message: dropped.set() if "企微回调无处理器" in str(message) else None,
+                level="DEBUG",
             )
-            await asyncio.sleep(0)
+            try:
+                connector.connections[0].push(
+                    make_callback_frame(
+                        {
+                            "msgid": "m9",
+                            "chattype": "single",
+                            "from": {"userid": "u1"},
+                            "msgtype": "text",
+                            "text": {"content": "hi"},
+                        }
+                    )
+                )
+                await asyncio.wait_for(dropped.wait(), timeout=1.0)
+            finally:
+                logger.remove(handler_id)
             assert client.state is WeComConnectionState.READY
         finally:
             client.request_stop()
