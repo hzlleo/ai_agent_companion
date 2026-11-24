@@ -178,7 +178,7 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 3123 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 3125 passed）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
 cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖 220/220/sandbox-drift；当前 mypy 204 文件零问题）
 cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 11 用例（迁移链/并发唯一键/行锁/混合检索）
@@ -1356,7 +1356,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 5. **出站边界**：锁定仅入站——`SmsForwarderAdapter.send_message` 恒空
    投递结果、不发起平台调用；人格回复仍生成并落会话 / 记忆，手机端由用户
    自行阅读或回复。`config.yaml` 不承载通道配置（env 面专属）。
-6. **测试**（80 例，全异步、伪时钟、零真网）：`test_sms_forwarder_models.py`
+6. **测试**（82 例，全异步、伪时钟、零真网）：`test_sms_forwarder_models.py`
    （载荷变体 / 别名 / kind 开关 / 空正文 / 时间戳矩阵 / 发送者与属主 /
    msgid 与内容去重窗 / 直调路径去重与异常隔离）、
    `test_sms_forwarder_runner.py`（过载丢弃与重投恢复 / 去重 / 通知门 /
@@ -1374,8 +1374,8 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
    1 个 API）；surface 豁免清单新增 `SmsForwarderAckDTO`（41/41）。
 8. **证据纪律**：最终树跑 `cd backend && pixi run verify-slice -- --slice
    r4-4-sms-forwarder` → 0，canonical 证据包
-   `docs/evidence/r4-4-sms-forwarder-60a4ced6.json`（sha8=`60a4ced6`；
-   中间树 `e994abcc` 为同一实现的通过证据，留档）。
+   `docs/evidence/r4-4-sms-forwarder-9010c7b8.json`（sha8=`9010c7b8`；
+   `60a4ced6` 为复审前实现证据、`e994abcc` 为更早中间树——均按历史留档）。
 
 **设计取舍 / 偏离**：
 - 仓库没有可复用的通用有界 runner 基类（QQ / 企微各自持有同范式实现，
@@ -1394,25 +1394,58 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 - 复审归主 Agent。
 
 **实测（本机，命令 + 退出码；最终树）**：
-- `cd backend && pixi run tests-all` → 0：3123 passed。
+- `cd backend && pixi run tests-all` → 0：3125 passed。
 - `cd backend && pixi run coverage-gates` → 0：24 组 ≥80%
-  （harness/channels 97.4%、app/api 84.2%）。
+  （harness/channels 97.5%（2682/2751）、app/api 84.2%；同树复跑覆盖行数
+  有 2 行浮动——2680/2751 = 97.4%，差异落在 `wecom/wecom_client.py:534-535`
+  的运行顺序敏感路径，与本次改动无关）。
 - `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0
   （Success: no issues found in 204 source files）。
+- `cd backend && pixi run conftest-env` → 0（220/220）。
 - `cd backend && pixi run gen-examples` → 0；复跑三件套 sha256 不变（幂等）。
 - 根 `pixi run gates` → 0（comment-gates / sync-test-ratchet / noqa-freeze /
   conftest-env 220/220 / sandbox-drift 38 项 / red-probe 203 源文件 16 探针 /
   docs-truth / assertion-freeze / surface-check 41/41 / bench 自检与门禁 /
   api-smoke 自检 / prose-pin）。
 - `cd backend && pixi run verify-slice -- --slice r4-4-sms-forwarder` → 0
-  （5 步全 PASS：tests-all=3123 / coverage-gates=24 / typecheck=204；
-   canonical `60a4ced6`）。
+  （5 步全 PASS：tests-all=3125 / coverage-gates=24 / typecheck=204；
+   canonical `9010c7b8`；`60a4ced6` 为复审前历史证据、`e994abcc` 为更早
+   中间树）。
 - 前端未动；无迁移，未跑 SeekDB 真引擎套件。
+
+**复审修复（4 条 P2；未改产品语义，仅新增测试与文档）**：
+1. 心流延迟批次 `is_owner` 用例：`test_channel_router_owner_flag.py` 增
+   `test_delayed_batch_keeps_peer_provenance_for_non_owner`（FLOW 开启 +
+   睡眠窗口排程，`is_owner=False` / `is_group_chat=False` 入站到期执行
+   `scheduler.jobs[-1][1]()` 后仍按 `peer` 落档）；自证：临时把
+   `channel_service.py` 批次 `is_owner` 硬置 `True` → 该例红
+   （1 failed / 2 passed），复原后绿（3 passed）。
+2. token 恒时比较用例：`test_channels_sms_forwarder_api.py` 增
+   `test_token_comparison_uses_constant_time_primitive`（monkeypatch 录制
+   `secrets.compare_digest` 实参并委托真实实现；正确 Bearer token 请求后
+   断言恰一次 `(token, token)` 比较）；自证：临时把实现改成
+   `presented != expected` → 该例红（1 failed / 22 passed），复原后绿
+   （23 passed）。
+3. 覆盖率数字按证据日志更正：`harness/channels 97.5%`（2682/2751；原
+   `97.4%` 为誊写误差；同树复跑 2680/2751 的 2 行浮动见上方实测注记）、
+   `app/api 84.2%`。
+4. 归一规则文档：channels.md 发送者归一补「点」（实现剥离
+   `[\s\-().]`）并注明通知发送者包名会话键形态（`com.example.app` →
+   `sms:comexampleapp`）；LEDGER §6 记「仅点位置不同的包名共用会话」碰撞面
+   遗留（可选收紧归一，需评审）；归一实现未改。
+- 修复后全链：`cd backend && pixi run tests-all` → 0（3125 passed）；
+  `pixi run coverage-gates` → 0（24 组 ≥80%）；`pixi run lint` → 0；
+  `pixi run typecheck` → 0（204 源文件）；`pixi run conftest-env` → 0；
+  `pixi run gen-examples` → 0（三件套 sha256 复跑不变）；根 `pixi run gates`
+  → 0；`cd backend && pixi run verify-slice -- --slice r4-4-sms-forwarder`
+  → 0（5 步全 PASS：tests-all=3125 / coverage-gates=24 / typecheck=204；
+  canonical `9010c7b8`）。
 
 ## 6. 遗留与部署台账（非阻塞）
 
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
 - SmsForwarder 短信 / 通知转发通道已交付（默认关闭、仅入站；部署侧配置 `SMS_FORWARDER_*` 并在手机端配置 Webhook 与 token）；WhatsApp Cloud API（R4-5）等其余通道未开工。
+- SmsForwarder 通知发送者归一碰撞面：仅点位置不同的包名共用会话（`com.example.app` / `com.exampleapp` → 同一 `sms:` 会话键），可选收紧归一（需评审）。
 - 声纹（PIPL 合规）与表情包素材法律边界提示义务已随 R2d-2 交付（默认关闭，部署侧按需配置 `VOICEPRINT_*` / `STICKER_*` 并起说话人向量服务）。
 - 预算边界（R3-2 → R4-2 已分面）：LLM 日预算只计 LLM 用途行；ASR / TTS / voiceprint 各自独立预算（按 purpose 计数，见 [usage.md](backend/usage.md#分面日预算asr--tts--voiceprint)）。
 - 实时语音（R2f）遗留：AEC/移动端已由 R4-3 前置（浏览器 AEC/Worklet），残余：真实设备验证、真流式供应商连通验证（双轨默认关闭；步骤见 docs/backend/realtime-voice.md「部署侧一次性真机验证」）；实时语音轮次不注入工具面（需要搜索/沙盒走文字通道）。

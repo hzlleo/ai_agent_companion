@@ -8,12 +8,14 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from typing import Any
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+import app.api.channels_sms_forwarder as sms_forwarder_api
 from app.api.channels_sms_forwarder import (
     SMS_FORWARDER_MAX_BODY_BYTES,
 )
@@ -278,6 +280,32 @@ class TestAuthMatrix:
         assert body["success"] is False
         assert body["code"] == "FORBIDDEN"
         assert fake_router.handled == []
+
+    async def test_token_comparison_uses_constant_time_primitive(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """正确 token 走恒时比较原语（``secrets.compare_digest`` 实参记录）。"""
+        calls: list[tuple[bytes, bytes]] = []
+        real_compare_digest = secrets.compare_digest
+
+        def _record(presented: bytes, expected: bytes) -> bool:
+            """录制比较实参并委托真实实现。"""
+            calls.append((presented, expected))
+            return real_compare_digest(presented, expected)
+
+        monkeypatch.setattr(sms_forwarder_api.secrets, "compare_digest", _record)
+        fake_router = FakeChannelRouter()
+        app = _app(_settings(), router=fake_router)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/channels/sms-forwarder",
+                json=_payload(),
+                headers=_auth_headers(),
+            )
+        assert response.status_code == 200
+        presented = _TEST_TOKEN.encode("utf-8")
+        assert calls == [(presented, presented)]
 
     async def test_auth_disabled_when_token_empty(self) -> None:
         """token 为空：鉴权关闭（无头亦 200——同机 / 可信内网形态）。"""
