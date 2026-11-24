@@ -135,7 +135,7 @@ from packages.harness.channels.channel_models import ChannelType
 from packages.harness.channels.channel_service import ChannelRouter
 from packages.harness.channels.douyin.douyin_client import DouyinWebClient
 from packages.harness.channels.douyin.douyin_runner import DouyinChannelRunner
-from packages.harness.channels.phone_numbers import parse_phone_owner_numbers
+from packages.harness.channels.phone_numbers import parse_whatsapp_owner_numbers
 from packages.harness.channels.qq.qq_adapter import NapCatQQAdapter
 from packages.harness.channels.qq.qq_client import NapCatOneBotClient
 from packages.harness.channels.qq.qq_runner import QqWebhookRunner
@@ -861,7 +861,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
             phone_number_id=whatsapp.phone_number_id,
             access_token=whatsapp.access_token.get_secret_value().strip(),
         )
-        whatsapp_owner_numbers = parse_phone_owner_numbers(whatsapp.owner_numbers)
+        whatsapp_owner_numbers = parse_whatsapp_owner_numbers(whatsapp.owner_numbers)
         whatsapp_runner = WhatsAppWebhookRunner(
             router=router,
             service_window=whatsapp_window,

@@ -128,6 +128,31 @@ async def test_send_success_returns_provider_message_id_and_wire_shape() -> None
     assert body["text"] == {"body": "人格回复"}
 
 
+async def test_send_preserves_country_code_in_wire_to_field() -> None:
+    """出站 to 保留国家码：展示形态 chat_id 归一为含 86 的完整号码。"""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"messages": [{"id": "wamid.OUT-CN"}]})
+
+    window = WhatsAppServiceWindow()
+    window.record_inbound("8613800138000", _BASE_MS)
+    async with _client(handler) as http_client:
+        adapter = _adapter(
+            http_client,
+            service_window=window,
+            clock=_Clock(_BASE_MS + 1000),
+        )
+        result = await adapter.send_message(
+            OutboundMessageModel(chat_id="wa:+86 138 0013 8000", text="人格回复")
+        )
+    assert result.message_ids == ["wamid.OUT-CN"]
+    assert len(captured) == 1
+    body = json.loads(captured[0].content)
+    assert body["to"] == "8613800138000"
+
+
 async def test_send_response_without_message_id_returns_empty_ids() -> None:
     """响应未回传消息凭据：送达成功但 message_ids 空。"""
     window = WhatsAppServiceWindow()

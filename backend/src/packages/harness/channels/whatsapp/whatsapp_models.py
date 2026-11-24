@@ -12,14 +12,15 @@ WhatsApp Cloud API 是 **Meta 托管**的消息通道：入站只能经 Meta 的
            交互回复取文本回退）
         ↓ InboundMessageModel（channel=whatsapp、chat_id=wa:<wa_id>、
            synthetic=False、is_group_chat=False、is_owner 按属主清单命中）
-        ↓ 去重键（wamid 常驻 FIFO——Cloud API 对非 2xx 会重投）
+        ↓ 去重键（wamid 常驻 FIFO——吸收 Meta 偶发重复推送）
         ↓ 服务窗状态（每会话最近入站毫秒——24 小时客户服务窗判定原料）
 
 语义边界（锁定决策）：
 
-    - **会话键**：``wa:<归一 wa_id>``（wa_id 是不带加号的国际号码；归一
-      复用 :mod:`packages.harness.channels.phone_numbers`）。发送者不是
-      人格 ID——人格仍由通道路由器绑定；
+    - **会话键**：``wa:<归一 wa_id>``（wa_id 是国际号码，国家码是号码本身
+      的一部分，归一必须保留；归一复用
+      :mod:`packages.harness.channels.phone_numbers` 的 WhatsApp 口径）。
+      发送者不是人格 ID——人格仍由通道路由器绑定；
     - **仅私聊语义**：WhatsApp Cloud API 的 webhook 不区分群聊
       （``is_group_chat=False``）；群聊多人格路径不适用；
     - **来源分级**：默认 ``peer``（第三方发送者不自动晋升主人），仅当
@@ -32,6 +33,7 @@ WhatsApp Cloud API 是 **Meta 托管**的消息通道：入站只能经 Meta 的
 
 from __future__ import annotations
 
+import math
 from collections import deque
 from collections.abc import Callable
 from typing import Any, Final, Protocol
@@ -44,7 +46,7 @@ from packages.harness.channels.channel_models import (
     ChannelType,
     InboundMessageModel,
 )
-from packages.harness.channels.phone_numbers import normalize_phone_identifier
+from packages.harness.channels.phone_numbers import normalize_whatsapp_wa_id
 from packages.harness.core import time_utils
 
 __all__ = [
@@ -465,7 +467,7 @@ class WhatsAppSendRequestModel(BaseModel):
     Attributes:
         messaging_product: 产品标识（恒 whatsapp）。
         recipient_type: 接收方类型（individual）。
-        to: 目标 WhatsApp 号码（归一口径的纯数字 wa_id）。
+        to: 目标 WhatsApp 号码（归一后的国际号码——国家码保留）。
         type: 消息类型（text）。
         text: 文本消息体。
     """
@@ -474,7 +476,7 @@ class WhatsAppSendRequestModel(BaseModel):
 
     messaging_product: str = Field(default="whatsapp", description="产品标识")
     recipient_type: str = Field(default="individual", description="接收方类型")
-    to: str = Field(min_length=1, description="目标 WhatsApp 号码")
+    to: str = Field(min_length=1, description="目标 WhatsApp 号码（含国家码）")
     type: str = Field(default="text", description="消息类型")
     text: WhatsAppTextModel = Field(description="文本消息体")
 
@@ -482,9 +484,10 @@ class WhatsAppSendRequestModel(BaseModel):
 class WhatsAppDedupWindow:
     """WhatsApp wamid 去重窗口（进程内有界 FIFO，容量超限淘汰最旧）。
 
-    Cloud API 对非 2xx 响应会重投同一 webhook（同 wamid）——入站消费前
-    按 wamid 去重。窗口是进程内状态（多 worker 部署各自独立），进程重启
-    清零；容量上限内常驻（wamid 全局唯一，无需时间窗）。
+    本通道端点对已接收推送恒回 200（Meta 仅对非 2xx 重投），去重窗因此
+    不是重投防线，而是吸收 Meta 偶发重复推送（同 wamid 重复到达）的
+    幂等面。窗口是进程内状态（多 worker 部署各自独立），进程重启清零；
+    容量上限内常驻（wamid 全局唯一，无需时间窗）。
     """
 
     def __init__(self, cap: int = WHATSAPP_DEDUP_WINDOW_SIZE) -> None:
@@ -604,7 +607,8 @@ def resolve_whatsapp_timestamp_ms(
     """解析 Cloud API 时间戳为 epoch 毫秒（非法 / 缺失回落服务端时钟）。
 
     支持形态：秒级数值 / 数值字符串（×1000）、毫秒数值（原样）。负值 /
-    零值 / 过小数值 / 非数值文本视为非法（回落 ``fallback_ms``）。
+    零值 / 过小数值 / 非数值文本 / 非有限浮点（``NaN`` / ``Infinity`` /
+    字符串 ``"nan"`` / ``"inf"``）视为非法（回落 ``fallback_ms``）。
 
     Args:
         value: 原始时间戳（数值 / 数值字符串 / None）。
@@ -616,7 +620,12 @@ def resolve_whatsapp_timestamp_ms(
     if isinstance(value, bool):
         return fallback_ms
     if isinstance(value, (int, float)):
-        candidate = int(value)
+        if isinstance(value, float) and not math.isfinite(value):
+            return fallback_ms
+        try:
+            candidate = int(value)
+        except (OverflowError, ValueError):
+            return fallback_ms
     elif isinstance(value, str):
         text = value.strip()
         if not text:
@@ -625,8 +634,14 @@ def resolve_whatsapp_timestamp_ms(
             candidate = int(text)
         except ValueError:
             try:
-                candidate = int(float(text))
+                parsed = float(text)
             except ValueError:
+                return fallback_ms
+            if not math.isfinite(parsed):
+                return fallback_ms
+            try:
+                candidate = int(parsed)
+            except (OverflowError, ValueError):
                 return fallback_ms
     else:
         return fallback_ms
@@ -688,7 +703,7 @@ def _contact_names_by_wa_id(
     """
     names: dict[str, str] = {}
     for contact in value.contacts:
-        normalized = normalize_phone_identifier(contact.wa_id)
+        normalized = normalize_whatsapp_wa_id(contact.wa_id)
         name = contact.profile.name.strip()
         if normalized and name:
             names[normalized] = name
@@ -717,7 +732,7 @@ def _parse_message(
     if not wamid:
         logger.debug("WhatsApp 消息缺少 wamid（确认并忽略）: type={!r}", message.type)
         return None
-    sender_key = normalize_phone_identifier(message.from_value)
+    sender_key = normalize_whatsapp_wa_id(message.from_value)
     if not sender_key:
         logger.debug("WhatsApp 消息缺少发送者（确认并忽略）: wamid={}", wamid)
         return None
@@ -761,7 +776,7 @@ def parse_whatsapp_webhook_payload(
     """解析一次 WhatsApp webhook 推送（纯变换——不做去重登记、不触路由）。
 
     空批次表示无可路由消息（载荷非法 / 仅状态回执 / 全部不可路由）；
-    调用方确认并忽略，且不登记去重（Cloud API 重投仍有意义）。
+    调用方确认并忽略，且不登记去重（无可路由内容，无需占窗口）。
 
     Args:
         payload: HTTP 层已保证为 JSON 对象的推送载荷。

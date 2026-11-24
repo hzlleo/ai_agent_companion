@@ -314,6 +314,47 @@ class TestAssembledAppMatrix:
         assert body["code"] == "UNAUTHORIZED"
 
 
+    async def test_exempt_whatsapp_hub_handshake_unaffected_by_admin_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """豁免面（whatsapp GET 握手）：admin token 配置下无 admin 头仍 200
+        回显 challenge（若误挂 admin 依赖此处必 401）。"""
+        monkeypatch.setenv("ADMIN_AUTH_TOKEN", _TEST_ADMIN_TOKEN)
+        app = create_app()
+        verify_token = (
+            app.state.settings.channels.whatsapp.verify_token.get_secret_value()
+        )
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(
+                "/api/v1/channels/whatsapp",
+                params={
+                    "hub.mode": "subscribe",
+                    "hub.verify_token": verify_token,
+                    "hub.challenge": "whatsapp-challenge-42",
+                },
+            )
+        assert response.status_code == 200
+        assert response.text == "whatsapp-challenge-42"
+
+    async def test_exempt_whatsapp_post_signature_check_not_masked_by_admin(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """豁免面（whatsapp POST）：无 admin 头 + 缺签名 → 403（自身签名校验
+        可达——若被 admin 依赖拦截会变成 401）。"""
+        monkeypatch.setenv("ADMIN_AUTH_TOKEN", _TEST_ADMIN_TOKEN)
+        app = create_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/channels/whatsapp",
+                content=b'{"object": "whatsapp_business_account", "entry": []}',
+                headers={"Content-Type": "application/json"},
+            )
+        assert response.status_code == 403
+        assert response.json()["code"] == "FORBIDDEN"
+
+
 class TestDisabledMode:
     """关闭形态（conftest 默认 ADMIN_AUTH_TOKEN 空）：全部路由放行。"""
 

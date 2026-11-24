@@ -1,18 +1,19 @@
 """WhatsApp 通道 runner——webhook 入站有界队列消费（去重 / 丢弃计数 / 服务窗）。
 
 与 QQ / 企微 / SmsForwarder runner 同范式：webhook 端点只做 hub 校验 /
-签名校验 / 体校验 / 去重登记 / 入队，随后立即 200 确认；LLM 回合耗时由
-后台固定 worker 承担，Meta 的 webhook 等待不再被一次长回复阻塞::
+签名校验 / 体校验，随后立即 200 确认；LLM 回合耗时由后台固定 worker
+承担，Meta 的 webhook 等待不再被一次长回复阻塞::
 
     POST /api/v1/channels/whatsapp
         ↓ hub 校验（GET）/ HMAC 签名 + 体校验（POST——app/api/channels_whatsapp）
     WhatsAppWebhookRunner.submit(payload)   ← 本模块（同步、恒不抛）
         ① parse_whatsapp_webhook_payload（不可路由 / 状态回执不登记去重）
-        ② wamid 去重窗（进程内有界 FIFO 1024）
-        ③ 服务窗记录（每会话最近入站毫秒——出站 24h 判定原料）
-        ④ 入站队列（有界）put_nowait
-            └─ 队列满 → 丢弃并计数（ERROR 日志含 wamid / 队列深度 / 累计；
-                不登记去重——Meta 对非 2xx 重投可重新消费）
+        ② wamid 去重查询（窗口内重复 → 跳过，视为已确认）
+        ③ 入站队列（有界）put_nowait
+            └─ 队列满 → 丢弃并计数（ERROR 日志含 wamid / 队列深度 / 累计）；
+                端点恒 200（Meta 仅对非 2xx 重投），该条即最终丢失；
+                不登记去重仅为吸收 Meta 偶发重复推送
+        ④ 去重登记 + 服务窗记录（每会话最近入站毫秒——出站 24h 判定原料）
     200 {"status": "ok"}
         ↓ 固定 worker（后台任务，跨聊天并行、同聊天由路由器 per-chat 锁串行）
     ChannelRouter.handle_inbound（会话懒建 / 人格绑定 / ChatService）
@@ -47,7 +48,8 @@ __all__ = [
     "WhatsAppWebhookRunner",
 ]
 
-#: 入站待处理队列容量（过载即丢弃并告警——丢弃不登记去重，Meta 重投可重新消费）。
+#: 入站待处理队列容量（过载即丢弃并告警——端点恒 200，丢弃即最终丢失；
+#: 不登记去重只为吸收 Meta 偶发重复推送）。
 WHATSAPP_INBOUND_QUEUE_SIZE: Final[int] = 64
 #: 入站 worker 数（同聊天由路由器 per-chat 锁串行；多 worker 只提升跨聊天并行度）。
 WHATSAPP_INBOUND_WORKER_COUNT: Final[int] = 2
@@ -167,7 +169,8 @@ class WhatsAppWebhookRunner:
             except asyncio.QueueFull:
                 self._dropped_inbound += 1
                 logger.error(
-                    "WhatsApp 入站队列已满（丢弃该消息——未登记去重，Meta 重投可重新消费）: "
+                    "WhatsApp 入站队列已满（丢弃即最终丢失——端点已 200 确认，"
+                    "Meta 不重投；不登记去重仅为吸收偶发重复推送）: "
                     "wamid={}, chat_id={}, depth={}, dropped={}",
                     parsed.inbound.message_id,
                     parsed.inbound.chat_id,

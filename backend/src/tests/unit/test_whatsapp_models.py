@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from typing import Any
 
 import pytest
@@ -18,6 +19,7 @@ from packages.harness.channels.channel_models import (
     ChannelType,
     InboundMessageModel,
 )
+from packages.harness.channels.phone_numbers import parse_whatsapp_owner_numbers
 from packages.harness.channels.whatsapp.whatsapp_models import (
     WHATSAPP_SERVICE_WINDOW_MS,
     WhatsAppDedupWindow,
@@ -149,6 +151,28 @@ async def test_owner_numbers_normalize_equivalent_forms() -> None:
         clock=_Clock(),
     )
     assert batch.messages[0].inbound.is_owner is True
+
+
+async def test_whatsapp_wa_id_preserves_country_code_for_chat_key_and_owner() -> None:
+    """中国号码保留国家码：入站键含 86 数字、展示形态属主清单命中 owner。"""
+    batch = parse_whatsapp_webhook_payload(
+        _payload(messages=[_message(sender="8613800138000")]),
+        owner_numbers=parse_whatsapp_owner_numbers("+86 138 0013 8000"),
+        clock=_Clock(),
+    )
+    assert len(batch.messages) == 1
+    inbound = batch.messages[0].inbound
+    assert inbound.chat_id == "wa:8613800138000"
+    assert inbound.sender_id == "8613800138000"
+    assert inbound.is_owner is True
+
+    non_china = parse_whatsapp_webhook_payload(
+        _payload(messages=[_message(wamid="wamid.US-1", sender="15551234567")]),
+        owner_numbers=parse_whatsapp_owner_numbers("15551234567"),
+        clock=_Clock(),
+    )
+    assert non_china.messages[0].inbound.chat_id == "wa:15551234567"
+    assert non_china.messages[0].inbound.is_owner is True
 
 
 @pytest.mark.parametrize(
@@ -292,10 +316,13 @@ async def test_malformed_payload_returns_empty_batch() -> None:
         (0, 1_700_000_000_000),
         (-5, 1_700_000_000_000),
         (True, 1_700_000_000_000),
+        (math.nan, 1_700_000_000_000),
+        (math.inf, 1_700_000_000_000),
+        ("inf", 1_700_000_000_000),
     ],
 )
 async def test_timestamp_resolution_matrix(raw: Any, expected: int) -> None:
-    """时间戳矩阵：秒级 ×1000 / 毫秒原样 / 非法与缺失回落服务端时钟。"""
+    """时间戳矩阵：秒级 ×1000 / 毫秒原样 / 非法与非有限值回落服务端时钟。"""
     assert resolve_whatsapp_timestamp_ms(raw, fallback_ms=1_700_000_000_000) == expected
 
 
@@ -326,7 +353,7 @@ async def test_service_window_boundaries() -> None:
 
 
 async def test_service_window_ignores_older_timestamps() -> None:
-    """乱序重投不回退窗口（取较新的入站时刻）。"""
+    """乱序到达不回退窗口（取较新的入站时刻）。"""
     window = WhatsAppServiceWindow()
     window.record_inbound("15551234567", 1_700_000_500_000)
     window.record_inbound("15551234567", 1_700_000_000_000)

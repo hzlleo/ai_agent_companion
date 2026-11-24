@@ -180,8 +180,8 @@ class TestQueueBackpressure:
             for message in captured
         )
 
-    async def test_dropped_message_is_not_dedup_registered_and_retry_succeeds(self) -> None:
-        """丢弃不登记去重：腾出队列后同 wamid 重投可重新消费。"""
+    async def test_dropped_message_leaves_dedup_unregistered(self) -> None:
+        """丢弃不登记去重：同 wamid 再次到达时不被去重窗拦截。"""
         runner = _runner(
             router=RecordingRouter(), clock=_Clock(), inbound_queue_size=1
         )
@@ -194,7 +194,7 @@ class TestQueueBackpressure:
         assert runner.dropped_inbound == 1
 
     async def test_duplicate_wamid_absorbed_by_dedup(self) -> None:
-        """同 wamid 重投只入队一次（首见登记）。"""
+        """同 wamid 重复推送只入队一次（首见登记）。"""
         runner = _runner(router=RecordingRouter(), clock=_Clock())
         assert runner.submit(_payload(wamid="wamid.20")) is True
         assert runner.submit(_payload(wamid="wamid.20")) is True

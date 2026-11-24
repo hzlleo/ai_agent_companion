@@ -92,6 +92,11 @@ class WhatsAppCloudClient:
         """是否持有访问令牌（False = 发送时以 ``CHANNEL_TOKEN_MISSING`` 拒绝）。"""
         return bool(self._access_token)
 
+    @property
+    def http_client(self) -> httpx.AsyncClient:
+        """底层共享 HTTP 客户端（装配观测面——请求记录器 / 测试注入用）。"""
+        return self._http
+
     async def send_text(self, *, wa_id: str, text: str) -> str | None:
         """发送文本消息（Graph API ``/messages``）。
 

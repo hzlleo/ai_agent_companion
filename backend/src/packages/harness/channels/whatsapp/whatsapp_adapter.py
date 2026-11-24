@@ -7,7 +7,8 @@
 
 chat_id grammar（锁定决策）：
 
-    ``wa:<WA_ID>`` —— WA_ID 为归一后的纯数字国际号码（与入站会话键同源）；
+    ``wa:<WA_ID>`` —— WA_ID 为归一后的纯数字国际号码（国家码保留——与入站
+    会话键同源；不改写号码本身，否则出站会投递给另一个号码）；
     非法 grammar（缺前缀 / 目标为空）按调用方 bug 面拒绝
     （``VALIDATION_ERROR``）。
 
@@ -36,7 +37,7 @@ from packages.harness.channels.channel_models import (
     ChannelType,
     OutboundMessageModel,
 )
-from packages.harness.channels.phone_numbers import normalize_phone_identifier
+from packages.harness.channels.phone_numbers import normalize_whatsapp_wa_id
 from packages.harness.channels.whatsapp.whatsapp_client import WhatsAppCloudClient
 from packages.harness.channels.whatsapp.whatsapp_models import WhatsAppServiceWindow
 from packages.harness.core import time_utils
@@ -140,7 +141,7 @@ class WhatsAppAdapter:
             chat_id: 出站目标会话键。
 
         Returns:
-            归一后的纯数字 wa_id。
+            归一后的纯数字国际号码（国家码保留）。
 
         Raises:
             BusinessException: 前缀不符 / 目标为空（``VALIDATION_ERROR``
@@ -153,7 +154,7 @@ class WhatsAppAdapter:
                 message=f"WhatsApp chat_id 须为 wa:<wa_id> 形态: {chat_id!r}",
                 details={"chat_id": chat_id},
             )
-        target = normalize_phone_identifier(raw_target)
+        target = normalize_whatsapp_wa_id(raw_target)
         if not target:
             raise BusinessException(
                 code=ErrorCode.VALIDATION_ERROR,

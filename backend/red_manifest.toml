@@ -322,6 +322,13 @@ tests = [
 ]
 
 [[probes]]
+name = "whatsapp-wa-id-normalize-removal"
+symbol = "packages.harness.channels.phone_numbers:normalize_whatsapp_wa_id"
+tests = [
+    "tests/unit/test_whatsapp_models.py::test_whatsapp_wa_id_preserves_country_code_for_chat_key_and_owner",
+]
+
+[[probes]]
 name = "whatsapp-payload-parse-removal"
 symbol = "packages.harness.channels.whatsapp.whatsapp_models:parse_whatsapp_webhook_payload"
 tests = [

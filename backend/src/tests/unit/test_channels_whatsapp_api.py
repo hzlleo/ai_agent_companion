@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from starlette.requests import Request
 
 import app.api.channels_whatsapp as whatsapp_api
 from app.api.channels_whatsapp import WHATSAPP_MAX_BODY_BYTES
@@ -38,6 +39,7 @@ from packages.harness.config.models import (
     WhatsAppChannelSettings,
 )
 from packages.harness.config.settings import build_isolated_settings
+from packages.harness.core.errors import BusinessException, ErrorCode
 
 _VERIFY_TOKEN = "test-only-verify-token"
 _APP_SECRET = "test-only-app-secret"
@@ -377,7 +379,7 @@ class TestSignatureVerification:
         assert len(fake_router.handled) == 1
 
     async def test_duplicate_wamid_routed_once(self) -> None:
-        """合法签名重投同 wamid：直调路径去重（只路由一次）。"""
+        """合法签名的同 wamid 重复推送：直调路径去重（只路由一次）。"""
         fake_router = FakeChannelRouter()
         app = _app(_settings(), router=fake_router)
         transport = ASGITransport(app=app)
@@ -492,6 +494,92 @@ class TestBodyValidation:
             response = await client.send(request)
         assert response.status_code == 200
         assert len(fake_router.handled) == 1
+
+
+class _ReceiveRecorder:
+    """ASGI receive 记录器（逐条投放预置消息并计数）。"""
+
+    def __init__(self, messages: list[dict[str, Any]]) -> None:
+        self._messages = messages
+        self.calls = 0
+
+    async def __call__(self) -> dict[str, Any]:
+        message = self._messages[self.calls]
+        self.calls += 1
+        return message
+
+
+def _raw_request(
+    *,
+    receive: Any,
+    headers: list[tuple[bytes, bytes]],
+    app: FastAPI | None = None,
+) -> Request:
+    """手工构造 ASGI 请求（body 消费面可记录——不经过传输层）。"""
+    scope: dict[str, Any] = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": _URL,
+        "raw_path": _URL.encode("utf-8"),
+        "query_string": b"",
+        "root_path": "",
+        "headers": headers,
+        "client": ("test", 12345),
+        "server": ("test", 80),
+    }
+    if app is not None:
+        scope["app"] = app
+    return Request(scope, receive)
+
+
+class TestBoundedBodyRead:
+    """无 Content-Length 的 chunked 体按上限逐块读取（超限即停）。"""
+
+    async def test_bounded_body_reader_stops_reading_after_limit(self) -> None:
+        """逐块累计超限：立即受控 400，后续块不再向 ASGI 流索取。"""
+        receive = _ReceiveRecorder(
+            [
+                {"type": "http.request", "body": b"a" * 6, "more_body": True},
+                {"type": "http.request", "body": b"b" * 6, "more_body": True},
+                {"type": "http.request", "body": b"c", "more_body": False},
+            ]
+        )
+        request = _raw_request(
+            receive=receive, headers=[(b"content-type", b"application/json")]
+        )
+        with pytest.raises(BusinessException) as exc_info:
+            await whatsapp_api._read_request_body_bounded(request, 8)
+        assert exc_info.value.code is ErrorCode.BAD_REQUEST
+        assert receive.calls == 2
+
+    async def test_declared_oversize_rejected_without_reading_stream(self) -> None:
+        """声明 Content-Length 超限：端点直接 400，ASGI 流一次都不读。"""
+        app = FastAPI(docs_url=None, redoc_url=None)
+        app.state.settings = _settings()
+        reads: list[str] = []
+
+        async def receive() -> dict[str, Any]:
+            reads.append("read")
+            raise AssertionError("声明超限时不应读取请求体")
+
+        request = _raw_request(
+            receive=receive,
+            headers=[
+                (b"content-type", b"application/json"),
+                (
+                    b"content-length",
+                    str(WHATSAPP_MAX_BODY_BYTES + 1).encode("ascii"),
+                ),
+            ],
+            app=app,
+        )
+        with pytest.raises(BusinessException) as exc_info:
+            await whatsapp_api.receive_whatsapp_webhook(request)
+        assert exc_info.value.code is ErrorCode.BAD_REQUEST
+        assert reads == []
 
 
 class TestRouterNotAssembled:

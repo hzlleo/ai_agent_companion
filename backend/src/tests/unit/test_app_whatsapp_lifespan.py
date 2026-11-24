@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
 import pytest
 
 from app.main import create_app, shutdown_app_state, startup_app_state
@@ -30,6 +31,16 @@ from packages.harness.config.models import (
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.core.background_tasks import background_task_manager
 from packages.harness.core.errors import BusinessException, ErrorCode
+
+
+class _RequestRecorder:
+    """HTTP 请求记录器（httpx request 事件钩子——断言零网络调用）。"""
+
+    def __init__(self) -> None:
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> None:
+        self.requests.append(request)
 
 
 def _settings(
@@ -91,11 +102,14 @@ class TestEnabledWiring:
             assert runner._owner_numbers == frozenset({"15551234567", "妈妈"})
             assert adapter.service_window is runner.service_window
             assert runner.service_window.last_inbound_ms("15551234567") is None
+            recorder = _RequestRecorder()
+            adapter.client.http_client.event_hooks["request"].append(recorder)
             with pytest.raises(BusinessException) as exc_info:
                 await adapter.send_message(
                     OutboundMessageModel(chat_id="wa:15551234567", text="主动招呼")
                 )
             assert exc_info.value.code == ErrorCode.CHANNEL_API_ERROR
+            assert recorder.requests == []
             runner.service_window.record_inbound("15551234567", 1_731_000_000_000)
             assert adapter.service_window.last_inbound_ms("15551234567") == 1_731_000_000_000
             assert task is not None and not task.done()
