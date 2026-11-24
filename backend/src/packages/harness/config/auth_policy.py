@@ -1,8 +1,8 @@
 """生产环境鉴权启动策略——fail-closed 判定（纯函数面）。
 
-管理面 owner-token 与 QQ 入站 webhook 的鉴权在开发 / 测试环境保持
-「空 token = 鉴权关闭」形态；``ENV=prod`` 时两者必须有非空 token，
-否则 app 启动期拒绝启动（安全边界不得以无鉴权形态上线）。
+管理面 owner-token 与 QQ / SmsForwarder 入站 webhook 的鉴权在开发 /
+测试环境保持「空 token = 鉴权关闭」形态；``ENV=prod`` 时三者必须有
+非空 token，否则 app 启动期拒绝启动（安全边界不得以无鉴权形态上线）。
 
 判定面与文档边界：保护路由清单与豁免契约归 ``app/main.py`` 的
 ``_include_routers`` 唯一权威；本模块只回答「生产环境是否允许以当前
@@ -20,6 +20,7 @@ __all__ = [
     "ensure_auth_policy",
     "resolve_admin_token",
     "resolve_qq_webhook_token",
+    "resolve_sms_forwarder_token",
 ]
 
 
@@ -50,21 +51,35 @@ def resolve_qq_webhook_token(settings: Settings) -> str:
     return os.environ.get(settings.channels.qq.webhook_token_env, "").strip()
 
 
+def resolve_sms_forwarder_token(settings: Settings) -> str:
+    """解析 SmsForwarder 入站校验 token（配置字段直接持有本值）。
+
+    Args:
+        settings: 生效 Settings（``settings.channels.sms_forwarder.token``
+            持有 SecretStr 本值）。
+
+    Returns:
+        token 本值（strip 后）；配置为空返回空串（= 开发形态下鉴权关闭）。
+    """
+    return settings.channels.sms_forwarder.token.get_secret_value().strip()
+
+
 def ensure_auth_policy(settings: Settings) -> None:
     """启动期鉴权策略校验（生产环境 fail-closed）。
 
     规则（锁定）：``settings.env`` 为 ``prod`` 时，管理面 owner token
-    必须非空；QQ 通道启用时其入站 webhook token 同样必须非空。开发 /
-    测试环境保持既有「空 = 鉴权关闭」行为（零配置开发可用）。
+    必须非空；QQ / SmsForwarder 通道启用时其入站 token 同样必须非空。
+    开发 / 测试环境保持既有「空 = 鉴权关闭」行为（零配置开发可用）。
 
     Args:
         settings: 生效 Settings（运行环境标识 / 管理面 token 变量名 /
-            QQ 通道开关与其 token 变量名）。
+            QQ / SmsForwarder 通道开关与其 token 配置）。
 
     Raises:
         BusinessException: 生产环境 ``ADMIN_AUTH_TOKEN`` 解析为空
             （``CONFIG_INVALID``）；生产环境 QQ 通道启用但
-            ``QQ_WEBHOOK_TOKEN`` 解析为空（同码）。
+            ``QQ_WEBHOOK_TOKEN`` 解析为空（同码）；生产环境 SmsForwarder
+            通道启用但 ``SMS_FORWARDER_TOKEN`` 为空（同码）。
     """
     if settings.env is not RuntimeEnv.PROD:
         return
@@ -88,4 +103,10 @@ def ensure_auth_policy(settings: Settings) -> None:
                 "qq_webhook_token_env": settings.channels.qq.webhook_token_env,
                 "env": settings.env.value,
             },
+        )
+    if settings.channels.sms_forwarder.enabled and not resolve_sms_forwarder_token(settings):
+        raise BusinessException(
+            code=ErrorCode.CONFIG_INVALID,
+            message="生产环境启用 SmsForwarder 通道时必须设置 SMS_FORWARDER_TOKEN",
+            details={"env": settings.env.value},
         )

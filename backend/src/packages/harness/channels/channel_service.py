@@ -322,6 +322,7 @@ class ChannelRouter:
         self._flow_states: dict[str, FlowChatStateModel] = {}
         self._group_states: dict[str, GroupResponderStateModel] = {}
         self._chat_group_flags: dict[str, bool] = {}
+        self._chat_owner_flags: dict[str, bool] = {}
         self._synthetic_skip_count = 0
         self._empty_text_skip_count = 0
         self._flow_job_seq = 0
@@ -467,6 +468,7 @@ class ChannelRouter:
         async with self._lock_for(self.session_key(context)):
             try:
                 self._chat_group_flags[self.session_key(context)] = message.is_group_chat
+                self._chat_owner_flags[self.session_key(context)] = message.is_owner
                 group_pool = await self._group_responder_pool(message)
                 primary_state: ChatSessionStateModel | None = None
                 if group_pool is None:
@@ -533,6 +535,7 @@ class ChannelRouter:
                     context.chat_id,
                     message.text,
                     is_group_chat=message.is_group_chat,
+                    is_owner=message.is_owner,
                     reply_to_message_id=message.message_id,
                     include_sticker_reply=has_sticker,
                 )
@@ -755,6 +758,7 @@ class ChannelRouter:
                     merged.dropped_count,
                 )
             is_group = bool(state.recent_arrival_ms) and self._flow_group_hint(key)
+            is_owner = self._chat_owner_flags.get(key, True)
             try:
                 group_pool = await self._group_responder_pool_for_flag(is_group)
                 if group_pool is not None:
@@ -763,11 +767,11 @@ class ChannelRouter:
                     )
                     if delivery is None:
                         delivery = await self._reply_with_primary(
-                            adapter, context, merged.text, is_group
+                            adapter, context, merged.text, is_group, is_owner
                         )
                 else:
                     delivery = await self._reply_with_primary(
-                        adapter, context, merged.text, is_group
+                        adapter, context, merged.text, is_group, is_owner
                     )
                 logger.info(
                     "心流延迟批次已投递: job={}, used={}, message_ids={}",
@@ -810,6 +814,7 @@ class ChannelRouter:
         context: ChannelContextModel,
         text: str,
         is_group_chat: bool,
+        is_owner: bool = True,
     ) -> ChannelDeliveryResultModel:
         """以主人格单会话回复（群聊多人格关闭 / 选择为空时的既有路径）。
 
@@ -818,6 +823,8 @@ class ChannelRouter:
             context: 通道会话上下文。
             text: 回复输入文本（已合并或单条）。
             is_group_chat: 是否群聊（来源分级）。
+            is_owner: 私聊发送者是否为主人（延迟批次沿用该聊天最近入站
+                标记；群聊下不参与分级）。
 
         Returns:
             投递结果。
@@ -829,6 +836,7 @@ class ChannelRouter:
             context.chat_id,
             text,
             is_group_chat=is_group_chat,
+            is_owner=is_owner,
             reply_to_message_id=None,
         )
 
@@ -841,6 +849,7 @@ class ChannelRouter:
         *,
         is_group_chat: bool,
         reply_to_message_id: str | None,
+        is_owner: bool = True,
         include_sticker_reply: bool = False,
     ) -> ChannelDeliveryResultModel:
         """单人格回复并投递（人格上下文绑定 + 来源分级）。
@@ -850,8 +859,10 @@ class ChannelRouter:
             state: 会话状态。
             chat_id: 目标平台会话 ID。
             user_text: 用户输入文本。
-            is_group_chat: 是否群聊（群聊按 peer 落档）。
+            is_group_chat: 是否群聊（群聊恒按 peer 落档）。
             reply_to_message_id: 引用回复目标（None = 不引用）。
+            is_owner: 私聊发送者是否为主人（False = 第三方转发按 peer 落档；
+                群聊下不参与分级）。
             include_sticker_reply: 是否随文本附发一张表情（入站带 sticker
                 附件且表情桥已装配时生效）。
 
@@ -860,7 +871,9 @@ class ChannelRouter:
         """
         async with bind_persona_context(state.persona_id):
             sender_provenance = (
-                MemoryProvenance.PEER if is_group_chat else MemoryProvenance.OWNER
+                MemoryProvenance.OWNER
+                if is_owner and not is_group_chat
+                else MemoryProvenance.PEER
             )
             reply_text = await self._chat_service_factory().reply(
                 state, user_text, sender_provenance=sender_provenance

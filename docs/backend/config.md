@@ -54,6 +54,7 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 | CHANNELS.QQ — QQ 通道配置（NapCat OneBot v11；令牌经 QQ_ACCESS_TOKEN / QQ_WEBHOOK_TOKEN 间接） | `QQ_` | `QQ_ENABLED`(false) · `QQ_HTTP_API_BASE_URL`(http://127.0.0.1:3000) · `QQ_ACCESS_TOKEN_ENV`(空) · `QQ_WEBHOOK_TOKEN_ENV`(空) · `QQ_REQUEST_TIMEOUT_SECONDS`(15.0) |
 | CHANNELS.WECOM — 企业微信智能机器人长连接配置（默认关闭；订阅凭据 = BotID + Secret，密钥经 WECOM_SECRET 间接） | `WECOM_` | `WECOM_ENABLED`(false) · `WECOM_BOT_ID`(空) · `WECOM_SECRET_ENV`(空) · `WECOM_WS_ENDPOINT`(wss://openws.work.weixin.qq.com) · `WECOM_REQUEST_TIMEOUT_SECONDS`(15.0) · `WECOM_HEARTBEAT_INTERVAL_SECONDS`(30.0) · `WECOM_HEARTBEAT_TIMEOUT_SECONDS`(10.0) · `WECOM_OPEN_TIMEOUT_SECONDS`(10.0) · `WECOM_BACKOFF_BASE_SECONDS`(1.0) · `WECOM_BACKOFF_MAX_SECONDS`(60.0) · `WECOM_BACKOFF_JITTER_RATIO`(0.3) · `WECOM_REPLY_WINDOW_SECONDS`(86400.0) |
 | CHANNELS.DOUYIN — 抖音 web 通道配置（默认关闭；复用浏览器 sidecar 的已登录页面，登录态是 profile cookie，无独立密钥键） | `DOUYIN_` | `DOUYIN_ENABLED`(false) · `DOUYIN_CHAT_URL`(空) · `DOUYIN_CONVERSATION_ID`(空) · `DOUYIN_POLL_INTERVAL_SECONDS`(5.0) · `DOUYIN_MAX_MESSAGES_PER_POLL`(20) · `DOUYIN_BACKOFF_BASE_SECONDS`(2.0) · `DOUYIN_BACKOFF_MAX_SECONDS`(60.0) |
+| CHANNELS.SMS_FORWARDER — SmsForwarder 短信 / 通知转发通道配置（默认关闭；仅入站；令牌经 SMS_FORWARDER_TOKEN 直接配置） | `SMS_FORWARDER_` | `SMS_FORWARDER_ENABLED`(false) · `SMS_FORWARDER_TOKEN`(空) · `SMS_FORWARDER_NOTIFICATIONS_ENABLED`(false) · `SMS_FORWARDER_OWNER_NUMBERS`(空) |
 | DUTY — 值班轮配置（charter 工具循环 + 报告属主投递） | `DUTY_` | `DUTY_ENABLED`(false) · `DUTY_DAILY_AT`(22:00) · `DUTY_MAX_TOOL_STEPS`(8) · `DUTY_REPORT_TO_OWNER`(true) · `DUTY_CHARTER_TEXT`(空) |
 | DREAM_SCHEDULE — 夜间梦境定时触发配置 | `DREAM_SCHEDULE_` | `DREAM_SCHEDULE_ENABLED`(false) · `DREAM_SCHEDULE_DAILY_AT`(03:00) |
 | SCHEDULER — 中央调度器配置（自研异步循环） | `SCHEDULER_` | `SCHEDULER_TICK_SECONDS`(1.0) |
@@ -89,6 +90,8 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 - `LogConfig.to_core_config()`：字段一一映射为 `core.LoggingConfig`（`file→log_file` / `json_file→log_json_file`；`text_format` 空串 → `None`，走 core 默认统一模板）；app lifespan 经 `setup_logging_from_settings(settings)` 接线 `core.setup_logging`。
 - 嵌套覆盖：`Settings` 开启 `env_nested_delimiter="__"`（如 `DATABASE__POOL_SIZE`），与各分节自身 `env_prefix` 并行生效。
 - 测试隔离：`build_isolated_settings(database=..., pools=..., seekdb=...)` 显式值构造（子配置实例 pass-through，不重读 env）。
+
+- 短信 / 通知转发（SmsForwarder，默认关闭）：`SMS_FORWARDER_ENABLED` / `SMS_FORWARDER_TOKEN` / `SMS_FORWARDER_NOTIFICATIONS_ENABLED` / `SMS_FORWARDER_OWNER_NUMBERS`；仅入站（出站恒丢弃），token 直接配置（SecretStr），`ENV=prod` 且通道启用时强制非空；载荷 / 去重 / 队列语义见 [channels.md](channels.md) SmsForwarder 一节。
 
 ### 多 worker 语义（`SERVER_WORKERS` > 1）
 

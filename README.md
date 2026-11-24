@@ -14,7 +14,7 @@
 - **实时语音全双工**：WebSocket 会话 + 能量/静音 VAD 切段 + 切段转写（节流中途字幕）+ 人格回复逐句 TTS 分片播报 + 打断（取消在途生成/合成）；管理台实时字幕面板；默认关闭
 - **声纹（PIPL 合规）**：同意先于处理、人格 × 发送者隔离、撤回 / 删除即清样本与向量；默认关闭
 - **表情包库**：哈希去重 + 来源与授权备注必填 + VLM 描述 / 标签标注 + 通道附件 v2 收发；默认关闭
-- **平台通道**：Telegram 长轮询 / QQ（NapCat OneBot v11）推送入站 / 企业微信智能机器人长连接（WebSocket——订阅鉴权、心跳保活、退避重连、素材分片上传）/ 抖音 web（浏览器 sidecar 底座上的会话页采集与发送）；共用统一通道路由器与附件协议 v2
+- **平台通道**：Telegram 长轮询 / QQ（NapCat OneBot v11）推送入站 / 企业微信智能机器人长连接（WebSocket——订阅鉴权、心跳保活、退避重连、素材分片上传）/ 抖音 web（浏览器 sidecar 底座上的会话页采集与发送）/ SmsForwarder 手机短信与通知转发（token 鉴权、有界入站队列、仅入站）；共用统一通道路由器与附件协议 v2
 - **画布**：人格作用域的 HTML / SVG / Markdown 渲染产物——管理台沙箱预览、修订留号、单文件导出
 
 ## 技术栈
@@ -56,6 +56,10 @@ cd backend && pixi run chat # 控制台与当前人格对话
 cd ../frontend && pixi install && pixi run install  # 前端环境（必须经 pixi 提供 Node 22；勿直接 npm）
 pixi run dev                # 前端开发服务器（5173，连本机后端 8000）
 ```
+
+手机短信 / 通知转发（SmsForwarder）：后端设 `SMS_FORWARDER_ENABLED=true` 与
+`SMS_FORWARDER_TOKEN`，手机端把模板 POST 到 `/api/v1/channels/sms-forwarder`
+（请求头或查询参数携带同一 token；详见 `docs/backend/channels.md` SmsForwarder 一节）。
 
 配置 example 三件套（`.env.example` / `config.example.yaml` / `extensions_config.example.json`）由
 `pixi run gen-examples` 从 Pydantic 配置类自动生成；真实配置经 `pixi run setup` 交互式向导生成，全部配置项均受管理。

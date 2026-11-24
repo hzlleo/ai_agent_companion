@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "max_entries": 40,
+  "max_entries": 41,
   "note": "HTTP wire 模型导出豁免清单——每项必须写明不导出前端契约的理由（scripts/surface_check.py 消费）；陈旧条目在门禁输出中报告并应删除。max_entries 是规模棘轮：新增豁免须 --update 同步抬高并随 diff 受审。",
   "entries": [
     {
@@ -98,6 +98,10 @@
     {
       "surface": "SkillStatus",
       "reason": "StrEnum 技能状态查询参数值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
+    },
+    {
+      "surface": "SmsForwarderAckDTO",
+      "reason": "SmsForwarder webhook 手机端应答，前端不参与该链路。"
     },
     {
       "surface": "StickerAnnotationStatus",

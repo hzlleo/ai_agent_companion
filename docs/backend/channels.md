@@ -1,6 +1,6 @@
 # channels — 平台通道层（Telegram 首个适配器；QQ / NapCat OneBot v11）
 
-`backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram——手写 Bot API 客户端 + 长轮询 runner；QQ——NapCat OneBot v11 客户端 + webhook 推送入站；企业微信——智能机器人长连接 WebSocket 客户端 + 回调 runner；抖音——浏览器 sidecar 页面上轮询采集 / 发送的 web 会话通道）。通道抽象保持类型可扩展（`ChannelType` StrEnum——B站等后续通道在此追加成员与同级子模型）。消息协议已升级 **v2**（附件 / 静默 / 合成事件——见「协议 v2」一节；v1 纯文本形态缺省保持，additive 向后兼容）。
+`backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram——手写 Bot API 客户端 + 长轮询 runner；QQ——NapCat OneBot v11 客户端 + webhook 推送入站；企业微信——智能机器人长连接 WebSocket 客户端 + 回调 runner；抖音——浏览器 sidecar 页面上轮询采集 / 发送的 web 会话通道；SmsForwarder——手机端短信 / 通知转发的仅入站 webhook 通道）。通道抽象保持类型可扩展（`ChannelType` StrEnum——B站等后续通道在此追加成员与同级子模型）。消息协议已升级 **v2**（附件 / 静默 / 合成事件——见「协议 v2」一节；v1 纯文本形态缺省保持，additive 向后兼容）。
 
 ## 模块一览
 
@@ -23,6 +23,9 @@
 | `douyin/douyin_scripts.py` | 页面 JS 表达式（会话 DOM 采集 / 输入框写入并发送——参数 JSON 嵌入，零浏览器依赖） | `build_douyin_collect_script` / `build_douyin_send_script` / `DOUYIN_MESSAGE_NODE_SELECTORS` |
 | `douyin/douyin_client.py` | 浏览器底座客户端（经注入的 `evaluate` / `navigate` 调用面读写会话；失败归一可重试错误） | `DouyinWebClient` / `DouyinBrowserInvoker` |
 | `douyin/douyin_runner.py` | 抖音 runner（轮询采集 / 去重窗口 / 逐消息路由隔离 / 指数退避 / 出站文本发送与附件逐条不支持承载） | `DouyinChannelRunner` / `DouyinMessageDedupWindow` |
+| `sms_forwarder/sms_models.py` | SmsForwarder 转发载荷归一（Unit 文件）：字段别名 / kind 过滤 / 正文与发送者归一 / 时间戳解析 / 属主清单 / msgid 与内容时间窗去重 / 直调路径 | `SmsForwarderPayloadModel` / `parse_sms_forwarder_payload` / `SmsForwarderDedupWindow` / `parse_owner_numbers` / `process_sms_forwarder_payload` |
+| `sms_forwarder/sms_runner.py` | SmsForwarder webhook 入站 runner（有界队列 + 固定 worker / 去重 / 过载丢弃计数 / 周期观测 / 生命周期收尾） | `SmsForwarderWebhookRunner` / `SMS_FORWARDER_INBOUND_QUEUE_SIZE` / `SMS_FORWARDER_INBOUND_WORKER_COUNT` |
+| `sms_forwarder/sms_adapter.py` | SmsForwarder 仅入站适配器（出站恒丢弃——空投递结果，不发起平台调用） | `SmsForwarderAdapter` |
 
 依赖方向：channels → chat（ChatService）+ persona（bind_persona_context）+ config（Settings.channels）+ core（errors / time_utils）；HTTP 出站一律经 pools 共享 `httpx.AsyncClient`（硬规则：无私建连接）。锁定设计决策：**不引入 aiogram / python-telegram-bot / 任何 OneBot SDK**——按平台协议手写（与 llm 域「不引入 openai SDK」同约定）。
 
@@ -220,9 +223,11 @@ runner 循环层另有兜底：getUpdates 失败按指数退避重试（见下�
 
 ## 来源分级（提示词攻击防御面）
 
-入站消息按会话形态标记来源分级：**私聊 = owner（主人）**、**群聊 = peer
-（同侪 / 其他智能体的发言）**——路由器据 ``InboundMessageModel.is_group_chat``
-（Telegram 按 chat.type、QQ 按 ``group:`` 会话键判定）透传给聊天服务的
+入站消息按会话形态标记来源分级：**群聊 = peer（同侪 / 其他智能体的发言）**；
+**私聊 = owner（主人）**，但第三方转发通道（SmsForwarder）的私聊默认
+`is_owner=False` 按 peer 落档，仅发送者命中属主清单时晋升 owner——路由器据
+``InboundMessageModel.is_group_chat``（Telegram 按 chat.type、QQ 按
+``group:`` 会话键判定）与 ``is_owner`` 透传给聊天服务的
 ``sender_provenance`` 参数，情景落档按真实层级（user 回合 = 透传值、
 assistant 回合恒为 agent）。**peer 事件永不晋升策展记忆、永不作为人物
 事实证据**（梦境规则门与事实证据面双重排除）——群聊里其他鱼的断言无法
@@ -1163,6 +1168,208 @@ settings = build_isolated_settings(
 
 零真实网络（浏览器调用面经协议注入 fake）；零真实等待（休眠注入记录式闸门）；
 全部 `async def test_*`。
+
+## SmsForwarder 短信 / 通知转发通道（SMS_FORWARDER——仅入站）
+
+手机端 SmsForwarder（开源短信 / 通知转发应用）把手机收到的短信与应用通知按
+自定义模板 POST 到本后端。本通道**仅入站**：没有平台主动控制 API 的强依赖，
+出站恒丢弃（人格回复仍生成并落会话 / 记忆，手机端由用户自行阅读或回复）。
+
+### 架构：手机端推送入站（无轮询、无出站）
+
+```
+手机（SmsForwarder 应用，配置转发 URL / 自定义请求头或查询参数 token）
+    ↓ HTTP POST /api/v1/channels/sms-forwarder（Content-Type: application/json）
+app/api/channels_sms_forwarder（鉴权 → 体校验 → 入队 → 立即 200）
+    ↓ token 校验（SMS_FORWARDER_TOKEN 常量时间比较；缺失 401 / 不符 403）
+    ↓ 请求体：仅 application/json；64 KiB 上限；非法 JSON / 非对象 → 400
+SmsForwarderWebhookRunner.submit（sms_forwarder/sms_runner.py——同步、恒不抛）
+    ① parse_sms_forwarder_payload（不可路由事件不登记去重）
+    ② kind 过滤（短信默认接收；notification 由 SMS_FORWARDER_NOTIFICATIONS_ENABLED 决定）
+    ③ 去重登记（msgid 常驻 FIFO；无 msgid 按发送者 + 正文内容 + 时间窗）
+    ④ 有界入站队列 put_nowait
+        └─ 队列满 → 丢弃 + 计数 + ERROR（含去重键 / chat_id / message_id /
+           队列深度 / 累计丢弃）；不登记去重——手机端重投可重新消费
+    200 {"status": "ok"}
+        ↓ 固定 worker（2；跨会话并行、同会话由路由器 per-chat 锁串行）
+ChannelRouter.handle_inbound（会话懒建 / 人格绑定 / ChatService）
+    ↓ 入站 provenance：默认 peer；命中 SMS_FORWARDER_OWNER_NUMBERS 时 owner
+SmsForwarderAdapter.send_message（仅入站边界——空投递结果，不发起平台调用）
+```
+
+与 QQ webhook 的同构点：推送式入站 + 有界队列 + 立即确认 + 过载丢弃 +
+进程内去重。差异：鉴权 token 由配置字段直接承载（手机端自定义请求头 /
+查询参数），载荷是手机端模板自由字段（无固定平台协议），且**没有出站发送**。
+
+### 载荷示例（手机端模板 JSON）
+
+短信（kind 缺省即短信；模板字段名可映射到本表）：
+
+```json
+{
+  "from": "+86 138-0013-8000",
+  "contact": "妈妈",
+  "body": "今晚回家吃饭吗？",
+  "timestamp": 1731000000000,
+  "device": "Pixel-8",
+  "kind": "SMS",
+  "sim": "SIM1",
+  "msgid": "phone-msg-0001"
+}
+```
+
+应用通知（仅在 `SMS_FORWARDER_NOTIFICATIONS_ENABLED=true` 时接收）：
+
+```json
+{
+  "from": "com.example.app",
+  "content": "订单已发货",
+  "timestamp": "1731000000",
+  "device": "Pixel-8",
+  "kind": "notification",
+  "msgid": "notify-0001"
+}
+```
+
+字段说明（多余字段忽略；缺失字段给默认）：
+
+| 字段 | 别名 | 类型 | 默认 | 说明 |
+|---|---|---|---|---|
+| `from` | `sender` | string | 空 | 发送者手机号 / 联系名；空时回落 `contact`，仍空归一 `unknown` |
+| `contact` | — | string | 空 | 联系名（`from` / `sender` 缺失时的发送者来源） |
+| `body` | — | string | 空 | 正文候选（优先级最高） |
+| `content` | — | string | 空 | 正文候选 |
+| `message` | — | string | 空 | 正文候选 |
+| `text` | — | string | 空 | 正文候选（模板使用 text 键时） |
+| `timestamp` | — | 数值 / 数值字符串 | 服务端时钟 | 秒级自动 ×1000；毫秒原样；非法 / 缺失 / 非正值回落服务端时钟 |
+| `device` | — | string | 空 | 设备标识（仅日志观测，不参与路由） |
+| `kind` | — | string | 短信 | `SMS` / `短信` / `short_message` 归一短信；`notification` / `通知` / `notify` 归一通知；未知值确认丢弃 |
+| `sim` | — | string | 空 | SIM 卡标识（仅日志观测） |
+| `msgid` | `message_id` / `messageId` | string | 空 | 去重首选键；缺失时按内容 + 时间窗去重 |
+
+正文优先级 `body` > `content` > `message` > `text`；全空（含纯空白）丢弃且
+不登记去重。载荷对象内字段类型非法（如 `kind` 为数组）按不可路由事件确认
+忽略（HTTP 仍 200——手机端重投防线）。
+
+### 归一与来源语义（锁定决策）
+
+- **会话键**：`sms:<归一发送者>`（如 `sms:13800138000`；号码去空格 / 连字符 /
+  括号 / 点，`+86` / `0086` / `86` 中国码前缀归一为 11 位；联系名小写）。通知
+  转发的发送者为包名形态时沿用同一归一口径：`com.example.app` →
+  `sms:comexampleapp`（点被剥离；仅点位置不同的包名归一到同一会话）。发送者
+  **不是人格 ID**——人格仍由路由器按主人格 / 群聊多人格规则绑定；
+- **仅私聊语义**：`is_group_chat=False`（SmsForwarder 无群聊概念；群聊多人格
+  路径不适用）；
+- **来源分级**：`synthetic=False`（真实人类消息）；默认 `peer`（第三方发送者
+  不自动晋升主人），仅当归一发送者命中 `SMS_FORWARDER_OWNER_NUMBERS`
+  （逗号分隔的号码 / 联系名，同一归一口径）时该消息 `is_owner=True`，路由器
+  按主人来源落档；
+- **时间**：`ts_ms` 恒为服务端可用的 epoch 毫秒；时间戳缺失 / 非法 / 微秒级
+  以下数值统一回落服务端时钟；
+- **附件**：SmsForwarder 转发为纯文本（无附件提取）。
+
+### 去重 / 队列 / 丢弃（文档化边界）
+
+- **幂等**：带 `msgid` 的载荷按消息号在进程内有界 FIFO 窗口（1024）内吸收；
+  无 `msgid` 的载荷按「发送者 + 正文」内容哈希在 120 秒窗口内吸收（手机端
+  模板未带消息号时的重投 / 网络重试防线；同发送者同正文在窗口内真实重复
+  到达会被视为重投——需要区分时请让模板携带 `msgid`）；
+- **队列**：入站队列容量 64 / worker 2（**代码常量非 env**——与 QQ / 企微
+  runner 同风格）。队列满即丢弃并计 `dropped_inbound`，ERROR 含去重键 /
+  chat_id / message_id / 队列深度 / 累计丢弃；
+- **丢弃不登记去重**：队列满丢弃后手机端重投可在队列恢复后重新消费；已入队
+  载荷的重投由去重窗吸收。周期观测 INFO 每 60 秒 gate 一次（注入时钟），仅
+  在 `pending>0` 或丢弃有增量时输出深度 / 增量；
+- **停机**：`request_stop` → 取消 worker → 清空待处理队列（会话级资源零残留）；
+- **进程边界**：去重窗是进程内状态（多 worker 部署各自独立——负载均衡把
+  重投打到不同进程时可能重消费；需要严格幂等时保持 `SERVER_WORKERS=1`）。
+
+### webhook 确认与鉴权（铁律）
+
+**端点只做鉴权 / 体校验 / 入队，随后恒 200 确认**——LLM 回合耗时由后台
+worker 承担。解析 / 去重 / 路由面恒不抛异常；接受 / 忽略类事件（通知关闭 /
+空正文 / 未知 kind）/ 隔离失败均返回 `200 {"status": "ok"}`（手机端对非 200
+会重投）。仅请求形态错误走 4xx：
+
+| 失败类别 | 错误码 | HTTP | 说明 |
+|---|---|---|---|
+| token 缺失 | `UNAUTHORIZED` | 401 | 鉴权在体解析 / 去重之前——被拒不消耗去重 |
+| token 不匹配 | `FORBIDDEN` | 403 | 恒时比较（`secrets.compare_digest`） |
+| Content-Type 非 `application/json` | `BAD_REQUEST` | 400 | 手机端转发通道固定 JSON 模板 |
+| 请求体为空 / 超 64 KiB / 非法 JSON / 非 JSON 对象 / 深嵌套 | `BAD_REQUEST` | 400 | 不进入路由与去重 |
+
+鉴权 token 可经三种形态携带（任一命中即可）：`Authorization: Bearer <token>`、
+`X-SmsForwarder-Token: <token>` / `X-Sms-Forwarder-Token: <token>` 请求头、
+`?token=<token>` 查询参数。`SMS_FORWARDER_TOKEN` 为空 = 鉴权关闭（仅限同机 /
+可信内网）；`ENV=prod` 且通道启用时空 token 启动期 fail-closed（见
+[README.md](README.md#认证管理面-owner-token-鉴权)）。
+
+### 仅入站边界（锁定）
+
+- 适配器 `SmsForwarderAdapter.send_message` 恒返回空 `message_ids`，**不对
+  手机端发起任何请求**；人格回复照常生成并写入会话 / 记忆（后续回合可引用）。
+- 若后续需要手机端回信，接入 SmsForwarder 主动控制 API 时必须在适配器内
+  扩展发送面、配置化默认关闭并做逐消息失败隔离——本切片不引入。
+
+### 部署步骤（手机端 + 后端）
+
+1. 后端设置 `SMS_FORWARDER_ENABLED=true` 与 `SMS_FORWARDER_TOKEN=<随机长串>`
+   （公网部署必须非空；`ENV=prod` 强制）；按需开启
+   `SMS_FORWARDER_NOTIFICATIONS_ENABLED` 与配置 `SMS_FORWARDER_OWNER_NUMBERS`；
+2. 公网部署经反代暴露 `POST /api/v1/channels/sms-forwarder`（HTTPS）；
+3. 手机端 SmsForwarder 新建「Webhook」转发通道：URL 填后端端点；请求头填
+   `X-SmsForwarder-Token: <同一 token>`（或使用 `Authorization: Bearer` /
+   查询参数）；模板 JSON 按上表字段配置（建议至少 `from` / `content` /
+   `timestamp` / `msgid`）；
+4. 手机端「发送测试」应收到 `{"status":"ok"}`；后端日志可见队列消费与
+   `peer` / `owner` 来源分级记录。
+
+### Settings（SmsForwarder 分节）
+
+env 面（`env_prefix=SMS_FORWARDER_`；嵌套覆写 `CHANNELS__SMS_FORWARDER__*`
+亦可用）：
+
+| 字段 | env 变量 | 默认 | 说明 |
+|---|---|---|---|
+| `enabled` | `SMS_FORWARDER_ENABLED` | `false` | 是否装配仅入站适配器与有界入站 runner（false = 端点照常确认并丢弃） |
+| `token` | `SMS_FORWARDER_TOKEN` | 空 | 入站校验 token（SecretStr；空 = 鉴权关闭；生产 `ENV=prod` 且通道启用时强制非空） |
+| `notifications_enabled` | `SMS_FORWARDER_NOTIFICATIONS_ENABLED` | `false` | 是否接收 `kind=notification`（false = 仅短信；通知确认丢弃） |
+| `owner_numbers` | `SMS_FORWARDER_OWNER_NUMBERS` | 空 | 属主号码 / 联系名清单（逗号分隔；空 = 全部发送者按 peer 落档） |
+
+```bash
+# .env 形态（分节 env 前缀）
+SMS_FORWARDER_ENABLED=true
+SMS_FORWARDER_TOKEN=your-long-random-token
+SMS_FORWARDER_NOTIFICATIONS_ENABLED=false
+SMS_FORWARDER_OWNER_NUMBERS=13800138000,妈妈
+```
+
+```yaml
+# config.yaml 不承载通道配置（env 面专属——与 telegram / QQ / 企微 / 抖音同约定）；
+# 嵌套覆写形态（进程环境变量，优先级高于 .env）：
+#   CHANNELS__SMS_FORWARDER__ENABLED=true
+#   CHANNELS__SMS_FORWARDER__NOTIFICATIONS_ENABLED=true
+```
+
+隔离构造（测试 / 工具）：
+
+```python
+from packages.harness.config.models import ChannelsSettings, SmsForwarderChannelSettings
+from packages.harness.config.settings import build_isolated_settings
+
+settings = build_isolated_settings(
+    channels=ChannelsSettings(
+        sms_forwarder=SmsForwarderChannelSettings(
+            enabled=True,
+            token="test-only-token",
+            owner_numbers="13800138000",
+        )
+    )
+)
+```
+
+> 注：`backend/.env.example` 键面以 `.env.example`（`pixi run gen-examples`
+> 生成）为真源，本表为语义说明。
 
 ## Settings（`Settings.channels`）——telegram 分节
 
