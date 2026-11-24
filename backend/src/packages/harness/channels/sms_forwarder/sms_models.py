@@ -23,7 +23,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from collections import deque
 from collections.abc import Callable
 from enum import StrEnum
@@ -36,6 +35,10 @@ from packages.harness.channels.channel_models import (
     ChannelDeliveryResultModel,
     ChannelType,
     InboundMessageModel,
+)
+from packages.harness.channels.phone_numbers import (
+    normalize_phone_identifier,
+    parse_phone_owner_numbers,
 )
 from packages.harness.core import time_utils
 
@@ -62,9 +65,6 @@ SMS_FORWARDER_CONTENT_DEDUP_WINDOW_MS: Final[int] = 120_000
 
 #: 去重窗口容量（已见键上限——超出按 FIFO 淘汰；进程重启清零）。
 SMS_FORWARDER_DEDUP_WINDOW_SIZE: Final[int] = 1024
-
-#: 手机号分隔符（空格 / 连字符 / 括号 / 点——展示形态归一为纯号码）。
-_SENDER_SEPARATORS_RE: Final[re.Pattern[str]] = re.compile(r"[\s\-().]")
 
 #: 秒级时间戳下界（低于该值视为非法——回落到服务端时钟）。
 _EPOCH_SECONDS_MIN: Final[int] = 1_000_000_000
@@ -297,13 +297,9 @@ def normalize_sms_forwarder_kind(raw: str) -> SmsForwarderKind | None:
 def normalize_sms_sender(raw: str) -> str:
     """归一发送者标识（手机号去分隔符 / 国家码，联系名小写）。
 
-    规则（文档化决策）：
-
-        - 去除空格 / 连字符 / 括号 / 点等展示分隔符；
-        - 纯数字号码去掉 ``+86`` / ``0086`` / ``86`` 前缀（中国手机号
-          11 位归一）——手机端模板可能带国际码，属主清单与发送者两侧
-          使用同一归一键；
-        - 其余（联系名）小写化，便于属主清单大小写不敏感比较。
+    委托 :func:`packages.harness.channels.phone_numbers.normalize_phone_identifier`
+    （与 WhatsApp 通道共享同一归一口径——两侧属主清单与会话键必须
+    逐字节一致）；本函数保留原导出名以维持既有消费面。
 
     Args:
         raw: 原始发送者（手机号 / 联系名）。
@@ -311,40 +307,23 @@ def normalize_sms_sender(raw: str) -> str:
     Returns:
         归一后的发送者键；空串表示无发送者。
     """
-    cleaned = _SENDER_SEPARATORS_RE.sub("", raw.strip())
-    if not cleaned:
-        return ""
-    if cleaned.startswith("+"):
-        digits = cleaned[1:]
-        if digits.isdigit():
-            if len(digits) == 13 and digits.startswith("86"):
-                return digits[2:]
-            return digits
-        return cleaned.lower()
-    if cleaned.isdigit():
-        if len(cleaned) == 15 and cleaned.startswith("0086"):
-            return cleaned[4:]
-        if len(cleaned) == 13 and cleaned.startswith("86"):
-            return cleaned[2:]
-        return cleaned
-    return cleaned.lower()
+    return normalize_phone_identifier(raw)
 
 
 def parse_owner_numbers(raw: str) -> frozenset[str]:
     """解析属主号码 / 联系名清单（逗号分隔；空串 = 空集）。
 
+    委托
+    :func:`packages.harness.channels.phone_numbers.parse_phone_owner_numbers`
+    （与 WhatsApp 通道共享同一归一口径）；本函数保留原导出名。
+
     Args:
         raw: 配置原值（``SMS_FORWARDER_OWNER_NUMBERS``）。
 
     Returns:
-        归一后的属主键集合（沿用 :func:`normalize_sms_sender` 的归一口径）。
+        归一后的属主键集合。
     """
-    owners: set[str] = set()
-    for item in raw.split(","):
-        normalized = normalize_sms_sender(item)
-        if normalized:
-            owners.add(normalized)
-    return frozenset(owners)
+    return parse_phone_owner_numbers(raw)
 
 
 def resolve_sms_forwarder_timestamp_ms(

@@ -24,7 +24,9 @@
       子模型 env_prefix=``TELEGRAM_``；qq 子模型 env_prefix=``QQ_``；
       wecom 子模型 env_prefix=``WECOM_``——企业微信智能机器人长连接；
       douyin 子模型 env_prefix=``DOUYIN_``；sms_forwarder 子模型
-      env_prefix=``SMS_FORWARDER_``——手机端转发的短信 / 通知入站）
+      env_prefix=``SMS_FORWARDER_``——手机端转发的短信 / 通知入站；
+      whatsapp 子模型 env_prefix=``WHATSAPP_``——WhatsApp Cloud API 入站 /
+      文本出站）
     - ``DutySettings``       —— 值班轮分节（``Settings.duty``；env_prefix=
       ``DUTY_``——duty 域）
     - ``DreamScheduleSettings`` —— 梦境调度分节（``Settings.dream_schedule``；
@@ -90,6 +92,7 @@ __all__ = [
     "TelegramSettings",
     "QqChannelSettings",
     "SmsForwarderChannelSettings",
+    "WhatsAppChannelSettings",
     "ChannelsSettings",
     "DutySettings",
     "DreamScheduleSettings",
@@ -1124,13 +1127,82 @@ class SmsForwarderChannelSettings(BaseSettings):
     )
 
 
+class WhatsAppChannelSettings(BaseSettings):
+    """WhatsApp Cloud API 通道配置（env_prefix=``WHATSAPP_``——channels 域）。
+
+    入站经 Meta webhook 推送（hub 校验 + ``X-Hub-Signature-256`` HMAC
+    校验），出站经 Graph API 文本消息发送。锁定决策：``enabled=False``
+    （默认）——零配置开发可用、测试 hermetic；``enabled=True`` 时 app
+    lifespan 装配有界入站 runner 与文本出站适配器（24 小时客户服务窗
+    判定——超窗自由格式消息拒绝，模板消息暂未实现）。
+
+    凭据面（SecretStr 三分量——repr 不泄露）：
+    ``verify_token``（hub 握手比对）、``app_secret``（webhook 签名密钥）、
+    ``access_token``（Graph API Bearer）。``ENV=prod`` 且本通道启用时
+    四项（上述三者 + ``phone_number_id``）任一为空即拒绝启动（见
+    :func:`packages.harness.config.auth_policy.ensure_auth_policy`）；
+    非生产环境空值分别表示对应校验关闭 / 发送时拒绝（开发 / 测试形态）。
+
+    ``owner_numbers`` 与 SmsForwarder 共享同一号码归一函数
+    （:mod:`packages.harness.channels.phone_numbers`）——默认全部发送者按
+    ``peer`` 落档，仅命中清单时按主人来源处理。
+
+    Attributes:
+        enabled: 是否启用 WhatsApp Cloud API 通道（False = 不装配 runner /
+            适配器；webhook 端点照常确认并丢弃）。
+        verify_token: Meta webhook hub 校验 token（SecretStr；空 = 校验关闭，
+            仅限开发 / 测试形态）。
+        app_secret: Meta 应用密钥（SecretStr——webhook 签名 HMAC 密钥；
+            空 = 签名校验关闭，仅限开发 / 测试形态）。
+        access_token: Graph API 永久访问令牌（SecretStr；空 = 发送时以
+            ``CHANNEL_TOKEN_MISSING`` 拒绝）。
+        phone_number_id: 企业号码 ID（Graph API 出站路径段；启用时必填）。
+        api_version: Graph API 版本段（默认 ``v21.0``）。
+        api_base: Graph API 基础 URL（默认 ``https://graph.facebook.com``）。
+        owner_numbers: 属主号码清单（逗号分隔；空 = 全部发送者按 peer 落档）。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用 WhatsApp Cloud API 通道")
+    verify_token: SecretStr = Field(
+        default=SecretStr(""),
+        description="Meta webhook hub 校验 token（空 = 校验关闭，仅开发 / 测试形态）",
+    )
+    app_secret: SecretStr = Field(
+        default=SecretStr(""),
+        description="Meta 应用密钥（webhook 签名 HMAC；空 = 签名校验关闭，仅开发 / 测试形态）",
+    )
+    access_token: SecretStr = Field(
+        default=SecretStr(""),
+        description="Graph API 永久访问令牌（空 = 发送时拒绝）",
+    )
+    phone_number_id: str = Field(
+        default="", description="企业号码 ID（Graph API 出站路径段；启用时必填）"
+    )
+    api_version: str = Field(default="v21.0", min_length=1, description="Graph API 版本段")
+    api_base: str = Field(
+        default="https://graph.facebook.com", min_length=1, description="Graph API 基础 URL"
+    )
+    owner_numbers: str = Field(
+        default="",
+        description="属主号码清单（逗号分隔；空 = 全部发送者按 peer 落档）",
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="WHATSAPP_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class ChannelsSettings(BaseModel):
     """通道域配置分节（``Settings.channels``——多平台通道聚合容器）。
 
     当前含 telegram、qq（NapCat / OneBot v11）、企业微信智能机器人长连接、
-    抖音 web 与 SmsForwarder 短信 / 通知转发五个子模型；多通道扩展（B站等）
-    在此追加同级子模型（各自独立 env_prefix 的 ``BaseSettings``——本工程
-    约定：env 面子配置为 BaseSettings，聚合容器为普通 BaseModel）。
+    抖音 web、SmsForwarder 短信 / 通知转发与 WhatsApp Cloud API 六个子模型；
+    多通道扩展（B站等）在此追加同级子模型（各自独立 env_prefix 的
+    ``BaseSettings``——本工程约定：env 面子配置为 BaseSettings，聚合容器为
+    普通 BaseModel）。
 
     Attributes:
         telegram: Telegram 通道配置（默认关闭）。
@@ -1138,6 +1210,7 @@ class ChannelsSettings(BaseModel):
         wecom: 企业微信智能机器人长连接配置（默认关闭）。
         douyin: 抖音 web 通道配置（默认关闭——浏览器 sidecar 底座）。
         sms_forwarder: SmsForwarder 短信 / 通知转发配置（默认关闭；仅入站）。
+        whatsapp: WhatsApp Cloud API 配置（默认关闭；webhook 入站 + 文本出站）。
     """
 
     telegram: TelegramSettings = Field(
@@ -1153,6 +1226,10 @@ class ChannelsSettings(BaseModel):
     sms_forwarder: SmsForwarderChannelSettings = Field(
         default_factory=SmsForwarderChannelSettings,
         description="SmsForwarder 短信 / 通知转发配置（仅入站）",
+    )
+    whatsapp: WhatsAppChannelSettings = Field(
+        default_factory=WhatsAppChannelSettings,
+        description="WhatsApp Cloud API 配置（webhook 入站 + 文本出站）",
     )
 
 

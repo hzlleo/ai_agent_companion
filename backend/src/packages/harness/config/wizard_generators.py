@@ -17,7 +17,7 @@
 
 步骤定义（``_STEP_DEFINITIONS``）覆盖 ``.env.example`` 的全部分节前缀
 ——即 ``scripts/generate_examples_env.py`` 的 ``_ENV_SECTIONS`` 登记表
-全部前缀（当前 30 个），与模板分节顺序一致。前缀存在包含关系时
+全部前缀（当前 31 个），与模板分节顺序一致。前缀存在包含关系时
 （``LLM_INTIMATE_`` ⊂ ``LLM_``）按定义顺序首次命中归属，模板键不会在
 两个步骤里重复出现；``FLOW_`` / ``GROUP_PERSONA_`` 为独立前缀，各自
 对应心流门控与群聊多人格配置步骤。
@@ -61,6 +61,7 @@ _STEP_DEFINITIONS: list[tuple[str, list[str]]] = [
     ("企业微信智能机器人通道配置", ["WECOM_"]),
     ("抖音 web 通道配置", ["DOUYIN_"]),
     ("SmsForwarder 短信转发通道配置", ["SMS_FORWARDER_"]),
+    ("WhatsApp Cloud API 通道配置", ["WHATSAPP_"]),
     ("值班轮配置", ["DUTY_"]),
     ("梦境调度配置", ["DREAM_SCHEDULE_"]),
     ("中央调度器配置", ["SCHEDULER_"]),

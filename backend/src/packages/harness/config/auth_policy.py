@@ -1,12 +1,13 @@
 """生产环境鉴权启动策略——fail-closed 判定（纯函数面）。
 
-管理面 owner-token 与 QQ / SmsForwarder 入站 webhook 的鉴权在开发 /
-测试环境保持「空 token = 鉴权关闭」形态；``ENV=prod`` 时三者必须有
-非空 token，否则 app 启动期拒绝启动（安全边界不得以无鉴权形态上线）。
+管理面 owner-token 与 QQ / SmsForwarder / WhatsApp 入站 webhook 的鉴权在
+开发 / 测试环境保持「空凭据 = 校验关闭」形态；``ENV=prod`` 时管理面 token
+必须非空、启用的入站通道凭据必须齐全，否则 app 启动期拒绝启动（安全边界
+不得以无鉴权形态上线）。
 
 判定面与文档边界：保护路由清单与豁免契约归 ``app/main.py`` 的
 ``_include_routers`` 唯一权威；本模块只回答「生产环境是否允许以当前
-token 配置启动」。
+凭据配置启动」。
 """
 
 from __future__ import annotations
@@ -68,18 +69,21 @@ def ensure_auth_policy(settings: Settings) -> None:
     """启动期鉴权策略校验（生产环境 fail-closed）。
 
     规则（锁定）：``settings.env`` 为 ``prod`` 时，管理面 owner token
-    必须非空；QQ / SmsForwarder 通道启用时其入站 token 同样必须非空。
-    开发 / 测试环境保持既有「空 = 鉴权关闭」行为（零配置开发可用）。
+    必须非空；QQ / SmsForwarder 通道启用时其入站 token 同样必须非空；
+    WhatsApp 通道启用时 hub 校验 token / 应用密钥 / 访问令牌 / 企业号码 ID
+    四项必须全部非空。开发 / 测试环境保持既有「空 = 鉴权关闭」行为
+    （零配置开发可用）。
 
     Args:
         settings: 生效 Settings（运行环境标识 / 管理面 token 变量名 /
-            QQ / SmsForwarder 通道开关与其 token 配置）。
+            QQ / SmsForwarder / WhatsApp 通道开关与其凭据配置）。
 
     Raises:
         BusinessException: 生产环境 ``ADMIN_AUTH_TOKEN`` 解析为空
             （``CONFIG_INVALID``）；生产环境 QQ 通道启用但
             ``QQ_WEBHOOK_TOKEN`` 解析为空（同码）；生产环境 SmsForwarder
-            通道启用但 ``SMS_FORWARDER_TOKEN`` 为空（同码）。
+            通道启用但 ``SMS_FORWARDER_TOKEN`` 为空（同码）；生产环境
+            WhatsApp 通道启用但四项凭据任一为空（同码）。
     """
     if settings.env is not RuntimeEnv.PROD:
         return
@@ -110,3 +114,23 @@ def ensure_auth_policy(settings: Settings) -> None:
             message="生产环境启用 SmsForwarder 通道时必须设置 SMS_FORWARDER_TOKEN",
             details={"env": settings.env.value},
         )
+    if settings.channels.whatsapp.enabled:
+        whatsapp = settings.channels.whatsapp
+        required_credentials = {
+            "WHATSAPP_VERIFY_TOKEN": whatsapp.verify_token.get_secret_value().strip(),
+            "WHATSAPP_APP_SECRET": whatsapp.app_secret.get_secret_value().strip(),
+            "WHATSAPP_ACCESS_TOKEN": whatsapp.access_token.get_secret_value().strip(),
+            "WHATSAPP_PHONE_NUMBER_ID": whatsapp.phone_number_id.strip(),
+        }
+        missing = [name for name, value in required_credentials.items() if not value]
+        if missing:
+            raise BusinessException(
+                code=ErrorCode.CONFIG_INVALID,
+                message=(
+                    "生产环境启用 WhatsApp 通道时必须设置 WHATSAPP_VERIFY_TOKEN / "
+                    "WHATSAPP_APP_SECRET / WHATSAPP_ACCESS_TOKEN / "
+                    "WHATSAPP_PHONE_NUMBER_ID（缺失："
+                    f"{', '.join(missing)}）"
+                ),
+                details={"missing": ", ".join(missing), "env": settings.env.value},
+            )

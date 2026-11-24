@@ -51,6 +51,7 @@ from packages.harness.config.models import (
     TtsSettings,
     WebSearchSettings,
     WecomChannelSettings,
+    WhatsAppChannelSettings,
 )
 from packages.harness.emotion.emotion_models import EmotionSettings
 from packages.harness.intent.intent_models import IntentSettings
@@ -74,6 +75,7 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("CHANNELS.WECOM — 企业微信智能机器人长连接配置（默认关闭；订阅凭据 = BotID + Secret，密钥经 WECOM_SECRET 间接）", [WecomChannelSettings]),
     ("CHANNELS.DOUYIN — 抖音 web 通道配置（默认关闭；复用浏览器 sidecar 的已登录页面，登录态是 profile cookie，无独立密钥键）", [DouyinChannelSettings]),
     ("CHANNELS.SMS_FORWARDER — SmsForwarder 短信 / 通知转发通道配置（默认关闭；仅入站；令牌经 SMS_FORWARDER_TOKEN 直接配置）", [SmsForwarderChannelSettings]),
+    ("CHANNELS.WHATSAPP — WhatsApp Cloud API 通道配置（默认关闭；webhook 入站 + 文本出站；hub token / 应用密钥 / 访问令牌经 WHATSAPP_* 直接配置）", [WhatsAppChannelSettings]),
     ("DUTY — 值班轮配置（charter 工具循环 + 报告属主投递）", [DutySettings]),
     ("DREAM_SCHEDULE — 夜间梦境定时触发配置", [DreamScheduleSettings]),
     ("SCHEDULER — 中央调度器配置（自研异步循环）", [SchedulerSettings]),

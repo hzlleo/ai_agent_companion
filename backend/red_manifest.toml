@@ -313,3 +313,45 @@ symbol = "app.api.channels_sms_forwarder:receive_sms_forwarder_webhook"
 tests = [
     "tests/unit/test_channels_sms_forwarder_api.py::TestHappyPath::test_accepted_payload_returns_ok_shape",
 ]
+
+[[probes]]
+name = "phone-number-normalize-removal"
+symbol = "packages.harness.channels.phone_numbers:normalize_phone_identifier"
+tests = [
+    "tests/unit/test_phone_numbers.py::test_normalize_phone_identifier_matrix",
+]
+
+[[probes]]
+name = "whatsapp-payload-parse-removal"
+symbol = "packages.harness.channels.whatsapp.whatsapp_models:parse_whatsapp_webhook_payload"
+tests = [
+    "tests/unit/test_whatsapp_models.py::test_text_payload_routes_with_normalized_chat_key",
+]
+
+[[probes]]
+name = "whatsapp-runner-removal"
+symbol = "packages.harness.channels.whatsapp.whatsapp_runner:WhatsAppWebhookRunner"
+tests = [
+    "tests/unit/test_whatsapp_runner.py::TestQueueBackpressure::test_queue_overflow_drops_counts_and_logs",
+]
+
+[[probes]]
+name = "whatsapp-adapter-removal"
+symbol = "packages.harness.channels.whatsapp.whatsapp_adapter:WhatsAppAdapter"
+tests = [
+    "tests/unit/test_whatsapp_adapter.py::test_send_outside_window_rejected_without_http_call",
+]
+
+[[probes]]
+name = "whatsapp-client-removal"
+symbol = "packages.harness.channels.whatsapp.whatsapp_client:WhatsAppCloudClient"
+tests = [
+    "tests/unit/test_whatsapp_adapter.py::test_send_success_returns_provider_message_id_and_wire_shape",
+]
+
+[[probes]]
+name = "whatsapp-webhook-route-removal"
+symbol = "app.api.channels_whatsapp:receive_whatsapp_webhook"
+tests = [
+    "tests/unit/test_channels_whatsapp_api.py::TestSignatureVerification::test_valid_signature_routes_message",
+]
