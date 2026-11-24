@@ -176,44 +176,55 @@ async def test_whatsapp_wa_id_preserves_country_code_for_chat_key_and_owner() ->
 
 
 @pytest.mark.parametrize(
-    ("message_type", "overrides", "expected"),
+    ("message_type", "overrides", "expected", "expected_has_user_text"),
     [
-        ("image", {"image": {"caption": "看图"}}, "看图"),
-        ("document", {"document": {"caption": "合同", "filename": "a.pdf"}}, "合同"),
-        ("video", {"video": {"caption": "短片"}}, "短片"),
-        ("image", {"image": {}}, "[图片]"),
-        ("audio", {"audio": {"voice": True}}, "[语音]"),
-        ("document", {"document": {}}, "[文件]"),
-        ("sticker", {"sticker": {}}, "[贴纸]"),
-        ("video", {"video": {}}, "[视频]"),
-        ("location", {"location": {"name": "家"}}, "家"),
-        ("location", {"location": {"address": "上海市"}}, "上海市"),
-        ("location", {"location": {}}, "[位置]"),
-        ("button", {"button": {"text": "确认"}}, "确认"),
-        ("button", {"button": {}}, "[按钮]"),
+        ("text", {}, "你好", True),
+        ("image", {"image": {"caption": "看图"}}, "看图", True),
+        ("document", {"document": {"caption": "合同", "filename": "a.pdf"}}, "合同", True),
+        ("video", {"video": {"caption": "短片"}}, "短片", True),
+        ("image", {"image": {}}, "[图片]", False),
+        ("audio", {"audio": {"voice": True}}, "[语音]", False),
+        ("document", {"document": {}}, "[文件]", False),
+        ("sticker", {"sticker": {}}, "[贴纸]", False),
+        ("video", {"video": {}}, "[视频]", False),
+        ("location", {"location": {"name": "家"}}, "家", True),
+        ("location", {"location": {"address": "上海市"}}, "上海市", True),
+        ("location", {"location": {}}, "[位置]", True),
+        ("button", {"button": {"text": "确认"}}, "确认", True),
+        ("button", {"button": {}}, "[按钮]", True),
         (
             "interactive",
             {"interactive": {"type": "button_reply", "button_reply": {"title": "选项甲"}}},
             "选项甲",
+            True,
         ),
         (
             "interactive",
             {"interactive": {"type": "list_reply", "list_reply": {"title": "选项乙"}}},
             "选项乙",
+            True,
         ),
-        ("interactive", {"interactive": {"type": "button_reply"}}, "[交互回复]"),
+        ("interactive", {"interactive": {"type": "button_reply"}}, "[交互回复]", True),
     ],
 )
 async def test_message_type_text_fallback_matrix(
-    message_type: str, overrides: dict[str, Any], expected: str
+    message_type: str,
+    overrides: dict[str, Any],
+    expected: str,
+    expected_has_user_text: bool,
 ) -> None:
-    """媒体 / 位置 / 按钮 / 交互回复的文本回退（caption 或占位标签）。"""
+    """媒体 / 位置 / 按钮 / 交互回复的文本回退与 has_user_text 映射。
+
+    纯媒体占位（无 caption）映射 ``has_user_text=False``；caption / 文本 /
+    结构化文本回退映射 True——路由器按该字段跳过纯媒体生成。
+    """
     message = _message(message_type=message_type, **overrides)
     batch = parse_whatsapp_webhook_payload(
         _payload(messages=[message]), owner_numbers=frozenset(), clock=_Clock()
     )
     assert len(batch.messages) == 1
     assert batch.messages[0].inbound.text == expected
+    assert batch.messages[0].inbound.has_user_text is expected_has_user_text
 
 
 @pytest.mark.parametrize(

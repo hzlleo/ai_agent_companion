@@ -472,6 +472,10 @@ class ChannelRouter:
                 self._chat_group_flags[self.session_key(context)] = message.is_group_chat
                 self._chat_owner_flags[self.session_key(context)] = message.is_owner
                 group_pool = await self._group_responder_pool(message)
+                # 本入站只读一次时钟：表情收录选择与群聊应答选择必须基于同一
+                # 时刻，否则冷却边界上两次读数会产出不同人格集合（收录集与
+                # 应答集分叉）。
+                now_ms = self._clock()
                 primary_state: ChatSessionStateModel | None = None
                 if group_pool is None:
                     primary_state = await self._get_or_create_session(context)
@@ -492,7 +496,7 @@ class ChannelRouter:
                         ingest_persona_ids: Sequence[int] = [gate_persona_id]
                     else:
                         ingest_persona_ids = self._group_responder_persona_ids(
-                            context, group_pool, now_ms=self._clock()
+                            context, group_pool, now_ms=now_ms
                         )
                     await self._ingest_sticker_attachments(
                         message.attachments, ingest_persona_ids
@@ -503,6 +507,7 @@ class ChannelRouter:
                         adapter,
                         message,
                         gate_persona_id,
+                        now_ms=now_ms,
                     )
                     if gate_result is not None:
                         return gate_result
@@ -532,6 +537,7 @@ class ChannelRouter:
                         group_pool,
                         message.text,
                         reply_to_message_id=message.message_id,
+                        now_ms=now_ms,
                         include_sticker_reply=has_sticker,
                     )
                     if group_delivery is not None:
@@ -574,6 +580,8 @@ class ChannelRouter:
         adapter: ChannelAdapterProtocol,
         message: InboundMessageModel,
         persona_id: int,
+        *,
+        now_ms: int,
     ) -> ChannelDeliveryResultModel | None:
         """门控判定后再记录入站（返回非 None 表示本消息已由门控接管）。
 
@@ -584,14 +592,17 @@ class ChannelRouter:
         合成事件不会到达本方法（路由器在门控前恒跳过 ``synthetic=True``）；
         判定层的 ``SKIP / SYNTHETIC_EVENT`` 结论保留为纯函数契约。
 
-        仅附件入站不把占位文本追加进待回复缓冲（``has_user_text=False``）：
-        到达时刻与积压照常推进，连发 / 节律判定不变，合并批次不含占位条目。
+        仅附件入站不把占位文本追加进待回复缓冲，也不计未读积压
+        （``has_user_text=False``）：到达时刻照常推进（连发 / 节律判定
+        原料），「未读」只统计待回复的用户文本。
 
         Args:
             context: 通道会话上下文。
             adapter: 通道适配器（延迟批次投递面）。
             message: 入站消息。
             persona_id: 关系摘要查询人格（群聊取首选人格 / 单聊取会话人格）。
+            now_ms: 本入站时刻（调用方单次读数——与表情收录 / 群聊应答
+                选择同一时刻，防冷却边界分叉）。
 
         Returns:
             ``SKIP`` / 已排程（延迟或合并）时返回空投递结果；``REPLY`` 时
@@ -601,7 +612,7 @@ class ChannelRouter:
         if settings is None:
             return None
         key = self.session_key(context)
-        now = self._clock()
+        now = now_ms
         state = self._flow_states.get(key, FlowChatStateModel())
         if (
             state.pending
@@ -629,7 +640,7 @@ class ChannelRouter:
             settings,
         )
         state = record_inbound(
-            state, message.text, now, append_text=message.has_user_text
+            state, message.text, now, has_user_text=message.has_user_text
         )
         self._flow_states[key] = state
         logger.debug(
@@ -779,7 +790,12 @@ class ChannelRouter:
                 group_pool = await self._group_responder_pool_for_flag(is_group)
                 if group_pool is not None:
                     delivery = await self._reply_via_group(
-                        context, adapter, group_pool, merged.text, reply_to_message_id=None
+                        context,
+                        adapter,
+                        group_pool,
+                        merged.text,
+                        reply_to_message_id=None,
+                        now_ms=now,
                     )
                     if delivery is None:
                         delivery = await self._reply_with_primary(
@@ -1082,6 +1098,7 @@ class ChannelRouter:
         user_text: str,
         *,
         reply_to_message_id: str | None,
+        now_ms: int,
         include_sticker_reply: bool = False,
     ) -> ChannelDeliveryResultModel | None:
         """按轮转 / 冷却 / 重复抑制结论逐人格应答并投递。
@@ -1091,6 +1108,9 @@ class ChannelRouter:
         归属。逐人格失败隔离：单人格回复 / 投递失败记日志后继续其余人格；
         **全部失败**时抛出首个异常交给外层兜底（用户面仍收到一条短提示）。
 
+        选择时刻由调用方单次读数传入（``now_ms``）：入站表情收录与应答
+        选择必须共用同一时刻，否则冷却边界上两次读数会选中不同人格集合。
+
         Args:
             context: 通道会话上下文。
             adapter: 通道适配器。
@@ -1098,6 +1118,7 @@ class ChannelRouter:
             user_text: 回复输入文本（单条或合并文本）。
             reply_to_message_id: 首条应答的引用目标（None = 不引用；其余
                 人格的应答不再引用同一入站，避免引用噪声）。
+            now_ms: 本轮选择与应答记录时刻（调用方注入的 epoch 毫秒）。
             include_sticker_reply: 每位应答人格是否随文本附发自己库中的
                 表情（入站带 sticker 附件且表情桥已装配时生效）。
 
@@ -1108,7 +1129,7 @@ class ChannelRouter:
         if settings is None:
             return None
         key = self.session_key(context)
-        now = self._clock()
+        now = now_ms
         group_state = self._group_states.get(key, GroupResponderStateModel())
         selection = self._select_group_responders(context, pool, now_ms=now)
         if not selection.responder_persona_ids:
@@ -1156,7 +1177,7 @@ class ChannelRouter:
                 continue
             message_ids.extend(delivery.message_ids)
             replied.append(persona_id)
-            updated_last_reply[persona_id] = self._clock()
+            updated_last_reply[persona_id] = now
         if not replied:
             if first_exception is not None:
                 raise first_exception

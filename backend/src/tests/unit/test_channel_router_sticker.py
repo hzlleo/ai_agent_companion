@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -23,6 +24,7 @@ from packages.harness.channels.channel_models import (
 from packages.harness.channels.channel_service import ChannelRouter
 from packages.harness.chat.chat_models import ChatSessionStateModel
 from packages.harness.chat.persona_rotation_models import GroupPersonaSettings
+from packages.harness.core import time_utils
 from packages.harness.core.context import persona_id_var
 from packages.harness.persona.chara_card import CharaCardModel
 from packages.harness.persona.dtos import PersonaRecordDTO, PersonaStatus
@@ -268,24 +270,70 @@ def _group_inbound(*, message_id: str = "42") -> InboundMessageModel:
     return message
 
 
+class _SteppingClock:
+    """每次读数推进固定步长的时钟（暴露同入站多次读数导致的选择漂移）。"""
+
+    def __init__(self, start_ms: int = BASE_MS, step_ms: int = 1) -> None:
+        """初始化。
+
+        Args:
+            start_ms: 起始时刻（epoch 毫秒）。
+            step_ms: 每次读数推进的毫秒数。
+        """
+        self.current = start_ms
+        self.step_ms = step_ms
+        self.calls = 0
+
+    def __call__(self) -> int:
+        """返回当前时刻并推进（记录读数次数）。"""
+        self.calls += 1
+        value = self.current
+        self.current += self.step_ms
+        return value
+
+    def reset(self, start_ms: int = BASE_MS) -> None:
+        """回到指定时刻并清零读数计数（逐入站独立观测）。
+
+        Args:
+            start_ms: 起始时刻（epoch 毫秒）。
+        """
+        self.current = start_ms
+        self.calls = 0
+
+
 def _group_router(
     *,
     adapter: GroupFakeAdapter,
     service: GroupFakeChatService,
     ingest: Any,
     max_responders: int = 2,
+    cooldown_ms: int = 0,
+    clock: Callable[[], int] | None = None,
 ) -> ChannelRouter:
-    """装配群聊多人格路由器（注入 fake 依赖与表情收录钩子）。"""
+    """装配群聊多人格路由器（注入 fake 依赖与表情收录钩子）。
+
+    Args:
+        adapter: fake 通道适配器。
+        service: fake ChatService。
+        ingest: 表情收录钩子。
+        max_responders: 单轮应答人格上限。
+        cooldown_ms: 人格应答冷却毫秒（0 = 不设冷却）。
+        clock: 注入时钟（None = 真实时钟）。
+
+    Returns:
+        装配好的群聊路由器。
+    """
     router = ChannelRouter(
         chat_service_factory=lambda: service,
         session_factory=empty_session_factory,
         group_settings=GroupPersonaSettings(
-            enabled=True, max_responders=max_responders, cooldown_ms=0
+            enabled=True, max_responders=max_responders, cooldown_ms=cooldown_ms
         ),
         persona_service=_StickerPersonaService(
             [_record(1, is_primary=True), _record(2), _record(3)]
         ),
         sticker_ingest_hook=ingest,
+        clock=clock if clock is not None else time_utils.now_ms,
     )
     router.register_adapter(ChannelType.TELEGRAM, adapter)
     return router
@@ -309,20 +357,57 @@ async def test_group_sticker_ingested_into_every_responder_library() -> None:
 
 
 async def test_group_sticker_same_hash_deduped_independently_per_library() -> None:
-    """同哈希重复入站：每个人格库各自去重，跨人格互不吞并。"""
+    """同哈希重复入站：收录调用逐次到达各人格库（非自去重），各库独立去重。"""
     adapter = GroupFakeAdapter(message_ids=reply_index_message_ids)
     service = GroupFakeChatService(echo_style="persona")
-    libraries: dict[str, set[str]] = {}
+    calls: list[tuple[str, str]] = []
+    libraries: dict[str, list[str]] = {}
 
     async def ingest(attachments: list[ChannelMessageAttachment]) -> None:
+        persona = persona_id_var.get()
         digest = hashlib.sha256(attachments[0].base64.encode("ascii")).hexdigest()
-        libraries.setdefault(persona_id_var.get(), set()).add(digest)
+        calls.append((persona, digest))
+        libraries.setdefault(persona, []).append(digest)
 
     router = _group_router(adapter=adapter, service=service, ingest=ingest)
     await router.handle_inbound(_group_inbound(message_id="1"))
     await router.handle_inbound(_group_inbound(message_id="2"))
+    assert len(calls) == 4
     assert {"1", "2", "3"} <= set(libraries)
-    assert all(len(digests) == 1 for digests in libraries.values())
+    assert any(digests.count(digests[0]) == 2 for digests in libraries.values())
+    assert all(len(set(digests)) == 1 for digests in libraries.values())
+
+
+async def test_group_sticker_cooling_boundary_single_clock_read_keeps_sets_aligned() -> None:
+    """冷却边界：单次时钟读数下收录集与应答集一致（不因二次读数漂移）。"""
+    adapter = GroupFakeAdapter(message_ids=reply_index_message_ids)
+    service = GroupFakeChatService(echo_style="persona")
+    clock = _SteppingClock()
+    ingested: list[str] = []
+
+    async def ingest(attachments: list[ChannelMessageAttachment]) -> None:
+        ingested.append(persona_id_var.get())
+
+    router = _group_router(
+        adapter=adapter,
+        service=service,
+        ingest=ingest,
+        cooldown_ms=1,
+        clock=clock,
+    )
+    await router.handle_inbound(_group_inbound(message_id="1"))
+    assert ingested == ["1", "2"]
+    ingested.clear()
+    replied_before = len(service.reply_calls)
+    clock.reset()
+    result = await router.handle_inbound(_group_inbound(message_id="2"))
+    replied = [
+        str(call["persona_id"]) for call in service.reply_calls[replied_before:]
+    ]
+    assert clock.calls == 1
+    assert result.message_ids != []
+    assert replied == ["3"]
+    assert ingested == replied
 
 
 async def test_group_sticker_ingest_failure_isolated_from_reply() -> None:

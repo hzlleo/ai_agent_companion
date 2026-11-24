@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.dialects import mysql
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import packages.harness.multimodal.sticker_orm as sticker_orm  # noqa: F401  模型注册副作用导入（共享建表）
@@ -36,7 +37,7 @@ from packages.harness.multimodal.sticker_models import (
     StickerUploadItemModel,
 )
 from packages.harness.multimodal.sticker_orm import StickerRow
-from packages.harness.multimodal.sticker_service import StickerService
+from packages.harness.multimodal.sticker_service import StickerService, _winner_select
 from packages.harness.persona.service import bind_persona_context
 
 #: 测试人格上下文轴（PersonaMixin 无外键——任意字符串 ID 即隔离轴）。
@@ -541,6 +542,13 @@ async def test_insert_sticker_conflict_resolves_winner_and_keeps_file(
     assert outcome.path.exists()
     assert len(rows) == 1
     assert binary.content == PNG
+
+
+async def test_winner_select_uses_locking_read() -> None:
+    """冲突收敛查询是当前读：MySQL 方言编译含 FOR UPDATE（快照读回归即红）。"""
+    compiled = str(_winner_select("sha-guard").compile(dialect=mysql.dialect()))
+    assert compiled.rstrip().endswith("UPDATE")
+    assert "ff_stickers.sha256" in compiled
 
 
 async def test_ingest_same_hash_twice_single_row_and_file(

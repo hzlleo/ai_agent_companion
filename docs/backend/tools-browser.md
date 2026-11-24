@@ -39,9 +39,11 @@ duty / chat 轮 tool_calls
 
 ## 工具面（八工具——JSON 示例）
 
-**暴露面区分（锁定）**：sidecar 协议能力面共八工具；**LLM 工具注册表只暴露
-无副作用族七工具**（`navigate` / `read_text` / `screenshot` / `click` /
-`fill` / `list_tabs` / `close_tab`）。`evaluate` 在页面上下文执行任意 JS
+**暴露面区分（锁定）**：sidecar 协议能力面共八工具（常量
+`BROWSER_TOOL_NAMES` 为单一真源，无运行时消费方——仅作协议面文档 / 结构
+测试对照）；**LLM 工具注册表只暴露无副作用族七工具**（`navigate` /
+`read_text` / `screenshot` / `click` / `fill` / `list_tabs` / `close_tab`，
+即 `BROWSER_LLM_TOOL_NAMES`）。`evaluate` 在页面上下文执行任意 JS
 （副作用面），**默认不进入 chat / duty 的 LLM 工具面**——唯一消费方是抖音
 web 通道的内部脚本执行面（`DouyinWebClient` 经 `client.invoke("evaluate")`
 直调）。需要 LLM 求值的装配点可显式 `build_browser_specs(include_evaluate=True)`

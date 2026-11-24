@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import func, select
@@ -1179,6 +1179,48 @@ async def test_delete_clears_every_persona_scoped_table_and_files(
     with pytest.raises(BusinessException) as exc_info:
         await persona_service.delete(db_session, persona_a.id)
     assert exc_info.value.code == ErrorCode.NOT_FOUND
+
+
+class _StickerQueryFailingSession:
+    """包装真实 Session：表情包路径查询抛错（验证收集失败不阻断删除）。"""
+
+    def __init__(self, inner: AsyncSession) -> None:
+        """保存被包装的真实会话。
+
+        Args:
+            inner: 真实异步 Session。
+        """
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        """其余会话方法原样委托真实会话。"""
+        return getattr(self._inner, name)
+
+    async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        """表情包路径查询抛错，其余语句委托真实会话。"""
+        rendered = str(statement)
+        if "ff_stickers" in rendered and "storage_path" in rendered:
+            raise RuntimeError("sticker path query down")
+        return await self._inner.execute(statement, *args, **kwargs)
+
+
+async def test_delete_survives_file_path_collection_failure(
+    persona_service: PersonaService, db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """表情路径收集失败不阻断删除：人格行照常删、声纹文件仍清理、表情残留无害。"""
+    persona = await persona_service.create(db_session, _create_dto(name="collect-fail"))
+    sticker = tmp_path / "sticker-collect.png"
+    sample = tmp_path / "sample-collect.wav"
+    await _seed_all_persona_scoped_rows(
+        db_session, persona.id, sticker_path=sticker, sample_path=sample
+    )
+    wrapped = cast(AsyncSession, _StickerQueryFailingSession(db_session))
+
+    await persona_service.delete(wrapped, persona.id)
+
+    assert set((await _count_scoped_rows(db_session, persona.id)).values()) == {0}
+    assert not sample.exists()
+    assert sticker.exists()
 
 
 async def test_delete_dispatches_remote_index_purge(

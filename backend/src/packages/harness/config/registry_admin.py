@@ -176,8 +176,8 @@ class RegistryAdminService(ConfigSectionAdmin[LlmConfig]):
     # ------------------------------------------------------------------
 
     def _section_key(self) -> str:
-        """本管理面持有的 config.yaml 顶层键（LLM 注册表 = ``llm``）。"""
-        return "llm"
+        """本管理面持有的 config.yaml 顶层键（LLM 注册表 = loader 单源常量）。"""
+        return config_loader.LLM_SECTION_KEY
 
     def _current_section(self) -> LlmConfig:
         """读取内存运行时当前节（loader ``runtime_llm_config`` 全局真源）。"""

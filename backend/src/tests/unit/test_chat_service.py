@@ -12,8 +12,10 @@ test_chat_world_book.py）。
 
 from __future__ import annotations
 
+import ast
 import random
 from collections.abc import AsyncIterator, Sequence
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -44,6 +46,48 @@ from packages.harness.persona.chara_card import (
 )
 from packages.harness.persona.dtos import PersonaCreateDTO, PersonaRecordDTO
 from packages.harness.persona.service import PersonaService
+
+
+def _compose_message_call_sites(source: str) -> list[str]:
+    """枚举源码中对 ``compose_messages`` 的直接调用点（含别名 / 属性形态）。
+
+    覆盖三种绕过形态：直接名字调用、``from ... import compose_messages as
+    <别名>`` 后以别名调用、``<对象>.compose_messages(...)`` 属性调用；扫描
+    整个模块 AST（含模块层语句），返回所在函数名（模块层记 ``<module>``）。
+
+    Args:
+        source: 待扫描的 Python 源码文本。
+
+    Returns:
+        直接调用点列表（元素为所在函数名 / ``<module>``；按 AST 遍历序）。
+    """
+    tree = ast.parse(source)
+    local_names = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.name == "compose_messages"
+    }
+    local_names.add("compose_messages")
+
+    owners: dict[int, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for child in ast.walk(node):
+                if isinstance(child, ast.Call):
+                    owners[id(child)] = node.name
+    sites: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        target = node.func
+        matched = (
+            isinstance(target, ast.Name) and target.id in local_names
+        ) or (isinstance(target, ast.Attribute) and target.attr == "compose_messages")
+        if matched:
+            sites.append(owners.get(id(node), "<module>"))
+    return sites
 
 
 class FakeGateway:
@@ -739,29 +783,44 @@ async def test_only_unified_entry_calls_compose_messages_in_production() -> None
     """结构守卫：生产代码仅 compose_for_generation 可直连 compose_messages。
 
     新增生成路径若绕过统一入口直连组装函数即红（漏传包裹裁决的结构防线）。
+    扫描复用 :func:`_compose_message_call_sites`——别名导入与属性调用同样
+    计入，模块层调用也不会漏网。
     """
-    import ast
-    from pathlib import Path
-
     src_root = Path(__file__).resolve().parents[2]
     offenders: list[str] = []
     for base in (src_root / "packages", src_root / "app"):
         for path in base.rglob("*.py"):
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            functions = [
-                node
-                for node in ast.walk(tree)
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            ]
-            for function in functions:
-                for call in (
-                    node for node in ast.walk(function) if isinstance(node, ast.Call)
-                ):
-                    target = call.func
-                    if (
-                        isinstance(target, ast.Name)
-                        and target.id == "compose_messages"
-                        and function.name != "compose_for_generation"
-                    ):
-                        offenders.append(f"{path.name}:{function.name}")
+            for owner in _compose_message_call_sites(
+                path.read_text(encoding="utf-8")
+            ):
+                if owner != "compose_for_generation":
+                    offenders.append(f"{path.name}:{owner}")
     assert offenders == []
+
+
+async def test_direct_call_matcher_catches_import_alias() -> None:
+    """反例一：``import compose_messages as cm`` 后的别名调用必须命中。"""
+    source = (
+        "from packages.harness.chat.service import compose_messages as cm\n"
+        "\n"
+        "async def generate(state):\n"
+        "    return cm(state)\n"
+    )
+    assert _compose_message_call_sites(source) == ["generate"]
+
+
+async def test_direct_call_matcher_catches_attribute_and_module_level() -> None:
+    """反例二：属性调用与模块层直调同样命中（不因不在函数体内漏扫）。"""
+    attribute_source = (
+        "from packages.harness.chat.service import ChatService\n"
+        "\n"
+        "def generate(service, state):\n"
+        "    return service.compose_messages(state)\n"
+    )
+    module_source = (
+        "from packages.harness.chat.service import compose_messages\n"
+        "\n"
+        "RESULT = compose_messages(None)\n"
+    )
+    assert _compose_message_call_sites(attribute_source) == ["generate"]
+    assert _compose_message_call_sites(module_source) == ["<module>"]

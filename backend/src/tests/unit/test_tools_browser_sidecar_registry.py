@@ -19,6 +19,7 @@ from packages.harness.tools.browser import (
 )
 from packages.harness.tools.browser_models import (
     BROWSER_LLM_TOOL_NAMES,
+    BROWSER_TOOL_NAMES,
     EVALUATE_TOOL_NAME,
 )
 from packages.harness.tools.registry import ToolRegistry
@@ -72,6 +73,12 @@ def _registry_with_fake() -> tuple[ToolRegistry, FakeBrowserSidecarClient]:
 
 
 class TestRegistration:
+    async def test_protocol_surface_is_llm_surface_plus_evaluate(self) -> None:
+        """协议能力面常量与 LLM 面 + evaluate 的派生关系一致（文档 / 测试对照源）。"""
+        assert (*BROWSER_LLM_TOOL_NAMES, EVALUATE_TOOL_NAME) == BROWSER_TOOL_NAMES
+        assert len(BROWSER_TOOL_NAMES) == 8
+        assert EVALUATE_TOOL_NAME not in BROWSER_LLM_TOOL_NAMES
+
     async def test_all_tools_in_order(self) -> None:
         """注册序：七工具按约定顺序（navigate → close_tab），evaluate 不在内。"""
         registry, _ = _registry_with_fake()

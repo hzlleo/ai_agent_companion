@@ -311,7 +311,7 @@ file: (filename, audio_bytes)    model: <model_id>    language?: str
 | `sender_id` | varchar(128) | 发送者 ID（平台侧用户标识） |
 | `sample_path` | varchar(512) | 样本文件落盘路径（撤回 / 删除 / 过期时随行清理） |
 | `sample_sha256` | varchar(64) | 样本哈希（同发送者去重键） |
-| `duration_ms` / `sample_rate_hz` | int | 样本时长 / 采样率（服务从 WAV 头或裸 PCM 字节长度实测；不可解析容器回落声明值——门槛与落库均用实测值） |
+| `duration_ms` / `sample_rate_hz` | int | 样本时长 / 采样率（WAV / 裸 PCM 由服务实测；不可解析容器（MP3 / OGG / WebM / MP4）回落声明值——见 LEDGER §6 缓解台账） |
 | `embedding` / `embedding_dim` | text / int | 说话人向量（JSON 浮点数组）/ 维度（同档案一致性校验） |
 
 唯一键 `uq_ff_voiceprint_samples_persona_sender_sha (persona_id, sender_id, sample_sha256)`；索引 `ix_ff_voiceprint_samples_persona_sender`。`ff_voiceprint_consents` 记录 `consent_text_version` / `granted_at_ms` / `revoked_at_ms`（可空 = 有效），同一发送者可多次授予 / 撤回，读取面取最新有效行。
@@ -333,7 +333,7 @@ POST /api/v1/voiceprints/{sender_id}/enroll
 
 POST /api/v1/voiceprints/{sender_id}/verify
     ↓ ①-③ 同上（校验同样要求同意）
-    ↓ ④ 短音频拒识：实测 duration_ms < VOICEPRINT_MIN_VERIFY_DURATION_MS（WAV 头 / 裸 PCM 换算；声明值不参与判定）
+    ↓ ④ 短音频拒识：实测 duration_ms < VOICEPRINT_MIN_VERIFY_DURATION_MS（WAV / 裸 PCM 以实测为准；不可解析容器回落声明并见缓解台账）
     ↓ ⑤ 保存期清理 → 无样本 → matched=false（no_samples）
     ↓ ⑥ VOICEPRINT_DAILY_BUDGET_* 闸 → 查询向量 → 档案向量均值 → 余弦相似度
     ↓ ⑦ matched = similarity ≥ VOICEPRINT_SIMILARITY_THRESHOLD

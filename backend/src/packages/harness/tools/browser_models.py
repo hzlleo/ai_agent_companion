@@ -231,8 +231,11 @@ BROWSER_LLM_TOOL_NAMES: tuple[str, ...] = (
     CLOSE_TAB_TOOL_NAME,
 )
 
-#: 全部浏览器工具名（sidecar 协议能力面——含 evaluate；装配面按
-#: :data:`BROWSER_LLM_TOOL_NAMES` 裁剪）。
+#: 全部浏览器工具名（sidecar 协议能力面——含 evaluate）。**无运行时消费
+#: 方**：仅作 sidecar 协议八工具面的单一真源，供文档与结构测试对照（避免
+#: 文档 / 测试各处手写工具名）；LLM 注册 / 规格 / 日志按
+#: :data:`BROWSER_LLM_TOOL_NAMES` 裁剪，内部直调按
+#: :data:`EVALUATE_TOOL_NAME`。
 BROWSER_TOOL_NAMES: tuple[str, ...] = (
     *BROWSER_LLM_TOOL_NAMES,
     EVALUATE_TOOL_NAME,

@@ -449,8 +449,8 @@ async def test_single_empty_text_media_skips_generation_without_fallback() -> No
 
 
 async def test_empty_text_media_burst_keeps_buffer_clean_and_merges_real_text() -> None:
-    """连发纯媒体空文本：批次触发后无生成 / 无兜底、缓冲无空条目，到达与
-    积压照常推进；随后真实文本合并为净文本（无前导换行）。"""
+    """连发纯媒体空文本：批次触发后无生成 / 无兜底、缓冲无空条目，到达
+    历史推进但未读积压不增；随后真实文本合并为净文本（无前导换行）。"""
     service = FakeChatService()
     adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
     scheduler = FakeScheduler()
@@ -477,7 +477,7 @@ async def test_empty_text_media_burst_keeps_buffer_clean_and_merges_real_text() 
     state = router.flow_state_for(key)
     assert state is not None
     assert state.buffered_texts == []
-    assert state.backlog_count == 3
+    assert state.backlog_count == 0
     assert len(state.recent_arrival_ms) == 3
     assert service.reply_calls == []
     assert adapter.sent == []
@@ -494,6 +494,45 @@ async def test_empty_text_media_burst_keeps_buffer_clean_and_merges_real_text() 
     await scheduler.run_last()
     assert service.reply_calls[-1]["text"] == "真实文本"
     assert adapter.sent[-1].text == "echo:真实文本"
+
+
+async def test_media_burst_then_text_replies_immediately_without_backlog_defer() -> None:
+    """连续纯媒体不累积未读：后续文本不再触发积压延迟，当场应答。"""
+    service = FakeChatService()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
+    scheduler = FakeScheduler()
+    clock = FakeClock()
+    router = _router(
+        service=service,
+        adapter=adapter,
+        clock=clock,
+        rhythm=FakeRhythm(),
+        scheduler=scheduler,
+        settings=_flow_settings(
+            burst_count=20,
+            burst_window_ms=4000,
+            merge_quiet_ms=0,
+            min_reply_gap_ms=0,
+            backlog_defer_threshold=5,
+            backlog_defer_step_ms=4000,
+        ),
+    )
+    for index in range(6):
+        clock.now += 100
+        await router.handle_inbound(_media_inbound(f"media-{index}"))
+    key = "channel:telegram:10086"
+    state = router.flow_state_for(key)
+    assert state is not None
+    assert state.backlog_count == 0
+    assert len(state.recent_arrival_ms) == 6
+    clock.now += 100
+    result = await router.handle_inbound(_inbound("现在说正事", message_id="text-1"))
+    assert scheduler.jobs == []
+    assert result.message_ids != []
+    assert adapter.sent[-1].text == "echo:现在说正事"
+    state = router.flow_state_for(key)
+    assert state is not None
+    assert state.backlog_count == 0
 
 
 async def test_media_only_inbound_skips_generation_across_four_channels() -> None:

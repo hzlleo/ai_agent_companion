@@ -160,9 +160,9 @@ def evaluate_flow_gate(
 
 
 def record_inbound(
-    state: FlowChatStateModel, text: str, now_ms: int, *, append_text: bool = True
+    state: FlowChatStateModel, text: str, now_ms: int, *, has_user_text: bool = True
 ) -> FlowChatStateModel:
-    """记录一条入站消息（到达时刻 + 积压递增 + 待回复缓冲追加）。
+    """记录一条入站消息（到达时刻 + 用户文本的积压 / 待回复缓冲）。
 
     纯函数：返回新状态，不改写入参。到达时刻保留最近
     :data:`~packages.harness.chat.flow_models.FLOW_ARRIVAL_HISTORY_LIMIT`
@@ -170,32 +170,34 @@ def record_inbound(
     :data:`~packages.harness.chat.flow_models.FLOW_BUFFERED_TEXT_LIMIT` 条
     （合并阶段的正式裁剪由 :func:`merge_buffered_texts` 按配置上限执行）。
 
-    仅附件入站（``text=""``）以 ``append_text=False`` 记录：到达时刻与
-    积压照常递增（连发窗口 / 节律判定不变），空文本不进入待回复缓冲——
-    合并文本不会因空条目产生孤立换行，纯媒体批次也不会被误判为有待
-    回复内容。
+    仅用户文本入站（``has_user_text=True``）递增未读积压并进入待回复缓冲；
+    纯媒体入站（``has_user_text=False``）只记录到达时刻（连发窗口 / 节律
+    判定原料），不计未读、不追加空条目——「未读」的语义是「待回复的用户
+    文本」，纯媒体不产生待回复内容，也不应把后续文本回复推入积压延迟。
 
     Args:
         state: 既有会话节拍状态。
-        text: 入站文本（非空原文；append_text=False 时仅作占位，不追加）。
+        text: 入站文本（非空原文；has_user_text=False 时仅作占位，不使用）。
         now_ms: 入站时刻（epoch 毫秒——调用方注入）。
-        append_text: 是否把 ``text`` 追加进待回复缓冲（仅附件入站传
+        has_user_text: 入站是否携带用户字面文本（媒体纯占位 / 空文本传
             False）。
 
     Returns:
-        追加后的新状态（积压 +1，``pending`` / ``pending_due_ms`` 保持；
-        append_text=False 时缓冲原样保留）。
+        追加后的新状态（用户文本入站积压 +1；纯媒体积压保持原值）。
+        ``pending`` / ``pending_due_ms`` 保持不变；has_user_text=False 时
+        缓冲原样保留。
     """
     arrivals = [*state.recent_arrival_ms, now_ms][-FLOW_ARRIVAL_HISTORY_LIMIT:]
     buffered = (
         [*state.buffered_texts, text][-FLOW_BUFFERED_TEXT_LIMIT:]
-        if append_text
+        if has_user_text
         else list(state.buffered_texts)
     )
+    backlog_count = state.backlog_count + 1 if has_user_text else state.backlog_count
     return state.model_copy(
         update={
             "recent_arrival_ms": arrivals,
-            "backlog_count": state.backlog_count + 1,
+            "backlog_count": backlog_count,
             "buffered_texts": buffered,
         }
     )

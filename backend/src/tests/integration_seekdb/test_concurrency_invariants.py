@@ -1,8 +1,8 @@
 """并发不变式真引擎验证（DB 级约束 + 行锁——服务层重试收敛的强制面）。
 
-十个不变式（迁移 0007/0008/0013/0014/0015/0016/0019 落地的 DB 级守卫 +
-InnoDB 行锁语义，全部经 raw SQL 直击真引擎——SQLite 单测面无法验证的
-并发拒绝行为）：
+十一个不变式（迁移 0007/0008/0013/0014/0015/0016/0019 落地的 DB 级守卫 +
+InnoDB 行锁语义，全部经 raw SQL / 服务层共用插入函数直击真引擎——SQLite
+单测面无法验证的并发拒绝行为）：
 
     - (a) ``ff_personas``：``is_primary_marker`` 唯一键
       ``uq_ff_personas_primary``——NULL 标记行多行共存（唯一键忽略
@@ -33,7 +33,11 @@ InnoDB 行锁语义，全部经 raw SQL 直击真引擎——SQLite 单测面无
       第二条写入被 1062 拒绝；
     - (j) ``ff_dream_runs``：唯一键 ``uq_ff_dream_runs_persona_running``
       (persona_id, running_marker)——同人格第二条运行中行（标记 ``'1'``）
-      被 1062 拒绝；终态清标记（NULL）后下一次运行可插入。
+      被 1062 拒绝；终态清标记（NULL）后下一次运行可插入；
+    - (k) 表情落败写入的跨连接收敛：连接 B 在连接 A 提交前建立可重复读
+      快照，随后同哈希插入撞 ``uq_ff_stickers_persona_sha``——服务层共用
+      插入函数经 ``SELECT ... FOR UPDATE`` 当前读解析胜者行（快照读会落
+      入旧读视图看不到胜者），单行收敛且胜者文件保留、败者文件清理。
 
 引擎方言事实（live 实测 v1.4.0，锁定进断言）：唯一键冲突 =
 pymysql ``IntegrityError``（1062，消息携带约束名）；行锁等待上限的
@@ -44,9 +48,20 @@ pymysql ``IntegrityError``（1062，消息携带约束名）；行锁等待上�
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+
 import aiomysql
 import pytest
+from pydantic import SecretStr
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
+from packages.harness.config.models import DatabaseConfig
+from packages.harness.multimodal.sticker_models import StickerSettings
+from packages.harness.multimodal.sticker_orm import StickerRow
+from packages.harness.multimodal.sticker_service import StickerService
+from packages.harness.persona.service import bind_persona_context
 from tests.integration_seekdb import support
 from tests.integration_seekdb.support import SeekDbTestTarget
 
@@ -636,6 +651,98 @@ async def test_voiceprint_sample_persona_sender_sha_unique(
     finally:
         conn.close()
 
+
+
+#: 跨连接表情收敛用例的固定载荷（字节内容不参与图片解码——只作哈希原料）。
+_STICKER_CONFLICT_PAYLOAD = b"\x89PNG\r\n\x1a\nrr-sticker-guard"
+
+
+def _sticker_service_engine(target: SeekDbTestTarget) -> AsyncEngine:
+    """按 scratch 目标构造真实 MySQL 异步引擎（服务层会话面）。
+
+    Args:
+        target: 已升级 head 的 scratch 库目标。
+
+    Returns:
+        未连接的异步引擎（可重复读隔离级别——显式锁定读用例的事务形态；
+        连接惰性建立，关闭归调用方 dispose）。
+    """
+    config = DatabaseConfig(
+        type="mysql",
+        host=target.host,
+        port=target.port,
+        name=target.database,
+        user=target.user,
+        password=SecretStr(target.password),
+    )
+    return create_async_engine(
+        config.async_sqlalchemy_url, isolation_level="REPEATABLE READ"
+    )
+
+
+async def test_sticker_conflict_across_connections_uses_current_read(
+    migrated_scratch: SeekDbTestTarget, tmp_path: Path
+) -> None:
+    """跨连接同哈希：RR 旧快照下锁定读仍解析胜者（单行 + 文件归属收敛）。
+
+    连接 B 在连接 A 提交前建立可重复读读视图；A 提交后 B 的同哈希插入被
+    ``uq_ff_stickers_persona_sha`` 拒绝。服务层的胜者解析若为普通快照读，
+    会落入 B 的旧读视图而返回 ``None``；``SELECT ... FOR UPDATE`` 当前读
+    恒见 A 的已提交行——返回胜者记录、保留胜者文件、删除败者写入的文件。
+
+    Args:
+        migrated_scratch: 已升级 head 的 scratch 库目标。
+        tmp_path: 文件落盘临时根（胜者 / 败者路径按 MIME 扩展名区分）。
+    """
+    digest = hashlib.sha256(_STICKER_CONFLICT_PAYLOAD).hexdigest()
+    engine = _sticker_service_engine(migrated_scratch)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    service = StickerService(settings=StickerSettings(enabled=True), storage_root=tmp_path)
+    try:
+        async with bind_persona_context("910001"):
+            async with factory() as winner_session, factory() as loser_session:
+                # B 的读视图建立于 A 提交之前（旧快照看不到稍后提交的胜者行）。
+                await loser_session.execute(text("SELECT 1"))
+                winner = await service._insert_sticker(
+                    winner_session,
+                    digest=digest,
+                    content_type="image/png",
+                    payload=_STICKER_CONFLICT_PAYLOAD,
+                    tags=[],
+                    description="并发胜者",
+                    source_note="跨连接胜者",
+                )
+                assert winner.created is True
+                assert winner.row is not None
+                await winner_session.commit()
+                loser = await service._insert_sticker(
+                    loser_session,
+                    digest=digest,
+                    content_type="image/webp",
+                    payload=_STICKER_CONFLICT_PAYLOAD,
+                    tags=[],
+                    description="并发落败",
+                    source_note="跨连接落败",
+                )
+                assert loser.created is False
+                assert loser.row is not None
+                assert loser.row.id == winner.row.id
+                assert winner.path.exists()
+                assert not loser.path.exists()
+                await loser_session.rollback()
+            async with factory() as verify_session:
+                count = (
+                    await verify_session.execute(select(func.count()).select_from(StickerRow))
+                ).scalar_one()
+                rows = list(
+                    (await verify_session.execute(select(StickerRow))).scalars().all()
+                )
+                assert int(count) == 1
+                assert len(rows) == 1
+                assert rows[0].storage_path == str(winner.path)
+                assert rows[0].content_type == "image/png"
+    finally:
+        await engine.dispose()
 
 
 async def test_dream_run_single_flight_marker_unique(

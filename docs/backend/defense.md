@@ -179,9 +179,11 @@
 | `INJECTION_ANTI_INJECTION_HINT` | bool / `true` | 命中时是否追加提示块（false = 只记日志、结构包裹仍生效） |
 
 检测前文本归一（`chat/text_normalization.py`）剔除的是 Unicode
-`Default_Ignorable_Code_Point` 可见性等价集：`Cf` 全类 + 不可见 `Mn` 族
-（U+034F / U+180B–180D / U+FE00–FE0F / U+E0100–E01EF）+ Hangul 填充符
-（U+115F / U+1160 / U+3164 / U+FFA0）；**可见组合附加符保留**（重音文本的
+`Default_Ignorable_Code_Point` **属性全族**（Unicode 15 口径：软连字符 /
+阿拉伯字母标记 / Khmer 固有元音 / 蒙古文自由变体选择符与元音分隔符 /
+零宽格式族 / Hangul 填充符 / 变体选择符 / 音乐与速记格式控制符 / 标签
+字符，以及 U+FFF0–FFF8 与 U+E0000–E0FFF 中未赋值但声明可忽略的码点段）
+加 `Cf` 全类（零宽格式控制符超集面）；**可见组合附加符保留**（重音文本的
 匹配面与显示面一致）。归一只作用于匹配副本——原文（回合 / 包裹内容）不被
 修改。
 

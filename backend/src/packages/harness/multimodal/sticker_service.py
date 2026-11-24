@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any, Final, NamedTuple
 
 from loguru import logger
-from sqlalchemy import desc, select
+from sqlalchemy import Select, desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -640,9 +640,13 @@ class StickerService:
         """保存点插入表情包行（唯一键冲突收敛——上传与通道桥共用）。
 
         文件先落盘再插入；撞 ``uq_ff_stickers_persona_sha`` 时只回滚本条目的
-        保存点，解析胜者行并按路径判定清理落败文件：胜者路径与本次写入
-        路径相同（人格作用域确定性命名）时保留文件，避免删除胜者仍在
-        引用的字节。调用方据 ``created`` 决定拒收 / 返回既有记录。
+        保存点，以**锁定读**（``SELECT ... FOR UPDATE``）解析胜者行并按路径
+        判定清理落败文件：胜者路径与本次写入路径相同（人格作用域确定性
+        命名）时保留文件，避免删除胜者仍在引用的字节。锁定读是并发收敛的
+        正确性前提——可重复读隔离级别下普通快照读可能落入事务早先建立的
+        读视图而看不到对方已提交的胜者行，导致重复插入被误判为「无胜者」；
+        锁定读走当前读，恒见已提交行。调用方据 ``created`` 决定拒收 / 返回
+        既有记录。
 
         Args:
             session: 注入的异步 Session（人格上下文已绑定）。
@@ -677,13 +681,7 @@ class StickerService:
                 await session.flush()
         except IntegrityError:
             winner = (
-                (
-                    await session.execute(
-                        select(StickerRow).where(StickerRow.sha256 == digest)
-                    )
-                )
-                .scalars()
-                .first()
+                (await session.execute(_winner_select(digest))).scalars().first()
             )
             if winner is None or winner.storage_path != str(path):
                 await self._remove_files([path])
@@ -853,6 +851,22 @@ class StickerService:
             await session.rollback()
         except Exception:  # best-effort: 回滚失败由会话关闭兜底
             logger.opt(exception=True).debug("表情包路径会话回滚失败（close 兜底）")
+
+
+def _winner_select(digest: str) -> Select[StickerRow]:
+    """构造冲突后胜者行的锁定读查询（可重复读隔离级别下的当前读）。
+
+    保存点插入撞唯一键后，普通快照读可能仍落在事务早先建立的读视图里而
+    看不到对方已提交的胜者行；``FOR UPDATE`` 要求当前读，MySQL 可重复读
+    下恒见已提交版本（真实 MySQL 的并发收敛前提）。
+
+    Args:
+        digest: 冲突文件的 SHA-256（同人格唯一键原料）。
+
+    Returns:
+        带 ``FOR UPDATE`` 的胜者行查询语句。
+    """
+    return select(StickerRow).where(StickerRow.sha256 == digest).with_for_update()
 
 
 def _read_bytes(path: Path) -> bytes:

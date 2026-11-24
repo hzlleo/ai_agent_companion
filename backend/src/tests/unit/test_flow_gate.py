@@ -290,13 +290,26 @@ async def test_record_inbound_caps_history_and_buffer() -> None:
     assert state.backlog_count == FLOW_BUFFERED_TEXT_LIMIT + 5
 
 
-async def test_record_inbound_without_text_append_keeps_arrival_and_backlog() -> None:
-    """仅附件入站（append_text=False）：到达时刻与积压递增，缓冲不追加空条目。"""
+async def test_record_inbound_without_user_text_keeps_arrival_only() -> None:
+    """仅附件入站（has_user_text=False）：只记录到达时刻，不计未读、不追加缓冲。"""
     state = record_inbound(FlowChatStateModel(), "旧文本", _BASE_MS)
-    state = record_inbound(state, "", _BASE_MS + 10, append_text=False)
+    state = record_inbound(state, "", _BASE_MS + 10, has_user_text=False)
     assert state.buffered_texts == ["旧文本"]
-    assert state.backlog_count == 2
+    assert state.backlog_count == 1
     assert state.recent_arrival_ms == [_BASE_MS, _BASE_MS + 10]
+
+
+async def test_record_inbound_counts_only_user_text_backlog() -> None:
+    """积压只统计用户文本入站：纯媒体序列后接文本，积压为文本条数。"""
+    state = FlowChatStateModel()
+    for index in range(3):
+        state = record_inbound(state, "[图片]", _BASE_MS + index, has_user_text=False)
+    assert state.backlog_count == 0
+    state = record_inbound(state, "第一句", _BASE_MS + 10)
+    state = record_inbound(state, "第二句", _BASE_MS + 20)
+    assert state.backlog_count == 2
+    assert state.buffered_texts == ["第一句", "第二句"]
+    assert len(state.recent_arrival_ms) == 5
 
 
 async def test_pending_and_backlog_state_transitions() -> None:

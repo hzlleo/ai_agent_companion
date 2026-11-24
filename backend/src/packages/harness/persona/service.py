@@ -700,6 +700,10 @@ class PersonaService:
     ) -> list[Path]:
         """收集人格删除前需要清理的磁盘文件路径（行删除即失去定位面）。
 
+        逐表 best-effort：表情 / 声纹路径查询各自隔离异常——单表查询失败
+        仅告警并跳过该表文件清理，不阻断人格行删除（与删除 docstring 的
+        「收集失败不阻断」一致；残留文件不参与查询）。
+
         Args:
             session: 注入的异步 Session。
             persona_id: 人格主键。
@@ -708,30 +712,44 @@ class PersonaService:
         Returns:
             表情包文件路径 + 声纹样本路径（去重；已存在性由删除面容错）。
         """
-        sticker_paths = (
-            (
-                await session.execute(
-                    select(StickerRow.storage_path).where(
-                        StickerRow.persona_id == str(persona_id)
-                    ),
-                    execution_options=skip_filter,
+        sticker_paths: list[str] = []
+        try:
+            sticker_paths = list(
+                (
+                    await session.execute(
+                        select(StickerRow.storage_path).where(
+                            StickerRow.persona_id == str(persona_id)
+                        ),
+                        execution_options=skip_filter,
+                    )
                 )
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
-        sample_paths = (
-            (
-                await session.execute(
-                    select(VoiceprintSampleRow.sample_path).where(
-                        VoiceprintSampleRow.persona_id == str(persona_id)
-                    ),
-                    execution_options=skip_filter,
+        except Exception:  # best-effort: 单表路径收集失败不阻断人格删除
+            logger.opt(exception=True).warning(
+                "人格删除的表情包文件路径收集失败（跳过该表文件清理）: persona_id={}",
+                persona_id,
+            )
+        sample_paths: list[str] = []
+        try:
+            sample_paths = list(
+                (
+                    await session.execute(
+                        select(VoiceprintSampleRow.sample_path).where(
+                            VoiceprintSampleRow.persona_id == str(persona_id)
+                        ),
+                        execution_options=skip_filter,
+                    )
                 )
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
+        except Exception:  # best-effort: 单表路径收集失败不阻断人格删除
+            logger.opt(exception=True).warning(
+                "人格删除的声纹样本路径收集失败（跳过该表文件清理）: persona_id={}",
+                persona_id,
+            )
         return [Path(path) for path in (*sticker_paths, *sample_paths)]
 
     async def _purge_persona_files(self, paths: Sequence[Path]) -> None:
