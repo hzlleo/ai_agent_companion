@@ -98,7 +98,7 @@
 | R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（PoC 门，Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 本分支（`feat/r4-5-whatsapp`）工作区（R4-1 / R4-2 / R4-3 已合并；其余切片待开工） |
 
 **当前分支状态**：
-- main：`3f313a6`（PR#34–#37 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
+- main：`f8eb398`（PR#34–#43 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
 - `feat/r3-perf`：R3-3 性能基线，已合并（PR #37），可删除。
 - R4：R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 在当前分支 `feat/r4-5-whatsapp` 工作区（R4-1 / R4-2 / R4-3 已合并），后续切片待排期。
 - 历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入 main，可删除；工作区 clean。
@@ -1491,7 +1491,8 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
    config.md 分节表由生成器重出；Wizard 新增 `WHATSAPP_` 前缀步骤；
    conftest 八键硬覆盖（conftest-env 228/228）；`ChannelType.WHATSAPP`
    与值域断言同步；默认关闭零影响。
-6. **测试**（新增 141 例——含复审修复 18 例 + 枚举值域断言同步 1 处，全异步、
+6. **测试**（新增 143 例——含复审修复 20 例（第 1 轮 18 + 第 2 轮 2）+
+   枚举值域断言同步 1 处，全异步、
    伪时钟、零真网）：
    `test_whatsapp_models.py`（载荷变体 / 媒体与结构化回退 / 状态计数 /
    缺字段 / 时间戳含非有限值 / 含国家码会话键与属主 / 多 entry / 服务窗 /
@@ -1531,7 +1532,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
   前缀归一（行为不变），两侧不共享归一函数。
 - 无迁移、无新依赖；前端未动。
 
-**实测（本机，命令 + 退出码；最终树）**：
+**实测（本机，命令 + 退出码；第 1 轮复审后树）**：
 - `cd backend && pixi run tests-all` → 0：3266 passed。
 - `cd backend && pixi run coverage-gates` → 0：24 组 ≥80%
   （harness/channels 97.3%（3182/3270）、app/api 85.2%（1257/1476））。
@@ -1551,11 +1552,11 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
   `whatsapp-wa-id-normalize-removal` failed=1、其余各 failed=1。
 - `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0
   （5 步全 PASS：tests-all=3266 / coverage-gates=24 / lint / typecheck=210 /
-  gates；canonical 证据 `docs/evidence/r4-5-whatsapp-1a50b8fc.json`，
-  sha8=`1a50b8fc`；`5547e269` 为复审修复前历史证据）。
+  gates；证据 `docs/evidence/r4-5-whatsapp-1a50b8fc.json`，
+  sha8=`1a50b8fc`（现为历史）；`5547e269` 为更早历史证据）。
 - 前端未动；无迁移，未跑 SeekDB 真引擎套件。
 
-**复审修复（Oracle R4-5 深审 1×P1 + 5×P2 逐条闭环；canonical 证据
+**复审修复（Oracle R4-5 深审 1×P1 + 5×P2 逐条闭环；历史证据
 `1a50b8fc`）**：
 1. **P1 出站 to 丢 +86 国家码**：`channels/phone_numbers.py` 新增
    `normalize_whatsapp_wa_id` / `parse_whatsapp_owner_numbers`（只剥分隔符
@@ -1601,13 +1602,58 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
    记录顺序一致），runner 模块 docstring 同步。
 7. **附（台账 / 探针 / 最终树复跑）**：§3 R4-4 改「已合并（PR #43 → main
    `f8eb398`）」、R4-5 标当前分支；red_manifest 增
-   `normalize_whatsapp_wa_id` 探针（映射 +86 用例）。最终树复跑：
+   `normalize_whatsapp_wa_id` 探针（映射 +86 用例）。当轮树复跑：
    `pixi run tests-all` → 0（3266 passed）；`pixi run coverage-gates` → 0
    （24 组 ≥80%）；`pixi run lint` → 0；`pixi run typecheck` → 0（210 源
    文件）；`pixi run conftest-env` → 0（228/228）；`pixi run gen-examples`
    连跑两次 → 0（幂等）；根 `pixi run gates` → 0；`pixi run red-probe --all`
    → 0（23 条全 RED）；`pixi run verify-slice -- --slice r4-5-whatsapp`
-   → 0（canonical `1a50b8fc`，旧 `5547e269` 为历史）。
+   → 0（canonical `1a50b8fc`，现为历史；`5547e269` 更早）。
+
+**复审修复（Oracle R4-5 第 2 轮复审 4×P2 + 台账项逐条闭环；canonical 证据
+`1c33f1fe`）**：
+1. **P2-1 属主解析回归钉**：`test_app_whatsapp_lifespan.py` 属主清单改
+   `+86 138 0013 8000,妈妈`，断言 `_owner_numbers == {"8613800138000",
+   "妈妈"}`；`test_channels_whatsapp_api.py` 直调路径补国家码属主用例
+   （`from=8613800138000` → `wa:8613800138000` 且 `is_owner=True`，属主清单
+   同上）。变异自证：`main.py` 与 `channels_whatsapp.py` 分别临时换回
+   `parse_phone_owner_numbers` → 前者红于 owner 集合断言、后者红于
+   `is_owner` 断言；复原后相关三文件 46 例全绿。
+2. **P2-2 归一口径文档残留 + 国家码告知**：`config/models.py` 的 WhatsApp
+   设置 docstring / Attributes / Field description 改为「独立归一、保留国家
+   码，清单须含国家码（如 `+86 138 0013 8000`）」；`sms_models.py` 两处委托
+   说明改为「短信口径（中国码前缀归一）；WhatsApp 使用保留国家码的独立
+   归一」；channels.md 设置表 `owner_numbers` 行同步国家码示例；
+   `pixi run gen-examples` 重出 `.env.example`（`WHATSAPP_OWNER_NUMBERS`
+   注释同步）。全仓 grep 无「WhatsApp 与短信共享归一 / 逐字节一致」类现行句。
+3. **P2-3 零请求钩子**：lifespan 用例的 httpx request 钩子改 `async def`
+   （httpx 以 await 调用）；出站 `api_base` 指向 `http://127.0.0.1:9`
+   （本机不可路由——判定被绕过也不打真网）。变异自证：临时跳过适配器
+   24h 服务窗判定 → 用例红于 `recorder.requests == []`（钩子确有记录，传输
+   失败仍映射 `CHANNEL_API_ERROR`）；复原后绿。
+4. **P2-4 批内满队少计**：`whatsapp_runner.py` 满队分支改为对当前及批内
+   剩余每条消息分别 `_dropped_inbound += 1` + ERROR（wamid / 深度 / 累计）
+   后 `continue`，不再首条满队即返回；批内任一条丢弃时 `submit` 返回 False。
+   新增用例：容量 1、单推送 3 条 → 首条入队、`dropped_inbound==2`、两条
+   ERROR（`dropped=1` / `dropped=2`）；既有容量 2 / 单条满队断言语义未变、
+   保持通过。
+5. **备注项**：§3 main 指针改 `f8eb398`（PR#34–#43 已并入）；
+   `whatsapp_models.py` 服务窗 docstring「乱序重投」改「乱序到达」；§6 增
+   SmsForwarder runner 满队分支同形遗留一行（单条载荷下无少计，扩展批载荷
+   前需同法逐条计数）。
+6. **最终树复跑（命令 + 退出码）**：`cd backend && pixi run tests-all` → 0
+   （3268 passed）；`pixi run coverage-gates` → 0（24 组 ≥80%；
+   harness/channels 97.4%（3185/3271）、app/api 85.2%（1257/1476））；
+   `pixi run lint` → 0；`pixi run typecheck` → 0（210 源文件）；`pixi run
+   conftest-env` → 0（228/228）；`pixi run gen-examples` 连跑两次 → 0
+   （三件套 sha256 一致，幂等；`.env.example` `02872633…`、
+   `config.example.yaml` `19bba95d…`、`extensions_config.example.json`
+   `1a17d6e6…`）；根 `pixi run gates` → 0（assertion-freeze asserts=9202
+   raises=671 / red-probe 209 源文件 23 探针 / surface-check 42/42）；
+   `pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：
+   tests-all=3268 / coverage-gates=24 / lint / typecheck=210 / gates；
+   canonical 证据 `docs/evidence/r4-5-whatsapp-1c33f1fe.json`，
+   sha8=`1c33f1fe`；`1a50b8fc` 为历史）。
 
 ## 6. 遗留与部署台账（非阻塞）
 
@@ -1615,6 +1661,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 - SmsForwarder 短信 / 通知转发通道已交付（默认关闭、仅入站；部署侧配置 `SMS_FORWARDER_*` 并在手机端配置 Webhook 与 token）；WhatsApp Cloud API 通道已交付（`WHATSAPP_ENABLED` 默认关闭；Meta 应用侧配置 webhook / 订阅 messages + 四项凭据；出站仅自由格式文本并受 24h 客户服务窗约束——窗外主动消息需模板发送（未实现）或属主先发消息；窗口状态与 wamid 去重均为进程内单实例语义）。
 - SmsForwarder 通知发送者归一碰撞面：仅点位置不同的包名共用会话（`com.example.app` / `com.exampleapp` → 同一 `sms:` 会话键），可选收紧归一（需评审）。
 - SmsForwarder 时间戳非有限值同病遗留：`resolve_sms_forwarder_timestamp_ms` 未做 `math.isfinite` / `OverflowError` 护栏——载荷传入 `NaN` / `Infinity` 时可能抛异常而非回落服务端时钟（WhatsApp 侧已在本切片修复并测试）；下一批补同样护栏与矩阵用例。
+- SmsForwarder runner 队列满分支同形遗留：`sms_forwarder/sms_runner.py` 的 `QueueFull` 分支为「计数 + ERROR + `return False`」单条短路形态——当前 `submit` 仅承单条载荷故无少计；若后续扩展为批载荷，需按 WhatsApp runner 同法对批内每条分别计数与告警。本批不改。
 - 声纹（PIPL 合规）与表情包素材法律边界提示义务已随 R2d-2 交付（默认关闭，部署侧按需配置 `VOICEPRINT_*` / `STICKER_*` 并起说话人向量服务）。
 - 预算边界（R3-2 → R4-2 已分面）：LLM 日预算只计 LLM 用途行；ASR / TTS / voiceprint 各自独立预算（按 purpose 计数，见 [usage.md](backend/usage.md#分面日预算asr--tts--voiceprint)）。
 - 实时语音（R2f）遗留：AEC/移动端已由 R4-3 前置（浏览器 AEC/Worklet），残余：真实设备验证、真流式供应商连通验证（双轨默认关闭；步骤见 docs/backend/realtime-voice.md「部署侧一次性真机验证」）；实时语音轮次不注入工具面（需要搜索/沙盒走文字通道）。

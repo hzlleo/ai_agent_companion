@@ -1652,7 +1652,7 @@ env 面（`env_prefix=WHATSAPP_`；嵌套覆写 `CHANNELS__WHATSAPP__*` 亦可�
 | `phone_number_id` | `WHATSAPP_PHONE_NUMBER_ID` | 空 | 企业号码 ID（出站路径段；生产启用时强制非空） |
 | `api_version` | `WHATSAPP_API_VERSION` | `v21.0` | Graph API 版本段 |
 | `api_base` | `WHATSAPP_API_BASE` | `https://graph.facebook.com` | Graph API 基础 URL（代理 / 测试端点可覆写） |
-| `owner_numbers` | `WHATSAPP_OWNER_NUMBERS` | 空 | 属主号码清单（逗号分隔；空 = 全部发送者按 peer 落档） |
+| `owner_numbers` | `WHATSAPP_OWNER_NUMBERS` | 空 | 属主号码清单（逗号分隔；须含国家码，如 `+86 138 0013 8000`；空 = 全部发送者按 peer 落档） |
 
 ```bash
 # .env 形态（分节 env 前缀）

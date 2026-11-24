@@ -11,6 +11,7 @@
         ② wamid 去重查询（窗口内重复 → 跳过，视为已确认）
         ③ 入站队列（有界）put_nowait
             └─ 队列满 → 丢弃并计数（ERROR 日志含 wamid / 队列深度 / 累计）；
+                批内剩余消息逐条计数并各自告警（不因首条满队短路）；
                 端点恒 200（Meta 仅对非 2xx 重投），该条即最终丢失；
                 不登记去重仅为吸收 Meta 偶发重复推送
         ④ 去重登记 + 服务窗记录（每会话最近入站毫秒——出站 24h 判定原料）
@@ -151,6 +152,7 @@ class WhatsAppWebhookRunner:
         if not batch.messages:
             return False
         accepted_any = False
+        dropped_any = False
         for parsed in batch.messages:
             if self._stop_event.is_set():
                 logger.debug(
@@ -168,6 +170,7 @@ class WhatsAppWebhookRunner:
                 self._inbound_queue.put_nowait(parsed.inbound)
             except asyncio.QueueFull:
                 self._dropped_inbound += 1
+                dropped_any = True
                 logger.error(
                     "WhatsApp 入站队列已满（丢弃即最终丢失——端点已 200 确认，"
                     "Meta 不重投；不登记去重仅为吸收偶发重复推送）: "
@@ -177,15 +180,14 @@ class WhatsAppWebhookRunner:
                     self._inbound_queue.qsize(),
                     self._dropped_inbound,
                 )
-                self._maybe_log_stats()
-                return False
+                continue
             self._dedup.remember(parsed.dedup_key)
             self._service_window.record_inbound(
                 parsed.inbound.sender_id, parsed.inbound.ts_ms
             )
             accepted_any = True
         self._maybe_log_stats()
-        return accepted_any
+        return accepted_any and not dropped_any
 
     def request_stop(self) -> None:
         """请求停机（worker 在 ``run()`` 收尾路径取消）。"""

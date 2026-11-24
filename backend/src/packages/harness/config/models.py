@@ -1143,9 +1143,9 @@ class WhatsAppChannelSettings(BaseSettings):
     :func:`packages.harness.config.auth_policy.ensure_auth_policy`）；
     非生产环境空值分别表示对应校验关闭 / 发送时拒绝（开发 / 测试形态）。
 
-    ``owner_numbers`` 与 SmsForwarder 共享同一号码归一函数
-    （:mod:`packages.harness.channels.phone_numbers`）——默认全部发送者按
-    ``peer`` 落档，仅命中清单时按主人来源处理。
+    ``owner_numbers`` 使用 WhatsApp 独立归一（保留国家码，与短信口径
+    不同）——清单条目须含国家码（如 ``+86 138 0013 8000``）；默认全部
+    发送者按 ``peer`` 落档，仅命中清单时按主人来源处理。
 
     Attributes:
         enabled: 是否启用 WhatsApp Cloud API 通道（False = 不装配 runner /
@@ -1159,7 +1159,8 @@ class WhatsAppChannelSettings(BaseSettings):
         phone_number_id: 企业号码 ID（Graph API 出站路径段；启用时必填）。
         api_version: Graph API 版本段（默认 ``v21.0``）。
         api_base: Graph API 基础 URL（默认 ``https://graph.facebook.com``）。
-        owner_numbers: 属主号码清单（逗号分隔；空 = 全部发送者按 peer 落档）。
+        owner_numbers: 属主号码清单（逗号分隔；须含国家码，如
+            ``+86 138 0013 8000``；空 = 全部发送者按 peer 落档）。
     """
 
     enabled: bool = Field(default=False, description="是否启用 WhatsApp Cloud API 通道")
@@ -1184,7 +1185,7 @@ class WhatsAppChannelSettings(BaseSettings):
     )
     owner_numbers: str = Field(
         default="",
-        description="属主号码清单（逗号分隔；空 = 全部发送者按 peer 落档）",
+        description="属主号码清单（逗号分隔；须含国家码，如 +86 138 0013 8000；空 = 全部发送者按 peer 落档）",
     )
 
     model_config = SettingsConfigDict(

@@ -180,6 +180,52 @@ class TestQueueBackpressure:
             for message in captured
         )
 
+    async def test_batch_overflow_counts_every_remaining_message(self) -> None:
+        """批内满队：首条入队，其余每条分别计数 + ERROR（各自 wamid / 累计）。"""
+        runner = _runner(
+            router=RecordingRouter(), clock=_Clock(), inbound_queue_size=1
+        )
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "field": "messages",
+                            "value": {
+                                "messages": [
+                                    _message_entry(wamid="wamid.B1"),
+                                    _message_entry(wamid="wamid.B2"),
+                                    _message_entry(wamid="wamid.B3"),
+                                ]
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+        captured: list[str] = []
+        handler_id = logger.add(lambda message: captured.append(str(message)), level="ERROR")
+        try:
+            assert runner.submit(payload) is False
+        finally:
+            logger.remove(handler_id)
+        assert runner.pending_inbound == 1
+        assert runner.dropped_inbound == 2
+        assert any(
+            "WhatsApp 入站队列已满" in message
+            and "wamid.B2" in message
+            and "depth=1" in message
+            and "dropped=1" in message
+            for message in captured
+        )
+        assert any(
+            "WhatsApp 入站队列已满" in message
+            and "wamid.B3" in message
+            and "depth=1" in message
+            and "dropped=2" in message
+            for message in captured
+        )
+
     async def test_dropped_message_leaves_dedup_unregistered(self) -> None:
         """丢弃不登记去重：同 wamid 再次到达时不被去重窗拦截。"""
         runner = _runner(

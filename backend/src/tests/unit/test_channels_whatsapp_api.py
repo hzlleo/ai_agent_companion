@@ -87,6 +87,7 @@ def _settings(
     access_token: str = "test-only-access-token",
     phone_number_id: str = "123456",
     enabled: bool = True,
+    owner_numbers: str = "",
 ) -> Settings:
     """构造隔离 Settings（WhatsApp 配置显式值）。"""
     return build_isolated_settings(
@@ -97,6 +98,7 @@ def _settings(
                 app_secret=app_secret,
                 access_token=access_token,
                 phone_number_id=phone_number_id,
+                owner_numbers=owner_numbers,
             )
         )
     )
@@ -313,6 +315,23 @@ class TestSignatureVerification:
         assert message.chat_id == "wa:15551234567"
         assert message.synthetic is False
         assert message.is_owner is False
+
+    async def test_country_code_owner_marked_on_direct_path(self) -> None:
+        """直调路径：属主清单带国家码命中 → 会话键保留国家码且 owner 落档。"""
+        fake_router = FakeChannelRouter()
+        app = _app(
+            _settings(owner_numbers="+86 138 0013 8000,妈妈"), router=fake_router
+        )
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            status_code, _ = await _post(
+                client, _payload(wamid="wamid.CN-OWNER", sender="8613800138000")
+            )
+        assert status_code == 200
+        assert len(fake_router.handled) == 1
+        message = fake_router.handled[0]
+        assert message.chat_id == "wa:8613800138000"
+        assert message.is_owner is True
 
     async def test_tampered_body_403_and_router_untouched(self) -> None:
         """签名后篡改体：403 + 路由器零调用。"""

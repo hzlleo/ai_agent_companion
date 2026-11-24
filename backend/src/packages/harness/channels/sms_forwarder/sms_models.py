@@ -298,8 +298,9 @@ def normalize_sms_sender(raw: str) -> str:
     """归一发送者标识（手机号去分隔符 / 国家码，联系名小写）。
 
     委托 :func:`packages.harness.channels.phone_numbers.normalize_phone_identifier`
-    （与 WhatsApp 通道共享同一归一口径——两侧属主清单与会话键必须
-    逐字节一致）；本函数保留原导出名以维持既有消费面。
+    （短信口径：中国码前缀归一；WhatsApp 使用保留国家码的独立归一
+    ——两侧口径不同，不共享归一函数）；本函数保留原导出名以维持既有
+    消费面。
 
     Args:
         raw: 原始发送者（手机号 / 联系名）。
@@ -315,7 +316,7 @@ def parse_owner_numbers(raw: str) -> frozenset[str]:
 
     委托
     :func:`packages.harness.channels.phone_numbers.parse_phone_owner_numbers`
-    （与 WhatsApp 通道共享同一归一口径）；本函数保留原导出名。
+    （短信口径：中国码前缀归一）；本函数保留原导出名。
 
     Args:
         raw: 配置原值（``SMS_FORWARDER_OWNER_NUMBERS``）。

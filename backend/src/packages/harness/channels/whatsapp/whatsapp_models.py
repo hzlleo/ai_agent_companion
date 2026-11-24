@@ -561,7 +561,7 @@ class WhatsAppServiceWindow:
         self._last_inbound: dict[str, int] = {}
 
     def record_inbound(self, wa_id: str, inbound_ms: int) -> None:
-        """登记会话最近入站时刻（取较新值——乱序重投不回退窗口）。
+        """登记会话最近入站时刻（取较新值——乱序到达不回退窗口）。
 
         Args:
             wa_id: 归一后的 WhatsApp 号码（会话键原料）。

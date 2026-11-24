@@ -9,6 +9,7 @@
     - 出站边界：未收到入站时适配器以受控业务错误拒绝（不发起网络调用）。
 
 零真实网络：出站判定在 HTTP 调用之前完成；共享池 client 不实际发请求。
+出站 base 指向本机不可路由端口——即便判定被绕过也会立即失败（不打真网）。
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ class _RequestRecorder:
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
 
-    def __call__(self, request: httpx.Request) -> None:
+    async def __call__(self, request: httpx.Request) -> None:
         self.requests.append(request)
 
 
@@ -49,7 +50,7 @@ def _settings(
     enabled: bool,
     owner_numbers: str = "",
 ) -> Settings:
-    """构造隔离 Settings（tmp SQLite + WhatsApp 开关面）。"""
+    """构造隔离 Settings（tmp SQLite + WhatsApp 开关面；base 本机不可路由）。"""
     return build_isolated_settings(
         database=DatabaseConfig(type="sqlite", name=str(tmp_path / "app-whatsapp.db")),
         channels=ChannelsSettings(
@@ -59,6 +60,7 @@ def _settings(
                 app_secret="test-only-app-secret",
                 access_token="test-only-access-token",
                 phone_number_id="123456",
+                api_base="http://127.0.0.1:9",
                 owner_numbers=owner_numbers,
             )
         ),
@@ -87,7 +89,7 @@ class TestEnabledWiring:
         """enabled：适配器 + 有界 runner / 托管任务 + 共享服务窗 + 配置接线。"""
         app = create_app()
         settings = _settings(
-            tmp_path, enabled=True, owner_numbers="15551234567,妈妈"
+            tmp_path, enabled=True, owner_numbers="+86 138 0013 8000,妈妈"
         )
         await startup_app_state(app, settings, config_dir=tmp_path)
         runner = app.state.channels_whatsapp_runner
@@ -99,19 +101,19 @@ class TestEnabledWiring:
             adapter = router.get_adapter(ChannelType.WHATSAPP)
             assert isinstance(adapter, WhatsAppAdapter)
             assert isinstance(runner, WhatsAppWebhookRunner)
-            assert runner._owner_numbers == frozenset({"15551234567", "妈妈"})
+            assert runner._owner_numbers == frozenset({"8613800138000", "妈妈"})
             assert adapter.service_window is runner.service_window
-            assert runner.service_window.last_inbound_ms("15551234567") is None
+            assert runner.service_window.last_inbound_ms("8613800138000") is None
             recorder = _RequestRecorder()
             adapter.client.http_client.event_hooks["request"].append(recorder)
             with pytest.raises(BusinessException) as exc_info:
                 await adapter.send_message(
-                    OutboundMessageModel(chat_id="wa:15551234567", text="主动招呼")
+                    OutboundMessageModel(chat_id="wa:8613800138000", text="主动招呼")
                 )
             assert exc_info.value.code == ErrorCode.CHANNEL_API_ERROR
             assert recorder.requests == []
-            runner.service_window.record_inbound("15551234567", 1_731_000_000_000)
-            assert adapter.service_window.last_inbound_ms("15551234567") == 1_731_000_000_000
+            runner.service_window.record_inbound("8613800138000", 1_731_000_000_000)
+            assert adapter.service_window.last_inbound_ms("8613800138000") == 1_731_000_000_000
             assert task is not None and not task.done()
             assert task in background_task_manager.tasks
         finally:
