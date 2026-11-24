@@ -710,6 +710,24 @@ def _contact_names_by_wa_id(
     return names
 
 
+def _has_whatsapp_user_text(message: WhatsAppMessageModel) -> bool:
+    """判定入站是否携带用户字面文本（媒体无 caption 的占位文本为 False）。
+
+    Args:
+        message: 容错解析后的入站消息。
+
+    Returns:
+        True = 存在用户输入的字面文本 / caption；媒体占位文本返回 False。
+    """
+    text = _resolve_message_text(message)
+    if not text:
+        return False
+    message_type = message.type.strip().lower()
+    if message_type in _MEDIA_PLACEHOLDERS:
+        return text != _MEDIA_PLACEHOLDERS[message_type]
+    return True
+
+
 def _parse_message(
     message: WhatsAppMessageModel,
     *,
@@ -763,6 +781,7 @@ def _parse_message(
         synthetic=False,
         is_group_chat=False,
         is_owner=sender_key in owner_numbers,
+        has_user_text=_has_whatsapp_user_text(message),
     )
     return WhatsAppParsedMessageModel(inbound=inbound, dedup_key=f"wamid:{wamid}")
 

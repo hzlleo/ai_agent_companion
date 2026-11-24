@@ -437,7 +437,7 @@ async def test_compose_wraps_recent_history_user_turns_up_to_cap() -> None:
     assert state.turns[0].content == "历史问句1"
     assert state.turns[-1].content == "当轮消息"
 
-    unwrapped = compose_messages(state)
+    unwrapped = compose_messages(state, wrap_current_message=False)
     assert [message.content for message in unwrapped.messages[1:]] == [
         turn.content for turn in state.turns
     ]

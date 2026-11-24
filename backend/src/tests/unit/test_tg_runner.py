@@ -631,6 +631,8 @@ class TestInboundMediaV2:
         try:
             await _run_until(task, lambda: len(router.handled) >= 2)
             assert [message.text for message in router.handled] == ["", "你好"]
+            assert router.handled[0].has_user_text is False
+            assert router.handled[1].has_user_text is True
             assert router.handled[0].attachments[0].kind is ChannelAttachmentKind.STICKER
             assert runner.offset == 7
         finally:
@@ -649,6 +651,7 @@ class TestInboundMediaV2:
         )
         assert inbound is not None
         assert inbound.text == "听我说"
+        assert inbound.has_user_text is True
         attachment = inbound.attachments[0]
         assert attachment.kind is ChannelAttachmentKind.AUDIO
         assert attachment.media_type == "audio/ogg"

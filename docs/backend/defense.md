@@ -161,7 +161,8 @@
 | 伪系统帧 / 伪标签 | 宪章第 2、4 条 + `<心声>` 解析器只认模型输出前缀 + 检测 | 短前缀（≤8 字符）的标签模仿已覆盖（如「哈哈 <心声>…</心声>」）；长前缀（>8 字符）的中段标签仍不命中——保守边界，结构包裹仍在 |
 | 模型被「请用 JSON 回复」带偏格式 | 检测提示 + 宪章第 2 条 | 输出协议解析器本身容忍标签缺失（优雅降级），但可见正文形态不强制——属提示面约束 |
 | 长会话人格漂移（历史累积） | 历史后再注入（既有）+ 宪章恒注入 | 无（既有防线） |
-| 消息变体（swipes）候选重生成 | 复用 `compose_messages`：末位 user 回合定界包裹（缺省「消息」标签）+ 命中时提示块；`SwipeService` 经构造注入的 `InjectionGuardSettings` 按 `INJECTION_` 配置生效 | 候选是对同一人格历史的单轮重掷，没有新的入站文本；回复链路与变体路径共用同一套 `INJECTION_` kill-switch / 阈值 / 风格 / 提示开关 |
+| 消息变体（swipes）候选重生成 | 经**同一统一入口** `compose_for_generation`（intent=SWIPE）：末位 user 回合定界包裹（缺省「消息」标签）+ 命中时提示块；`SwipeService` 经构造注入的 `InjectionGuardSettings` 按 `INJECTION_` 配置生效 | 候选是对同一人格历史的单轮重掷，没有新的入站文本；回复 / 流式 / 变体路径共用同一入口裁决（结构测试枚举 `compose_messages` 直连点），同一套 `INJECTION_` kill-switch / 阈值 / 风格 / 提示开关 |
+| 工具面对页面求值的隐式信任 | **有副作用的页面求值不暴露给 LLM**：`evaluate` 默认不进 chat / duty 工具注册表；LLM 只经浏览器工具族的无副作用面（navigate / read_text / screenshot / click / fill / list_tabs / close_tab）；抖音通道内部经 `client.invoke("evaluate")` 直调 | 页面脚本的结果若回流 LLM，仍按既有 tool 结果定界包裹处理；需要 LLM 求值的装配点显式 opt-in（默认关闭，无新增 env 键） |
 | 检测误报（正常口语） | 阈值 2.0 保守；提示只是参考台词 | 语义级注入（反讽 / 暗示）不在规则表覆盖内——规则表是可审计的字面启发式，不追求语义理解 |
 
 ## 配置（`INJECTION_` env 面）
@@ -176,6 +177,13 @@
 | `INJECTION_COUNTER_STYLE` | `sassy` / `sweet` / `tsun`，默认 `sassy` | 提示块参考回怼风格 |
 | `INJECTION_THRESHOLD` | float / `2.0` | 触发提示的加权总分阈值（调低属运维决策） |
 | `INJECTION_ANTI_INJECTION_HINT` | bool / `true` | 命中时是否追加提示块（false = 只记日志、结构包裹仍生效） |
+
+检测前文本归一（`chat/text_normalization.py`）剔除的是 Unicode
+`Default_Ignorable_Code_Point` 可见性等价集：`Cf` 全类 + 不可见 `Mn` 族
+（U+034F / U+180B–180D / U+FE00–FE0F / U+E0100–E01EF）+ Hangul 填充符
+（U+115F / U+1160 / U+3164 / U+FFA0）；**可见组合附加符保留**（重音文本的
+匹配面与显示面一致）。归一只作用于匹配副本——原文（回合 / 包裹内容）不被
+修改。
 
 检测命中的日志面：`logger.debug`（`persona_id` / `score` / 命中种类列表）；
 不新增 usage 行（零 token 成本，无记账语义）。

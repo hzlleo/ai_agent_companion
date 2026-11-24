@@ -72,8 +72,13 @@ def evaluate_flow_gate(
 ) -> FlowGateDecisionModel:
     """按锁定判定矩阵产出单条入站的门控裁决。
 
+    判定输入显式区分「当前消息」与「之前的历史」：``prior_arrivals_ms``
+    不含当前消息（路由器先取历史 → 门控 → 再记录当前）；不存在
+    「末条是否为当前消息」的隐式推断。
+
     Args:
-        request: 判定输入（时刻 / 节律快照 / 关系摘要 / 会话节拍状态）。
+        request: 判定输入（时刻 / 节律快照 / 关系摘要 / 当前消息之前的
+            入站历史与积压）。
         settings: 门控配置（阈值与开关——调用方注入，模型层不读环境）。
 
     Returns:
@@ -95,30 +100,29 @@ def evaluate_flow_gate(
             reason=FlowReason.SLEEP_WINDOW,
         )
     window_start = request.now_ms - settings.burst_window_ms
-    recent = [
+    # prior_arrivals_ms 显式不含当前消息：窗口内历史 + 当前消息本身才构成
+    # 连发计数（阈值语义与「当前已入历史」的旧形态一致，无分支推断）。
+    recent_prior = [
         ts
-        for ts in request.state.recent_arrival_ms
+        for ts in request.prior_arrivals_ms
         if window_start <= ts <= request.now_ms
     ]
-    if len(recent) >= settings.burst_count:
-        remaining = max(0, settings.merge_quiet_ms - (request.now_ms - recent[-1]))
+    if len(recent_prior) + 1 >= settings.burst_count:
+        # 静默窗口从当前消息到达时刻起算（当前恒为最新入站）。
         return FlowGateDecisionModel(
-            verdict=FlowVerdict.MERGE, delay_ms=remaining, reason=FlowReason.BURST_MERGE
+            verdict=FlowVerdict.MERGE,
+            delay_ms=settings.merge_quiet_ms,
+            reason=FlowReason.BURST_MERGE,
         )
-    grouped = len(recent) >= 2
     density_wait = 0
-    if grouped and settings.min_reply_gap_ms > 0:
-        # 密度判定的锚点是「当前消息之前最近一条入站」：生产形态下当前消息
-        # 已由 record_inbound 追加（recent[-1] == now_ms），此时取 recent[-2]；
-        # 非生产形态（判定时刻未含当前条目）取 recent[-1]。间隔不足最小回复
-        # 间隔才补齐剩余毫秒，达到或超过则立即落入后续规则。
-        anchor = recent[-2] if recent[-1] == request.now_ms else recent[-1]
-        elapsed = request.now_ms - anchor
+    if recent_prior and settings.min_reply_gap_ms > 0:
+        # 密度判定锚点 = 当前消息之前最近一条入站（显式历史末条）。
+        elapsed = request.now_ms - recent_prior[-1]
         if elapsed < settings.min_reply_gap_ms:
             density_wait = settings.min_reply_gap_ms - elapsed
     backlog_wait = 0
-    if request.state.backlog_count >= settings.backlog_defer_threshold:
-        overflow = request.state.backlog_count - settings.backlog_defer_threshold + 1
+    if request.backlog_count >= settings.backlog_defer_threshold:
+        overflow = request.backlog_count - settings.backlog_defer_threshold + 1
         backlog_wait = min(
             settings.backlog_defer_max_ms, settings.backlog_defer_step_ms * overflow
         )

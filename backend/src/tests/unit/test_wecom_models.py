@@ -119,6 +119,7 @@ class TestInboundMapping:
         assert inbound.chat_id == "single:zhangsan"
         assert inbound.message_id == "msg-1"
         assert inbound.sender_id == "zhangsan"
+        assert inbound.has_user_text is True
         assert inbound.text == "你好"
         assert inbound.ts_ms == 1731000000000
         assert inbound.attachments == []
@@ -206,6 +207,7 @@ class TestInboundMapping:
         )
         assert inbound is not None
         assert inbound.text == WECOM_PLACEHOLDER_IMAGE
+        assert inbound.has_user_text is False
         assert inbound.attachments[0].kind is ChannelAttachmentKind.IMAGE
         assert inbound.attachments[0].media_type is None
 

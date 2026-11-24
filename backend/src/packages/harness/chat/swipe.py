@@ -13,10 +13,11 @@
       **不装载工具面**（单轮候选生成——工具循环属 reply 的回合语义）；
       关系摘要经既有事实读取面与 ``build_relationship_summary`` 派生，
       读取面未接线时不注入关系块且路由输入为 None、读取失败降级空摘要；
-      末位 user 回合沿用组装链的注入防御语义（定界包裹 + 检测提示）：本
-      服务经构造注入 ``InjectionGuardSettings``（与 ``ChatService`` 同形
-      态），``INJECTION_`` 配置的启用 / 阈值 / 风格 / 提示开关对变体路径
-      同样生效；无来源分级信息时标签取 ``UNTRUSTED_LABEL_DEFAULT``，见
+      末位 user 回合沿用组装链的注入防御语义（定界包裹 + 检测提示）：
+      本服务经构造注入 ``InjectionGuardSettings``（与 ``ChatService`` 同形
+      态），并**经同一统一入口** ``compose_for_generation``（intent=SWIPE）
+      裁决包裹 / 标签 / 提示——``INJECTION_`` 配置对变体路径同样生效；
+      无来源分级信息时标签取 ``UNTRUSTED_LABEL_DEFAULT``，见
       docs/backend/defense.md；
     - **协议面**：每个候选独立经 ``parse_assistant_output`` 解析——可见
       正文落变体行 content，心声 / 情绪增量落 meta（附 ``variant_index``）；
@@ -43,14 +44,13 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.harness.chat.chat_models import ChatSessionStateModel
-from packages.harness.chat.injection_guard import build_injection_hint, detect_injection
 from packages.harness.chat.injection_models import InjectionGuardSettings
 from packages.harness.chat.output_protocol import parse_assistant_output
-from packages.harness.chat.prompts import UNTRUSTED_LABEL_DEFAULT
 from packages.harness.chat.service import (
     CHAT_PURPOSE,
     FactsReaderFace,
-    compose_messages,
+    GenerationIntent,
+    compose_for_generation,
     derive_relationship_summary,
 )
 from packages.harness.config.model_entry import ModelRole
@@ -79,7 +79,7 @@ class SwipeService:
 
     构造注入网关 / 会话持久化服务 / 情绪引擎（测试可全量 fake）；网关
     调用与 ``ChatService.reply`` 同参数面（角色 / 用途 / persona 直传），
-    组装链经同一 ``compose_messages`` 纯函数——prompt 字节零变更。
+    组装链经同一 ``compose_for_generation`` 统一入口——prompt 字节零变更。
     """
 
     def __init__(
@@ -215,33 +215,13 @@ class SwipeService:
                     now_ms=now_ms, thresholds=self._relationship_thresholds
                 )
         intimacy_level = relationship.intimacy_level if relationship is not None else None
-        injection = self._injection_settings
-        last_turn = state.turns[-1] if state.turns else None
-        injection_hint: str | None = None
-        if (
-            injection.enabled
-            and last_turn is not None
-            and last_turn.role == ChatMessageRole.USER
-        ):
-            signal = detect_injection(last_turn.content, threshold=injection.threshold)
-            if signal.suspected:
-                logger.debug(
-                    "变体重生成注入信号命中: persona_id={}, score={:.2f}, kinds={}",
-                    persona.id,
-                    signal.score,
-                    [reason.kind.value for reason in signal.reasons],
-                )
-                if injection.anti_injection_hint:
-                    injection_hint = build_injection_hint(
-                        injection.counter_style, last_turn.content
-                    )
-        composition = compose_messages(
+        composition = compose_for_generation(
             state,
+            injection=self._injection_settings,
+            intent=GenerationIntent.SWIPE,
+            provenance=None,
             emotion_summary=emotion_summary,
             relationship=relationship,
-            wrap_current_message=injection.enabled,
-            current_message_label=UNTRUSTED_LABEL_DEFAULT,
-            injection_hint=injection_hint,
         )
         candidates: list[tuple[str, dict[str, Any]]] = []
         for _ in range(count):

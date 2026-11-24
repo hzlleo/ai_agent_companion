@@ -362,3 +362,10 @@ symbol = "app.api.channels_whatsapp:receive_whatsapp_webhook"
 tests = [
     "tests/unit/test_channels_whatsapp_api.py::TestSignatureVerification::test_valid_signature_routes_message",
 ]
+
+[[probes]]
+name = "orm-registry-anchor-removal"
+symbol = "packages.harness.database.models:load_all_models"
+tests = [
+    "tests/unit/test_persona_service.py::test_persona_cascade_derives_every_persona_id_table",
+]

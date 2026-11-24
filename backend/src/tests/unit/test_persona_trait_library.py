@@ -834,7 +834,7 @@ async def test_tsundere_preset_composes_into_system_message_with_persona_body() 
     assert "【性格特点】" in card.system_prompt
 
     state = ChatSessionStateModel(persona_id=1, persona_name="tsundere", card=card)
-    composed = compose_messages(state)
+    composed = compose_messages(state, wrap_current_message=False)
     system = composed.messages[0].content
     assert card.system_prompt in system
     for fragment in card.personality.split("；"):

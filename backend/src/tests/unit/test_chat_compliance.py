@@ -164,7 +164,7 @@ async def _make_state(
 async def test_compose_injects_persona_contract_after_constitution() -> None:
     """组装位置：角色契约紧跟宪章，先于记忆层与输出格式协议。"""
     _, state = await _make_state(ScriptedGateway([ChatResponseModel(content="好")]))
-    result = compose_messages(state, emotion_summary="心情不错")
+    result = compose_messages(state, emotion_summary="心情不错", wrap_current_message=False)
     system = result.messages[0].content
     assert render_persona_contract("大肥鱼") in system
     assert system.index(render_constitution()) < system.index("【角色契约】")

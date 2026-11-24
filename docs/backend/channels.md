@@ -112,14 +112,17 @@ SMS_FORWARDER_ENABLED / WHATSAPP_ENABLED 全为 false（缺省）：
 
 门控是聊天生成前的判定层：入站先经 `evaluate_flow_gate` 得到
 `reply | defer | merge | skip` 与延迟毫秒 / 理由枚举（矩阵与配置见
-[chat.md](chat.md#心流门控heartflow-gate)）。本层只负责把裁决映射到运行面：
+[chat.md](chat.md#心流门控heartflow-gate)）。本层只负责把裁决映射到运行面；
+判定输入显式区分「当前消息之前的到达历史」与当前消息（先取历史 → 门控 →
+再记录当前，无末条推断）：
 
 ```
 FLOW_ENABLED=true
-    ↓ 入站记录（FlowChatStateModel：到达时刻 / 积压 / 待回复缓冲）
+    ↓ 读取既有节拍状态（当前消息之前的到达历史 / 积压——不写入）
     ↓ 节律门快照（RhythmService.gate_reply——睡眠 / 拟人延迟）
     ↓ 关系摘要（关系类现行事实派生——仅门控启用时读取）
-    ↓ evaluate_flow_gate → verdict / delay_ms / reason
+    ↓ evaluate_flow_gate(prior_arrivals_ms, backlog_count, ...) → verdict / delay_ms / reason
+    ↓ 记录当前入站（FlowChatStateModel：到达时刻 / 积压 / 待回复缓冲）
     ├─ reply  → 继续会话路由与即时投递
     ├─ skip   → 返回空投递结果（判定层纯函数契约保留；路由器已在
     │            门控前恒跳过合成事件——见「协议 v2」合成语义）
@@ -300,7 +303,7 @@ v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语�
 
 `synthetic=True` = 机器生成事件上浮（heartflow / mood / 平台系统消息），非人类消息：**路由器恒跳过，与 `FLOW_ENABLED` 无关**——不建会话、不回调心流判定、不回复，跳过计数只进 debug 日志（`synthetic_skip_count` 为观测面）。入站 `silent` 为平台上报的无通知上下文标记位（预留）。
 
-入站 `text` 允许空串：**仅附件入站**（纯图片 / 纯表情，无用户字面文本）归一为 `text=""` 投递——路由器照常收录表情、推进心流游标，但**不调用生成**（不写空回合、不发兜底文案），跳过计数 `empty_text_skip_count` 只进 debug 日志。**占位文本不算用户文本，所有 wire 形态一致**（Telegram 媒体 / QQ 段数组 / QQ CQ 码字符串）：无用户字面文本但消息含非文本内容（CQ 码或非 text 段）即归一空文本投递；既无用户文本也无任何非文本内容的消息才由产生方丢弃（不进路由器）。
+入站消息携带 `has_user_text`（适配器按平台 wire 语义声明是否含用户字面文本）：纯媒体 / 纯表情 / 纯文件（含 WeCom / 抖音以 `[图片]` 等占位文本承载的形态、QQ 段数组与 CQ 码字符串、Telegram 无 caption 媒体）一律 `has_user_text=False`——路由器照常收录附件、推进心流游标，但**不调用生成**（不写空回合、不发兜底文案），跳过计数 `no_user_text_skip_count` 只进 debug 日志。**占位文本不算用户文本，所有 wire 形态一致**（文本为空时模型校验强制 `has_user_text=False`）；既无用户文本也无任何非文本内容的消息才由产生方丢弃（不进路由器）。
 
 **OutboundMessageModel v2 字段**（`attachments: list = []` / `silent: bool = False`）：
 
@@ -358,7 +361,7 @@ Telegram 入站路由门槛（v2）：文本与媒体互斥（Bot API 语义）�
 
 NapCat 段数组消息的 image / record 段提取为附件（引用形态优先序）：`data.url`（可下载 URL）→ `url` 源；`data.file` 为 `base64://` 前缀 → `base64` 源（载荷剥前缀）；其余 `data.file`（`file://` URL / 平台引用）→ `path` 源原样承载。**边界**：仅段数组形态提取（NapCat HTTP POST 上报缺省 `message_format=array`）；CQ 码字符串形态维持占位符降级（参数解析转义复杂度不抵增益——文档化决策）；无可用引用（url / file 皆缺）的媒体段跳过。
 
-**仅附件入站（锁定语义）**：纯图片 / 纯表情消息（无用户字面文本）不做前置丢弃——只要消息含非文本内容（段数组的非 text 段或 CQ 码字符串的 `[CQ:...]` 码，两种 wire 形态一致），就归一为 `text=""` 的入站消息投递（段数组形态照常搭载可提取附件），路由器跳过生成但照常执行表情收录与心流游标推进（见「协议 v2」空文本语义）；既无用户文本也无任何非文本内容才丢弃（无可投递内容）。
+**仅附件入站（锁定语义）**：纯图片 / 纯表情消息（无用户字面文本）不做前置丢弃——只要消息含非文本内容（段数组的非 text 段或 CQ 码字符串的 `[CQ:...]` 码，两种 wire 形态一致），就归一为 `text=""` + `has_user_text=False` 的入站消息投递（段数组形态照常搭载可提取附件），路由器跳过生成但照常执行表情收录与心流游标推进（见「协议 v2」空文本语义）；既无用户文本也无任何非文本内容才丢弃（无可投递内容）。
 
 ### 流式降级（锁定契约）
 
@@ -388,7 +391,7 @@ v2 只交付 **wire**（模型 + 适配器 + 测试）。**表情包收发桥**�
     ↓ 取表情 / 平台附件投递失败：文本照常投递（逐附件结果由适配器聚合）
 ```
 
-延迟 / 合并批次只承接文本，不携带入站附件；收录已在门控前完成（合成事件除外——路由器在收录前已恒跳过），回表情仅即时回复路径生效（文档化边界）。空文本入站（纯表情 / 纯图片）同样收录，但跳过生成与兜底回发（`empty_text_skip_count`）。
+延迟 / 合并批次只承接文本，不携带入站附件；收录已在门控前完成（合成事件除外——路由器在收录前已恒跳过），回表情仅即时回复路径生效（文档化边界）。无用户文本入站（纯表情 / 纯图片）同样收录，但跳过生成与兜底回发（`no_user_text_skip_count`）。
 
 群聊多人格模式的素材归属（锁定）：**应答侧**各人格仍使用各自素材库（人格隔离轴与文本会话一致）；**入站收录**只进主人格（第一位候选）的素材库——多人格应答下表情归属本身歧义，取首位候选是确定性选择（不按发言者 / 应答者猜归属）。
 
@@ -508,7 +511,7 @@ OneBot v11 `message` 字段双形态：段数组（`[{"type": "text", "data": {.
 | `forward` | `[合并转发]` | `json` / `xml` | `[卡片消息]` |
 | 未知类型 | `[其它消息]` | （CQ 字符串内 `text` 罕见形态） | 空串 |
 
-- 展平后空文本（无段 / 空串）跳过路由；纯图片 / 纯表情消息（CQ 字符串与段数组形态一致）展平为占位文本后**无用户字面文本**归一 `text=""` 进路由（路由器跳过生成、照常推进心流游标；占位符只在混合消息中作为人格可感知的非文本降级形态保留）。
+- 展平后空文本（无段 / 空串）跳过路由；纯图片 / 纯表情消息（CQ 字符串与段数组形态一致）展平为占位文本后**无用户字面文本**归一 `text=""` + `has_user_text=False` 进路由（路由器跳过生成、照常推进心流游标；占位符只在混合消息中作为人格可感知的非文本降级形态保留）。
 
 ### 去重与顺序（文档化边界）
 
@@ -688,7 +691,7 @@ WeComChannelRunner._handle_callback
 |---|---|---|
 | 文本 | `text.content` 原文 | 无 |
 | 语音 | `voice.content`（平台转写） | 无 |
-| 图文混排 | 文本项原文 + 图片项占位符 `[图片]` 逐项拼接 | 各图片项 → `image`（`url` 源） |
+| 图文混排 | 文本项原文 + 图片项占位符 `[图片]` 逐项拼接（有非空文本项 → `has_user_text=True`） | 各图片项 → `image`（`url` 源） |
 | 图片 | `[图片]` | `image`（`url` 源） |
 | 文件 | `[文件]` | `file`（`url` 源） |
 | 视频 | `[视频]` | `file` + `media_type=video/mp4` |
@@ -933,13 +936,16 @@ settings = build_isolated_settings(
 已登录的抖音页面（持久化 profile 承载 cookie），通道层经 sidecar 的
 `evaluate` 工具在页面上下文读取会话 DOM、写入输入框并发送。这是与 GUI 微信
 实验轨**同一套浏览器底座**——不引入第二套浏览器进程、不新增依赖。
+`evaluate` 有任意页面副作用，**不进 chat / duty 的 LLM 工具面**（LLM 只经
+无副作用七工具）；抖音内部经 `DouyinWebClient` 的 `client.invoke("evaluate")`
+直调，工具注册面裁剪不影响本通道（见 tools-browser.md「暴露面区分」）。
 
 底座职责划分（锁定）：
 
 | 层 | 职责 | 位置 |
 |---|---|---|
 | 浏览器运行时 | 启动 chromium / 持久化 profile / 允许清单与路由拦截 | `docker/browser-sidecar` 树 |
-| 页面协议（JS） | 会话 DOM 采集 / 输入框写入并发送 | `harness/channels/douyin/douyin_scripts.py` |
+| 页面协议（JS） | 会话 DOM 采集 / 输入框写入并发送（经 `evaluate` 工具——**内部直用，不进 LLM 工具面**） | `harness/channels/douyin/douyin_scripts.py` |
 | 通道客户端 | 工具调用编排 / wire 解析 / 失败归一 | `harness/channels/douyin/douyin_client.py` |
 | 通道路由 | 轮询节拍 / 去重 / 归一 / 人格会话 / 兜底 | `harness/channels/douyin/douyin_runner.py` + `channel_service.py` |
 
@@ -980,7 +986,7 @@ DOUYIN_ENABLED=false（缺省）：no-op——零轮询任务 / 零页面操作
       ② 无标识 / 已处理标识 / 批内重复剔除
       ③ 系统消息归一 synthetic=True（路由器恒跳过回复，与 FLOW_ENABLED 无关）
       ④ 图片 URL → 通道附件（kind=image；data: 内联图剔除）
-      ⑤ 纯图片消息归一占位文本 [图片]
+      ⑤ 纯图片消息归一占位文本 [图片] + has_user_text=False（路由器跳过生成）
       ⑥ 上限截断（保留时间序末尾——最新优先）
     ↓ 去重窗口登记（message_id 有界 FIFO 1024——与 QQ / 企微同语义）
 ChannelRouter.handle_inbound（per-chat 锁 / 心流门控 / 群聊多人格 /
@@ -994,7 +1000,7 @@ ChannelRouter.handle_inbound（per-chat 锁 / 心流门控 / 群聊多人格 /
 |---|---|---|---|
 | `message_id` | string | `data-message-id` / `data-id`；缺失时「发送者 + 时间 + 文本」哈希兜底 | 去重键 + 入站 `message_id` |
 | `sender_id` | string | `data-sender-id` / `data-uid`；缺失为 `unknown` | 入站 `sender_id` |
-| `text` | string | 消息节点正文（脚本裁剪空白） | 入站文本（为空且有图时用占位文本） |
+| `text` | string | 消息节点正文（脚本裁剪空白） | 入站文本（为空且有图时用占位文本）；`has_user_text` 只按原始正文是否非空声明（占位文本为 False） |
 | `ts_ms` | number | `data-timestamp` / `data-ts` / `data-createTime`（秒级自动 ×1000）；缺失为 0 | 入站时间（0 按采集时刻兜底） |
 | `is_self` | bool | 自身气泡标记（`data-is-self` / self、right 类名） | True 不进路由（自己的回复回声） |
 | `is_system` | bool | `data-is-system` / system 类名 | 归一 `synthetic=True` |
@@ -1560,7 +1566,7 @@ runner 与适配器共享同一服务窗实例；`app.state.channels_whatsapp_ru
 | `entry[].changes[].value.messages[].timestamp` | 秒级数值字符串 | 服务端时钟 | ×1000 归一 epoch 毫秒；非法 / 非正 / 非有限值（`NaN` / `Infinity` / `"nan"` / `"inf"`）/ 缺失回落服务端时钟 |
 | `entry[].changes[].value.messages[].type` | string | 空 | `text` / `image` / `audio` / `document` / `sticker` / `video` / `location` / `button` / `interactive`；其余类型丢弃 |
 | `…messages[].text.body` | string | 空 | 文本正文（空白丢弃） |
-| `…messages[].image/video/document.caption` | string | 空 | 媒体 caption（非空即正文；否则占位 `[图片]` / `[视频]` / `[文件]`） |
+| `…messages[].image/video/document.caption` | string | 空 | 媒体 caption（非空即正文 + `has_user_text=True`；否则占位 `[图片]` / `[视频]` / `[文件]` + `has_user_text=False`） |
 | `…messages[].audio/sticker` | object | — | 无 caption 概念：`[语音]` / `[贴纸]` |
 | `…messages[].location.name/address` | string | 空 | 位置文本回退（空则 `[位置]`） |
 | `…messages[].button.text` | string | 空 | 模板按钮文本回退（空则 `[按钮]`） |

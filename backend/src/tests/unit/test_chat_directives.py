@@ -160,7 +160,7 @@ async def test_compose_inserts_directives_before_protocol() -> None:
     result = compose_messages(
         _state(),
         emotion_summary="当前情绪：愉悦↑",
-        directives=["以后都用简体中文"],
+        directives=["以后都用简体中文"], wrap_current_message=False
     )
     prompt = result.system_prompt
     emotion_index = prompt.index("【心情状态】")
@@ -172,7 +172,7 @@ async def test_compose_inserts_directives_before_protocol() -> None:
 
 async def test_compose_without_directives_unchanged() -> None:
     """未提供长期指令：system 提示不含长期指令块（既有形态零变更）。"""
-    result = compose_messages(_state())
+    result = compose_messages(_state(), wrap_current_message=False)
     assert "【长期指令】" not in result.system_prompt
 
 

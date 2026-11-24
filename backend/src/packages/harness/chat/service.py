@@ -2,7 +2,9 @@
 
 组装链（单一真相，文档化于 docs/backend/chat.md）::
 
-    compose_messages(state)
+    compose_for_generation(state, injection=..., intent=..., provenance=...)
+        ↓（注入防御裁决：包裹开关 / 来源标签 / 检测提示——单一入口）
+        ↓ compose_messages(state, wrap_current_message=...)
         ↓ ① prompts.render_charter()                      会话章程帧
         ↓ ② 世界书 before_char 条目块                      检索增强（前段）
         ↓ ③ prompts.render_persona_system_prompt(card)     人格正典（覆写感知）
@@ -283,6 +285,7 @@ from __future__ import annotations
 import json
 import random
 from collections.abc import AsyncIterator, Sequence
+from enum import StrEnum
 from typing import Final, Protocol
 
 from loguru import logger
@@ -392,12 +395,27 @@ __all__ = [
     "ChatService",
     "ToolExecutorFace",
     "IntentShortcutFace",
+    "GenerationIntent",
     "CHAT_TOOL_STEP_CAP",
     "HISTORY_WRAP_MAX_TURNS",
     "compose_messages",
+    "compose_for_generation",
     "estimate_text_tokens",
     "derive_relationship_summary",
 ]
+
+
+class GenerationIntent(StrEnum):
+    """生成意图（统一组装入口的调用面标识——来源分级合法性与日志观测）。
+
+    ``REPLY`` / ``STREAM`` 是会话回合生成，必须携带发送者来源分级
+    （主人 / 群友标签由分级派生）；``SWIPE`` 是变体重生成，无来源分级
+    信息，标签取默认值。
+    """
+
+    REPLY = "reply"
+    STREAM = "stream"
+    SWIPE = "swipe"
 
 #: 用途常量——chat 会话调用恒以 chat 用途落用量账（usage 域枚举校验）。
 CHAT_PURPOSE: str = "chat"
@@ -482,7 +500,7 @@ def compose_messages(
     core_memory: Sequence[CoreMemoryBlockDTO] | None = None,
     relationship: RelationshipSummaryModel | None = None,
     skills: Sequence[SkillRecordDTO] | None = None,
-    wrap_current_message: bool = False,
+    wrap_current_message: bool,
     current_message_label: str = "",
     injection_hint: str | None = None,
 ) -> MessageCompositionResult:
@@ -561,8 +579,9 @@ def compose_messages(
             ——本函数保持纯函数无 I/O）。
         wrap_current_message: 是否把当轮入站 user 回合与最近
             :data:`HISTORY_WRAP_MAX_TURNS` 条历史 user 回合包进不可信内容
-            定界帧（注入防御启用时由 ChatService 传 True；直调缺省 False
-            保持既有组装形态）。
+            定界帧（**必填关键字**——生产调用一律经
+            :func:`compose_for_generation` 统一入口决定；直调测试须显式
+            传值，漏传无法通过类型检查）。
         current_message_label: 当轮入站消息的来源标签（主人消息 / 群友消息
             ／……；空白回落 ``UNTRUSTED_LABEL_DEFAULT``）。
         injection_hint: 注入提示块文本（检测命中时由调用方渲染；None = 不
@@ -668,6 +687,115 @@ def compose_messages(
         emotion_summary=emotion_summary if emotion_block else None,
         current_message_wrapped=current_message_wrapped,
         injection_hint=applied_hint,
+    )
+
+
+def _current_user_text(state: ChatSessionStateModel) -> str:
+    """取组装输入的当轮用户文本（末位 user 回合；无则空串）。
+
+    Args:
+        state: 会话状态（末位回合即本轮追加的入站消息）。
+
+    Returns:
+        当轮用户文本（检测与提示台词种子）。
+    """
+    if state.turns and state.turns[-1].role == ChatMessageRole.USER:
+        return state.turns[-1].content
+    return ""
+
+
+def compose_for_generation(
+    state: ChatSessionStateModel,
+    *,
+    injection: InjectionGuardSettings,
+    intent: GenerationIntent,
+    provenance: MemoryProvenance | None,
+    rng: random.Random | None = None,
+    emotion_summary: str | None = None,
+    directives: Sequence[str] | None = None,
+    facts: Sequence[str] | None = None,
+    core_memory: Sequence[CoreMemoryBlockDTO] | None = None,
+    relationship: RelationshipSummaryModel | None = None,
+    skills: Sequence[SkillRecordDTO] | None = None,
+) -> MessageCompositionResult:
+    """生成路径的**唯一组装入口**：注入防御配置裁决收敛于此。
+
+    包裹开关 / 来源标签 / 检测提示由 ``INJECTION_`` 配置与调用意图统一
+    决定，生产代码不得直连 :func:`compose_messages`（结构测试枚举直连
+    调用点守护）。判定语义（与历史实现等价）：
+
+        - 配置关闭：不包裹、不检测、无提示；
+        - 会话回合（``REPLY`` / ``STREAM``）：标签按发送者来源分级
+          （owner = 主人消息；其余 = 群友消息），缺来源分级即 fail loud；
+        - 变体重生成（``SWIPE``）：无来源分级，标签取默认值；
+        - 检测命中且提示开关开启时，按 ``INJECTION_COUNTER_STYLE`` 渲染
+          提示块（台词按当轮文本确定性选取）；检测只记 debug 日志，从不
+          拦截生成。
+
+    Args:
+        state: 会话状态（末位回合为本轮入站消息）。
+        injection: 注入防御配置（调用方持有一份，测试可注入）。
+        intent: 生成意图（决定来源分级合法性 / 默认标签）。
+        provenance: 发送者来源分级（``REPLY`` / ``STREAM`` 必填；
+            ``SWIPE`` 传 None）。
+        rng: 概率门随机源（透传组装面）。
+        emotion_summary: 非中性情绪摘要行（透传组装面）。
+        directives: 现行长期指令正文列表（透传组装面）。
+        facts: 现行人物事实注入行列表（透传组装面）。
+        core_memory: 核心记忆块记录列表（透传组装面）。
+        relationship: 关系进展摘要（透传组装面）。
+        skills: 命中当轮文本的技能记录列表（透传组装面）。
+
+    Returns:
+        组装结果（消息序列 + 观测元数据 + 推进后的世界书回合状态）。
+
+    Raises:
+        ValueError: ``REPLY`` / ``STREAM`` 未携带来源分级（编程错误——
+            fail loud，避免标签静默降级）。
+    """
+    wrap_current_message = False
+    current_message_label = ""
+    injection_hint: str | None = None
+    if injection.enabled:
+        if intent is GenerationIntent.SWIPE:
+            current_message_label = UNTRUSTED_LABEL_DEFAULT
+        else:
+            if provenance is None:
+                raise ValueError(
+                    "reply / stream 生成必须携带发送者来源分级（provenance）"
+                )
+            current_message_label = (
+                UNTRUSTED_LABEL_OWNER
+                if provenance == MemoryProvenance.OWNER
+                else UNTRUSTED_LABEL_PEER
+            )
+        wrap_current_message = True
+        user_text = _current_user_text(state)
+        signal = detect_injection(user_text, threshold=injection.threshold)
+        if signal.suspected:
+            logger.debug(
+                "注入信号命中: intent={}, persona_id={}, score={:.2f}, kinds={}",
+                intent.value,
+                state.persona_id,
+                signal.score,
+                [reason.kind.value for reason in signal.reasons],
+            )
+            if injection.anti_injection_hint:
+                injection_hint = build_injection_hint(
+                    injection.counter_style, user_text
+                )
+    return compose_messages(
+        state,
+        rng=rng,
+        emotion_summary=emotion_summary,
+        directives=directives,
+        facts=facts,
+        core_memory=core_memory,
+        relationship=relationship,
+        skills=skills,
+        wrap_current_message=wrap_current_message,
+        current_message_label=current_message_label,
+        injection_hint=injection_hint,
     )
 
 
@@ -1224,20 +1352,17 @@ class ChatService:
         core_memory = await self._current_core_memory(state)
         relationship = await self._current_relationship(state)
         skills = await self._current_skills(state, user_text)
-        wrap_current, current_label, injection_hint = self._injection_compose_inputs(
-            state, user_text, sender_provenance
-        )
-        result = compose_messages(
+        result = compose_for_generation(
             state,
+            injection=self._injection_settings,
+            intent=GenerationIntent.REPLY,
+            provenance=sender_provenance,
             emotion_summary=emotion_summary,
             directives=directives,
             facts=facts,
             core_memory=core_memory,
             relationship=relationship,
             skills=skills,
-            wrap_current_message=wrap_current,
-            current_message_label=current_label,
-            injection_hint=injection_hint,
         )
         # 功能式回合状态回存：组装纯函数不回写会话态，冷却时钟推进由
         # 本服务消费后落回（快径路径不组装、不推进——时钟只度量真实
@@ -1330,20 +1455,17 @@ class ChatService:
         core_memory = await self._current_core_memory(state)
         relationship = await self._current_relationship(state)
         skills = await self._current_skills(state, user_text)
-        wrap_current, current_label, injection_hint = self._injection_compose_inputs(
-            state, user_text, sender_provenance
-        )
-        result = compose_messages(
+        result = compose_for_generation(
             state,
+            injection=self._injection_settings,
+            intent=GenerationIntent.STREAM,
+            provenance=sender_provenance,
             emotion_summary=emotion_summary,
             directives=directives,
             facts=facts,
             core_memory=core_memory,
             relationship=relationship,
             skills=skills,
-            wrap_current_message=wrap_current,
-            current_message_label=current_label,
-            injection_hint=injection_hint,
         )
         # 功能式回合状态回存（与 reply 同构——冷却时钟只度量真实组装回合）。
         state.world_book_state = result.world_book_state
@@ -1406,50 +1528,6 @@ class ChatService:
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
-
-    def _injection_compose_inputs(
-        self,
-        state: ChatSessionStateModel,
-        user_text: str,
-        sender_provenance: MemoryProvenance,
-    ) -> tuple[bool, str, str | None]:
-        """构建注入防御的组装入参（包裹开关 / 来源标签 / 注入提示）。
-
-        运行判定：``INJECTION_ENABLED`` 关闭时返回未启用形态（不包裹、不
-        检测——回复链路回到原始组装）。启用时：标签按发送者来源分级
-        （owner = 主人消息；peer / untrusted = 群友消息）；检测命中且
-        ``INJECTION_ANTI_INJECTION_HINT`` 开启时，按 ``INJECTION_COUNTER_STYLE``
-        渲染注入提示块（台词按本轮文本确定性选取）。检测只记 debug 日志、
-        只追加提示——从不拦截回合。
-
-        Args:
-            state: 会话状态（日志归属人格）。
-            user_text: 本轮入站文本（检测与台词种子）。
-            sender_provenance: 本轮发送者来源分级（决定包裹标签）。
-
-        Returns:
-            ``(是否包裹当轮消息, 来源标签, 注入提示或 None)`` 三元组。
-        """
-        if not self._injection_settings.enabled:
-            return False, "", None
-        label = (
-            UNTRUSTED_LABEL_OWNER
-            if sender_provenance == MemoryProvenance.OWNER
-            else UNTRUSTED_LABEL_PEER
-        )
-        signal = detect_injection(user_text, threshold=self._injection_settings.threshold)
-        if not signal.suspected:
-            return True, label, None
-        logger.debug(
-            "注入信号命中: persona_id={}, score={:.2f}, kinds={}",
-            state.persona_id,
-            signal.score,
-            [reason.kind.value for reason in signal.reasons],
-        )
-        if not self._injection_settings.anti_injection_hint:
-            return True, label, None
-        hint = build_injection_hint(self._injection_settings.counter_style, user_text)
-        return True, label, hint
 
     async def _apply_compliance_retry(
         self,

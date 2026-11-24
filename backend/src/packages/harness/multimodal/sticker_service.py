@@ -32,7 +32,7 @@ import json
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 from loguru import logger
 from sqlalchemy import desc, select
@@ -81,7 +81,23 @@ from packages.harness.multimodal.sticker_prompts import (
     render_sticker_annotation_instruction,
 )
 
-__all__ = ["STICKER_MIME_EXTENSIONS", "StickerService"]
+__all__ = ["STICKER_MIME_EXTENSIONS", "StickerInsertOutcome", "StickerService"]
+
+
+class StickerInsertOutcome(NamedTuple):
+    """表情包插入结局（保存点冲突收敛面——上传与通道收录共用）。
+
+    Attributes:
+        row: 入库行（created=True）或唯一键胜者行（created=False；查询不到
+            时为 None）。
+        created: 本次调用是否赢得插入。
+        path: 本次写入的文件路径（created=True 时为该行文件；created=False
+            时已按胜者路径判定清理——落败文件不存在则保留胜者文件）。
+    """
+
+    row: StickerRow | None
+    created: bool
+    path: Path
 
 #: MIME → 文件扩展名（落盘命名与内容类型保持一一对应）。
 STICKER_MIME_EXTENSIONS: Final[dict[str, str]] = {
@@ -188,27 +204,16 @@ class StickerService:
                         )
                     )
                     continue
-                extension = STICKER_MIME_EXTENSIONS[content_type]
-                path = await self._write_file(digest, extension, payload)
-                written_paths.append(path)
-                row = StickerRow(
-                    sha256=digest,
+                outcome = await self._insert_sticker(
+                    session,
+                    digest=digest,
                     content_type=content_type,
-                    storage_path=str(path),
-                    size_bytes=len(payload),
-                    tags=json.dumps(tags, ensure_ascii=False),
+                    payload=payload,
+                    tags=tags,
                     description=description,
                     source_note=source_note,
-                    annotation_status=StickerAnnotationStatus.PENDING.value,
-                    annotation_error=None,
-                    annotation_model_entry=None,
-                    annotated_at_ms=None,
                 )
-                try:
-                    async with session.begin_nested():
-                        session.add(row)
-                        await session.flush()
-                except IntegrityError:
+                if not outcome.created:
                     rejected.append(
                         StickerRejectedItemModel(
                             index=index,
@@ -216,24 +221,12 @@ class StickerService:
                             message="同一人格下已存在相同文件（并发写入按唯一键收敛）",
                         )
                     )
-                    written_paths.remove(path)
                     existing_hashes.add(digest)
-                    winner_path = (
-                        (
-                            await session.execute(
-                                select(StickerRow.storage_path).where(
-                                    StickerRow.sha256 == digest
-                                )
-                            )
-                        )
-                        .scalars()
-                        .first()
-                    )
-                    if winner_path != str(path):
-                        await self._remove_files([path])
                     continue
+                assert outcome.row is not None  # created=True 契约：行恒存在
+                written_paths.append(outcome.path)
                 existing_hashes.add(digest)
-                created.append(self._record(row))
+                created.append(self._record(outcome.row))
             await self._commit(session)
         except Exception:
             await self._rollback_quietly(session)
@@ -285,30 +278,26 @@ class StickerService:
         if existing is not None:
             return self._record(existing)
         note = source_note.strip()[: settings.source_note_max_length] or "通道入站表情"
-        extension = STICKER_MIME_EXTENSIONS[normalized_type]
-        path = await self._write_file(digest, extension, payload)
-        row = StickerRow(
-            sha256=digest,
+        outcome = await self._insert_sticker(
+            session,
+            digest=digest,
             content_type=normalized_type,
-            storage_path=str(path),
-            size_bytes=len(payload),
-            tags=json.dumps([], ensure_ascii=False),
+            payload=payload,
+            tags=[],
             description="",
             source_note=note,
-            annotation_status=StickerAnnotationStatus.PENDING.value,
-            annotation_error=None,
-            annotation_model_entry=None,
-            annotated_at_ms=None,
         )
-        session.add(row)
+        if not outcome.created:
+            # 并发同哈希：返回既有胜者行（落败文件已按胜者路径判定清理）。
+            return self._record(outcome.row) if outcome.row is not None else None
         try:
-            await session.flush()
             await self._commit(session)
         except Exception:
             await self._rollback_quietly(session)
-            await self._remove_files([path])
+            await self._remove_files([outcome.path])
             raise
-        return self._record(row)
+        assert outcome.row is not None  # created=True 契约：行恒存在
+        return self._record(outcome.row)
 
     # ------------------------------------------------------------------
     # 读取 / 修改 / 删除
@@ -632,6 +621,70 @@ class StickerService:
                 details={"reason": "sticker disabled", "env_flag": "STICKER_ENABLED"},
             )
         return settings
+
+    async def _insert_sticker(
+        self,
+        session: AsyncSession,
+        *,
+        digest: str,
+        content_type: str,
+        payload: bytes,
+        tags: list[str],
+        description: str,
+        source_note: str,
+    ) -> StickerInsertOutcome:
+        """保存点插入表情包行（唯一键冲突收敛——上传与通道桥共用）。
+
+        文件先落盘再插入；撞 ``uq_ff_stickers_persona_sha`` 时只回滚本条目的
+        保存点，解析胜者行并按路径判定清理落败文件：胜者路径与本次写入
+        路径相同（人格作用域确定性命名）时保留文件，避免删除胜者仍在
+        引用的字节。调用方据 ``created`` 决定拒收 / 返回既有记录。
+
+        Args:
+            session: 注入的异步 Session（人格上下文已绑定）。
+            digest: 文件 SHA-256（同人格唯一键）。
+            content_type: 图片 MIME 类型（允许清单内）。
+            payload: 文件字节。
+            tags: 标签列表（JSON 落库）。
+            description: 描述文本。
+            source_note: 来源备注。
+
+        Returns:
+            插入结局（行 / 是否胜出 / 本次写入路径）。
+        """
+        extension = STICKER_MIME_EXTENSIONS[content_type]
+        path = await self._write_file(digest, extension, payload)
+        row = StickerRow(
+            sha256=digest,
+            content_type=content_type,
+            storage_path=str(path),
+            size_bytes=len(payload),
+            tags=json.dumps(tags, ensure_ascii=False),
+            description=description,
+            source_note=source_note,
+            annotation_status=StickerAnnotationStatus.PENDING.value,
+            annotation_error=None,
+            annotation_model_entry=None,
+            annotated_at_ms=None,
+        )
+        try:
+            async with session.begin_nested():
+                session.add(row)
+                await session.flush()
+        except IntegrityError:
+            winner = (
+                (
+                    await session.execute(
+                        select(StickerRow).where(StickerRow.sha256 == digest)
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if winner is None or winner.storage_path != str(path):
+                await self._remove_files([path])
+            return StickerInsertOutcome(row=winner, created=False, path=path)
+        return StickerInsertOutcome(row=row, created=True, path=path)
 
     async def _require_row(self, session: AsyncSession, sticker_id: int) -> StickerRow:
         """按主键取表情包行（人格作用域内；缺失即 NOT_FOUND）。"""

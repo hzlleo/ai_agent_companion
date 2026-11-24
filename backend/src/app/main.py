@@ -218,7 +218,7 @@ from packages.harness.tools.browser import (
     build_browser_specs,
     register_browser_sidecar_tools,
 )
-from packages.harness.tools.browser_models import BROWSER_TOOL_NAMES
+from packages.harness.tools.browser_models import BROWSER_LLM_TOOL_NAMES
 from packages.harness.tools.registry import ToolRegistry, register_builtin_tools
 from packages.harness.tools.sandbox import (
     build_sandbox_client,
@@ -484,7 +484,7 @@ async def _startup_browser_sidecar(app: FastAPI, settings: Settings) -> None:
     （bounded 超时 = ``request_timeout_seconds``）。
 
     chat 注册表接线（镜像 web_search 的双注册形态——文档化决策）：
-    搜索装配已建 chat 注册表（``search_tool_registry``）时浏览器八工具
+    搜索装配已建 chat 注册表（``search_tool_registry``）时浏览器七工具
     **并入该注册表**（规格追加到 ``search_tool_specs``——单一 chat 工具
     注册表面）；否则独立建 browser 槽位（``browser_tool_registry`` /
     ``browser_tool_specs``——通道工厂按「搜索槽位优先、浏览器槽位兜底」
@@ -538,7 +538,7 @@ async def _startup_browser_sidecar(app: FastAPI, settings: Settings) -> None:
         app.state.search_tool_specs = [*search_specs, *browser_specs]
         logger.info(
             "浏览器 sidecar 工具已并入搜索 chat 注册表: tools=[{}]（duty 注册表在调度器装配时追加）",
-            ", ".join(BROWSER_TOOL_NAMES),
+            ", ".join(BROWSER_LLM_TOOL_NAMES),
         )
         return
     browser_registry = ToolRegistry()
@@ -547,7 +547,7 @@ async def _startup_browser_sidecar(app: FastAPI, settings: Settings) -> None:
     app.state.browser_tool_specs = browser_specs
     logger.info(
         "浏览器 sidecar 工具已注册（独立 chat 注册表）: tools=[{}]（duty 注册表在调度器装配时追加）",
-        ", ".join(BROWSER_TOOL_NAMES),
+        ", ".join(BROWSER_LLM_TOOL_NAMES),
     )
 
 
@@ -1370,7 +1370,7 @@ async def _register_browser_sidecar_tools(
     Args:
         app: 待装配的 FastAPI 应用（读取 ``browser_sidecar_client`` 槽位）。
         settings: 生效 Settings（``settings.tools_browser_sidecar`` 分节）。
-        registry: duty 工具注册表（浏览器八工具追加装配目标）。
+        registry: duty 工具注册表（浏览器七工具追加装配目标）。
     """
     client = getattr(app.state, "browser_sidecar_client", None)
     if client is None:

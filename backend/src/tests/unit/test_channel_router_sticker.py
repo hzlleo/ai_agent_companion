@@ -199,7 +199,7 @@ async def test_empty_text_sticker_ingested_without_generation_or_fallback() -> N
     assert chat.reply_calls == []
     assert adapter.sent == []
     assert result.message_ids == []
-    assert router.empty_text_skip_count == 1
+    assert router.no_user_text_skip_count == 1
 
 
 async def test_ingest_and_reply_failures_do_not_block_reply() -> None:

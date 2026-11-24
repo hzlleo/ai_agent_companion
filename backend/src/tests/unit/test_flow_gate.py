@@ -64,16 +64,14 @@ def _input(
     synthetic: bool = False,
     relationship: RelationshipSummaryModel | None = None,
 ) -> FlowGateInputModel:
-    """构造门控判定输入（缺省为清醒、单条、无积压）。"""
+    """构造门控判定输入（arrivals 是当前消息之前的历史；缺省清醒 / 无积压）。"""
     return FlowGateInputModel(
         now_ms=now_ms,
         is_synthetic=synthetic,
         rhythm=rhythm_state_from_gate(allowed=allowed, suggested_delay_ms=delay_ms),
         relationship=relationship,
-        state=FlowChatStateModel(
-            recent_arrival_ms=list(arrivals or [now_ms]),
-            backlog_count=backlog,
-        ),
+        prior_arrivals_ms=list(arrivals or []),
+        backlog_count=backlog,
     )
 
 
@@ -120,9 +118,9 @@ async def test_sleep_window_defers_until_wake() -> None:
     assert decision.reason == FlowReason.SLEEP_WINDOW
 
 
-async def test_burst_merges_after_quiet_window() -> None:
-    """窗口内连发达阈值：转合并并按静默窗口剩余排程。"""
-    arrivals = [_BASE_MS - 800, _BASE_MS - 400, _BASE_MS]
+async def test_burst_merges_when_prior_history_plus_current_reaches_threshold() -> None:
+    """窗口内历史 + 当前消息达阈值：转合并（静默窗口从当前消息起算）。"""
+    arrivals = [_BASE_MS - 800, _BASE_MS - 400]
     decision = evaluate_flow_gate(
         _input(arrivals=arrivals),
         _settings(burst_window_ms=4000, burst_count=3, merge_quiet_ms=2500),
@@ -132,21 +130,30 @@ async def test_burst_merges_after_quiet_window() -> None:
     assert decision.reason == FlowReason.BURST_MERGE
 
 
+async def test_burst_history_alone_below_threshold_replies() -> None:
+    """历史未达阈值（不含当前只有一条）：不合并。"""
+    decision = evaluate_flow_gate(
+        _input(arrivals=[_BASE_MS - 400]),
+        _settings(burst_window_ms=4000, burst_count=3, min_reply_gap_ms=0),
+    )
+    assert decision.verdict == FlowVerdict.REPLY
+    assert decision.reason == FlowReason.NORMAL
+
+
 async def test_burst_outside_window_does_not_merge() -> None:
     """窗口外的历史入站不参与连发计数。"""
-    arrivals = [_BASE_MS - 60_000, _BASE_MS - 50_000, _BASE_MS]
+    arrivals = [_BASE_MS - 60_000, _BASE_MS - 50_000]
     decision = evaluate_flow_gate(
         _input(arrivals=arrivals),
-        _settings(burst_window_ms=4000, burst_count=3),
+        _settings(burst_window_ms=4000, burst_count=3, min_reply_gap_ms=0),
     )
     assert decision.verdict == FlowVerdict.REPLY
 
 
 async def test_density_pacing_defers_short_gap_follow_up() -> None:
-    """生产形态追发（当前消息已入历史）：以上一条入站为锚补齐最小间隔。"""
-    arrivals = [_BASE_MS - 300, _BASE_MS]
+    """显式历史末条即上一条入站：间隔不足最小间隔时补齐剩余毫秒。"""
     decision = evaluate_flow_gate(
-        _input(arrivals=arrivals),
+        _input(arrivals=[_BASE_MS - 300]),
         _settings(burst_count=3, min_reply_gap_ms=1200),
     )
     assert decision.verdict == FlowVerdict.DEFER
@@ -154,23 +161,30 @@ async def test_density_pacing_defers_short_gap_follow_up() -> None:
     assert decision.reason == FlowReason.DENSITY_PACING
 
 
-async def test_density_pacing_anchor_without_current_entry_is_equivalent() -> None:
-    """未含当前条目的历史形态与生产形态等价：末条即上一条入站，补齐同额延迟。"""
-    arrivals = [_BASE_MS - 600, _BASE_MS - 300]
+async def test_density_pacing_history_matches_now_is_literal_prior() -> None:
+    """历史末条与 now 同毫秒：按字面参与判定（不做「末条即当前」推断）。"""
     decision = evaluate_flow_gate(
-        _input(arrivals=arrivals),
-        _settings(burst_count=3, min_reply_gap_ms=1200),
+        _input(arrivals=[_BASE_MS - 300, _BASE_MS]),
+        _settings(burst_count=10, min_reply_gap_ms=1200),
     )
     assert decision.verdict == FlowVerdict.DEFER
-    assert decision.delay_ms == 900
+    assert decision.delay_ms == 1200
     assert decision.reason == FlowReason.DENSITY_PACING
+
+
+async def test_empty_prior_history_replies_immediately() -> None:
+    """空历史：当前消息是首条入站，无密度延迟。"""
+    decision = evaluate_flow_gate(
+        _input(arrivals=[]), _settings(burst_count=3, min_reply_gap_ms=1200)
+    )
+    assert decision.verdict == FlowVerdict.REPLY
+    assert decision.reason == FlowReason.NORMAL
 
 
 async def test_density_pacing_replies_when_gap_reaches_minimum() -> None:
     """追发间隔达到最小回复间隔：不延迟，落入正常立即回复。"""
-    arrivals = [_BASE_MS - 3500, _BASE_MS]
     decision = evaluate_flow_gate(
-        _input(arrivals=arrivals),
+        _input(arrivals=[_BASE_MS - 3500]),
         _settings(burst_count=3, min_reply_gap_ms=1200),
     )
     assert decision.verdict == FlowVerdict.REPLY
@@ -207,7 +221,7 @@ async def test_close_relationship_bypasses_throttles() -> None:
     decision = evaluate_flow_gate(
         _input(
             backlog=20,
-            arrivals=[_BASE_MS - 200, _BASE_MS],
+            arrivals=[_BASE_MS - 200],
             relationship=_relationship(RelationshipStage.CLOSE),
         ),
         _settings(backlog_defer_threshold=6, min_reply_gap_ms=1200),

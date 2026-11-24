@@ -445,7 +445,7 @@ async def test_single_empty_text_media_skips_generation_without_fallback() -> No
     assert service.reply_calls == []
     assert adapter.sent == []
     assert scheduler.jobs == []
-    assert router.empty_text_skip_count == 1
+    assert router.no_user_text_skip_count == 1
 
 
 async def test_empty_text_media_burst_keeps_buffer_clean_and_merges_real_text() -> None:
@@ -494,3 +494,68 @@ async def test_empty_text_media_burst_keeps_buffer_clean_and_merges_real_text() 
     await scheduler.run_last()
     assert service.reply_calls[-1]["text"] == "真实文本"
     assert adapter.sent[-1].text == "echo:真实文本"
+
+
+async def test_media_only_inbound_skips_generation_across_four_channels() -> None:
+    """跨通道纯媒体：四通道均不触发生成、不兜底（占位文本不算用户文本）。"""
+    service = FakeChatService()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
+    router = ChannelRouter(
+        chat_service_factory=lambda: service,
+        session_factory=empty_session_factory,
+        flow_settings=FlowGateSettings(enabled=False),
+        clock=FakeClock(),
+    )
+    for channel in (
+        ChannelType.WECOM,
+        ChannelType.DOUYIN,
+        ChannelType.QQ,
+        ChannelType.TELEGRAM,
+    ):
+        router.register_adapter(channel, adapter)
+        result = await router.handle_inbound(
+            InboundMessageModel(
+                channel=channel,
+                chat_id=f"media-{channel.value}",
+                message_id=f"m-{channel.value}",
+                sender_id="7",
+                text="[图片]",
+                has_user_text=False,
+            )
+        )
+        assert result.message_ids == []
+    assert service.reply_calls == []
+    assert adapter.sent == []
+    assert router.no_user_text_skip_count == 4
+
+
+async def test_mixed_text_media_inbound_still_generates() -> None:
+    """图文混排（has_user_text=True）：照常生成回复。"""
+    service = FakeChatService()
+    adapter = FakeAdapter(message_ids=chat_scoped_message_ids)
+    router = ChannelRouter(
+        chat_service_factory=lambda: service,
+        session_factory=empty_session_factory,
+        flow_settings=FlowGateSettings(enabled=False),
+        clock=FakeClock(),
+    )
+    router.register_adapter(ChannelType.WECOM, adapter)
+    result = await router.handle_inbound(
+        InboundMessageModel(
+            channel=ChannelType.WECOM,
+            chat_id="mixed-1",
+            message_id="m-mixed",
+            sender_id="7",
+            text="看这个[图片]",
+            has_user_text=True,
+            attachments=[
+                ChannelMessageAttachment(
+                    kind=ChannelAttachmentKind.IMAGE,
+                    url="https://example.test/mixed.jpg",
+                )
+            ],
+        )
+    )
+    assert result.message_ids == ["out:mixed-1:1"]
+    assert service.reply_calls[0]["text"] == "看这个[图片]"
+    assert router.no_user_text_skip_count == 0

@@ -10,12 +10,14 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import packages.harness.multimodal.sticker_orm as sticker_orm  # noqa: F401  模型注册副作用导入（共享建表）
@@ -508,6 +510,61 @@ async def test_channel_bridge_ingest_and_pick(
     )
     async with bind_persona_context(PERSONA_A):
         assert await no_reply.pick_channel_reply(db_session) is None
+
+
+async def test_insert_sticker_conflict_resolves_winner_and_keeps_file(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """并发同哈希收敛：共用插入函数撞唯一键时返回胜者行、不删胜者文件。"""
+    service = StickerService(
+        settings=_settings(), gateway=FakeGateway(), resolver=_resolver(), storage_root=tmp_path
+    )
+    async with bind_persona_context(PERSONA_A):
+        winner = await service.ingest_bytes(
+            db_session, PNG, "image/png", source_note="并发胜者"
+        )
+        assert winner is not None
+        outcome = await service._insert_sticker(
+            db_session,
+            digest=hashlib.sha256(PNG).hexdigest(),
+            content_type="image/png",
+            payload=PNG,
+            tags=[],
+            description="落败写入",
+            source_note="并发落败",
+        )
+        await db_session.rollback()
+        rows = list((await db_session.execute(select(StickerRow))).scalars().all())
+        binary = await service.get_binary(db_session, winner.id)
+    assert outcome.created is False
+    assert outcome.row is not None and outcome.row.id == winner.id
+    assert outcome.path.exists()
+    assert len(rows) == 1
+    assert binary.content == PNG
+
+
+async def test_ingest_same_hash_twice_single_row_and_file(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """顺序同哈希收录：行唯一、文件在、get_binary 可用、dupe 返回既有记录。"""
+    service = StickerService(
+        settings=_settings(), gateway=FakeGateway(), resolver=_resolver(), storage_root=tmp_path
+    )
+    async with bind_persona_context(PERSONA_A):
+        first = await service.ingest_bytes(
+            db_session, PNG, "image/png", source_note="通道入站表情"
+        )
+        second = await service.ingest_bytes(
+            db_session, PNG, "image/png", source_note="通道入站表情"
+        )
+        assert first is not None and second is not None
+        row_count = (
+            await db_session.execute(select(func.count()).select_from(StickerRow))
+        ).scalar_one()
+        binary = await service.get_binary(db_session, first.id)
+    assert second.id == first.id
+    assert int(row_count) == 1
+    assert binary.content == PNG
 
 
 async def test_channel_bridge_skips_when_disabled(

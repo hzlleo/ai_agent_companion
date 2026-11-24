@@ -110,7 +110,7 @@ pixi run alembic upgrade head                        # 应用迁移
 
 ## 人格级联删除（服务层批删，无跨域 FK）
 
-记忆域 / 画像域表与 `ff_personas` 之间**没有跨域外键**（PersonaMixin 是逻辑作用域列，不是 FK）——人格删除的级联由 `PersonaService.delete` 在单事务内按 `persona_id` 批删：`ff_persona_states` / `ff_memory_episodes` / `ff_curated_memory` / `ff_dream_runs` / `ff_persona_facts` / `ff_persona_skills` / `ff_core_memory_blocks` / `ff_core_memory_revisions` / `ff_chat_sessions` / `ff_chat_messages`，并同步清理 `ff_memory_index_lite` 回退索引行（SeekDB 生产索引经注入 indexer 提交后 best-effort 清理）。这条服务层级联是方言一致性的唯一保证（SQLite 测试方言默认不启用 FK 强制；DB 级 CASCADE 仅作直删 SQL 兜底）。范围与逐表处理见 [persona.md](persona.md#删除级联范围personaservicedelete)。
+记忆域 / 画像域表与 `ff_personas` 之间**没有跨域外键**（PersonaMixin 是逻辑作用域列，不是 FK）——人格删除的级联由 `PersonaService.delete` 在单事务内按 `persona_id` 批删，**范围从 `Base.metadata` 派生**：所有含 `persona_id` 列的表自动纳入（当前含状态 / 情景 / 策展 / 梦境 / 事实 / 技能 / 核心记忆块 / 会话 / 表情包 / 声纹样本与同意 / 提醒 / 画布），无 persona_id 的依赖表按归属轴清理（聊天消息经 session_id、核心记忆修订经 block_id），回退索引 `ff_memory_index_lite` 同事务按 persona_id 删除，SeekDB 生产索引经注入 indexer 提交后 best-effort 清理；`ff_usage_records` 有意保留（跨人格聚合真源）。磁盘文件（表情 / 声纹样本）在提交后 best-effort 删除。这条服务层级联是方言一致性的唯一保证（SQLite 测试方言默认不启用 FK 强制；DB 级 CASCADE 仅作直删 SQL 兜底）；结构测试守护「派生集合 == 元数据全集」。范围与逐表处理见 [persona.md](persona.md#删除级联范围personaservicedelete)。
 
 ## 测试与门禁
 

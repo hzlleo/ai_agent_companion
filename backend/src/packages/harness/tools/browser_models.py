@@ -64,6 +64,7 @@ __all__ = [
     "LIST_TABS_TOOL_NAME",
     "CLOSE_TAB_TOOL_NAME",
     "EVALUATE_TOOL_NAME",
+    "BROWSER_LLM_TOOL_NAMES",
     "BROWSER_TOOL_NAMES",
     "NavigateArgsModel",
     "ReadTextArgsModel",
@@ -213,11 +214,14 @@ LIST_TABS_TOOL_NAME: str = "list_tabs"
 #: close_tab 工具名（同上）。
 CLOSE_TAB_TOOL_NAME: str = "close_tab"
 
-#: evaluate 工具名（同上——页面上下文 JS 求值；通道采集面与 LLM 工具面共用）。
+#: evaluate 工具名（同上——页面上下文 JS 求值；通道采集面内部直用，默认不
+#: 进入 LLM 工具注册表——页面求值有任意副作用，LLM 只消费无副作用工具族）。
 EVALUATE_TOOL_NAME: str = "evaluate"
 
-#: 全部浏览器工具名（装配 / 日志面消费——顺序即注册序）。
-BROWSER_TOOL_NAMES: tuple[str, ...] = (
+#: LLM 工具面的浏览器工具名（注册 / 规格 / 日志面消费——顺序即注册序）。
+#: 不含 evaluate：唯一消费方是抖音通道的内部脚本执行面（``client.invoke``
+#: 直调），LLM 循环看不到它。
+BROWSER_LLM_TOOL_NAMES: tuple[str, ...] = (
     NAVIGATE_TOOL_NAME,
     READ_TEXT_TOOL_NAME,
     SCREENSHOT_TOOL_NAME,
@@ -225,6 +229,12 @@ BROWSER_TOOL_NAMES: tuple[str, ...] = (
     FILL_TOOL_NAME,
     LIST_TABS_TOOL_NAME,
     CLOSE_TAB_TOOL_NAME,
+)
+
+#: 全部浏览器工具名（sidecar 协议能力面——含 evaluate；装配面按
+#: :data:`BROWSER_LLM_TOOL_NAMES` 裁剪）。
+BROWSER_TOOL_NAMES: tuple[str, ...] = (
+    *BROWSER_LLM_TOOL_NAMES,
     EVALUATE_TOOL_NAME,
 )
 

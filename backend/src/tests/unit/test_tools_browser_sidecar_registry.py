@@ -1,6 +1,7 @@
 """harness/tools 浏览器 sidecar 代理注册测试——fake 客户端回路 + 结果格式化。
 
-覆盖矩阵：八工具注册序；代理回路（ok 透传 / 失败归一 INTERNAL_ERROR）；
+覆盖矩阵：LLM 工具面七工具注册序（evaluate 默认不进 LLM 注册表——页面
+求值有副作用）；代理回路（ok 透传 / 失败归一 INTERNAL_ERROR）；
 本地校验 fail-fast（非法参数零网络往返）；默认值物化经 wire
 （read_text max_chars=8000）；read_text 不可信平台内容包裹（标注前缀 +
 provenance 字段——记忆域语义镜像）；screenshot 视觉提示（look_at 配对）；
@@ -16,7 +17,10 @@ from packages.harness.tools.browser import (
     build_browser_specs,
     register_browser_sidecar_tools,
 )
-from packages.harness.tools.browser_models import BROWSER_TOOL_NAMES
+from packages.harness.tools.browser_models import (
+    BROWSER_LLM_TOOL_NAMES,
+    EVALUATE_TOOL_NAME,
+)
 from packages.harness.tools.registry import ToolRegistry
 from packages.harness.tools.tool_models import ToolResultModel
 
@@ -69,14 +73,35 @@ def _registry_with_fake() -> tuple[ToolRegistry, FakeBrowserSidecarClient]:
 
 class TestRegistration:
     async def test_all_tools_in_order(self) -> None:
-        """注册序：八工具按约定顺序（navigate → evaluate）。"""
+        """注册序：七工具按约定顺序（navigate → close_tab），evaluate 不在内。"""
         registry, _ = _registry_with_fake()
-        assert registry.tool_names == list(BROWSER_TOOL_NAMES)
+        assert registry.tool_names == list(BROWSER_LLM_TOOL_NAMES)
+        assert EVALUATE_TOOL_NAME not in registry.tool_names
 
     async def test_build_browser_specs_matches_registry(self) -> None:
         """规格构建面：build_browser_specs 与注册面同序同集合。"""
         specs = build_browser_specs()
-        assert [spec.name for spec in specs] == list(BROWSER_TOOL_NAMES)
+        assert [spec.name for spec in specs] == list(BROWSER_LLM_TOOL_NAMES)
+
+    async def test_evaluate_opt_in_extends_llm_surface(self) -> None:
+        """evaluate 仅显式 opt-in 才进 LLM 工具面（默认关闭——无 env 开关）。"""
+        registry = ToolRegistry()
+        register_browser_sidecar_tools(registry, FakeBrowserSidecarClient(), include_evaluate=True)
+        assert registry.tool_names == [*BROWSER_LLM_TOOL_NAMES, EVALUATE_TOOL_NAME]
+        assert [spec.name for spec in build_browser_specs(include_evaluate=True)] == [
+            *BROWSER_LLM_TOOL_NAMES,
+            EVALUATE_TOOL_NAME,
+        ]
+
+    async def test_evaluate_still_callable_through_client_for_internal_use(self) -> None:
+        """内部直调面不受注册裁剪影响：douyin 经 client.invoke("evaluate") 仍可用。"""
+        fake = FakeBrowserSidecarClient()
+        fake.next_result = ToolResultModel(
+            tool=EVALUATE_TOOL_NAME, ok=True, result={"value": {"ok": True}}
+        )
+        outcome = await fake.invoke(EVALUATE_TOOL_NAME, {"script": "1+1"})
+        assert outcome.ok is True
+        assert fake.invocations == [(EVALUATE_TOOL_NAME, {"script": "1+1"})]
 
 
 class TestProxyLoop:
@@ -169,7 +194,7 @@ class TestProxyLoop:
 
 class TestSpecPresentation:
     async def test_spec_names_and_descriptions(self) -> None:
-        """规格呈现面：八工具名 + 描述含隔离执行说明（LLM 呈现锚点）。"""
+        """规格呈现面：七工具名 + 描述含隔离执行说明（LLM 呈现锚点）。"""
         for spec in build_browser_specs():
             assert "经隔离 sidecar 执行" in spec.description or "sidecar" in spec.description
             assert spec.args_model is not None

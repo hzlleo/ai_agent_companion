@@ -324,7 +324,7 @@ class ChannelRouter:
         self._chat_group_flags: dict[str, bool] = {}
         self._chat_owner_flags: dict[str, bool] = {}
         self._synthetic_skip_count = 0
-        self._empty_text_skip_count = 0
+        self._no_user_text_skip_count = 0
         self._flow_job_seq = 0
         self._scheduler_missing_warned = False
 
@@ -386,9 +386,9 @@ class ChannelRouter:
         return self._synthetic_skip_count
 
     @property
-    def empty_text_skip_count(self) -> int:
-        """累计跳过生成的空文本入站条数（观测面——仅附件消息的计数面）。"""
-        return self._empty_text_skip_count
+    def no_user_text_skip_count(self) -> int:
+        """累计跳过生成的无用户文本入站条数（观测面——纯媒体消息计数面）。"""
+        return self._no_user_text_skip_count
 
     @staticmethod
     def session_key(context: ChannelContextModel) -> str:
@@ -428,7 +428,7 @@ class ChannelRouter:
 
         空文本入站（纯图片 / 纯表情附件）：表情收录与心流游标照常执行，
         但**不调用生成**（不产生兜底文案、不写空回合）——返回空投递结果；
-        跳过计数累加并记 debug 日志（``empty_text_skip_count``）。
+        跳过计数累加并记 debug 日志（``no_user_text_skip_count``）。
 
         群聊多人格：启用时按选择结论逐人格应答并逐条投递（每人格自己的
         持久化会话）；选择为空 / 未启用时回退主人格单人格路径。
@@ -496,18 +496,19 @@ class ChannelRouter:
                     )
                     if gate_result is not None:
                         return gate_result
-                if not message.text.strip():
-                    # 仅附件入站：表情已收录、心流游标已推进（门控 / 会话
-                    # 懒建保持既有顺序），但不进入生成——空文本会触发
-                    # ChatService 的 VALIDATION_ERROR 兜底文案并写空回合。
-                    self._empty_text_skip_count += 1
+                if not message.has_user_text:
+                    # 无用户字面文本入站：附件已收录、心流游标已推进（门控 /
+                    # 会话懒建保持既有顺序），但不进入生成——空文本 / 占位
+                    # 文本会触发 ChatService 的 VALIDATION_ERROR 兜底文案并
+                    # 写空回合。
+                    self._no_user_text_skip_count += 1
                     logger.debug(
-                        "空文本入站（跳过生成——表情收录 / 游标照常）: "
+                        "无用户文本入站（跳过生成——附件收录 / 游标照常）: "
                         "channel={}, chat_id={}, message_id={}, skipped_total={}",
                         message.channel.value,
                         message.chat_id,
                         message.message_id,
-                        self._empty_text_skip_count,
+                        self._no_user_text_skip_count,
                     )
                     return ChannelDeliveryResultModel(
                         channel=message.channel,
@@ -564,13 +565,17 @@ class ChannelRouter:
         message: InboundMessageModel,
         persona_id: int,
     ) -> ChannelDeliveryResultModel | None:
-        """记录入站并执行门控判定（返回非 None 表示本消息已由门控接管）。
+        """门控判定后再记录入站（返回非 None 表示本消息已由门控接管）。
+
+        判定先于记录：门控输入显式携带**当前消息之前**的到达历史与积压
+        （``prior_arrivals_ms`` / ``backlog_count``），无「末条是否当前
+        消息」的隐式推断；判定完成后才把当前消息记入会话节拍状态。
 
         合成事件不会到达本方法（路由器在门控前恒跳过 ``synthetic=True``）；
         判定层的 ``SKIP / SYNTHETIC_EVENT`` 结论保留为纯函数契约。
 
-        仅附件入站（空文本）只推进到达时刻与积压计数，不把空串追加进
-        待回复缓冲——连发 / 节律判定照常，合并批次不含空条目。
+        仅附件入站不把占位文本追加进待回复缓冲（``has_user_text=False``）：
+        到达时刻与积压照常推进，连发 / 节律判定不变，合并批次不含占位条目。
 
         Args:
             context: 通道会话上下文。
@@ -600,10 +605,6 @@ class ChannelRouter:
                 now,
             )
             state = clear_pending(state)
-        state = record_inbound(
-            state, message.text, now, append_text=bool(message.text.strip())
-        )
-        self._flow_states[key] = state
         rhythm = await self._rhythm_snapshot(now)
         relationship = await self._relationship_summary(persona_id, now)
         decision = evaluate_flow_gate(
@@ -612,10 +613,15 @@ class ChannelRouter:
                 is_synthetic=message.synthetic,
                 rhythm=rhythm,
                 relationship=relationship,
-                state=state,
+                prior_arrivals_ms=list(state.recent_arrival_ms),
+                backlog_count=state.backlog_count,
             ),
             settings,
         )
+        state = record_inbound(
+            state, message.text, now, append_text=message.has_user_text
+        )
+        self._flow_states[key] = state
         logger.debug(
             "心流门控裁决: key={}, verdict={}, reason={}, delay_ms={}, backlog={}",
             key,

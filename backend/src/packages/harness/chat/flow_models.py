@@ -180,14 +180,19 @@ class FlowChatStateModel(BaseModel):
 
 
 class FlowGateInputModel(BaseModel):
-    """门控判定输入（纯函数消费面——全部字段由调用方注入）。
+    """门控判定输入（纯函数消费面——全部字段由调用方显式注入）。
+
+    判定对象是**当前消息**：历史入站时刻必须显式给出且**不含当前消息**
+    （路由器在记录当前入站之前调用判定）。判定函数不推断「末条是否为
+    当前消息」——同一毫秒的历史时刻按字面参与计算，语义无歧义。
 
     Attributes:
-        now_ms: 判定时刻（epoch 毫秒）。
+        now_ms: 判定时刻（epoch 毫秒——当前消息到达时刻）。
         is_synthetic: 入站是否为机器生成事件（``InboundMessageModel.synthetic``）。
         rhythm: 节律层现状快照。
         relationship: 关系进展摘要（None = 读取面未接线——不参与判定）。
-        state: 会话心流节拍状态（入站计数与积压）。
+        prior_arrivals_ms: 当前消息**之前**的入站时刻历史（时间序；不含 now_ms）。
+        backlog_count: 当前消息之前的未读积压条数（不含当前消息）。
     """
 
     now_ms: int = Field(ge=0, description="判定时刻（epoch 毫秒）")
@@ -196,7 +201,12 @@ class FlowGateInputModel(BaseModel):
     relationship: RelationshipSummaryModel | None = Field(
         default=None, description="关系进展摘要（None = 不参与判定）"
     )
-    state: FlowChatStateModel = Field(description="会话心流节拍状态")
+    prior_arrivals_ms: list[int] = Field(
+        default_factory=list, description="当前消息之前的入站时刻历史（不含当前）"
+    )
+    backlog_count: int = Field(
+        default=0, ge=0, description="当前消息之前的未读积压条数（不含当前）"
+    )
 
 
 class FlowGateDecisionModel(BaseModel):

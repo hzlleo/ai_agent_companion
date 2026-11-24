@@ -19,14 +19,14 @@
 | `persona_rotation_models.py` | 群聊多人格 Model Classes（Unit 文件）：`GROUP_PERSONA_` 配置 / 选择理由枚举 / 应答候选 / 应答记忆 / 选择结论 | `GroupPersonaSettings` / `GroupSelectionReason` / `GroupResponderCandidateModel` / `GroupResponderStateModel` / `GroupPersonaSelectionModel` |
 | `persona_rotation.py` | 群聊多人格选择纯函数（轮转 / 冷却 / 重复抑制 / 全冷却兜底——确定性） | `select_group_responders` |
 | `world_book.py` | 世界书高级选择算法链（纯函数 Unit 文件；rng / 回合状态可注入）+ token 近似估算 | `select_world_book_entries` / `SelectedEntryModel` / `WorldBookTurnStateModel` / `WorldBookSelectionResult` / `RECURSION_HOP_CAP` / `estimate_text_tokens` |
-| `service.py` | 消息组装（消费选择结果）+ `ChatService` 会话循环（回合状态回存 / 可选工具循环与发送者来源分级工具闸） | `compose_messages` / `ChatService` |
+| `service.py` | 消息组装（消费选择结果）+ 生成路径统一入口（注入防御裁决收敛）+ `ChatService` 会话循环（回合状态回存 / 可选工具循环与发送者来源分级工具闸） | `compose_messages` / `compose_for_generation` / `GenerationIntent` / `ChatService` |
 | `cli.py` | 控制台 REPL（启动 / 停机序列 + 命令面 + 流式直写） | `run_chat_cli` / `main` |
 
 依赖方向：chat → persona（chara card / PersonaRecordDTO / PersonaService / 核心记忆读取面与工具） + llm（LlmGateway / 消息模型）+ config / database / pools（CLI 启动栈）+ core（errors / time_utils）。prompt 文本与逻辑分离（模板全在 prompts.py；service / cli 禁止内联 prompt 字符串）。`world_book` 只依赖 persona 卡片模型（不导入 chat 其他 Unit——依赖无环；`service` 再导出 `estimate_text_tokens` 供既有测试面）。
 
 ## 提示词组装链（单一真相）
 
-`compose_messages(state, rng=None)` 纯函数（无 I/O——测试直调面；世界书选择经 `world_book.select_world_book_entries`，rng 可注入——仅 `trigger_probability < 1.0` 卡片消耗随机数；推进后的回合状态随结果携带，由 `ChatService` 回存）：
+`compose_for_generation(state, injection=..., intent=..., provenance=...)` 是生成路径的**唯一入口**（注入防御的包裹开关 / 来源标签 / 检测提示统一裁决）；其内部调用纯函数 `compose_messages(state, ..., wrap_current_message=...)`（`wrap_current_message` 为**必填关键字**——生产调用不得直连组装函数；结构测试枚举直连调用点）。纯函数面（无 I/O——测试直调；世界书选择经 `world_book.select_world_book_entries`，rng 可注入——仅 `trigger_probability < 1.0` 卡片消耗随机数；推进后的回合状态随结果携带，由 `ChatService` 回存）：
 
 ```
 [system 首块]
@@ -163,10 +163,9 @@ prompt Unit 文件 byte-lock 面（版本常量 `RELATIONSHIP_BLOCK_TEMPLATE_VER
 `SKILLS_BLOCK_TEMPLATE_VERSION`）。命中后的使用计数由服务层 fire-and-forget
 写入（回复链路不等待、计数失败只告警）。
 
-注：`compose_messages(state, rng=None, emotion_summary=None, directives=None,
-facts=None, core_memory=None, relationship=None, skills=None,
-wrap_current_message=False, current_message_label="", injection_hint=None)`
-仍是纯函数——M 态读取 / 衰减、常备指令、人物事实、核心记忆、关系进展派生与
+注：`compose_messages(state, ..., wrap_current_message=..., current_message_label="",
+injection_hint=None)` 仍是纯函数（`wrap_current_message` 必填）；生产路径经
+`compose_for_generation` 统一裁决注入参数。M 态读取 / 衰减、常备指令、人物事实、核心记忆、关系进展派生与
 技能匹配均在 `ChatService` 侧（仅持久化会话已落库且对应服务已接线时激活），
 纯内存形态 / 无持久化测试面零附加 I/O。长期指令 / 人物事实 / 核心记忆 / 技能
 读取失败均不阻断回复（日志 + 空块——增强面语义；关系进展读取失败降级为空摘要
@@ -178,10 +177,12 @@ wrap_current_message=False, current_message_label="", injection_hint=None)`
 这个人（逐条见下方「人格输出契约与合规守卫」）。
 当轮入站包裹（`wrap_current_message=True` → 包裹最后一条 user 回合与最近 10 条
 历史 user 回合，历史标签「历史消息」）与注入提示块（`injection_hint` 非空且
-确实发生包裹时追加）由 `ChatService` 按 `INJECTION_` 配置驱动；`SwipeService`
-重生成经构造注入的同一 `InjectionGuardSettings` 按 `INJECTION_` 配置生效（无
-来源分级时缺省标签「消息」）；包裹不改变 `state.turns` 原文与落库内容。包裹格式、检测矩阵、来源标签与攻击面缺口
-见 [defense.md](defense.md)。
+确实发生包裹时追加）由**统一入口** `compose_for_generation` 按 `INJECTION_`
+配置与生成意图裁决：`ChatService.reply` / `stream_reply` 传来源分级
+（`GenerationIntent.REPLY` / `STREAM`，缺分级 fail loud）；`SwipeService` 重生成
+传 `GenerationIntent.SWIPE`（无来源分级，缺省标签「消息」）。包裹不改变
+`state.turns` 原文与落库内容。包裹格式、检测矩阵、来源标签与攻击面缺口见
+[defense.md](defense.md)。
 
 ### 意图快径（含 DIRECTIVE 常备指令捕获）
 
@@ -484,8 +485,8 @@ JSON 结构不变；读侧经同一 Model 校验。情绪状态推进 / 衰减 /
 | ① | `FLOW_ENABLED=false` | `reply` | `disabled` | 0 |
 | ② | 入站 `synthetic=true`（机器事件） | `skip` | `synthetic_event` | 0 |
 | ③ | 节律门不允许（睡眠窗口） | `defer` | `sleep_window` | 节律门给出的距醒来毫秒 |
-| ④ | 连发窗口内条数 ≥ `FLOW_BURST_COUNT` | `merge` | `burst_merge` | 静默窗口剩余毫秒 |
-| ⑤ | 以上一条入站为锚，间隔 < `FLOW_MIN_REPLY_GAP_MS`，且关系非亲近 / 亲密 | `defer` | `density_pacing` | 补齐最小间隔毫秒；间隔 ≥ 阈值立即回复 |
+| ④ | 窗口内**历史条数 + 当前消息** ≥ `FLOW_BURST_COUNT` | `merge` | `burst_merge` | 静默窗口（从当前消息起算） |
+| ⑤ | 以显式历史末条为锚，间隔 < `FLOW_MIN_REPLY_GAP_MS`，且关系非亲近 / 亲密 | `defer` | `density_pacing` | 补齐最小间隔毫秒；间隔 ≥ 阈值立即回复 |
 | ⑥ | 未读积压 ≥ `FLOW_BACKLOG_DEFER_THRESHOLD`，且关系非亲近 / 亲密 | `defer` | `backlog_defer` | `step × 超出条数`，封顶 `FLOW_BACKLOG_DEFER_MAX_MS` |
 | ⑦ | 关系阶段为 `close` / `intimate`，且本应触发 ⑤ 或 ⑥ | `reply` | `relationship_priority` | 0 |
 | ⑧ | 节律允许但拟人延迟 > 0 | `defer` | `rhythm_delay` | 节律门延迟 |
@@ -498,8 +499,10 @@ JSON 结构不变；读侧经同一 Model 校验。情绪状态推进 / 衰减 /
 
 `FlowChatStateModel` 按会话身份键保存在通道路由器内存中：最近入站时刻
 （最多 32 条）、未读积压条数、待回复缓冲（最多 32 条）、排程标记与计划
-执行时刻。判定前的入站记录经 `record_inbound` 追加；回复成功后
-`clear_backlog` 清零积压与缓冲（到达时刻历史保留供密度判定）。
+执行时刻。路由器**先取既有历史 → 门控判定 → 再记录当前消息**（`record_inbound`
+在裁决之后调用）；判定输入 `FlowGateInputModel.prior_arrivals_ms` **显式不含
+当前消息**，无「末条是否为当前」的隐式推断（同毫秒历史按字面参与计算）。
+回复成功后 `clear_backlog` 清零积压与缓冲（到达时刻历史保留供密度判定）。
 
 连发合并按 `FLOW_MERGE_MAX_MESSAGES` 保留**最近**条目（最新几句承载当前
 诉求），丢弃最老条目并记录条数；合并文本按入站顺序以换行连接。延迟 /
@@ -549,13 +552,8 @@ JSON 结构不变；读侧经同一 Model 校验。情绪状态推进 / 衰减 /
     "boundaries": [],
     "generated_at_ms": 1700000000200
   },
-  "state": {
-    "recent_arrival_ms": [1700000000000, 1700000000100, 1700000000200],
-    "backlog_count": 3,
-    "buffered_texts": ["在吗", "看看这个", "喂"],
-    "pending": false,
-    "pending_due_ms": null
-  }
+  "prior_arrivals_ms": [1700000000000, 1700000000100],
+  "backlog_count": 2
 }
 ```
 
@@ -624,15 +622,15 @@ JSON 结构不变；读侧经同一 Model 校验。情绪状态推进 / 衰减 /
 - **上下文脊柱**：重生成只回放父回合之前的**正典对话链**（`variant_of_id IS NULL`）——
   既有变体**不进入上下文**（每回合针对原始对话脊柱重掷）；已选中的变体已就地替换正典
   正文，因此自然进入后续回合上下文。这是「swipes 是逐回合重掷」语义的直接结果；
-- **生成路径**：与 `reply` 同一 `compose_messages`（人格卡片 / 世界书 / 情绪摘要 /
-  关系进展 / 输出协议全量复用，**prompt 字节零变更**）+ `chat_by_role`（`role=chat`、
+- **生成路径**：与 `reply` 同一统一入口 `compose_for_generation`（intent=SWIPE；
+  人格卡片 / 世界书 / 情绪摘要 / 关系进展 / 输出协议全量复用，**prompt 字节零变更**）+ `chat_by_role`（`role=chat`、
   `purpose="chat"`、`persona_id` 直传）；**不装载工具面**（单轮候选——工具循环属
   `reply` 的回合语义）；关系摘要经既有事实读取面与 `build_relationship_summary`
   派生后注入【关系进展】块，派生 `intimacy_level` 原样传给网关（与 `reply` 同语义，
   端点裁决在 llm 网关）；事实读取面未接线时按既有降级语义不注入关系块、路由输入为
   `None`，读取失败降级为空摘要（stranger / 0）；末位 user 回合沿用组装链注入防御
-  （定界包裹 + 命中提示块；无来源分级时标签「消息」、默认毒舌台词风格，服务不持有
-  `INJECTION_` 配置）；
+  （定界包裹 + 命中提示块；持有所注入的 `InjectionGuardSettings`，无来源分级时标签
+  「消息」）；
 - **协议面**：每个候选独立经 `parse_assistant_output` 解析——可见正文落变体 `content`，
   心声 / 情绪增量落 `meta`（附 `variant_index`）；变体情绪增量**不推进共享 M 态**
   （探索面：只有选定变体经 select API 时推进，见下）；
@@ -794,8 +792,9 @@ lifespan                                          上述函数对的 asynccontex
 
 ## 消息序列 JSON 示例
 
-`compose_messages` 产出的请求消息序列（两轮对话后；此处为直调缺省形态——
-`wrap_current_message=False`，当轮消息不包裹。经 `ChatService.reply` /
+`compose_messages` 产出的请求消息序列（两轮对话后；此处为直调形态——
+`wrap_current_message=False`，当轮消息不包裹。生产路径经
+`compose_for_generation` 统一入口；`ChatService.reply` /
 `stream_reply` 且注入防御启用时，最后一条 user 回合会被 nonce 定界帧替换、
 命中时其后追加【注入提示】system 块——见 [defense.md](defense.md)；关系进展
 块只在 `ChatService` 接上事实读取面且会话已落库时出现——系统首块此时另含

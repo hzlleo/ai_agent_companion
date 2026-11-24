@@ -47,7 +47,8 @@ DOUYIN_CHAT_ID_PREFIX: Final[str] = "im:"
 #: 页面未报告会话标识且配置未指定时的兜底会话标识（单会话部署形态）。
 DOUYIN_DEFAULT_CONVERSATION_ID: Final[str] = "default"
 
-#: 纯图片消息的归一文本（人格可感知附件存在——与 QQ ``[图片]`` 占位符同语义）。
+#: 纯图片消息的归一占位文本（``has_user_text=False``——附件照常收录，
+#: 路由器跳过生成；与 QQ ``[图片]`` 占位符同语义）。
 DOUYIN_IMAGE_PLACEHOLDER_TEXT: Final[str] = "[图片]"
 
 
@@ -220,6 +221,7 @@ def map_douyin_snapshot_to_inbound(
         通道中立入站消息列表（时间序）。
     """
     selected: list[DouyinWebMessageModel] = []
+    user_text_ids: set[str] = set()
     seen: set[str] = set()
     for message in snapshot.messages:
         message_id = message.message_id.strip()
@@ -233,6 +235,8 @@ def map_douyin_snapshot_to_inbound(
         )
         if not text:
             continue
+        if message.text.strip():
+            user_text_ids.add(message_id)
         seen.add(message_id)
         selected.append(
             message.model_copy(update={"message_id": message_id, "text": text})
@@ -250,6 +254,7 @@ def map_douyin_snapshot_to_inbound(
             synthetic=message.is_system,
             silent=False,
             is_group_chat=message.is_group,
+            has_user_text=message.message_id in user_text_ids,
         )
         for message in bounded
     ]

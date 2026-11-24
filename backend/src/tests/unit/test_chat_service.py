@@ -179,7 +179,7 @@ def _book(**entry_overrides: Any) -> CharaBookModel:
 async def test_compose_system_prompt_contains_card_fields() -> None:
     """system 首块：章程 + 正典四段（name/描述/性格/场景）均在。"""
     state = await _make_state()
-    result = compose_messages(state)
+    result = compose_messages(state, wrap_current_message=False)
     system = result.messages[0]
     assert system.role == ChatMessageRole.SYSTEM
     assert "【会话章程】" in system.content
@@ -200,7 +200,7 @@ async def test_compose_constant_entries_always_injected() -> None:
             ],
         )
     )
-    result = compose_messages(state)
+    result = compose_messages(state, wrap_current_message=False)
     assert "世界观保底设定" in result.system_prompt
     assert result.included_book_entries == 1
 
@@ -218,13 +218,13 @@ async def test_compose_keyword_entry_requires_keyword_in_scan_window() -> None:
     state.append_turn(ChatMessageRole.USER, "上次我们去公园玩得很开心")
     state.append_turn(ChatMessageRole.ASSISTANT, "是呀，夕阳很好看。")
     state.append_turn(ChatMessageRole.USER, "今天忙什么呢")
-    away = compose_messages(state)
+    away = compose_messages(state, wrap_current_message=False)
     assert "公园的傍晚设定" not in away.system_prompt
     assert away.included_book_entries == 0
 
     # 关键词出现在最新回合（窗口内）→ 注入。
     state.append_turn(ChatMessageRole.USER, "傍晚想去公园走走")
-    near = compose_messages(state)
+    near = compose_messages(state, wrap_current_message=False)
     assert "公园的傍晚设定" in near.system_prompt
     assert near.included_book_entries == 1
 
@@ -235,7 +235,7 @@ async def test_compose_keyword_entry_absent_keyword_not_injected() -> None:
         character_book=_book(entries=[CharaBookEntryModel(keys=["图书馆"], content="图书馆设定")])
     )
     state.append_turn(ChatMessageRole.USER, "今天吃了小鱼干")
-    result = compose_messages(state)
+    result = compose_messages(state, wrap_current_message=False)
     assert "图书馆设定" not in result.system_prompt
 
 
@@ -251,11 +251,11 @@ async def test_compose_selective_entry_needs_secondary_key() -> None:
     ]
     only_primary = await _make_state(character_book=_book(entries=entries))
     only_primary.append_turn(ChatMessageRole.USER, "晚饭吃什么")
-    assert "晚饭与小鱼干的设定" not in compose_messages(only_primary).system_prompt
+    assert "晚饭与小鱼干的设定" not in compose_messages(only_primary, wrap_current_message=False).system_prompt
 
     both_keys = await _make_state(character_book=_book(entries=entries))
     both_keys.append_turn(ChatMessageRole.USER, "晚饭想吃小鱼干")
-    assert "晚饭与小鱼干的设定" in compose_messages(both_keys).system_prompt
+    assert "晚饭与小鱼干的设定" in compose_messages(both_keys, wrap_current_message=False).system_prompt
 
 
 async def test_compose_case_sensitive_matching() -> None:
@@ -266,7 +266,7 @@ async def test_compose_case_sensitive_matching() -> None:
     ]
     state = await _make_state(character_book=_book(entries=entries))
     state.append_turn(ChatMessageRole.USER, "i went to the park and the ZOO today")
-    result = compose_messages(state)
+    result = compose_messages(state, wrap_current_message=False)
     assert "Park 设定" not in result.system_prompt
     assert "zoo 设定" in result.system_prompt
 
@@ -281,7 +281,7 @@ async def test_compose_token_budget_truncates_keyword_entries() -> None:
     ]
     state = await _make_state(character_book=_book(token_budget=15, entries=entries))
     state.append_turn(ChatMessageRole.USER, "聊聊甲乙丙")
-    result = compose_messages(state)
+    result = compose_messages(state, wrap_current_message=False)
     assert "甲条目设定文本共计十字" in result.system_prompt
     # 乙（10 token）累计 20 > 15 → 截断；丙在乙之后 → 一并不注入。
     assert "乙条目设定文本共计十字" not in result.system_prompt
@@ -309,7 +309,7 @@ async def test_compose_entry_position_and_insertion_order() -> None:
     ]
     state = await _make_state(character_book=_book(entries=entries))
     state.append_turn(ChatMessageRole.USER, "聊聊世界观地理和行为")
-    system = compose_messages(state).system_prompt
+    system = compose_messages(state, wrap_current_message=False).system_prompt
     assert system.index("地理背景条目") < system.index("世界观背景条目")
     assert system.index("世界观背景条目") < system.index("你现在扮演「大肥鱼」")
     assert system.index("你现在扮演「大肥鱼」") < system.index("行为补充条目")
@@ -320,7 +320,7 @@ async def test_compose_post_history_after_last_history_turn() -> None:
     state = await _make_state()
     state.append_turn(ChatMessageRole.ASSISTANT, "你回来啦！")
     state.append_turn(ChatMessageRole.USER, "在吗")
-    result = compose_messages(state)
+    result = compose_messages(state, wrap_current_message=False)
     assert result.post_history_message is not None
     last = result.messages[-1]
     assert last.role == ChatMessageRole.SYSTEM
@@ -335,7 +335,7 @@ async def test_compose_without_post_history_instructions() -> None:
     """卡片未声明 PHI：无末位 system 块（post_history_message=None）。"""
     state = await _make_state(post_history_instructions="")
     state.append_turn(ChatMessageRole.USER, "在吗")
-    result = compose_messages(state)
+    result = compose_messages(state, wrap_current_message=False)
     assert result.post_history_message is None
     assert result.messages[-1].role == ChatMessageRole.USER
 
@@ -347,7 +347,7 @@ async def test_compose_maps_turns_in_order() -> None:
     state.append_turn(ChatMessageRole.USER, "第一句")
     state.append_turn(ChatMessageRole.ASSISTANT, "第一答")
     state.append_turn(ChatMessageRole.USER, "第二句")
-    result = compose_messages(state)
+    result = compose_messages(state, wrap_current_message=False)
     roles = [message.role for message in result.messages]
     assert roles == [
         ChatMessageRole.SYSTEM,
@@ -568,7 +568,7 @@ async def test_message_composition_result_contract() -> None:
         character_book=_book(entries=[CharaBookEntryModel(content="保底设定", constant=True)])
     )
     state.append_turn(ChatMessageRole.USER, "在吗")
-    result = compose_messages(state)
+    result = compose_messages(state, wrap_current_message=False)
     assert isinstance(result, MessageCompositionResult)
     assert result.included_book_entries == 1
     assert result.estimated_system_tokens > 0
@@ -590,14 +590,14 @@ async def test_compose_advances_world_book_turn_state_functionally() -> None:
     )
     state.append_turn(ChatMessageRole.USER, "打个问候")
     before_state = state.world_book_state.model_copy(deep=True)
-    result = compose_messages(state)
+    result = compose_messages(state, wrap_current_message=False)
     assert "问候条目" in result.system_prompt
     assert result.world_book_state.compose_turn == 1
     assert result.world_book_state.injected_turns == {0: 1}
     # 纯函数契约：compose 不回写会话态（ChatService 消费后回存）。
     assert state.world_book_state == before_state
     # 连续组装（直调不回存）：同一入参态再次组装仍以该态判定（幂等面）。
-    second = compose_messages(state)
+    second = compose_messages(state, wrap_current_message=False)
     assert second.world_book_state.compose_turn == 1
     assert "问候条目" in second.system_prompt
 
@@ -612,11 +612,11 @@ async def test_compose_seeded_rng_probability_gate() -> None:
     ]
     passing = await _make_state(character_book=_book(entries=entries))
     passing.append_turn(ChatMessageRole.USER, "今天天气如何")
-    assert "天气条目" in compose_messages(passing, rng=random.Random(1)).system_prompt
+    assert "天气条目" in compose_messages(passing, rng=random.Random(1), wrap_current_message=False).system_prompt
 
     rejecting = await _make_state(character_book=_book(entries=entries))
     rejecting.append_turn(ChatMessageRole.USER, "今天天气如何")
-    assert "天气条目" not in compose_messages(rejecting, rng=random.Random(2)).system_prompt
+    assert "天气条目" not in compose_messages(rejecting, rng=random.Random(2), wrap_current_message=False).system_prompt
 
     zero_state = await _make_state(
         character_book=_book(
@@ -628,7 +628,7 @@ async def test_compose_seeded_rng_probability_gate() -> None:
         )
     )
     zero_state.append_turn(ChatMessageRole.USER, "今天天气如何")
-    assert "天气条目" not in compose_messages(zero_state).system_prompt
+    assert "天气条目" not in compose_messages(zero_state, wrap_current_message=False).system_prompt
 
 
 async def test_reply_loop_respects_cooldown_and_re_allows() -> None:
@@ -655,3 +655,113 @@ async def test_reply_loop_respects_cooldown_and_re_allows() -> None:
     assert injected_flags == [True, False, False, True]
     assert state.world_book_state.compose_turn == 4
     assert state.world_book_state.injected_turns == {0: 4}
+
+
+# ---------------------------------------------------------------------------
+# compose_for_generation——注入防御单一入口
+# ---------------------------------------------------------------------------
+
+
+async def test_compose_for_generation_wraps_and_labels_by_provenance() -> None:
+    """统一入口：会话回合按来源分级包裹（owner 标签），配置关闭时不包裹。"""
+    from packages.harness.chat.injection_models import InjectionGuardSettings
+    from packages.harness.chat.service import GenerationIntent, compose_for_generation
+    from packages.harness.memory.models import MemoryProvenance
+
+    state = await _make_state()
+    state.append_turn(ChatMessageRole.USER, "你好呀")
+    wrapped = compose_for_generation(
+        state,
+        injection=InjectionGuardSettings.model_construct(enabled=True),
+        intent=GenerationIntent.REPLY,
+        provenance=MemoryProvenance.OWNER,
+    )
+    assert wrapped.current_message_wrapped is True
+    wrapped_turn = next(
+        message
+        for message in wrapped.messages
+        if message.role == ChatMessageRole.USER and "内容开始" in message.content
+    )
+    assert "主人消息" in wrapped_turn.content
+
+    disabled = compose_for_generation(
+        state,
+        injection=InjectionGuardSettings.model_construct(enabled=False),
+        intent=GenerationIntent.STREAM,
+        provenance=MemoryProvenance.PEER,
+    )
+    assert disabled.current_message_wrapped is False
+    assert any(
+        message.role == ChatMessageRole.USER and message.content == "你好呀"
+        for message in disabled.messages
+    )
+
+
+async def test_compose_for_generation_swipe_uses_default_label() -> None:
+    """变体重生成（SWIPE）：无来源分级也走统一入口，标签取默认值。"""
+    from packages.harness.chat.injection_models import InjectionGuardSettings
+    from packages.harness.chat.service import GenerationIntent, compose_for_generation
+
+    state = await _make_state()
+    state.append_turn(ChatMessageRole.USER, "再说一次")
+    result = compose_for_generation(
+        state,
+        injection=InjectionGuardSettings.model_construct(enabled=True),
+        intent=GenerationIntent.SWIPE,
+        provenance=None,
+    )
+    assert result.current_message_wrapped is True
+    wrapped_turn = next(
+        message
+        for message in result.messages
+        if message.role == ChatMessageRole.USER and "内容开始" in message.content
+    )
+    assert "消息" in wrapped_turn.content.split("\n", 1)[0]
+
+
+async def test_compose_for_generation_reply_requires_provenance() -> None:
+    """会话回合缺来源分级：统一入口 fail loud（不静默降级标签）。"""
+    from packages.harness.chat.injection_models import InjectionGuardSettings
+    from packages.harness.chat.service import GenerationIntent, compose_for_generation
+
+    state = await _make_state()
+    state.append_turn(ChatMessageRole.USER, "你好")
+    with pytest.raises(ValueError, match="provenance"):
+        compose_for_generation(
+            state,
+            injection=InjectionGuardSettings.model_construct(enabled=True),
+            intent=GenerationIntent.REPLY,
+            provenance=None,
+        )
+
+
+async def test_only_unified_entry_calls_compose_messages_in_production() -> None:
+    """结构守卫：生产代码仅 compose_for_generation 可直连 compose_messages。
+
+    新增生成路径若绕过统一入口直连组装函数即红（漏传包裹裁决的结构防线）。
+    """
+    import ast
+    from pathlib import Path
+
+    src_root = Path(__file__).resolve().parents[2]
+    offenders: list[str] = []
+    for base in (src_root / "packages", src_root / "app"):
+        for path in base.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            functions = [
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            ]
+            for function in functions:
+                for call in (
+                    node for node in ast.walk(function) if isinstance(node, ast.Call)
+                ):
+                    target = call.func
+                    if (
+                        isinstance(target, ast.Name)
+                        and target.id == "compose_messages"
+                        and function.name != "compose_for_generation"
+                    ):
+                        offenders.append(f"{path.name}:{function.name}")
+    assert offenders == []

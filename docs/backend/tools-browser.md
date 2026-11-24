@@ -1,6 +1,6 @@
 # 浏览器 sidecar（browser sidecar）— JS 渲染回退执行面
 
-`docker/browser-sidecar/`（独立 pixi 项目 + playwright 加固镜像——sidecar 树）+ `backend/src/packages/harness/tools/browser_models.py` / `browser.py`（后端侧客户端 + 注册接线）+ `docker/docker-compose.yml`（部署编排），共同构成「需要真实浏览器运行时的工具」的隔离执行面：后端把八浏览器工具（`navigate` / `read_text` / `screenshot` / `click` / `fill` / `list_tabs` / `close_tab` / `evaluate`）代理到 sidecar 进程执行——**直接页面抓取失败或需要 JS 渲染时的回退面**；`evaluate` 同时是通道采集面的执行底座（抖音 web 通道经它读取 / 写入页面内的会话 DOM，见 channels.md）。
+`docker/browser-sidecar/`（独立 pixi 项目 + playwright 加固镜像——sidecar 树）+ `backend/src/packages/harness/tools/browser_models.py` / `browser.py`（后端侧客户端 + 注册接线）+ `docker/docker-compose.yml`（部署编排），共同构成「需要真实浏览器运行时的工具」的隔离执行面：后端把八浏览器工具（`navigate` / `read_text` / `screenshot` / `click` / `fill` / `list_tabs` / `close_tab` / `evaluate`）代理到 sidecar 进程执行——**直接页面抓取失败或需要 JS 渲染时的回退面**；其中 LLM 工具注册表只暴露无副作用七工具，`evaluate` 仅作为通道采集面的内部执行底座（抖音 web 通道经它读取 / 写入页面内的会话 DOM，见 channels.md）。
 
 ## 为什么独立成树（架构决策）
 
@@ -38,6 +38,15 @@ duty / chat 轮 tool_calls
 - `InvokeRequestModel` 为 `extra=forbid` 严格面；`latency_ms` 为 sidecar 侧执行时延。
 
 ## 工具面（八工具——JSON 示例）
+
+**暴露面区分（锁定）**：sidecar 协议能力面共八工具；**LLM 工具注册表只暴露
+无副作用族七工具**（`navigate` / `read_text` / `screenshot` / `click` /
+`fill` / `list_tabs` / `close_tab`）。`evaluate` 在页面上下文执行任意 JS
+（副作用面），**默认不进入 chat / duty 的 LLM 工具面**——唯一消费方是抖音
+web 通道的内部脚本执行面（`DouyinWebClient` 经 `client.invoke("evaluate")`
+直调）。需要 LLM 求值的装配点可显式 `build_browser_specs(include_evaluate=True)`
+/ `register_browser_sidecar_tools(..., include_evaluate=True)` opt-in（默认
+关闭，不新增 env 键）。
 
 | 工具 | 参数 | 结果示例 | 说明 |
 |---|---|---|---|
@@ -128,13 +137,13 @@ startup_app_state
         ↓ probe_health() 失败（bounded 超时 request_timeout_seconds）→ 跳过 + 告警
         ↓ 客户端上挂 app.state.browser_sidecar_client（duty 装配复用——零二次探测）
         ↓ chat 注册表接线（镜像 web_search 双注册形态）：
-            搜索 chat 注册表已建 → 八工具并入（search_tool_specs 追加）
+            搜索 chat 注册表已建 → 七工具并入（search_tool_specs 追加）
             否则 → 独立 browser 槽位（browser_tool_registry / browser_tool_specs——
                    通道工厂按「搜索槽位优先、浏览器槽位兜底」消费）
     ↓ _startup_channels（chat 工厂消费上述槽位）
     ↓ _startup_scheduler（duty 分支）：
         ↓ _register_browser_sidecar_tools(app, settings, registry)：
-            客户端就绪 → register_browser_sidecar_tools(registry, client)（八工具）
+            客户端就绪 → register_browser_sidecar_tools(registry, client)（七工具）
             槽位 None（未启用 / 探测失败）→ 零注册（告警已在启动期落日志）
 ```
 
@@ -142,11 +151,11 @@ startup_app_state
 
 | duty | chat（搜索） | tools_browser_sidecar | 探测 / token | duty / chat 工具面 |
 |---|---|---|---|---|
-| off | off | on | 成功 | chat 仅浏览器八工具（browser 槽位） |
-| off | on | on | 成功 | chat = web_search + 浏览器八工具（并入搜索注册表） |
+| off | off | on | 成功 | chat 仅浏览器七工具（browser 槽位；evaluate 不在内） |
+| off | on | on | 成功 | chat = web_search + 浏览器七工具（并入搜索注册表） |
 | on | 任意 | off | —— | duty 工具面不含浏览器工具 |
 | on | 任意 | on | 失败 / token 缺失 | 既有工具集（告警——warn-and-continue） |
-| on | 任意 | on | 成功 | 既有工具集 + 浏览器八工具（duty + chat 双注册） |
+| on | 任意 | on | 成功 | 既有工具集 + 浏览器七工具（duty + chat 双注册） |
 
 ## 部署（compose——后端不进 compose）
 
@@ -164,7 +173,7 @@ docker compose up -d browser-sidecar               # 127.0.0.1:8766 → 容器 8
 
 ## 扩展路径
 
-1. 新浏览器工具按八工具范式接入 sidecar 树（参数 Model Class + 受控失败 + face 注入面）；后端侧镜像参数模型 + `build_<tool>_spec` + 结果格式化（需要标注的工具在 `_format_browser_tool_result` 分派）；
+1. 新浏览器工具按 sidecar 协议范式接入 sidecar 树（参数 Model Class + 受控失败 + face 注入面）；后端侧镜像参数模型 + `build_<tool>_spec` + 结果格式化（需要标注的工具在 `_format_browser_tool_result` 分派）；**是否有副作用决定是否加入 `BROWSER_LLM_TOOL_NAMES`（LLM 注册面）**——有副作用的页面求值不暴露给 LLM，只保留内部直调；
 2. 写入类浏览器操作（表单提交后的网络副作用等）属 safety 审批面（须过审批红线后才接入——不预设）；
 3. wire 契约演进：两树同步改 + 漂移门禁基线同步（36 项计数更新）。
 
@@ -175,7 +184,7 @@ docker compose up -d browser-sidecar               # 127.0.0.1:8766 → 容器 8
 | 测试文件（后端） | 覆盖 |
 |---|---|
 | `tests/unit/test_tools_browser_sidecar_client.py` | MockTransport 客户端：token 间接 / 鉴权头形状 / ok-error 映射 / 传输异常 / 非成功状态 / wire 破坏 / 健康探测矩阵 / 工厂 face 构造 |
-| `tests/unit/test_tools_browser_sidecar_registry.py` | 代理回路（fake 客户端 ok / 失败归一）/ 本地校验 fail-fast / 默认值物化经 wire / read_text 不可信包裹 / screenshot 视觉提示 / evaluate 结果与参数面 / 规格呈现面 |
+| `tests/unit/test_tools_browser_sidecar_registry.py` | 代理回路（fake 客户端 ok / 失败归一）/ 本地校验 fail-fast / 默认值物化经 wire / read_text 不可信包裹 / screenshot 视觉提示 / evaluate 结果与参数面 / 规格呈现面 / **evaluate 默认不进 LLM 注册表（七工具）+ opt-in 扩展 + 内部直调不受影响** |
 | `tests/unit/test_tools_browser_sidecar_settings.py` | env 面映射 / 默认值 / 校验 / 聚合 + 隔离构造 / conftest 硬覆盖锚点 |
 | `tests/unit/test_app_browser_sidecar_lifespan.py` | 装配矩阵（disabled / healthy / unhealthy / token 缺失 / duty 开关 / chat 并入 vs 独立槽位）+ 代理回路 |
 

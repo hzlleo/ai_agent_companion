@@ -154,6 +154,7 @@ async def test_normalize_images_and_placeholder_text() -> None:
     assert len(inbound) == 1
     message = inbound[0]
     assert message.text == DOUYIN_IMAGE_PLACEHOLDER_TEXT
+    assert message.has_user_text is False
     assert len(message.attachments) == 1
     attachment = message.attachments[0]
     assert attachment.kind is ChannelAttachmentKind.IMAGE

@@ -186,9 +186,10 @@ class InboundMessageModel(BaseModel):
             维度复用会话）。
         message_id: 平台消息 ID（字符串形态——出站回复的引用目标）。
         sender_id: 发送者 ID（字符串形态；平台匿名形态归一 "0"）。
-        text: 消息文本（**仅附件入站为空串**——纯图片 / 纯表情不含用户
-            字面文本，路由器照常收录表情 / 推进门控游标但不调用生成；
-            文本消息非空。Telegram 媒体消息以 caption 兜底为文本）。
+        text: 消息文本（纯媒体入站可为空串或平台占位文本——是否含用户
+            字面文本以 ``has_user_text`` 为准；路由器据该字段决定是否调用
+            生成，同时照常收录附件 / 推进门控游标。Telegram 媒体消息以
+            caption 兜底为文本）。
         ts_ms: 消息时间（epoch 毫秒；平台 wire 的秒级时间戳在映射时归一）。
         attachments: 消息附件（v2——缺省空列表 = v1 纯文本形态；由平台
             runner / webhook 提取，供未来消费者（贴纸 / 语音）消费，
@@ -203,6 +204,9 @@ class InboundMessageModel(BaseModel):
             事件上浮面而非人类消息；缺省 False = 人类消息）。
         silent: 是否无通知上下文（v2——平台上报「该消息在免通知语境
             送达」的标记位；缺省 False）。
+        has_user_text: 是否含用户字面文本（纯图片 / 纯表情 / 纯文件等
+            占位文本形态为 False——适配器按平台 wire 语义声明；路由器
+            据此跳过生成但照常收录附件与推进游标。空文本恒归一 False）。
     """
 
     channel: ChannelType = Field(description="来源通道类型")
@@ -223,6 +227,22 @@ class InboundMessageModel(BaseModel):
         default=True,
         description="私聊发送者是否为主人（False = 第三方转发按 peer 落档；群聊不消费）",
     )
+    has_user_text: bool = Field(
+        default=True,
+        description="是否含用户字面文本（纯媒体占位 False——路由器据此跳过生成）",
+    )
+
+    @model_validator(mode="after")
+    def _blank_text_has_no_user_text(self) -> Self:
+        """空文本恒不含用户字面文本（占位文本由适配器显式声明 False）。
+
+        Returns:
+            归一后的自身（``text`` 为空白时强制 ``has_user_text=False``，
+            防止适配器漏声明导致空回合生成）。
+        """
+        if not self.text.strip():
+            self.has_user_text = False
+        return self
 
 
 class OutboundMessageModel(BaseModel):
