@@ -44,6 +44,8 @@ __all__ = [
     "VoiceprintConsentRecordDTO",
     "VoiceprintSampleRecordDTO",
     "VoiceprintProfileDTO",
+    "VoiceprintAudioProbeModel",
+    "VoiceprintAudioProbeSource",
     "VoiceprintRejectedSampleModel",
     "VoiceprintEnrollResultModel",
     "VoiceprintVerifyResultModel",
@@ -238,8 +240,10 @@ class VoiceprintSampleUploadModel(BaseModel):
             4/3 展开上限拒绝超大载荷；解码后服务层仍按生效
             ``max_upload_bytes`` 与 MIME 白名单精确校验）。
         content_type: 音频 MIME 类型（缺省 ``audio/wav``）。
-        duration_ms: 音频时长毫秒（由上传方声明；服务按最短时长门槛校验）。
-        sample_rate_hz: 采样率赫兹（由上传方声明；服务按最低采样率校验）。
+        duration_ms: 音频时长毫秒（上传方声明；服务以实测为准——WAV 头
+            或裸 PCM 字节长度，不一致时采用实测值）。
+        sample_rate_hz: 采样率赫兹（上传方声明；WAV 以头内值为准，裸
+            PCM 以声明值为换算依据）。
     """
 
     audio_base64: str = Field(
@@ -317,6 +321,34 @@ class VoiceprintConsentRecordDTO(BaseModel):
             True 表示当前可处理声纹数据。
         """
         return self.revoked_at_ms is None
+
+
+class VoiceprintAudioProbeSource(StrEnum):
+    """音频元数据实测来源值域（拒绝上传方声明作为唯一依据）。"""
+
+    WAV_HEADER = "wav_header"
+    RAW_PCM = "raw_pcm"
+    DECLARED = "declared"
+
+
+class VoiceprintAudioProbeModel(BaseModel):
+    """音频实测元数据（时长 / 采样率 / 声道——注册与校验的门槛依据）。
+
+    来源语义：``wav_header`` 从 RIFF/fmt/data 头实测；``raw_pcm`` 按声明
+    采样率与字节长度换算（单声道 16 位假设）；``declared`` 仅用于无法
+    在零依赖下解析的容器（MP3 / OGG / WebM / MP4——沿用上传方声明）。
+
+    Attributes:
+        duration_ms: 实测时长毫秒。
+        sample_rate_hz: 实测采样率赫兹。
+        channels: 实测声道数（raw_pcm / declared 固定 1）。
+        source: 元数据来源（见值域说明）。
+    """
+
+    duration_ms: int = Field(ge=0, description="实测时长（毫秒）")
+    sample_rate_hz: int = Field(ge=0, description="实测采样率（赫兹）")
+    channels: int = Field(ge=1, description="实测声道数")
+    source: VoiceprintAudioProbeSource = Field(description="元数据来源")
 
 
 class VoiceprintSampleRecordDTO(BaseModel):

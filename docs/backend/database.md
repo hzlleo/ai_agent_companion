@@ -97,7 +97,7 @@ pixi run alembic upgrade head                        # 应用迁移
 ```
 
 - `alembic/env.py`：异步引擎（`run_sync` 桥接）+ `sqlalchemy.url` 由 `settings.database.async_sqlalchemy_url` 动态注入（alembic.ini 留空）+ `sys.path` 注入 backend/src；
-- `versions/000000000001_initial.py`：空基线（版本链锚点）；域表迁移链：`0002_add_usage_records`（用量）→ `0003_add_personas`（人格注册表 + 状态）→ `0004_add_memory_tables`（记忆四表）→ `0005_add_dream_runs`（梦境运行日志）→ `0006_add_persona_voice_profile`（人格音色绑定）→ `0007_memory_concurrency_constraints`（策展单 active 唯一键 + 会话消息 seq 唯一键——memory 域并发不变式）→ `0008_persona_primary_marker`（persona 域多激活可寻址模型：`ff_personas` 增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active` 单激活位退役——旧激活行回填 `'primary'` 后删列，降级逆向重建；与 0007 同「NULL 共存唯一键」模式）→ `0009_add_chat_message_meta`（会话消息 meta 列）→ `0010_chat_message_variants`（消息变体列）→ `0011_add_reminders`（提醒表）→ `0012_curated_lifecycle`（策展生命周期列）→ `0013_persona_facts`（人物事实）→ `0014_persona_skills`（程序性技能）→ `0015_core_memory`（核心记忆块 + append-only 修订）→ `0016_voiceprint_sticker`（声纹样本 / 同意记录 / 表情包库三表）→ `0017_canvas_documents`（画布产物表 + 人格 / 更新时间复合索引）→ `0018_persona_facts_confidence_index`（人物事实 `(persona_id, status, confidence)` 复合索引）；
+- `versions/000000000001_initial.py`：空基线（版本链锚点）；域表迁移链：`0002_add_usage_records`（用量）→ `0003_add_personas`（人格注册表 + 状态）→ `0004_add_memory_tables`（记忆四表）→ `0005_add_dream_runs`（梦境运行日志）→ `0006_add_persona_voice_profile`（人格音色绑定）→ `0007_memory_concurrency_constraints`（策展单 active 唯一键 + 会话消息 seq 唯一键——memory 域并发不变式）→ `0008_persona_primary_marker`（persona 域多激活可寻址模型：`ff_personas` 增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active` 单激活位退役——旧激活行回填 `'primary'` 后删列，降级逆向重建；与 0007 同「NULL 共存唯一键」模式）→ `0009_add_chat_message_meta`（会话消息 meta 列）→ `0010_chat_message_variants`（消息变体列）→ `0011_add_reminders`（提醒表）→ `0012_curated_lifecycle`（策展生命周期列）→ `0013_persona_facts`（人物事实）→ `0014_persona_skills`（程序性技能）→ `0015_core_memory`（核心记忆块 + append-only 修订）→ `0016_voiceprint_sticker`（声纹样本 / 同意记录 / 表情包库三表）→ `0017_canvas_documents`（画布产物表 + 人格 / 更新时间复合索引）→ `0018_persona_facts_confidence_index`（人物事实 `(persona_id, status, confidence)` 复合索引）→ `0019_dream_runs_single_flight`（梦境运行日志 `running_marker` 可空列 + `(persona_id, running_marker)` 唯一键——单飞守卫）；
 - `target_metadata = Base.metadata`（autogenerate 对比基准）。
 
 ### 0017_canvas_documents（画布产物）
@@ -107,6 +107,10 @@ pixi run alembic upgrade head                        # 应用迁移
 ### 0018_persona_facts_confidence_index（人物事实复合索引）
 
 为 `ff_persona_facts` 增加 `ix_ff_persona_facts_persona_status_confidence (persona_id, status, confidence)`：服务层按人格作用域 + 状态过滤、再按置信度排序读取现行事实面（管理面板 / compose 注入候选 / 关系摘要派生）。表时间列为 epoch 毫秒（`created_at` / `updated_at` BigInteger），`confidence` 为 0-1 浮点。升级仅建索引、无数据迁移；降级仅删索引、事实行保留。
+
+### 0019_dream_runs_single_flight（梦境运行单飞守卫）
+
+为 `ff_dream_runs` 增加可空 `running_marker`（String(16)）与唯一键 `uq_ff_dream_runs_persona_running (persona_id, running_marker)`：运行中行写固定 `'1'`，终态 / 失败 / 进程崩溃收敛清 NULL；MySQL / SQLite 唯一键均忽略 NULL，历史运行行多代共存。服务层 `DreamService.run_dream` 以插入带标记行为单飞动作，并发第二行被 1062 拒绝后回滚并返回既有在途运行。升级顺序为增列 → 按人格回填最新运行中行 → 建唯一键；降级先删约束再删列（运行行保留，标记数据丢弃）。唯一键名与语义见 [memory.md](memory.md#夜间梦境记忆巩固)。
 
 ## 人格级联删除（服务层批删，无跨域 FK）
 

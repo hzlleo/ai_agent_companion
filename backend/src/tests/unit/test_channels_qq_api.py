@@ -29,6 +29,7 @@ from packages.harness.channels.channel_models import (
     ChannelType,
     InboundMessageModel,
 )
+from tests.async_wait import wait_until
 
 #: conftest 硬覆盖的测试专用 webhook token 变量（webhook_token_env 指向形态）。
 _TEST_WEBHOOK_TOKEN_ENV = "QQ_TEST_WEBHOOK_TOKEN"
@@ -286,16 +287,6 @@ class _BlockingRouter:
         )
 
 
-async def _wait_until(predicate: Any) -> None:
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + 5.0
-    while not predicate():
-        remaining = deadline - loop.time()
-        if remaining <= 0:
-            raise TimeoutError("等待条件超时")
-        await asyncio.wait_for(asyncio.sleep(0), timeout=remaining)
-
-
 class TestQueuedAck:
     """runner 装配形态：端点只入队并立即确认（不等待 LLM 回合）。"""
 
@@ -323,7 +314,7 @@ class TestQueuedAck:
             assert router.handled == []
             await asyncio.wait_for(router.started.wait(), timeout=5.0)
             router.release.set()
-            await _wait_until(lambda: len(router.handled) == 1)
+            await wait_until(lambda: len(router.handled) == 1)
             assert router.handled[0].chat_id == "private:10086"
         finally:
             router.release.set()

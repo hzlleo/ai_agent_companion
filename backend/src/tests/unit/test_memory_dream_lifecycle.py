@@ -191,7 +191,7 @@ async def test_run_dream_archives_stale_curated(db_session: AsyncSession) -> Non
         await _age_curated(db_session, kept.id, days=90)
         gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "[]", "今天很安静，心里很平稳。"])
         run = await _dream_service().run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         row = (
             await db_session.execute(
@@ -247,7 +247,7 @@ async def test_run_dream_does_not_archive_pinned_or_frozen(
         await _age_curated(db_session, frozen.id, days=120)
         gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "[]", "今天很安静。"])
         run = await _dream_service().run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.stats.archived == 0
     assert [d for d in run.decisions if d.action == DreamDecisionAction.ARCHIVED] == []
@@ -323,7 +323,7 @@ async def test_frozen_topic_excluded_from_merge_prompt(
         )
         gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "[]", "今天很安静。"])
         run = await _dream_service().run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.status == "success"
     merge_prompt = gateway.calls[2]
@@ -361,7 +361,7 @@ async def test_frozen_topic_proposal_dropped_with_decision(
         )
         gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", proposal, "今天下雨，心情很好。"])
         run = await _dream_service().run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         frozen_row = (
             await db_session.execute(
@@ -396,7 +396,7 @@ async def test_archive_runs_even_without_merge_candidates(
         await _age_curated(db_session, stale.id, days=90)
         gateway = FakeDreamGateway([])
         run = await _dream_service(LifecycleConfig()).run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.status == "success"
     assert run.stats.archived == 1

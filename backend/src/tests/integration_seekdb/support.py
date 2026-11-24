@@ -86,14 +86,15 @@ _MISSING_ENV_MESSAGE = (
     "未注入测试服务 env 的本地运行。"
 )
 
-#: alembic 迁移链 head 版本戳（0018——人物事实复合索引迁移）。
-HEAD_REVISION = "000000000018"
+#: alembic 迁移链 head 版本戳（0019——梦境运行单飞守卫迁移）。
+HEAD_REVISION = "000000000019"
 
 #: 升级 head 后的全量表集（alembic_version + 17 张 ff_* 域表——0011 新增
 #: ff_reminders；0013 新增 ff_persona_facts；0014 新增 ff_persona_skills；
 #: 0015 新增 ff_core_memory_blocks / ff_core_memory_revisions；0016 新增
 #: ff_voiceprint_samples / ff_voiceprint_consents / ff_stickers；0017 新增
-#: ff_canvas_documents；0018 为 ff_persona_facts 复合索引，不新增表）。
+#: ff_canvas_documents；0018 为 ff_persona_facts 复合索引；0019 为
+#: ff_dream_runs 单飞标记列 + 唯一键，均不新增表）。
 EXPECTED_HEAD_TABLES: frozenset[str] = frozenset(
     {
         "alembic_version",

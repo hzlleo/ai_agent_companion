@@ -23,6 +23,7 @@ from packages.harness.channels.whatsapp.whatsapp_runner import (
     WHATSAPP_STATS_INTERVAL_MS,
     WhatsAppWebhookRunner,
 )
+from tests.async_wait import wait_until
 
 _WAIT_TIMEOUT: float = 5.0
 
@@ -138,17 +139,6 @@ def _runner(
         worker_count=worker_count,
         clock=clock,
     )
-
-
-async def _wait_until(predicate: Any) -> None:
-    """事件门轮询（零固定睡眠——仅让出事件循环直到条件成立）。"""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + _WAIT_TIMEOUT
-    while not predicate():
-        remaining = deadline - loop.time()
-        if remaining <= 0:
-            raise TimeoutError("等待条件超时")
-        await asyncio.wait_for(asyncio.sleep(0), timeout=remaining)
 
 
 class TestQueueBackpressure:
@@ -317,7 +307,7 @@ class TestOwnerRouting:
         task = asyncio.create_task(runner.run())
         try:
             assert runner.submit(_payload(wamid="wamid.40")) is True
-            await _wait_until(lambda: len(router.received) == 1)
+            await wait_until(lambda: len(router.received) == 1)
             assert router.received[0].is_owner is True
             assert router.received[0].chat_id == "wa:15551234567"
         finally:
@@ -333,7 +323,7 @@ class TestLifecycle:
         task = asyncio.create_task(runner.run())
         try:
             assert runner.submit(_payload(wamid="wamid.50")) is True
-            await _wait_until(lambda: len(router.received) == 1)
+            await wait_until(lambda: len(router.received) == 1)
             assert runner.pending_inbound == 0
         finally:
             runner.request_stop()
@@ -374,7 +364,7 @@ class TestLifecycle:
         task = asyncio.create_task(runner.run())
         try:
             assert runner.submit(_payload(wamid="wamid.60")) is True
-            await _wait_until(lambda: router.started.is_set())
+            await wait_until(lambda: router.started.is_set())
             assert runner.submit(_payload(wamid="wamid.61")) is True
             assert runner.pending_inbound == 1
         finally:

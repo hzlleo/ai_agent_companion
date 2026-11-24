@@ -369,3 +369,10 @@ symbol = "packages.harness.database.models:load_all_models"
 tests = [
     "tests/unit/test_persona_service.py::test_persona_cascade_derives_every_persona_id_table",
 ]
+
+[[probes]]
+name = "voiceprint-audio-probe-removal"
+symbol = "packages.harness.voice.voiceprint_audio:probe_audio"
+tests = [
+    "tests/unit/test_voiceprint_audio.py::test_probe_wav_reads_header_duration_and_rate",
+]

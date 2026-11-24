@@ -507,7 +507,7 @@ def build_dream_trigger_job(
     persona_service: PersonaService,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
     store: MemoryStore | None = None,
-    now_ms: Callable[[], int] | None = None,
+    clock_ms: Callable[[], int] | None = None,
 ) -> JobFactory:
     """构建梦境触发作业工厂（主人格解析 → 绑定 → run_dream）。
 
@@ -524,7 +524,8 @@ def build_dream_trigger_job(
         session_factory: 数据库会话工厂（每轮作业开新会话——app 装配
             注入 ``session_scope``）。
         store: 记忆检索存储（None = 主题相关度降级 boost=0）。
-        now_ms: 注入时钟（epoch 毫秒；None = 真实时间——窗口参考轴）。
+        clock_ms: 注入时钟（可调用，返回 epoch 毫秒；None = 真实时间
+            ——直接透传给 run_dream 作为开始 / 结束读数轴）。
 
     Returns:
         作业工厂（零参协程——``scheduler.register_daily`` 消费）。
@@ -548,7 +549,7 @@ def build_dream_trigger_job(
                     gateway=gateway,
                     persona_name=record.display_name,
                     store=store,
-                    now_ms=now_ms() if now_ms is not None else None,
+                    clock_ms=clock_ms,
                 )
         logger.info(
             "梦境调度轮次收束: status={}, promoted={}, superseded={}",

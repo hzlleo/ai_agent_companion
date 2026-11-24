@@ -190,7 +190,7 @@ async def test_run_dream_mines_skill_with_stats_and_phase_order(db_session: Asyn
             ]
         )
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         page = await skills_service.list_skills(db_session, SkillQueryDTO())
         curated = await memory_service.query_curated(db_session, CuratedQueryDTO(topic="口味偏好"))
@@ -253,7 +253,7 @@ async def test_run_dream_merges_existing_skill_metadata(db_session: AsyncSession
             ]
         )
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         page = await skills_service.list_skills(db_session, SkillQueryDTO())
     assert run.status == "success"
@@ -293,7 +293,7 @@ async def test_run_dream_drops_invalid_skill_proposals(db_session: AsyncSession)
             ]
         )
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         page = await skills_service.list_skills(db_session, SkillQueryDTO(limit=50))
     assert run.status == "success"
@@ -317,7 +317,7 @@ async def test_run_dream_skills_invalid_json_fails_before_merge(
         )
         gateway = FakeDreamGateway([_FACTS_EMPTY, "这不是JSON{{{"])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         curated = await memory_service.query_curated(
             db_session, CuratedQueryDTO(topic="口味偏好")
@@ -337,7 +337,7 @@ async def test_run_dream_skills_empty_output_fails(db_session: AsyncSession) -> 
         await memory_service.append_episode(db_session, _chat_dto(user="今天写字了"))
         gateway = FakeDreamGateway([_FACTS_EMPTY, "   "])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.status == "failed"
     assert "空内容" in (run.error or "")
@@ -363,7 +363,7 @@ async def test_mined_skill_persona_isolation(db_session: AsyncSession) -> None:
             ]
         )
         await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     async with bind_persona_context(PERSONA_B):
         page = await skills_service.list_skills(db_session, SkillQueryDTO())

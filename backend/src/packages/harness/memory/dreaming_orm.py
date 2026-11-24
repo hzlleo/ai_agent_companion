@@ -15,10 +15,13 @@ memory 域包，Base 注册表共享。
 DreamDecisionModel）；``diary_episode_id`` 自引用外键指向情景事件表
 （SET NULL——日记事件被管理面删除时运行日志保留，链接置空）。
 
-运行状态语义：行创建即落库 ``status=running``（进程崩溃可能遗留孤儿
-running 行——由 ``DreamService.run_dream`` 入口按
+运行状态语义：行创建即落库 ``status=running`` 且 ``running_marker='1'``
+——``(persona_id, running_marker)`` 唯一键是单飞权威闸门（并发第二个
+插入被拒绝，服务层回滚后返回既有运行）；终态 / 失败 / 崩溃收敛清
+``running_marker`` 释放闸门（唯一键忽略 NULL，历史行多代共存）。进程
+崩溃可能遗留孤儿 running 行——由 ``DreamService.run_dream`` 入口按
 ``DreamJobConfig.stale_running_threshold_ms`` 阈值批量收敛为 failed，
-error=「进程崩溃遗留，由调度收敛」）。
+error=「进程崩溃遗留，由调度收敛」。
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -53,6 +57,9 @@ class DreamRunRow(Base, BigIntIdMixin, TimestampMixin, PersonaMixin):
         status: 运行状态（running/success/failed）。
         started_ms: 开始时间（epoch 毫秒——注入时钟口径）。
         finished_ms: 结束时间（epoch 毫秒；运行中为 None）。
+        running_marker: 单飞守卫标记（运行中固定 ``'1'``；终态 / 失败 /
+            崩溃收敛后 None）。``(persona_id, running_marker)`` 唯一键使
+            同人格至多一条运行中行——唯一键忽略 NULL，历史行多代共存。
         stats: 运行统计 JSON（DreamRunStatsModel 序列化形态）。
         decisions: 逐事件决策 JSON 列表（DreamDecisionModel 序列化形态；
             既往成功运行的 promoted/merged 决策构成后续运行的跳过依据）。
@@ -62,12 +69,21 @@ class DreamRunRow(Base, BigIntIdMixin, TimestampMixin, PersonaMixin):
     """
 
     __tablename__ = "ff_dream_runs"
-    __table_args__ = (Index("ix_ff_dream_runs_status", "status"),)
+    __table_args__ = (
+        Index("ix_ff_dream_runs_status", "status"),
+        UniqueConstraint(
+            "persona_id", "running_marker", name="uq_ff_dream_runs_persona_running"
+        ),
+    )
 
     status: Mapped[str] = mapped_column(String(16), comment="运行状态（running/success/failed）")
     started_ms: Mapped[int] = mapped_column(BigInteger, comment="开始时间（epoch 毫秒）")
     finished_ms: Mapped[int | None] = mapped_column(
         BigInteger, comment="结束时间（epoch 毫秒；运行中为 None）"
+    )
+    running_marker: Mapped[str | None] = mapped_column(
+        String(16),
+        comment="单飞守卫标记（运行中 '1'；终态 / 失败 / 崩溃收敛清 NULL——唯一键忽略 NULL）",
     )
     stats: Mapped[dict[str, Any]] = mapped_column(
         JSON, comment="运行统计 JSON（DreamRunStatsModel 形态）"

@@ -84,7 +84,7 @@ class TestBackgroundTaskManagerShutdown:
         done_order: list[str] = []
 
         async def _worker(name: str) -> None:
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0)
             done_order.append(name)
 
         for i in range(3):

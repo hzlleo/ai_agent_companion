@@ -44,6 +44,7 @@ from packages.harness.config.models import (
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.core.background_tasks import background_task_manager
 from packages.harness.tools.tool_models import ToolResultModel
+from tests.async_wait import wait_until
 
 
 def _settings(
@@ -178,22 +179,6 @@ def _install_sidecar(monkeypatch: pytest.MonkeyPatch) -> FakeSidecarClient:
     return fake
 
 
-async def _wait_until(predicate: Any, *, timeout_seconds: float = 5.0) -> None:
-    """让出控制点直到条件成立（有界等待——超时即失败）。
-
-    Args:
-        predicate: 零参判定函数。
-        timeout_seconds: 等待上限秒数。
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_seconds
-    while loop.time() < deadline:
-        if predicate():
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("条件在等待上限内未成立")
-
-
 class TestDisabledByDefault:
     async def test_disabled_config_is_noop(self, tmp_path: Path) -> None:
         """disabled：零抖音对象构造 + 停机幂等（槽位恒 None）。"""
@@ -223,7 +208,7 @@ class TestEnabledWiring:
             runner = app.state.channels_douyin_runner
             task = app.state.channels_douyin_task
             assert isinstance(runner, FakeDouyinRunner)
-            await _wait_until(lambda: runner.ran)
+            await wait_until(lambda: runner.ran)
             assert task is not None and not task.done()
             assert task in background_task_manager.tasks
             assert runner.client.chat_url == "https://www.douyin.com/im"
@@ -273,7 +258,7 @@ class TestEnabledWiring:
         douyin_runner = app.state.channels_douyin_runner
         wecom_runner = app.state.channels_wecom_runner
         try:
-            await _wait_until(lambda: douyin_runner.ran and wecom_runner.ran)
+            await wait_until(lambda: douyin_runner.ran and wecom_runner.ran)
             router = app.state.channels_router
             assert router is not None
             assert ChannelType.DOUYIN in router.active_channels

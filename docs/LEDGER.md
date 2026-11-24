@@ -179,10 +179,10 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 3297 passed）
+cd backend && pixi run tests-all            # 全量后端测试（当前 3316 passed）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
-cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖 228/228/sandbox-drift；当前 mypy 211 文件零问题）
-cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 11 用例（迁移链/并发唯一键/行锁/混合检索）
+cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖 228/228/sandbox-drift；当前 mypy 212 文件零问题）
+cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 12 用例（迁移链/并发唯一键/行锁/混合检索/梦境单飞）
 cd frontend && pixi run test / coverage / lint / build   # 702 passed（build 2.52s；高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
 cd frontend && pixi run build && pixi run bundle-check     # 体积门禁（需先 build）；PASS 尾标记 total=389799 lazy=25
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
@@ -1696,6 +1696,26 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 - `cd backend && pixi run tests-all` → 0（3297 passed）；`pixi run coverage-gates` → 0（24 组 ≥80%：harness/persona 95.6%（1774/1855）、harness/channels 97.3%（3210/3299）、harness/chat 96.3%（1551/1611）、harness/multimodal 94.0%（669/712）、harness/database 94.0%（189/201）、app/main.py 94.1%（556/591）、app/api 85.2%（1257/1476））；`pixi run lint` → 0；`pixi run typecheck` → 0（211 源文件）；`pixi run conftest-env` → 0（228/228）；`pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `02872633…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）；根 `pixi run gates` → 0（comment-gates violations=0 / sync-test-ratchet +0 / noqa-freeze 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 24 条覆盖 23 文件 / docs-truth / assertion-freeze asserts=9265 raises=673 / surface-check 42/42 + env 791 行 / bench-core PASS / api-smoke PASS / prose-pin 报告）。
 - `cd backend && pixi run red-probe --all` → 0：24 条全部 RED（errors=0，含新增 `orm-registry-anchor-removal` → failed=1）。
 - 无迁移、无新依赖；前端未动。
+
+### 已完成切片：G1 根修 B1（§20 剩余非根修项——本分支工作区）
+
+**背景**：G1 审计另列 5 项非根修修复（时钟单一读数、窗宽单飞、声明时长、墙钟轮询、首调用同步读盘）与 1 项注释段落缺口。本批按 §20 逐条消除再发机制，并补齐对应结构性守卫。
+
+逐条（原修复位置 → 根修位置 → 守卫测试）：
+
+1. **梦境终态时钟**：原实现 `run_dream(now_ms=…)` 用单一读数同时写 `started_ms` / `finished_ms`（运行耗时恒 0，终态时间不是结束时刻）。根修：入口改为可调用 `clock_ms`（`packages/harness/memory/dreaming.py`），开始与结束各读取一次，`finished_ms` 取第二次读数；调度器透传可调用时钟，API 缺省真实时钟。守卫：`test_run_dream_finished_ms_uses_injected_clock`（可推进伪时钟：两次读数、`finished_ms > started_ms` 且等于第二读数）、调度器透传用例。
+2. **梦境单飞**：原实现以 `DREAM_REENTRY_WINDOW_MS` 窗内查询为唯一防线——窗外的并发触发会双插 running 行。根修：迁移 `0019_dream_runs_single_flight` 给 `ff_dream_runs` 增可空 `running_marker` + 唯一键 `uq_ff_dream_runs_persona_running (persona_id, running_marker)`（运行中 `'1'`，终态 / 失败 / 崩溃收敛清 NULL）；`run_dream` 以插入带标记行为权威单飞动作，唯一键冲突回滚后读回既有运行并原样返回；窗内复用保留为辅助快路径，二者关系写入 memory.md。守卫：`test_run_dream_unique_marker_conflict_returns_existing`（窗外在途行撞键复用）、`test_run_dream_clears_marker_and_allows_rerun`、`test_run_dream_failed_terminal_clears_marker`、`test_migration_dream_single_flight.py`（SQLite 升 / 降 / 复升 + 唯一键行为）、SeekDB `test_dream_run_single_flight_marker_unique`（1062 约束点名 + 清标记后可再插）、迁移链 0019 升级 / 降级 / 复升断言。
+3. **声纹实测时长**：原实现信任上传方 `duration_ms` / `sample_rate_hz` 声明。根修：新增 `packages/harness/voice/voiceprint_audio.py` + `VoiceprintAudioProbeModel`——WAV 从 RIFF/fmt/data 头实测采样率 / 声道 / 时长，裸 PCM 按声明采样率与字节长度换算，不可解析容器回落声明；注册与校验的时长 / 采样率门槛及落库元数据一律用实测值，非法 / 截断头按 `payload_invalid` 拒收。守卫：`test_voiceprint_audio.py`（不同时长 / 采样率 / 双声道 / 裸 PCM / 非法与截断头 / 容器回落）、`test_voiceprint_service.py` 的声明撒谎（短音频声明长时长、低采样率声明高采样率）注册与校验双路径拒收；既有用例已改为真实 WAV 载荷（列明于 voice.md 测试面）。
+4. **测试去墙钟**：原实现 10 处 `_wait_until` 与多处以 2-5s 墙钟 deadline + 固定睡眠轮询，慢机抖动会翻面。根修：新增 `tests/async_wait.py`（`wait_until` 10,000 次零延时让出封顶、`drain_loop` 固定次数让出），10 处本地 helper 与 duty / channels / reminders 的轮询循环统一接入；负向断言改 `drain_loop`。保留的真实时间面逐条注明：企微心跳超时改 `closed_event` 事件门（`wait_for` 为真实超时语义）、`DelayedCrashRunner` 0.05s 模拟停机窗口内在途、后台任务 30s 阻塞哨兵、`tg_runner` 线程池往返 0.01s、`realtime_fakes` 3600s 常驻哨兵。守卫：`test_async_wait.py`（注入记录器断言只请求零延时让出 + 失败消息携带预算与描述 + `drain_loop` 零延时）。
+5. **特质库预加载**：原实现首个管理面请求在事件循环内同步读 YAML。根修：`trait_library` 新增 `load_official_presets_async` / `load_official_components_async` / `preload_official_trait_library`（读盘 + 解析经 `run_blocking_ops`），`app/main.py` 启动期预加载，`app/api/personas.py` 两处读取改异步入口（未预加载的懒路径同样下沉线程池）。守卫：`test_preload_warms_official_cache`（预加载后缓存命中且异步读取返回同实例）、`test_lazy_official_loader_uses_blocking_sink`（注入记录器断言懒路径经 `run_blocking_ops`）、`test_app_main.py` 启动后缓存已热；persona.md 同步。
+6. **注释段落**：`sticker_bridge.py` / `sticker_models.py` / `sticker_service.py` / `realtime_models.py` / `realtime_session.py` / `realtime_vad.py` 的 8 条 hints 逐处读上下文后补 Google 段落（Args / Returns / Raises 按实际签名）。注释门复跑：violations=0、hints=23（剩余均为本批范围外存量：browser-sidecar 17 条 + 其 server 1 条、tool-sandbox server 1 条、chat cli 2 条、duty 1 条、douyin runner 1 条——均为各自域后续注释批次，非本批文件）。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3316 / coverage-gates=24 组 / lint / typecheck=212 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-fc26e182.json`，canonical sha8=`fc26e182`（707 文件级证据；`--hash-only` 复算一致）；`bd3bdfd3`（G1 根修前）与更早证据为历史，按 README 口径只认与当前 `--hash-only` 一致的一份）。
+- `cd backend && pixi run tests-all` → 0（3316 passed）；`pixi run coverage-gates` → 0（24 组 ≥80%：harness/voice 93.1%（2628/2822）、harness/memory 94.8%（1902/2007）、harness/persona 95.7%（1783/1864）、harness/channels 97.3%（3211/3299）、app/main.py 93.9%（558/594）、app/api 85.2%（1257/1476））；`pixi run lint` → 0；`pixi run typecheck` → 0（212 源文件）；`pixi run conftest-env` → 0（228/228，豁免 0）；`pixi run gen-examples` 连跑两次 → 0（三件套 sha256 与连跑前一致：`.env.example` `02872633…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）；根 `pixi run gates` → 0（comment-gates violations=0 hints=23 / sync-test-ratchet +0 / noqa-freeze 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 25 条覆盖 24 文件 / docs-truth / assertion-freeze asserts=9316 raises=679 / surface-check 42/42 + env 791 行 / bench-core PASS / api-smoke PASS / prose-pin 报告）。
+- `cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto` → 0（12 passed：迁移链 0019 真引擎升 / 降 / 复升、梦境单飞 1062、既有并发唯一键 / 行锁 / 混合检索）。
+- `cd frontend && pixi run npx vitest run src/test/contract/dtoContract.test.ts` → 0（2 passed；前端源码未改动，契约 fixture 与后端导出面一致）。
+- 无新增依赖 / env 键；迁移号 `0019`。
 
 ## 6. 遗留与部署台账（非阻塞）
 

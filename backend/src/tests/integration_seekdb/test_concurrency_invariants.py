@@ -1,6 +1,6 @@
 """并发不变式真引擎验证（DB 级约束 + 行锁——服务层重试收敛的强制面）。
 
-九个不变式（迁移 0007/0008/0013/0014/0015/0016 落地的 DB 级守卫 +
+十个不变式（迁移 0007/0008/0013/0014/0015/0016/0019 落地的 DB 级守卫 +
 InnoDB 行锁语义，全部经 raw SQL 直击真引擎——SQLite 单测面无法验证的
 并发拒绝行为）：
 
@@ -30,7 +30,10 @@ InnoDB 行锁语义，全部经 raw SQL 直击真引擎——SQLite 单测面无
     - (i) ``ff_voiceprint_samples``：唯一键
       ``uq_ff_voiceprint_samples_persona_sender_sha``
       (persona_id, sender_id, sample_sha256)——同人格同发送者同样本哈希
-      第二条写入被 1062 拒绝。
+      第二条写入被 1062 拒绝；
+    - (j) ``ff_dream_runs``：唯一键 ``uq_ff_dream_runs_persona_running``
+      (persona_id, running_marker)——同人格第二条运行中行（标记 ``'1'``）
+      被 1062 拒绝；终态清标记（NULL）后下一次运行可插入。
 
 引擎方言事实（live 实测 v1.4.0，锁定进断言）：唯一键冲突 =
 pymysql ``IntegrityError``（1062，消息携带约束名）；行锁等待上限的
@@ -630,6 +633,57 @@ async def test_voiceprint_sample_persona_sender_sha_unique(
             count_row = await cur.fetchone()
             assert count_row is not None
             assert int(count_row[0]) == 1
+    finally:
+        conn.close()
+
+
+
+async def test_dream_run_single_flight_marker_unique(
+    migrated_scratch: SeekDbTestTarget,
+) -> None:
+    """ff_dream_runs 单飞守卫：同人格第二运行中行被拒，清标记后可再运行。
+
+    Args:
+        migrated_scratch: 已升级 head 的 scratch 库目标。
+    """
+    insert_sql = (
+        "INSERT INTO ff_dream_runs"
+        " (persona_id, status, started_ms, finished_ms, stats, decisions,"
+        " error, created_at, updated_at, running_marker)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+    )
+    values = ("900001", "running", 1, None, "{}", "[]", None, 1, 1, "1")
+    conn = await support.connect_scratch(migrated_scratch)
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute(insert_sql, values)
+            with pytest.raises(aiomysql.IntegrityError) as exc_info:
+                await cur.execute(insert_sql, values)
+            assert exc_info.value.args[0] == 1062
+            assert "uq_ff_dream_runs_persona_running" in str(exc_info.value)
+            await cur.execute(
+                "SELECT COUNT(*) FROM ff_dream_runs"
+                " WHERE persona_id = %s AND running_marker = %s",
+                ("900001", "1"),
+            )
+            count_row = await cur.fetchone()
+            assert count_row is not None
+            assert int(count_row[0]) == 1
+
+            # 终态清标记（NULL 不入唯一键）后下一轮运行可插入。
+            await cur.execute(
+                "UPDATE ff_dream_runs SET status = %s, finished_ms = %s,"
+                " running_marker = NULL WHERE persona_id = %s",
+                ("success", 2, "900001"),
+            )
+            await cur.execute(insert_sql, values)
+            await cur.execute(
+                "SELECT COUNT(*) FROM ff_dream_runs WHERE persona_id = %s",
+                ("900001",),
+            )
+            total_row = await cur.fetchone()
+            assert total_row is not None
+            assert int(total_row[0]) == 2
     finally:
         conn.close()
 

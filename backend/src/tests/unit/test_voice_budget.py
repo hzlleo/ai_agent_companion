@@ -54,6 +54,7 @@ from packages.harness.voice.voiceprint_models import (
 )
 from packages.harness.voice.voiceprint_orm import VoiceprintSampleRow
 from packages.harness.voice.voiceprint_service import VoiceprintService
+from tests.unit.test_voiceprint_service import _wav_bytes
 
 #: 测试日桶起点（UTC 零点——计数口径与预算闸同轴）。
 _DAY_START_MS: int = 1_731_000_000_000 // 86_400_000 * 86_400_000
@@ -206,7 +207,7 @@ def _voiceprint_settings(**overrides: object) -> VoiceprintSettings:
         "min_sample_duration_ms": 1000,
         "min_verify_duration_ms": 800,
         "min_sample_rate_hz": 8000,
-        "max_upload_bytes": 4096,
+        "max_upload_bytes": 1_000_000,
         "retention_days": 30,
     }
     values.update(overrides)
@@ -216,7 +217,7 @@ def _voiceprint_settings(**overrides: object) -> VoiceprintSettings:
 def _sample(audio: bytes) -> VoiceprintSampleUploadModel:
     """构造一条注册样本（base64 编码）。"""
     return VoiceprintSampleUploadModel(
-        audio_base64=base64.b64encode(audio).decode("ascii"),
+        audio_base64=base64.b64encode(_wav_bytes(audio)).decode("ascii"),
         content_type="audio/wav",
         duration_ms=2000,
         sample_rate_hz=16000,

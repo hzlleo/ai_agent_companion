@@ -21,6 +21,7 @@ from packages.harness.channels.qq.qq_runner import (
     QQ_STATS_INTERVAL_MS,
     QqWebhookRunner,
 )
+from tests.async_wait import wait_until
 
 _WAIT_TIMEOUT: float = 5.0
 
@@ -107,16 +108,6 @@ def _runner(
     )
 
 
-async def _wait_until(predicate: Any) -> None:
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + _WAIT_TIMEOUT
-    while not predicate():
-        remaining = deadline - loop.time()
-        if remaining <= 0:
-            raise TimeoutError("等待条件超时")
-        await asyncio.wait_for(asyncio.sleep(0), timeout=remaining)
-
-
 class TestQueueBackpressure:
     async def test_default_queue_capacity_matches_wecom_style(self) -> None:
         assert QQ_INBOUND_QUEUE_SIZE == 64
@@ -178,7 +169,7 @@ class TestLifecycle:
         task = asyncio.create_task(runner.run())
         try:
             assert runner.submit(_message_event(40)) is True
-            await _wait_until(lambda: len(router.received) == 1)
+            await wait_until(lambda: len(router.received) == 1)
             assert runner.pending_inbound == 0
         finally:
             runner.request_stop()
@@ -219,7 +210,7 @@ class TestLifecycle:
         task = asyncio.create_task(runner.run())
         try:
             assert runner.submit(_message_event(50)) is True
-            await _wait_until(lambda: router.started.is_set())
+            await wait_until(lambda: router.started.is_set())
             assert runner.submit(_message_event(51)) is True
             assert runner.pending_inbound == 1
         finally:

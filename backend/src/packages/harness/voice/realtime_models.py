@@ -788,6 +788,9 @@ class RealtimeChatFace(Protocol):
         Args:
             user_text: 用户转写文本。
 
+        Returns:
+            回复文本增量异步迭代器（逐段产出）。
+
         Yields:
             回复文本增量。
         """

@@ -54,11 +54,29 @@ class StickerBridgeServiceFace(Protocol):
         *,
         source_note: str,
     ) -> StickerRecordDTO | None:
-        """收录一张表情（哈希去重；非法 / 停用返回 None）。"""
+        """收录一张表情（哈希去重；非法 / 停用返回 None）。
+
+        Args:
+            session: 注入的异步 Session（人格上下文已绑定）。
+            payload: 图片文件字节。
+            content_type: 图片 MIME 类型。
+            source_note: 素材来源与授权备注。
+
+        Returns:
+            入库或既有的表情记录；功能关闭 / 类型或大小非法时返回 None
+            （通道桥不因单张表情失败阻断消息回复）。
+        """
         ...
 
     async def pick_channel_reply(self, session: AsyncSession) -> StickerBinaryModel | None:
-        """取最新一条可读表情用于回发（无素材返回 None）。"""
+        """取最新一条可读表情用于回发（无素材返回 None）。
+
+        Args:
+            session: 注入的异步 Session（人格上下文已绑定）。
+
+        Returns:
+            可回发的表情二进制与 MIME；档案为空时返回 None。
+        """
         ...
 
 

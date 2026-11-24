@@ -202,6 +202,7 @@ from packages.harness.persona.relationship_models import (
 )
 from packages.harness.persona.service import PersonaService, bind_persona_context
 from packages.harness.persona.skills import SkillsService
+from packages.harness.persona.trait_library import preload_official_trait_library
 from packages.harness.pools.manager import get_pool_manager, init_pool_manager
 from packages.harness.reminders.job import (
     REMINDER_SCAN_INTERVAL_SECONDS,
@@ -296,6 +297,11 @@ async def startup_app_state(
     )
     app.state.memory_store = build_memory_store(settings)
     _assemble_memory_services(app)
+    # 官方特质库启动期预加载（读盘 / 校验下沉线程池；运行期命中缓存）。
+    preset_count, component_count = await preload_official_trait_library()
+    logger.info(
+        "官方特质库已预加载: presets={}, components={}", preset_count, component_count
+    )
     await _startup_search(app, settings, config_dir=config_dir)
     await _startup_browser_sidecar(app, settings)
     await _startup_channels(app, settings)

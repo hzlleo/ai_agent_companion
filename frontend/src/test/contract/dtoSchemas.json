@@ -3117,7 +3117,7 @@
           "type": "object"
         },
         "DreamRunStatus": {
-          "description": "梦境运行状态值域（ff_dream_runs.status）。\n\n- ``running``：运行中（行创建即落库——进程崩溃可能遗留终态缺失行；\n  孤儿 running 行由 ``run_dream`` 入口按\n  ``stale_running_threshold_ms`` 阈值批量收敛为 failed）；\n- ``success``：成功（合并 + 日记全部完成或按规则跳过）；\n- ``failed``：失败（LLM 输出不可解析 / 调用失败 / 日记生成失败——\n  fail-closed 语义见 dreaming 模块文档）。",
+          "description": "梦境运行状态值域（ff_dream_runs.status）。\n\n- ``running``：运行中（行创建即落库并持有 ``running_marker='1'``；\n  ``(persona_id, running_marker)`` 唯一键保证同人格单运行。进程\n  崩溃可能遗留终态缺失行——孤儿 running 行由 ``run_dream`` 入口按\n  ``stale_running_threshold_ms`` 阈值批量收敛为 failed 并清标记）；\n- ``success``：成功（合并 + 日记全部完成或按规则跳过）；\n- ``failed``：失败（LLM 输出不可解析 / 调用失败 / 日记生成失败——\n  fail-closed 语义见 dreaming 模块文档）。",
           "enum": [
             "running",
             "success",

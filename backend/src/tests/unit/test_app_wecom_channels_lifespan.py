@@ -41,6 +41,7 @@ from packages.harness.config.models import (
 )
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.core.background_tasks import background_task_manager
+from tests.async_wait import wait_until
 
 
 def _settings(
@@ -142,22 +143,6 @@ def _reset_fakes() -> None:
     FakeWeComRunner.instances = []
 
 
-async def _wait_until(predicate: Any, *, timeout_seconds: float = 5.0) -> None:
-    """让出控制点直到条件成立（有界等待——超时即失败）。
-
-    Args:
-        predicate: 零参判定函数。
-        timeout_seconds: 等待上限秒数。
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_seconds
-    while loop.time() < deadline:
-        if predicate():
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("条件在等待上限内未成立")
-
-
 class TestDisabledByDefault:
     async def test_disabled_config_is_noop(self, tmp_path: Path) -> None:
         """disabled：零企微对象构造 + 停机幂等（槽位恒 None）。"""
@@ -187,7 +172,7 @@ class TestEnabledWiring:
             runner = app.state.channels_wecom_runner
             task = app.state.channels_wecom_task
             assert isinstance(runner, FakeWeComRunner)
-            await _wait_until(lambda: runner.ran)
+            await wait_until(lambda: runner.ran)
             assert task is not None and not task.done()
             assert task in background_task_manager.tasks
             assert isinstance(runner.client, WeComLongConnectionClient)
@@ -238,7 +223,7 @@ class TestEnabledWiring:
         wecom_runner = app.state.channels_wecom_runner
         telegram_runner = app.state.channels_runner
         try:
-            await _wait_until(lambda: wecom_runner.ran and telegram_runner.ran)
+            await wait_until(lambda: wecom_runner.ran and telegram_runner.ran)
             router = app.state.channels_router
             assert router is not None
             assert ChannelType.WECOM in router.active_channels

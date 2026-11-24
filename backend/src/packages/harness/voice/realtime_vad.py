@@ -158,7 +158,11 @@ class EnergyVad:
         return self._segment_voiced_ms if self._speaking else 0
 
     def current_audio(self) -> bytes:
-        """当前语段已缓冲的 PCM16 字节（非语音态为空字节）。"""
+        """当前语段已缓冲的 PCM16 字节（非语音态为空字节）。
+
+        Returns:
+            当前语段拼接后的 PCM16 字节；非语音态恒为空字节串。
+        """
         return b"".join(self._segment) if self._speaking else b""
 
     def feed(self, pcm16: bytes, now_ms: int) -> VadFeedResultModel:

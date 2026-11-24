@@ -194,6 +194,9 @@ class ChatSessionStreamAdapter:
         Args:
             user_text: 用户转写文本。
 
+        Returns:
+            ChatService 流式回复迭代器（逐段产出文本增量）。
+
         Yields:
             回复文本增量。
         """
@@ -335,6 +338,10 @@ class RealtimeVoiceSession:
         本方法不抛业务异常：全部失败归一为下行 error + closed 并关闭传输；
         外部取消（服务停机）会取消派生任务后原样上抛。超时看门狗在 start
         处理时启动（会话时长从 start 起算——未 start 的连接不受时长规则约束）。
+
+        Raises:
+            asyncio.CancelledError: 外部取消（服务停机）——派生任务收尾后
+                原样上抛，交由上层停机流程处理。
         """
         try:
             while not self._closed:

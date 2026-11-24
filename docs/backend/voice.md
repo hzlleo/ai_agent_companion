@@ -32,6 +32,7 @@
 | `voice_service.py` | 编排门面（enabled 门控 + 人格绑定解析 + 分面预算闸 + 惰性客户端构建 + 成功用量发射 + 双轨流式通道（`open_asr_stream` / `synthesize_stream`）） | `VoiceService` / `VoiceUsageRecorder` / `VoiceBudgetCounter` |
 | `voiceprint_models.py` | 声纹域 Model Classes（Unit 文件）：`VOICEPRINT_` 配置面、注册 / 校验 / 同意 / 档案契约、PIPL 告知文本与版本常量 | `VoiceprintSettings` / `VoiceprintEnrollRequestDTO` / `VoiceprintVerifyResultModel` / `VoiceprintPrivacyNoticeDTO` / `render_privacy_notice` |
 | `voiceprint_orm.py` | 声纹样本 / 同意记录 ORM 行（PersonaMixin 人格作用域） | `VoiceprintSampleRow` / `VoiceprintConsentRow` |
+| `voiceprint_audio.py` | 音频探测 Unit（WAV 头实测 / 裸 PCM 时长换算 / 不可解析容器声明回落——零外部依赖） | `probe_audio` / `RAW_PCM_*` |
 | `voiceprint_embedding.py` | 说话人向量 HTTP 客户端（可配置端点；共享池 client 注入） | `VoiceprintEmbeddingClient` |
 | `voiceprint_service.py` | 声纹服务（同意闸 / 批量注册 / 余弦校验 / 档案删除 / 撤回 / 保存期清理 / 文件落盘） | `VoiceprintService` |
 
@@ -310,7 +311,7 @@ file: (filename, audio_bytes)    model: <model_id>    language?: str
 | `sender_id` | varchar(128) | 发送者 ID（平台侧用户标识） |
 | `sample_path` | varchar(512) | 样本文件落盘路径（撤回 / 删除 / 过期时随行清理） |
 | `sample_sha256` | varchar(64) | 样本哈希（同发送者去重键） |
-| `duration_ms` / `sample_rate_hz` | int | 样本时长 / 采样率（注册门槛校验面） |
+| `duration_ms` / `sample_rate_hz` | int | 样本时长 / 采样率（服务从 WAV 头或裸 PCM 字节长度实测；不可解析容器回落声明值——门槛与落库均用实测值） |
 | `embedding` / `embedding_dim` | text / int | 说话人向量（JSON 浮点数组）/ 维度（同档案一致性校验） |
 
 唯一键 `uq_ff_voiceprint_samples_persona_sender_sha (persona_id, sender_id, sample_sha256)`；索引 `ix_ff_voiceprint_samples_persona_sender`。`ff_voiceprint_consents` 记录 `consent_text_version` / `granted_at_ms` / `revoked_at_ms`（可空 = 有效），同一发送者可多次授予 / 撤回，读取面取最新有效行。
@@ -324,7 +325,7 @@ POST /api/v1/voiceprints/{sender_id}/enroll
     ↓ ③ 同意闸：当前有效同意（版本 = v1）不存在 → 409
     ↓ ④ 批量门槛：样本数 ≥ VOICEPRINT_MIN_SAMPLES、≤ MAX_BATCH_SAMPLES、
     │            档案累计 ≤ MAX_SAMPLES
-    ↓ ⑤ 逐样本校验（MIME 白名单 / base64 / 字节上限 / 时长 / 采样率 / 哈希去重）
+    ↓ ⑤ 逐样本校验（MIME 白名单 / base64 / 字节上限 / **实测时长 / 实测采样率** / 哈希去重）
     ↓ ⑥ 每样本 VOICEPRINT_DAILY_BUDGET_* 闸 → 向量提取（共享 HTTP 池）→ 维度一致性
     │   （中途超限：整体回滚本批文件与样本行；已成功出站调用各留一行用量）
     ↓ ⑦ 样本原子落盘（临时文件 + fsync + os.replace）+ 行插入（逐样本部分成功）
@@ -332,7 +333,7 @@ POST /api/v1/voiceprints/{sender_id}/enroll
 
 POST /api/v1/voiceprints/{sender_id}/verify
     ↓ ①-③ 同上（校验同样要求同意）
-    ↓ ④ 短音频拒识：duration_ms < VOICEPRINT_MIN_VERIFY_DURATION_MS
+    ↓ ④ 短音频拒识：实测 duration_ms < VOICEPRINT_MIN_VERIFY_DURATION_MS（WAV 头 / 裸 PCM 换算；声明值不参与判定）
     ↓ ⑤ 保存期清理 → 无样本 → matched=false（no_samples）
     ↓ ⑥ VOICEPRINT_DAILY_BUDGET_* 闸 → 查询向量 → 档案向量均值 → 余弦相似度
     ↓ ⑦ matched = similarity ≥ VOICEPRINT_SIMILARITY_THRESHOLD
@@ -450,4 +451,4 @@ Content-Type: multipart/form-data
 
 `src/tests/unit/test_voice_{settings,clients,service,api}.py` + `test_persona_voice_profile.py` + `test_chat_cli_voice.py`（82 例）：客户端 MockTransport（请求形状 / multipart 体 / 内容类型校验 / 超时 / 错误映射）、服务（优先级 / 仅成功用量行 / 分面预算闸 / disabled / 惰性构建 / 默认接线真实落库）、人格绑定全链路 round-trip（服务 / DTO / API）、API（ASGI + 处理器直调双面：字节响应 + 头 / multipart 解析 / 校验 400 / 上传上限字节精确边界）、CLI（旗标开关 / 人格绑定 / 失败存活 / 旗标透传）。迁移 `000000000006` 经 scratch SQLite `alembic upgrade head` → `downgrade -1` → 再 upgrade 实证（升列 / 降列 / 复升三态）。
 
-声纹测试：`src/tests/unit/test_voiceprint_service.py`（同意闸 / 注册门槛与逐样本拒收 / 重复哈希 / 向量维度 / 时长与采样率 / 短音频拒识 / 命中与阈值下 / 撤回清样本留凭证 / 删除幂等 / 保存期清理 / 人格 × 发送者隔离）、`test_voiceprint_embedding.py`（multipart 请求形状 / 两种响应形态 / 传输与非 200 / 向量非法）、`test_voiceprint_api.py`（告知 / 同意 / 注册 / 档案 / 校验 / 撤回 / 删除 / 人格解析 404 / 请求体校验）、`test_voice_budget.py`（三组分面预算矩阵 / purpose 隔离 / 记账口径 / 声纹中途超限回滚）；迁移 `000000000016` 经 scratch SQLite round-trip（`test_migration_voiceprint_sticker.py`）与 SeekDB 真引擎迁移链（`integration_seekdb/test_migration_chain.py`）双面验证。
+声纹测试：`src/tests/unit/test_voiceprint_service.py`（同意闸 / 注册门槛与逐样本拒收 / 重复哈希 / 向量维度 / 实测时长与采样率 / 声明撒谎被实测拒绝 / 短音频拒识 / 命中与阈值下 / 撤回清样本留凭证 / 删除幂等 / 保存期清理 / 人格 × 发送者隔离）、`test_voiceprint_audio.py`（真实 WAV 头不同时长与采样率 / 裸 PCM 换算 / 不可解析容器回落 / 截断头与非法头拒绝）、`test_voiceprint_embedding.py`（multipart 请求形状 / 两种响应形态 / 传输与非 200 / 向量非法）、`test_voiceprint_api.py`（告知 / 同意 / 注册 / 档案 / 校验 / 撤回 / 删除 / 人格解析 404 / 请求体校验）、`test_voice_budget.py`（三组分面预算矩阵 / purpose 隔离 / 记账口径 / 声纹中途超限回滚）；迁移 `000000000016` 经 scratch SQLite round-trip（`test_migration_voiceprint_sticker.py`）与 SeekDB 真引擎迁移链（`integration_seekdb/test_migration_chain.py`）双面验证。

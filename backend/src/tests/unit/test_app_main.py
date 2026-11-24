@@ -20,6 +20,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 import app.main as app_main
+import packages.harness.persona.trait_library as trait_library
 from app.api import health as health_module
 from app.api.health import APP_VERSION, health
 from app.main import create_app, lifespan, shutdown_app_state, startup_app_state
@@ -64,6 +65,8 @@ async def test_startup_app_state_drives_real_components(isolated_settings, tmp_p
         assert db_engine_holder.async_engine is not None
         assert db_engine_holder.session_factory is not None
         assert isinstance(app.state.gateway, LlmGateway)
+        assert trait_library._presets_cache is not None
+        assert trait_library._components_cache is not None
     finally:
         await shutdown_app_state(app)
 

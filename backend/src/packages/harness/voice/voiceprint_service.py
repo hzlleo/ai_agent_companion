@@ -22,6 +22,10 @@
       失效，文件删除尽力而为（失败仅告警，文件残留不参与比对）；
     - **保存期**：注册 / 校验 / 读取前先清理超过 ``retention_days`` 的样本
       （行 + 文件）；同意记录不受保存期清理（合规凭证）；
+    - **时长 / 采样率实测**：WAV（RIFF/fmt/data）从头部实测，裸 PCM 按
+      声明采样率与字节长度换算，不可解析容器（MP3 / OGG / WebM / MP4）
+      回落声明值——门槛判定与落库元数据一律采用实测值，上传方声明在
+      可解析形态下不构成依据；
     - **人格 × 发送者隔离**：样本 / 同意行均走 PersonaMixin 自动作用域；
       不同人格的同名发送者互不可见。
 
@@ -70,11 +74,13 @@ from packages.harness.voice.voice_budget import (
     emit_voice_usage,
     enforce_daily_budget,
 )
+from packages.harness.voice.voiceprint_audio import probe_audio
 from packages.harness.voice.voiceprint_embedding import VoiceprintEmbeddingClient
 from packages.harness.voice.voiceprint_models import (
     VOICEPRINT_AUDIO_MIME_ALLOWLIST,
     VOICEPRINT_CONSENT_TEXT_VERSION,
     VOICEPRINT_PRIVACY_NOTICE_VERSION,
+    VoiceprintAudioProbeModel,
     VoiceprintConsentGrantDTO,
     VoiceprintConsentRecordDTO,
     VoiceprintDeleteResultModel,
@@ -314,10 +320,10 @@ class VoiceprintService:
         written_paths: list[Path] = []
         try:
             for index, sample in enumerate(dto.samples):
-                audio, reason, message = self._validate_sample(
+                audio, probe, reason, message = self._validate_sample(
                     sample, settings, min_duration_ms=settings.min_sample_duration_ms
                 )
-                if audio is None:
+                if audio is None or probe is None:
                     rejected.append(
                         VoiceprintRejectedSampleModel(
                             index=index,
@@ -363,8 +369,8 @@ class VoiceprintService:
                         sender_id=sender_id,
                         sample_path=str(path),
                         sample_sha256=digest,
-                        duration_ms=sample.duration_ms,
-                        sample_rate_hz=sample.sample_rate_hz,
+                        duration_ms=probe.duration_ms,
+                        sample_rate_hz=probe.sample_rate_hz,
                         embedding=json.dumps(vector, ensure_ascii=False),
                         embedding_dim=embedding_dim,
                     )
@@ -436,18 +442,18 @@ class VoiceprintService:
         """
         settings = self._require_available()
         await self._require_active_consent(session, sender_id)
-        if dto.sample.duration_ms < settings.min_verify_duration_ms:
-            return VoiceprintVerifyResultModel(
-                sender_id=sender_id,
-                matched=False,
-                similarity=0.0,
-                threshold=settings.similarity_threshold,
-                reason=VoiceprintVerifyReason.AUDIO_TOO_SHORT,
-            )
-        audio, reason, message = self._validate_sample(
+        audio, _probe, reason, message = self._validate_sample(
             dto.sample, settings, min_duration_ms=settings.min_verify_duration_ms
         )
         if audio is None:
+            if reason is VoiceprintRejectReason.AUDIO_TOO_SHORT:
+                return VoiceprintVerifyResultModel(
+                    sender_id=sender_id,
+                    matched=False,
+                    similarity=0.0,
+                    threshold=settings.similarity_threshold,
+                    reason=VoiceprintVerifyReason.AUDIO_TOO_SHORT,
+                )
             reject_reason = (
                 reason if reason is not None else VoiceprintRejectReason.PAYLOAD_INVALID
             )
@@ -689,8 +695,18 @@ class VoiceprintService:
         settings: VoiceprintSettings,
         *,
         min_duration_ms: int,
-    ) -> tuple[bytes | None, VoiceprintRejectReason | None, str]:
-        """校验单条样本（载荷 / 类型 / 字节 / 时长 / 采样率）。
+    ) -> tuple[
+        bytes | None,
+        VoiceprintAudioProbeModel | None,
+        VoiceprintRejectReason | None,
+        str,
+    ]:
+        """校验单条样本（载荷 / 类型 / 字节 / 实测时长 / 实测采样率）。
+
+        元数据门槛以实测值为准：WAV 从头部解析，裸 PCM 按声明采样率与
+        字节长度换算；上传方声明的时长 / 采样率只在不可解析容器上回落
+        使用。声明与实测不一致时采用实测值（不是拒绝依据——实测低于
+        门槛时按门槛拒收，声明高于门槛不能放行短音频）。
 
         Args:
             sample: 待校验样本。
@@ -699,12 +715,13 @@ class VoiceprintService:
                 校验用校验门槛——两条路径独立，互不套用）。
 
         Returns:
-            ``(音频字节 | None, 拒收原因 | None, 中文说明)`` 三元组；通过时
-            原因为 None。
+            ``(音频字节 | None, 实测元数据 | None, 拒收原因 | None, 中文
+            说明)`` 四元组；通过时后两项为 None / 空串。
         """
         content_type = sample.content_type.strip().lower()
         if content_type not in VOICEPRINT_AUDIO_MIME_ALLOWLIST:
             return (
+                None,
                 None,
                 VoiceprintRejectReason.UNSUPPORTED_CONTENT_TYPE,
                 f"不支持的音频类型 {sample.content_type}（允许 WAV / MP3 / OGG / WebM / MP4）",
@@ -714,11 +731,13 @@ class VoiceprintService:
         except (binascii.Error, ValueError) as exc:
             return (
                 None,
+                None,
                 VoiceprintRejectReason.PAYLOAD_INVALID,
                 f"音频 base64 载荷非法：{exc}",
             )
         if not audio:
             return (
+                None,
                 None,
                 VoiceprintRejectReason.PAYLOAD_INVALID,
                 "音频载荷解码后为空",
@@ -726,22 +745,39 @@ class VoiceprintService:
         if len(audio) > settings.max_upload_bytes:
             return (
                 None,
+                None,
                 VoiceprintRejectReason.PAYLOAD_TOO_LARGE,
                 f"音频字节数 {len(audio)} 超过上限 {settings.max_upload_bytes}",
             )
-        if sample.duration_ms < min_duration_ms:
+        try:
+            probe = probe_audio(
+                audio,
+                content_type=content_type,
+                declared_duration_ms=sample.duration_ms,
+                declared_sample_rate_hz=sample.sample_rate_hz,
+            )
+        except ValueError as exc:
             return (
+                None,
+                None,
+                VoiceprintRejectReason.PAYLOAD_INVALID,
+                f"音频结构非法：{exc}",
+            )
+        if probe.duration_ms < min_duration_ms:
+            return (
+                None,
                 None,
                 VoiceprintRejectReason.AUDIO_TOO_SHORT,
-                f"音频时长 {sample.duration_ms}ms 低于下限 {min_duration_ms}ms",
+                f"音频实测时长 {probe.duration_ms}ms 低于下限 {min_duration_ms}ms",
             )
-        if sample.sample_rate_hz < settings.min_sample_rate_hz:
+        if probe.sample_rate_hz < settings.min_sample_rate_hz:
             return (
                 None,
+                None,
                 VoiceprintRejectReason.SAMPLE_RATE_TOO_LOW,
-                f"采样率 {sample.sample_rate_hz}Hz 低于下限 {settings.min_sample_rate_hz}Hz",
+                f"实测采样率 {probe.sample_rate_hz}Hz 低于下限 {settings.min_sample_rate_hz}Hz",
             )
-        return audio, None, ""
+        return audio, probe, None, ""
 
     async def _embed_with_budget(
         self,

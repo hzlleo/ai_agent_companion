@@ -427,7 +427,7 @@ async def test_run_dream_window_left_closed_right_open(db_session: AsyncSession)
         )
         gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "[]", "今天很平静。"])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.status == "success"
     assert run.stats.candidates == 1
@@ -454,7 +454,7 @@ async def test_run_dream_untrusted_excluded_everywhere(db_session: AsyncSession)
         )
         gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "[]", "今天主人很开心。"])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.status == "success"
     assert run.stats.candidates == 1
@@ -503,7 +503,7 @@ async def test_run_dream_merge_happy_path(db_session: AsyncSession) -> None:
             ]
         )
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         assert run.status == "success"
         assert run.error is None
@@ -558,7 +558,7 @@ async def test_run_dream_malformed_json_fail_closed_zero_upserts(
         )
         gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "这不是JSON{{{"])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         assert run.status == "failed"
         assert "不是合法 JSON" in (run.error or "")
@@ -576,7 +576,7 @@ async def test_run_dream_non_array_output_fails(db_session: AsyncSession) -> Non
         )
         gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", '{"items": []}'])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.status == "failed"
     assert "必须是 JSON 数组" in (run.error or "")
@@ -590,7 +590,7 @@ async def test_run_dream_empty_merge_output_fails(db_session: AsyncSession) -> N
         )
         gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "   "])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.status == "failed"
     assert "空内容" in (run.error or "")
@@ -604,7 +604,7 @@ async def test_run_dream_llm_exception_fails_run(db_session: AsyncSession) -> No
         )
         gateway = FailingDreamGateway([])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         assert run.status == "failed"
         assert "LLM_REQUEST_FAILED" in (run.error or "")
@@ -633,7 +633,7 @@ async def test_run_dream_unknown_merged_from_dropped_and_counted(
             ]
         )
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.status == "success"
     assert run.stats.failed == 1
@@ -658,7 +658,7 @@ async def test_run_dream_invalid_item_fields_dropped(db_session: AsyncSession) -
             ]
         )
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.status == "success"
     assert run.stats.failed == 1
@@ -682,7 +682,7 @@ async def test_run_dream_diary_failure_keeps_promotions(db_session: AsyncSession
             [_FACTS_EMPTY, "[]", _merge_response([_proposal("家务", [ep.id])]), ""]
         )
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         assert run.status == "failed"
         assert "日记" in (run.error or "")
@@ -706,7 +706,7 @@ async def test_run_dream_diary_disabled_skips_phase(db_session: AsyncSession) ->
             db_session,
             gateway=gateway,
             persona_name="大肥鱼",
-            now_ms=NOW,
+            clock_ms=lambda: NOW,
             cfg=DreamJobConfig(diary_enabled=False),
         )
         assert run.status == "success"
@@ -723,7 +723,7 @@ async def test_run_dream_empty_window_zero_calls(db_session: AsyncSession) -> No
     async with bind_persona_context(PERSONA_A):
         gateway = FakeDreamGateway([])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.stats.candidates == 0
     assert run.status == "success"
@@ -747,7 +747,7 @@ async def test_run_dream_min_score_gate_no_merge_call(db_session: AsyncSession) 
             db_session,
             gateway=gateway,
             persona_name="大肥鱼",
-            now_ms=NOW,
+            clock_ms=lambda: NOW,
             cfg=DreamJobConfig(min_score=2.0),
         )
     assert run.status == "success"
@@ -782,7 +782,7 @@ async def test_run_dream_cap_truncation(db_session: AsyncSession) -> None:
             db_session,
             gateway=gateway,
             persona_name="大肥鱼",
-            now_ms=NOW,
+            clock_ms=lambda: NOW,
             cfg=DreamJobConfig(max_candidates=2),
         )
     assert run.status == "success"
@@ -816,7 +816,7 @@ async def test_run_dream_already_promoted_from_previous_success(
                 ]
             ),
             persona_name="大肥鱼",
-            now_ms=NOW,
+            clock_ms=lambda: NOW,
         )
         assert first.status == "success"
         second = await dream_service.run_dream(
@@ -830,7 +830,7 @@ async def test_run_dream_already_promoted_from_previous_success(
                 ]
             ),
             persona_name="大肥鱼",
-            now_ms=NOW,
+            clock_ms=lambda: NOW,
         )
         assert second.status == "success"
         decision_by_id = {decision.episode_id: decision for decision in second.decisions}
@@ -887,7 +887,7 @@ async def test_run_dream_store_hits_apply_boost(db_session: AsyncSession) -> Non
             gateway=gateway,
             persona_name="大肥鱼",
             store=fake_store,
-            now_ms=NOW,
+            clock_ms=lambda: NOW,
             cfg=DreamJobConfig(min_score=2.9, boost=0.5),
         )
         assert run.status == "success"
@@ -917,7 +917,7 @@ async def test_run_dream_store_none_boost_zero(db_session: AsyncSession) -> None
             gateway=gateway,
             persona_name="大肥鱼",
             store=None,
-            now_ms=NOW,
+            clock_ms=lambda: NOW,
             cfg=DreamJobConfig(min_score=2.9, boost=0.5),
         )
     assert run.status == "success"
@@ -940,7 +940,7 @@ async def test_run_dream_lifecycle_row_states(db_session: AsyncSession) -> None:
             [_FACTS_EMPTY, "[]", _merge_response([_proposal("生命主题", [ep.id])]), "今天的日记。"]
         )
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         assert await _count_runs(db_session) == 1
         rows = list((await db_session.execute(select(DreamRunRow))).scalars().all())
@@ -963,7 +963,7 @@ async def test_run_dream_failed_row_states(db_session: AsyncSession) -> None:
         )
         gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "坏输出"])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         assert run.status == "failed"
         rows = list((await db_session.execute(select(DreamRunRow))).scalars().all())
@@ -990,7 +990,7 @@ async def test_dream_runs_read_and_isolation(db_session: AsyncSession) -> None:
                     ]
                 ),
                 persona_name="大肥鱼",
-                now_ms=NOW,
+                clock_ms=lambda: NOW,
             )
         page = await dream_service.list_runs(db_session, DreamRunQueryDTO(limit=1))
         assert len(page.items) == 1
@@ -1016,7 +1016,7 @@ async def test_run_dream_missing_persona_context_fails_loud(
     gateway = FakeDreamGateway([])
     with pytest.raises(BusinessException) as exc_info:
         await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert exc_info.value.code == "PERSONA_CONTEXT_REQUIRED"
 
@@ -1068,7 +1068,7 @@ async def test_run_dream_converges_stale_running_rows(db_session: AsyncSession) 
     async with bind_persona_context(PERSONA_A):
         gateway = FakeDreamGateway([])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.id == fresh_row.id
     assert run.status == "running"
@@ -1109,10 +1109,10 @@ async def test_run_dream_reentry_returns_same_running_row(
         await db_session.commit()
         gateway = FakeDreamGateway([])
         first = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         second = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         assert first.id == fresh.id
         assert second.id == fresh.id
@@ -1123,21 +1123,103 @@ async def test_run_dream_reentry_returns_same_running_row(
 async def test_run_dream_finished_ms_uses_injected_clock(
     db_session: AsyncSession,
 ) -> None:
-    """终态时间轴：finished_ms 与 started_ms 同用注入时钟（不读系统时钟）。"""
+    """终态时间轴：开始 / 结束各读一次注入时钟，finished_ms 为结束读数。"""
+    readings = [NOW, NOW + 2_500]
+    calls: list[int] = []
+
+    def _clock() -> int:
+        calls.append(len(calls))
+        return readings[len(calls) - 1]
+
     async with bind_persona_context(PERSONA_A):
         gateway = FakeDreamGateway([])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=_clock
         )
         assert run.started_ms == NOW
-        assert run.finished_ms == NOW
+        assert run.finished_ms == NOW + 2_500
+        assert run.finished_ms > run.started_ms
+        assert calls == [0, 1]
         rows = list((await db_session.execute(select(DreamRunRow))).scalars().all())
-        assert rows[0].finished_ms == NOW
+        assert rows[0].started_ms == NOW
+        assert rows[0].finished_ms == NOW + 2_500
 
 
-# ---------------------------------------------------------------------------
-# run_dream——已晋升回溯窗（promoted_lookback_ms）
-# ---------------------------------------------------------------------------
+async def test_run_dream_unique_marker_conflict_returns_existing(
+    db_session: AsyncSession,
+) -> None:
+    """DB 单飞：窗外的在途 running 行（持标记）使新插入撞唯一键后返回既有行。"""
+    async with bind_persona_context(PERSONA_A):
+        existing = DreamRunRow(
+            status="running",
+            started_ms=NOW - 2 * 3_600_000,  # 窗外（重入窗 1h）但在收敛阈值内
+            finished_ms=None,
+            stats={},
+            decisions=[],
+            diary_episode_id=None,
+            error=None,
+            running_marker="1",
+        )
+        db_session.add(existing)
+        await db_session.commit()
+        gateway = FakeDreamGateway([])
+        run = await dream_service.run_dream(
+            db_session,
+            gateway=gateway,
+            persona_name="大肥鱼",
+            clock_ms=lambda: NOW,
+            cfg=DreamJobConfig(stale_running_threshold_ms=10 * 3_600_000),
+        )
+        assert run.id == existing.id
+        assert run.status == "running"
+        assert gateway.calls == []
+        assert await _count_runs(db_session) == 1
+
+
+async def test_run_dream_clears_marker_and_allows_rerun(
+    db_session: AsyncSession,
+) -> None:
+    """终态清运行标记后可再次运行（唯一键不阻碍后续代际）。"""
+    readings = [NOW, NOW + 1_000, NOW + 5_000, NOW + 6_000]
+
+    def _clock() -> int:
+        return readings.pop(0)
+
+    async with bind_persona_context(PERSONA_A):
+        gateway = FakeDreamGateway([])
+        first = await dream_service.run_dream(
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=_clock
+        )
+        first_row = (
+            await db_session.execute(select(DreamRunRow).where(DreamRunRow.id == first.id))
+        ).scalar_one()
+        assert first_row.running_marker is None
+        assert first_row.status == "success"
+        second = await dream_service.run_dream(
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=_clock
+        )
+        assert second.id != first.id
+        assert await _count_runs(db_session) == 2
+
+
+async def test_run_dream_failed_terminal_clears_marker(db_session: AsyncSession) -> None:
+    """失败终态同样清运行标记（释放单飞闸门，崩溃遗留才会被收敛）。"""
+    async with bind_persona_context(PERSONA_A):
+        await memory_service.append_episode(
+            db_session, _chat_dto(user="失败清标记事件", importance=6, ts_ms=NOW - 1_000)
+        )
+        gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "坏输出"])
+        run = await dream_service.run_dream(
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
+        )
+        assert run.status == "failed"
+        row = (
+            await db_session.execute(select(DreamRunRow).where(DreamRunRow.id == run.id))
+        ).scalar_one()
+        assert row.running_marker is None
+
+
+
 
 
 async def test_run_dream_promoted_lookback_window_excludes_old_runs(
@@ -1168,7 +1250,7 @@ async def test_run_dream_promoted_lookback_window_excludes_old_runs(
             [_FACTS_EMPTY, "[]", _merge_response([_proposal("重新巩固", [ep.id])]), "今天的日记。"]
         )
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.status == "success"
     assert run.stats.gated == 1  # 窗外晋升不跳过——事件重新过门
@@ -1202,7 +1284,7 @@ async def test_run_dream_promoted_lookback_window_keeps_recent_runs(
         await db_session.commit()
         gateway = FakeDreamGateway(["今天很平静。"])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.status == "success"
     decision_by_id = {decision.episode_id: decision for decision in run.decisions}
@@ -1231,7 +1313,7 @@ async def test_run_dream_max_episodes_cap_truncates(db_session: AsyncSession) ->
             db_session,
             gateway=gateway,
             persona_name="大肥鱼",
-            now_ms=NOW,
+            clock_ms=lambda: NOW,
             cfg=DreamJobConfig(max_episodes=1),
         )
     assert run.status == "success"
@@ -1262,7 +1344,7 @@ async def test_run_dream_merge_interrupt_backfills_decisions(
         )
         gateway = FailingDreamGateway([_FACTS_EMPTY, "[]"])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.status == "failed"
     assert "LLM_REQUEST_FAILED" in (run.error or "")
@@ -1347,7 +1429,7 @@ async def test_run_dream_facts_created_with_evidence_chain(db_session: AsyncSess
             ]
         )
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         facts_page = await FactsService().list_facts(db_session, FactQueryDTO())
     assert run.status == "success"
@@ -1395,7 +1477,7 @@ async def test_run_dream_facts_identical_content_refreshes_metadata(
             ]
         )
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         facts_page = await facts_service.list_facts(db_session, FactQueryDTO())
     assert run.status == "success"
@@ -1432,7 +1514,7 @@ async def test_run_dream_facts_dropped_items_counted(db_session: AsyncSession) -
             ]
         )
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         facts_page = await FactsService().list_facts(db_session, FactQueryDTO())
     assert run.status == "success"
@@ -1460,7 +1542,7 @@ async def test_run_dream_facts_proposal_cap(db_session: AsyncSession) -> None:
             ]
         )
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         facts_page = await FactsService().list_facts(db_session, FactQueryDTO(limit=50))
     assert run.status == "success"
@@ -1479,7 +1561,7 @@ async def test_run_dream_facts_invalid_json_fails_before_merge(
         )
         gateway = FakeDreamGateway(["这不是JSON{{{"])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
         assert run.status == "failed"
         assert "不是合法 JSON" in (run.error or "")
@@ -1498,7 +1580,7 @@ async def test_run_dream_facts_empty_output_fails(db_session: AsyncSession) -> N
         )
         gateway = FakeDreamGateway(["   "])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.status == "failed"
     assert "空内容" in (run.error or "")
@@ -1521,7 +1603,7 @@ async def test_facts_service_persona_isolation_from_dream(
             ]
         )
         await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     async with bind_persona_context(PERSONA_B):
         page = await FactsService().list_facts(db_session, FactQueryDTO())
@@ -1554,7 +1636,7 @@ async def test_run_dream_peer_excluded_and_counted(db_session: AsyncSession) -> 
         assert {row.id: row.provenance for row in rows}[peer.id] == MemoryProvenance.PEER
         gateway = FakeDreamGateway([_FACTS_EMPTY, "[]", "[]", "今天主人很开心。"])
         run = await dream_service.run_dream(
-            db_session, gateway=gateway, persona_name="大肥鱼", now_ms=NOW
+            db_session, gateway=gateway, persona_name="大肥鱼", clock_ms=lambda: NOW
         )
     assert run.status == "success"
     assert run.stats.candidates == 1

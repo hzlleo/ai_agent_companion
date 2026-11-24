@@ -50,6 +50,7 @@ from packages.harness.chat.prompts import (
     PERSONA_PERSONALITY_SECTION_TEMPLATE,
     WORLD_BOOK_SECTION_SEPARATOR,
 )
+from packages.harness.core.thread_pool import run_blocking_ops
 from packages.harness.persona.chara_card import (
     CharaBookEntryModel,
     CharaBookModel,
@@ -71,7 +72,10 @@ __all__ = [
     "generate_card_from_preset",
     "detect_component_conflicts",
     "load_official_components",
+    "load_official_components_async",
     "load_official_presets",
+    "load_official_presets_async",
+    "preload_official_trait_library",
 ]
 
 #: kebab-case 校验（组件 / 预设 id 的统一形态：小写字母数字 + 连字符）。
@@ -796,3 +800,64 @@ def load_official_presets(presets_dir: Path | None = None) -> list[TraitPresetMo
     if presets_dir is None:
         _presets_cache = presets
     return presets
+
+
+async def load_official_components_async(
+    presets_dir: Path | None = None,
+) -> dict[str, TraitComponentModel]:
+    """异步装载官方组件库（读盘 / 解析经共享线程池，不占事件循环）。
+
+    缺省目录命中模块级缓存时直接返回（预加载后的运行期快路径）；未命中
+    时经 :func:`run_blocking_ops` 下沉同步装载。显式目录（测试）绕过缓存
+    直读，同样下沉线程池。
+
+    Args:
+        presets_dir: 数据目录（None = 随包发行的官方目录）。
+
+    Returns:
+        组件注册表（id → 组件；文件声明序）。
+
+    Raises:
+        ValueError: 数据文件缺失 / YAML 解析失败 / 组件校验失败（与同步
+            装载同语义；由线程池原样上抛）。
+    """
+    return await run_blocking_ops(load_official_components, presets_dir)
+
+
+async def load_official_presets_async(
+    presets_dir: Path | None = None,
+) -> list[TraitPresetModel]:
+    """异步装载官方预设库（读盘 / 解析经共享线程池，不占事件循环）。
+
+    缺省目录命中模块级缓存时直接返回；未命中时经
+    :func:`run_blocking_ops` 下沉同步装载（组件库随预设装载一并预热）。
+
+    Args:
+        presets_dir: 数据目录（None = 随包发行的官方目录）。
+
+    Returns:
+        预设列表（文件声明序）。
+
+    Raises:
+        ValueError: 数据文件缺失 / YAML 解析失败 / 预设或组件校验失败
+            （与同步装载同语义；由线程池原样上抛）。
+    """
+    return await run_blocking_ops(load_official_presets, presets_dir)
+
+
+async def preload_official_trait_library() -> tuple[int, int]:
+    """启动期预加载官方特质库（读盘 + 校验下沉线程池，运行期命中缓存）。
+
+    由 app lifespan 启动期调用：预设与组件装载在同一线程池任务内完成，
+    避免首个管理面请求同步读盘阻塞事件循环。装载失败原样上抛（启动期
+    fail loud——非法发行数据不应带病启动）。
+
+    Returns:
+        ``(预设数, 组件数)`` 二元组（启动日志与观测面用）。
+
+    Raises:
+        ValueError: 官方库数据非法 / 文件缺失（装载期校验拒绝）。
+    """
+    presets = await run_blocking_ops(load_official_presets)
+    components = await run_blocking_ops(load_official_components)
+    return len(presets), len(components)

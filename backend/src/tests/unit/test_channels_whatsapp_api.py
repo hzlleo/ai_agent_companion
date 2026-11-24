@@ -40,6 +40,7 @@ from packages.harness.config.models import (
 )
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.core.errors import BusinessException, ErrorCode
+from tests.async_wait import wait_until
 
 _VERIFY_TOKEN = "test-only-verify-token"
 _APP_SECRET = "test-only-app-secret"
@@ -612,17 +613,6 @@ class TestRouterNotAssembled:
         assert body == {"status": "ok"}
 
 
-async def _wait_until(predicate: Any) -> None:
-    """事件门轮询（零固定睡眠）。"""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + 5.0
-    while not predicate():
-        remaining = deadline - loop.time()
-        if remaining <= 0:
-            raise TimeoutError("等待条件超时")
-        await asyncio.wait_for(asyncio.sleep(0), timeout=remaining)
-
-
 class TestQueuedAck:
     """runner 装配形态：端点只入队并立即确认（不等待 LLM 回合）。"""
 
@@ -645,7 +635,7 @@ class TestQueuedAck:
             assert router.handled == []
             await asyncio.wait_for(router.started.wait(), timeout=5.0)
             router.release.set()
-            await _wait_until(lambda: len(router.handled) == 1)
+            await wait_until(lambda: len(router.handled) == 1)
             assert router.handled[0].chat_id == "wa:15551234567"
         finally:
             router.release.set()

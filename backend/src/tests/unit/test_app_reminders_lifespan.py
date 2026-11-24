@@ -37,6 +37,7 @@ from packages.harness.config.models import (
 )
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.reminders.service import ReminderService
+from tests.async_wait import wait_until
 
 
 def _settings(
@@ -147,11 +148,8 @@ async def test_reminders_job_registered_with_owner_channel(
             "reminders": {"kind": "interval", "every_seconds": 60.0}
         }
         assert isinstance(app.state.reminder_service, ReminderService)
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + 5.0
-        while not scheduler.ran:
-            assert loop.time() < deadline, "调度器任务未在期限内启动"
-            await asyncio.sleep(0.01)
+        await wait_until(lambda: scheduler.ran, description="调度器任务进入等待")
+        assert scheduler.ran is True
     finally:
         await shutdown_app_state(app)
     assert scheduler.stop_requested is True

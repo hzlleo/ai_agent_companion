@@ -24,11 +24,13 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+import packages.harness.persona.trait_library as trait_library
 from packages.harness.chat.chat_models import ChatSessionStateModel
 from packages.harness.chat.service import compose_messages
 from packages.harness.persona.chara_card import CharaBookEntryModel
@@ -42,7 +44,10 @@ from packages.harness.persona.trait_library import (
     detect_component_conflicts,
     generate_card_from_preset,
     load_official_components,
+    load_official_components_async,
     load_official_presets,
+    load_official_presets_async,
+    preload_official_trait_library,
     render_scene_scripts,
 )
 
@@ -926,3 +931,37 @@ async def test_official_presets_carry_scene_scripts() -> None:
         for entries in (scripts.daily, scripts.flirty, scripts.intimate, scripts.conflict):
             assert len(entries) <= 6
             assert all(1 <= len(entry) <= 200 for entry in entries)
+
+
+async def test_preload_warms_official_cache() -> None:
+    """启动期预加载后缓存已热（运行期零读盘快路径）。"""
+    trait_library._presets_cache = None
+    trait_library._components_cache = None
+    preset_count, component_count = await preload_official_trait_library()
+    assert preset_count == len(trait_library._presets_cache or [])
+    assert component_count == len(trait_library._components_cache or {})
+    assert await load_official_presets_async() is trait_library._presets_cache
+    assert await load_official_components_async() is trait_library._components_cache
+
+
+async def test_lazy_official_loader_uses_blocking_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """未预加载的懒路径同样经 run_blocking_ops（注入记录器断言）。"""
+    trait_library._presets_cache = None
+    trait_library._components_cache = None
+    recorded: list[object] = []
+
+    async def _fake_run_blocking_ops(
+        func: Callable[..., object], *args: object, **kwargs: object
+    ) -> object:
+        recorded.append(func)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(trait_library, "run_blocking_ops", _fake_run_blocking_ops)
+    presets = await load_official_presets_async()
+    components = await load_official_components_async()
+    assert presets
+    assert components
+    assert recorded[0] is load_official_presets
+    assert recorded[1] is load_official_components

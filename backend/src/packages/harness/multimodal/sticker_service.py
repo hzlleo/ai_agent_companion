@@ -256,6 +256,10 @@ class StickerService:
         Returns:
             入库或既有的记录；功能关闭 / 类型或大小非法时返回 None（通道
             桥不因单张表情失败而阻断消息回复）。
+
+        Raises:
+            Exception: 落盘 / 插入 / 提交阶段异常（回滚并清理本次写入文件
+                后原样上抛——调用方按通道失败策略处理）。
         """
         settings = self._resolve_settings()
         if not settings.enabled:

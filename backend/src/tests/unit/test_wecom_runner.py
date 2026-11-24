@@ -36,6 +36,7 @@ from packages.harness.channels.wecom.wecom_models import (
 )
 from packages.harness.channels.wecom.wecom_runner import WeComChannelRunner
 from packages.harness.core.errors import BusinessException, ErrorCode
+from tests.async_wait import drain_loop, wait_until
 from tests.wecom_fakes import FakeRouter, FakeWeComClient, make_callback_frame
 
 
@@ -137,22 +138,6 @@ def _text_frame(
     )
 
 
-async def _wait_until(predicate: Any, *, timeout_seconds: float = 2.0) -> None:
-    """让出控制点直到条件成立（有界等待——超时即失败）。
-
-    Args:
-        predicate: 零参判定函数。
-        timeout_seconds: 等待上限秒数。
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_seconds
-    while loop.time() < deadline:
-        if predicate():
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError("条件在等待上限内未成立")
-
-
 class TestInbound:
     async def test_single_chat_message_routed(self) -> None:
         """单聊文本 → 路由器收到 single: 会话键的入站消息。"""
@@ -161,9 +146,9 @@ class TestInbound:
         runner = _runner(client=client, router=router)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame())
-            await _wait_until(lambda: len(router.received) == 1)
+            await wait_until(lambda: len(router.received) == 1)
             inbound = router.received[0]
             assert inbound.chat_id == "single:u1"
             assert inbound.text == "你好"
@@ -180,11 +165,11 @@ class TestInbound:
         runner = _runner(client=client, router=router)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(
                 _text_frame(chattype="group", chatid="chat-1", userid="u9")
             )
-            await _wait_until(lambda: len(router.received) == 1)
+            await wait_until(lambda: len(router.received) == 1)
             assert router.received[0].chat_id == "group:chat-1"
             assert router.received[0].is_group_chat is True
         finally:
@@ -198,12 +183,12 @@ class TestInbound:
         runner = _runner(client=client, router=router)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             frame = _text_frame(msgid="dup-1")
             await client.emit_frame(frame)
-            await _wait_until(lambda: len(router.received) == 1)
+            await wait_until(lambda: len(router.received) == 1)
             await client.emit_frame(frame)
-            await asyncio.sleep(0.02)
+            await drain_loop()
             assert len(router.received) == 1
         finally:
             runner.request_stop()
@@ -216,7 +201,7 @@ class TestInbound:
         runner = _runner(client=client, router=router)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             event = WeComCallbackFrameModel.model_validate(
                 {
                     "cmd": "aibot_event_callback",
@@ -229,7 +214,7 @@ class TestInbound:
                 }
             )
             await client.emit_frame(event)
-            await asyncio.sleep(0.02)
+            await drain_loop()
             assert router.received == []
         finally:
             runner.request_stop()
@@ -242,7 +227,7 @@ class TestInbound:
         runner = _runner(client=client, router=router)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             frame = WeComCallbackFrameModel.model_validate_json(
                 make_callback_frame(
                     {
@@ -254,7 +239,7 @@ class TestInbound:
                 )
             )
             await client.emit_frame(frame)
-            await asyncio.sleep(0.02)
+            await drain_loop()
             assert router.received == []
         finally:
             runner.request_stop()
@@ -268,16 +253,16 @@ class TestInbound:
         runner = _runner(client=client, router=router, inbound_queue_size=1, worker_count=1)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(msgid="q1"))
             # 等 worker 取走第一条（队列空）后 worker 被闸门占住——此时容量 1 的
             # 队列可容纳 q2，q3 必然丢弃。
-            await _wait_until(lambda: runner.pending_inbound == 0)
+            await wait_until(lambda: runner.pending_inbound == 0)
             await client.emit_frame(_text_frame(msgid="q2"))
             await client.emit_frame(_text_frame(msgid="q3"))
             assert runner.dropped_inbound == 1
             router.hold.set()
-            await _wait_until(lambda: len(router.received) == 2)
+            await wait_until(lambda: len(router.received) == 2)
         finally:
             router.hold.set()
             runner.request_stop()
@@ -293,9 +278,9 @@ class TestInbound:
         handler_id = logger.add(lambda message: captured.append(str(message)), level="ERROR")
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(msgid="q1"))
-            await _wait_until(lambda: runner.pending_inbound == 0)
+            await wait_until(lambda: runner.pending_inbound == 0)
             await client.emit_frame(_text_frame(msgid="q2"))
             await client.emit_frame(_text_frame(msgid="q3"))
             assert runner.dropped_inbound == 1
@@ -307,9 +292,9 @@ class TestInbound:
                 for message in captured
             )
             router.hold.set()
-            await _wait_until(lambda: len(router.received) == 2 and runner.pending_inbound == 0)
+            await wait_until(lambda: len(router.received) == 2 and runner.pending_inbound == 0)
             await client.emit_frame(_text_frame(msgid="q3"))
-            await _wait_until(lambda: len(router.received) == 3)
+            await wait_until(lambda: len(router.received) == 3)
             assert [message.message_id for message in router.received] == ["q1", "q2", "q3"]
             assert runner.dropped_inbound == 1
         finally:
@@ -326,10 +311,10 @@ class TestInbound:
         runner = _runner(client=client, router=router)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(msgid="f1"))
             await client.emit_frame(_text_frame(msgid="f2"))
-            await _wait_until(lambda: len(router.received) == 1)
+            await wait_until(lambda: len(router.received) == 1)
             assert router.received[0].message_id == "f2"
         finally:
             runner.request_stop()
@@ -343,7 +328,7 @@ class TestReplyContext:
         runner = _runner(client=client)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(req_id="cb-42"))
             context = runner.reply_context("single:u1")
             assert context is not None
@@ -360,7 +345,7 @@ class TestReplyContext:
         runner = _runner(client=client, clock=clock, reply_window_seconds=60.0)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(req_id="cb-9"))
             assert runner.reply_context("single:u1") is not None
             clock.advance_ms(61_000)
@@ -377,7 +362,7 @@ class TestOutboundText:
         runner = _runner(client=client)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(req_id="cb-77"))
             result = await runner.send_message(
                 OutboundMessageModel(chat_id="single:u1", text="好的", silent=True)
@@ -395,7 +380,7 @@ class TestOutboundText:
         runner = _runner(client=client)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await runner.send_message(
                 OutboundMessageModel(chat_id="group:chat-9", text="播报")
             )
@@ -415,7 +400,7 @@ class TestOutboundText:
         runner = _runner(client=client, clock=clock, reply_window_seconds=60.0)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(req_id="cb-old"))
             clock.advance_ms(120_000)
             await runner.send_message(OutboundMessageModel(chat_id="single:u1", text="迟到"))
@@ -432,7 +417,7 @@ class TestOutboundText:
         long_text = "a" * (WECOM_MARKDOWN_MAX_BYTES + 5)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(req_id="cb-long"))
             await runner.send_message(
                 OutboundMessageModel(chat_id="single:u1", text=long_text)
@@ -608,7 +593,7 @@ class TestLifecycle:
         client = FakeWeComClient()
         runner = _runner(client=client)
         task = asyncio.create_task(runner.run())
-        await _wait_until(lambda: client.run_started)
+        await wait_until(lambda: client.run_started)
         runner.request_stop()
         await asyncio.wait_for(task, timeout=2.0)
         assert client.stop_requested is True
@@ -623,11 +608,11 @@ class TestDedupWindow:
         runner = _runner(client=client, router=router, dedup_capacity=1)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(msgid="old-1"))
             await client.emit_frame(_text_frame(msgid="new-1"))
             await client.emit_frame(_text_frame(msgid="old-1"))
-            await _wait_until(lambda: len(router.received) == 3)
+            await wait_until(lambda: len(router.received) == 3)
             assert [message.message_id for message in router.received] == [
                 "old-1",
                 "new-1",
@@ -652,7 +637,7 @@ class TestObservationSurface:
         runner = _runner(client=client, router=router)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             frame = WeComCallbackFrameModel.model_validate(
                 {
                     "cmd": "aibot_event_callback",
@@ -665,7 +650,7 @@ class TestObservationSurface:
                 }
             )
             await client.emit_frame(frame)
-            await asyncio.sleep(0.02)
+            await drain_loop()
             assert router.received == []
         finally:
             runner.request_stop()
