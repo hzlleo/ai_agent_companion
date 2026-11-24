@@ -1,0 +1,2 @@
+✨ Pixi task (lint in default): ruff check src/: (ruff 静态检查（仅 backend/src）)
+All checks passed!

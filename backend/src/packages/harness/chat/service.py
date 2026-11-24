@@ -31,8 +31,8 @@
               情绪标签指令）
         ↓ ⑬ 世界书 after_char 条目块                       检索增强（后段）
         ↓ ⑭ 历史回合 → ChatMessageModel 序列                （含刚追加的用户回合；
-              当轮入站回合经 nonce 定界包裹——历史 user 回合最近 10 条同样
-              定界包裹（标签「历史消息」），更早与 assistant 回合保持原文）
+              当轮入站回合与**全部历史 user 回合**均经 nonce 定界包裹（标签
+              「历史消息」），assistant 回合保持原文）
         ↓ ⑮ 注入提示块（检测命中时）                        紧接当轮包裹消息之后
         ↓ ⑯ prompts.render_post_history_message(card)      历史后再注入（末块）
 
@@ -43,11 +43,11 @@ docs/backend/defense.md）：
       current_message_label=...)`` 时，**最新一条 user 回合**被
       ``wrap_untrusted_content`` 包进 nonce 定界的「内容开始 / 内容结束」
       帧（标签区分主人消息 / 群友消息）；历史中的 **user 角色**回合同样
-      定界包裹（统一标签「历史消息」），上限
-      :data:`HISTORY_WRAP_MAX_TURNS`（最近 10 条）——更早回合与 assistant
-      回合保持原文：长会话逐条包裹会让上下文线性膨胀，且边界信号边际
-      收益递减；包裹只发生在请求消息面，不改变 ``state.turns`` 原文与
-      落库内容；
+      定界包裹（统一标签「历史消息」），逐条独立 nonce——不设条数上限，
+      边界信号覆盖全部历史输入；assistant 回合保持原文（人格自己的发言
+      属受信输出）。包裹只发生在请求消息面，不改变 ``state.turns`` 原文
+      与落库内容；每条包裹的固定开销是「两行定界 + 12 位 nonce」，历史
+      包裹总开销与 user 回合数线性（常数倍），不随会话增长膨胀；
     - **工具结果定界包裹**：``_render_tool_result_content`` 对执行器回灌的
       tool 轮正文统一包裹（标签「工具结果」）——搜索摘要 / 浏览器
       ``read_text`` / 任意执行器结果里的「指令」都不再裸奔；duty 域
@@ -397,7 +397,6 @@ __all__ = [
     "IntentShortcutFace",
     "GenerationIntent",
     "CHAT_TOOL_STEP_CAP",
-    "HISTORY_WRAP_MAX_TURNS",
     "compose_messages",
     "compose_for_generation",
     "estimate_text_tokens",
@@ -419,10 +418,6 @@ class GenerationIntent(StrEnum):
 
 #: 用途常量——chat 会话调用恒以 chat 用途落用量账（usage 域枚举校验）。
 CHAT_PURPOSE: str = "chat"
-
-#: 历史回合包裹上限（最近 N 条 user 回合定界包裹；更早回合保持原文——
-#: 长会话逐条包裹会让上下文线性膨胀，且边界信号边际收益递减）。
-HISTORY_WRAP_MAX_TURNS: Final[int] = 10
 
 #: chat 工具循环步数上限（锁定决策：5——chat 单轮回复的工具面收敛快于
 #: duty 巡检的 8 步；超限触发收尾指令 + 无工具面最终调用）。
@@ -512,7 +507,7 @@ def compose_messages(
                   心情状态块 + 长期指令块 + 人物事实块 + 核心记忆块 +
                   关系进展块 + 相关技能块 + 输出格式协议块 + 世界书 after 段
         [user/assistant ...]  全部历史回合（含刚追加的用户回合；当轮入站
-                  回合与最近 10 条历史 user 回合在 ``wrap_current_message=True``
+                  回合与全部历史 user 回合在 ``wrap_current_message=True``
                   时被定界包裹）
         [system]  注入提示块（仅检测命中且调用方传入 ``injection_hint`` 时；
                   紧接当轮包裹消息之后）
@@ -543,14 +538,14 @@ def compose_messages(
 
     当轮入站包裹（结构隔离，锁定边界）：``wrap_current_message=True``
     时**最后一条 user 回合**（即本轮刚追加的入站消息）被定界包裹；历史
-    中的 **user 角色**回合也定界包裹，上限为最近
-    :data:`HISTORY_WRAP_MAX_TURNS` 条（更早回合保持原文），assistant 回合
+    中的 **user 角色**回合也全部定界包裹（逐条独立 nonce），assistant 回合
     不包裹（人格自己的发言是受信输出）。包裹用
     ``wrap_untrusted_content``（nonce 定界 + 来源标签）；当轮标签缺省回落
     「消息」，历史回合统一使用「历史消息」标签。``injection_hint`` 非空且
     确实发生包裹时，提示块作为 system 消息紧接当轮包裹回合之后追加（先于
     历史后再注入）。包裹仅作用于请求消息面，不改变 ``state.turns`` 原文
-    与落库内容。
+    与落库内容；总 token 开销为历史 user 回合数 × 固定包裹常数（线性，
+    每条两行定界 + nonce）。
 
     世界书选择经 ``world_book.select_world_book_entries``（算法链与
     渲染序裁定见该模块文档）；推进后的回合状态（冷却时钟 + 注入
@@ -577,9 +572,8 @@ def compose_messages(
         skills: 命中本轮用户文本的技能记录列表（None / 空 = 不注入相关
             技能块；匹配与条数帽在调用方、字符帽在 ``render_skills_block``
             ——本函数保持纯函数无 I/O）。
-        wrap_current_message: 是否把当轮入站 user 回合与最近
-            :data:`HISTORY_WRAP_MAX_TURNS` 条历史 user 回合包进不可信内容
-            定界帧（**必填关键字**——生产调用一律经
+        wrap_current_message: 是否把当轮入站 user 回合与**全部**历史 user
+            回合包进不可信内容定界帧（**必填关键字**——生产调用一律经
             :func:`compose_for_generation` 统一入口决定；直调测试须显式
             传值，漏传无法通过类型检查）。
         current_message_label: 当轮入站消息的来源标签（主人消息 / 群友消息
@@ -644,7 +638,7 @@ def compose_messages(
             for index in range(history_end)
             if state.turns[index].role == ChatMessageRole.USER
         ]
-        for index in history_user_indices[-HISTORY_WRAP_MAX_TURNS:]:
+        for index in history_user_indices:
             message_index = index + 1
             history_content = messages[message_index].content
             if isinstance(history_content, str):

@@ -163,7 +163,7 @@ def load_search_config(
             details={"source": str(yaml_path), "got": type(data).__name__},
         )
 
-    section = data.get("search")
+    section = data.get(config_loader.SEARCH_SECTION_KEY)
     if section is None:
         section = {}
     if not isinstance(section, dict):
@@ -217,7 +217,7 @@ def _rebuild_runtime_from_yaml(yaml_path: Path) -> None:
     """
     global runtime_search_config, _loaded_search_yaml_path
     data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
-    section = (data or {}).get("search") or {}
+    section = (data or {}).get(config_loader.SEARCH_SECTION_KEY) or {}
     runtime_search_config = SearchConfig.model_validate(section)
     _loaded_search_yaml_path = yaml_path
 
@@ -541,7 +541,7 @@ class SearchRegistryAdminService(ConfigSectionAdmin[SearchConfig]):
 
     def _section_key(self) -> str:
         """本管理面持有的 config.yaml 顶层键（搜索注册表 = ``search``）。"""
-        return "search"
+        return config_loader.SEARCH_SECTION_KEY
 
     def _current_section(self) -> SearchConfig:
         """读取内存运行时当前节（本模块 ``runtime_search_config`` 真源）。"""

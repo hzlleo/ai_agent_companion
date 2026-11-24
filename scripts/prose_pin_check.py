@@ -3,7 +3,7 @@
 
 prose pin（文案钉死）指测试断言的是实现源码里的某个字符串字面量，而不是
 可观察行为：实现改一个字测试就红，实现逻辑烂掉但文案没变测试仍绿。本脚本
-做纯启发式盘点（**报告模式，恒退出 0**）：
+做纯启发式盘点（默认报告模式退出 0；``--gate`` 为棘轮门禁）：
 
     - 收集每个测试文件 ``assert`` 子树里的字符串字面量（长度 ≥ 8，过滤纯
       标点）；
@@ -17,21 +17,27 @@ prose pin（文案钉死）指测试断言的是实现源码里的某个字符�
       属性、``in`` / 比较、``len(...)`` 组成，视为结构断言（这类断言不随
       文案漂移，是 prose pin 的反面）。
 
-只读源码，不改仓库；退出码恒 0，供根门禁链与人工审查参考。
+只读源码（``--update`` 除外，只写基线 JSON），不修改被测源码。prose 计数
+棘轮语义：``--gate`` 读取基线，当前计数高于基线即红（只降不升）；``--update``
+重建基线（清偿后下调，或新增合法文案断言后经评审抬高）。
 
 用法::
 
-    python scripts/prose_pin_check.py            # Top-15
-    python scripts/prose_pin_check.py --top 30   # 自定义条数
+    python scripts/prose_pin_check.py                      # Top-15 报告
+    python scripts/prose_pin_check.py --top 30             # 自定义条数
+    python scripts/prose_pin_check.py --gate               # 棘轮门禁
+    python scripts/prose_pin_check.py --update             # 重建基线
+    python scripts/prose_pin_check.py --gate --baseline X  # 指定基线
 
 Exit:
-    0 = 恒成功（报告模式）；2 = 扫描根缺失。
+    0 = 报告完成 / 门禁通过；1 = 门禁红（计数升高）；2 = 扫描根或基线缺失。
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import json
 import re
 import sys
 from dataclasses import dataclass, field
@@ -45,6 +51,12 @@ TESTS_ROOT = REPO_ROOT / "backend" / "src" / "tests"
 
 #: 实现源码扫描根（被测面）。
 IMPLEMENTATION_ROOT = REPO_ROOT / "backend" / "src" / "packages" / "harness"
+
+#: prose 计数棘轮基线（``--update`` 重建；``--gate`` 消费）。
+DEFAULT_BASELINE = REPO_ROOT / "scripts" / ".prose_pin_baseline.json"
+
+#: 基线 JSON schema 版本（字段口径变化时递增）。
+_BASELINE_VERSION = 1
 
 #: 参与比对的最小字面量长度（低于此长度的短串命中噪声过大）。
 _MIN_LITERAL_CHARS = 8
@@ -199,12 +211,15 @@ def _classify_literal(literal: str) -> str:
     return "prose"
 
 
-def _report(stats: ProsePinStats, top: int) -> None:
+def _report(stats: ProsePinStats, top: int) -> int:
     """打印分桶计数、prose 桶优先的 Top-N 与结构断言占比。
 
     Args:
         stats: 扫描汇总。
         top: Top-N 条数。
+
+    Returns:
+        prose 桶条目数（棘轮门禁的计数面）。
     """
     ranked = sorted(
         stats.literals.items(), key=lambda item: (-len(item[1]), item[0])
@@ -237,19 +252,69 @@ def _report(stats: ProsePinStats, top: int) -> None:
     ]
     for name, literal, locations in ordered[:top]:
         print(f"  - [{name}] x{len(locations)} {literal!r} @ {locations[0]}")
+    return len(buckets["prose"])
+
+
+def _load_baseline(path: Path) -> int:
+    """读取 prose 计数基线。
+
+    Args:
+        path: 基线 JSON 路径。
+
+    Returns:
+        基线 prose 计数。
+
+    Raises:
+        ValueError: 文件缺失 / JSON 损坏 / 字段缺失或非法。
+    """
+    if not path.is_file():
+        raise ValueError(f"基线文件缺失: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"基线 JSON 解析失败: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("基线顶层结构非对象")
+    count = payload.get("prose_pin_count")
+    if not isinstance(count, int) or count < 0:
+        raise ValueError("基线 prose_pin_count 缺失或非法")
+    return count
+
+
+def _write_baseline(path: Path, prose_count: int) -> None:
+    """写出 prose 计数基线（确定性字段，无时间戳）。
+
+    Args:
+        path: 基线 JSON 路径。
+        prose_count: 当前 prose 桶条目数。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"baseline_version": _BASELINE_VERSION, "prose_pin_count": prose_count}
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI 入口（报告模式）。
+    """CLI 入口（报告 / 棘轮门禁 / 基线重建）。
 
     Args:
         argv: 命令行参数（None 取 sys.argv[1:]）。
 
     Returns:
-        0 = 扫描完成；2 = 扫描根缺失。
+        0 = 扫描完成或门禁通过；1 = 棘轮红；2 = 扫描根 / 基线缺失。
     """
-    parser = argparse.ArgumentParser(description="prose-pin 启发式报告（不阻断）")
+    parser = argparse.ArgumentParser(description="prose-pin 启发式报告与棘轮门禁")
     parser.add_argument("--top", type=int, default=15, help="输出条数（默认 15）")
+    parser.add_argument("--gate", action="store_true", help="棘轮门禁（当前计数不得高于基线）")
+    parser.add_argument(
+        "--baseline",
+        type=Path,
+        default=DEFAULT_BASELINE,
+        help=f"基线 JSON 路径（默认 {DEFAULT_BASELINE}）",
+    )
+    parser.add_argument("--update", action="store_true", help="按当前计数重建基线并退出")
     args = parser.parse_args(argv)
 
     if not TESTS_ROOT.is_dir() or not IMPLEMENTATION_ROOT.is_dir():
@@ -266,8 +331,30 @@ def main(argv: list[str] | None = None) -> int:
             _collect_file(path, implementation_text, stats)
         except SyntaxError as exc:
             print(f"[prose_pin_check] 语法错误（跳过）: {path}: {exc}", file=sys.stderr)
-    _report(stats, max(1, args.top))
-    print("[prose_pin_check] 报告完成（不阻断；exit 0）")
+    prose_count = _report(stats, max(1, args.top))
+    if args.update:
+        _write_baseline(args.baseline, prose_count)
+        print(f"[prose_pin_check] 基线已重建: {args.baseline} -> {prose_count}")
+        print("[prose_pin_check] 报告完成（基线重建；exit 0）")
+        return 0
+    if args.gate:
+        try:
+            baseline = _load_baseline(args.baseline)
+        except ValueError as exc:
+            print(f"[prose_pin_check] 门禁无法判定: {exc}", file=sys.stderr)
+            return 2
+        if prose_count > baseline:
+            print(
+                f"[prose_pin_check] 棘轮红: prose 计数 {prose_count} > 基线 {baseline}"
+                "——清理文案断言，或评审后 --update 抬高",
+                file=sys.stderr,
+            )
+            return 1
+        hint = "" if prose_count == baseline else f"（可 --update 下调至 {prose_count}）"
+        print(
+            f"[prose_pin_check] 棘轮通过: prose 计数 {prose_count} <= 基线 {baseline}{hint}"
+        )
+    print("[prose_pin_check] 报告完成（模式={}；exit 0）".format("gate" if args.gate else "report"))
     return 0
 
 

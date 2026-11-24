@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -21,8 +22,21 @@ from packages.harness.channels.channel_models import (
 )
 from packages.harness.channels.channel_service import ChannelRouter
 from packages.harness.chat.chat_models import ChatSessionStateModel
+from packages.harness.chat.persona_rotation_models import GroupPersonaSettings
 from packages.harness.core.context import persona_id_var
 from packages.harness.persona.chara_card import CharaCardModel
+from packages.harness.persona.dtos import PersonaRecordDTO, PersonaStatus
+from tests.router_fakes import (
+    BASE_MS,
+    empty_session_factory,
+    reply_index_message_ids,
+)
+from tests.router_fakes import (
+    FakeAdapter as GroupFakeAdapter,
+)
+from tests.router_fakes import (
+    FakeChatService as GroupFakeChatService,
+)
 
 _PERSONA_ID = 7
 
@@ -217,3 +231,117 @@ async def test_ingest_and_reply_failures_do_not_block_reply() -> None:
     assert result.message_ids == ["out:1"]
     assert adapter.sent[0].attachments == []
     assert adapter.sent[0].text == "echo:看看这个"
+
+
+def _record(persona_id: int, *, is_primary: bool = False) -> PersonaRecordDTO:
+    """构造启用人格记录（群聊表情归属用例直供）。"""
+    return PersonaRecordDTO(
+        id=persona_id,
+        name=f"persona-{persona_id}",
+        display_name=f"人格{persona_id}",
+        status=PersonaStatus.ACTIVE,
+        is_primary=is_primary,
+        card=CharaCardModel(name=f"人格{persona_id}"),
+        created_at=BASE_MS,
+        updated_at=BASE_MS,
+    )
+
+
+class _StickerPersonaService:
+    """fake 人格注册表（固定启用人格集合——群聊表情用例）。"""
+
+    def __init__(self, records: list[PersonaRecordDTO]) -> None:
+        """初始化。"""
+        self.records = records
+
+    async def list_addressable(self, session: object) -> list[PersonaRecordDTO]:
+        """返回固定启用人格集合。"""
+        return list(self.records)
+
+
+def _group_inbound(*, message_id: str = "42") -> InboundMessageModel:
+    """构造群聊带 sticker 附件的入站消息。"""
+    message = _sticker()
+    message.chat_id = "group:10086"
+    message.message_id = message_id
+    message.is_group_chat = True
+    return message
+
+
+def _group_router(
+    *,
+    adapter: GroupFakeAdapter,
+    service: GroupFakeChatService,
+    ingest: Any,
+    max_responders: int = 2,
+) -> ChannelRouter:
+    """装配群聊多人格路由器（注入 fake 依赖与表情收录钩子）。"""
+    router = ChannelRouter(
+        chat_service_factory=lambda: service,
+        session_factory=empty_session_factory,
+        group_settings=GroupPersonaSettings(
+            enabled=True, max_responders=max_responders, cooldown_ms=0
+        ),
+        persona_service=_StickerPersonaService(
+            [_record(1, is_primary=True), _record(2), _record(3)]
+        ),
+        sticker_ingest_hook=ingest,
+    )
+    router.register_adapter(ChannelType.TELEGRAM, adapter)
+    return router
+
+
+async def test_group_sticker_ingested_into_every_responder_library() -> None:
+    """群聊多人格：本轮两位应答人格各收录一份，第三人称不受影响。"""
+    adapter = GroupFakeAdapter(message_ids=reply_index_message_ids)
+    service = GroupFakeChatService(echo_style="persona")
+    calls: list[tuple[str, str]] = []
+
+    async def ingest(attachments: list[ChannelMessageAttachment]) -> None:
+        calls.append((persona_id_var.get(), attachments[0].base64))
+
+    router = _group_router(adapter=adapter, service=service, ingest=ingest)
+    result = await router.handle_inbound(_group_inbound())
+    assert result.message_ids == ["out:1", "out:2"]
+    assert [persona for persona, _ in calls] == ["1", "2"]
+    assert {payload for _, payload in calls} == {_sticker().attachments[0].base64}
+    assert all(call["persona_id"] in {1, 2} for call in service.reply_calls)
+
+
+async def test_group_sticker_same_hash_deduped_independently_per_library() -> None:
+    """同哈希重复入站：每个人格库各自去重，跨人格互不吞并。"""
+    adapter = GroupFakeAdapter(message_ids=reply_index_message_ids)
+    service = GroupFakeChatService(echo_style="persona")
+    libraries: dict[str, set[str]] = {}
+
+    async def ingest(attachments: list[ChannelMessageAttachment]) -> None:
+        digest = hashlib.sha256(attachments[0].base64.encode("ascii")).hexdigest()
+        libraries.setdefault(persona_id_var.get(), set()).add(digest)
+
+    router = _group_router(adapter=adapter, service=service, ingest=ingest)
+    await router.handle_inbound(_group_inbound(message_id="1"))
+    await router.handle_inbound(_group_inbound(message_id="2"))
+    assert {"1", "2", "3"} <= set(libraries)
+    assert all(len(digests) == 1 for digests in libraries.values())
+
+
+async def test_group_sticker_ingest_failure_isolated_from_reply() -> None:
+    """单人格收录失败：其余人格照常收录，两位应答人格文本回复照常投递。"""
+    adapter = GroupFakeAdapter(message_ids=reply_index_message_ids)
+    service = GroupFakeChatService(echo_style="persona")
+    ingested: list[str] = []
+
+    async def ingest(attachments: list[ChannelMessageAttachment]) -> None:
+        persona = persona_id_var.get()
+        ingested.append(persona)
+        if persona == "1":
+            raise RuntimeError("persona-1 library down")
+
+    router = _group_router(adapter=adapter, service=service, ingest=ingest)
+    result = await router.handle_inbound(_group_inbound())
+    assert result.message_ids == ["out:1", "out:2"]
+    assert ingested == ["1", "2"]
+    assert [message.text for message in adapter.sent] == [
+        "persona1:看看这个",
+        "persona2:看看这个",
+    ]

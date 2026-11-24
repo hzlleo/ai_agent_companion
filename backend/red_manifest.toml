@@ -199,6 +199,11 @@ grandfathered = [
     "packages/harness/voice/voiceprint_service.py",
 ]
 
+# grandfathered 数量棘轮上界（只允许下降；--gate 校验当前条目数不得高于
+# 本基线。精简基线后同步下调本值——由评审确认，不静默上调）。
+[metadata]
+grandfathered_baseline = 190
+
 [[probes]]
 name = "flow-gate-removal"
 symbol = "packages.harness.chat.flow_gate:evaluate_flow_gate"

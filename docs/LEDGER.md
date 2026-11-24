@@ -1711,13 +1711,49 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 6. **注释段落**：`sticker_bridge.py` / `sticker_models.py` / `sticker_service.py` / `realtime_models.py` / `realtime_session.py` / `realtime_vad.py` 的 8 条 hints 逐处读上下文后补 Google 段落（Args / Returns / Raises 按实际签名）。注释门复跑：violations=0、hints=23（剩余均为本批范围外存量：browser-sidecar 17 条 + 其 server 1 条、tool-sandbox server 1 条、chat cli 2 条、duty 1 条、douyin runner 1 条——均为各自域后续注释批次，非本批文件）。
 
 **实测（命令 + 退出码；最终树）**：
-- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3316 / coverage-gates=24 组 / lint / typecheck=212 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-fc26e182.json`，canonical sha8=`fc26e182`（707 文件级证据；`--hash-only` 复算一致）；`bd3bdfd3`（G1 根修前）与更早证据为历史，按 README 口径只认与当前 `--hash-only` 一致的一份）。
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3316 / coverage-gates=24 组 / lint / typecheck=212 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-fc26e182.json`，sha8=`fc26e182`（707 文件级证据；`--hash-only` 复算一致）；B2 后由 `a09677e7` 取代，本行保留为历史；`bd3bdfd3`（G1 根修前）与更早证据同样为历史，按 README 口径只认与当前 `--hash-only` 一致的一份）。
 - `cd backend && pixi run tests-all` → 0（3316 passed）；`pixi run coverage-gates` → 0（24 组 ≥80%：harness/voice 93.1%（2628/2822）、harness/memory 94.8%（1902/2007）、harness/persona 95.7%（1783/1864）、harness/channels 97.3%（3211/3299）、app/main.py 93.9%（558/594）、app/api 85.2%（1257/1476））；`pixi run lint` → 0；`pixi run typecheck` → 0（212 源文件）；`pixi run conftest-env` → 0（228/228，豁免 0）；`pixi run gen-examples` 连跑两次 → 0（三件套 sha256 与连跑前一致：`.env.example` `02872633…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）；根 `pixi run gates` → 0（comment-gates violations=0 hints=23 / sync-test-ratchet +0 / noqa-freeze 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 25 条覆盖 24 文件 / docs-truth / assertion-freeze asserts=9316 raises=679 / surface-check 42/42 + env 791 行 / bench-core PASS / api-smoke PASS / prose-pin 报告）。
 - `cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto` → 0（12 passed：迁移链 0019 真引擎升 / 降 / 复升、梦境单飞 1062、既有并发唯一键 / 行锁 / 混合检索）。
 - `cd frontend && pixi run npx vitest run src/test/contract/dtoContract.test.ts` → 0（2 passed；前端源码未改动，契约 fixture 与后端导出面一致）。
 - 无新增依赖 / env 键；迁移号 `0019`。
 
+### 已完成切片：G1 根修 B2（§20 剩余非根修项——本分支工作区）
+
+**背景**：G1 审计剩余 4 项非根修（群聊表情固定收录 `pool[0]`、历史 user 回合包裹条数上限、`tag_mimicry` 短前缀锚点、配置 / 计数口径多处硬编码）与 1 项缓解台账缺失。本批按 §20 逐条消除再发机制，并新增文档数字单源门与两条数量棘轮。
+
+逐条（原修复位置 → 根修位置 → 守卫）：
+
+1. **P2-4 群聊表情收录归属**：原实现群聊入站表情固定写入第一位候选（`pool[0]`）素材库，与本轮实际应答集合脱节，非应答人格与多人格应答者的库长期偏斜。根修：`packages/harness/channels/channel_service.py` 抽出 `_select_group_responders`（纯读取选择结论）与 `_group_responder_persona_ids`，表情收录按**本轮全部应答人格**逐人绑定上下文调用收录桥，逐人格独立哈希去重与失败隔离；单聊仍只收录主人格，应答侧「各人格用各自库」不变。守卫：`test_group_sticker_ingested_into_every_responder_library`（两位应答者各一份、第三人不在应答集不受影响）、`test_group_sticker_same_hash_deduped_independently_per_library`（同哈希跨人格互不吞并、各库去重）、`test_group_sticker_ingest_failure_isolated_from_reply`（单人格收录失败不阻断其余人格与回复）。
+2. **P2-8 历史 user 回合全包裹**：原实现 `HISTORY_WRAP_MAX_TURNS=10` 只包裹最近 10 条历史 user 回合，更早回合裸文本进入请求面，边界信号随会话长度失效。根修：删除该常量与切片，`compose_messages` 对**全部历史 user 回合**逐条独立 nonce 定界包裹（assistant 回合保持原文）；包裹总开销与 user 回合数线性（每条两行定界 + 12 位 nonce），不改变 `state.turns` 原文与落库内容。守卫：`test_compose_wraps_all_history_user_turns_with_independent_nonce`（11 条历史 user 全部包裹、逐条开闭 nonce 独立且不重复、assistant 原文、原文 / 落库不变）。
+3. **TAG 前缀任意位置**：原实现 `tag_mimicry` 的 `<…>…</…>` 规则锚定句首且仅允许 ≤8 字符前缀，长前缀中段标签不命中。根修：规则改为行内任意位置匹配同名开闭标签对（内容段 ≤120 字符、闭合回引同名），权重保持 1.0（单项不达阈值，防误报）；`【…】…【/…】` 句首规则不变。守卫：`test_tag_mimicry_matches_pair_anywhere_in_line`（超 8 字符深前缀命中且单项不触发）、`test_tag_mimicry_leaves_non_pairs_unmatched`（无闭合对 / 异名对 / 普通尖括号比较不误报）；原 55 条红队矩阵阳性集零回归。
+4. **P2-11 口径单源与机械守卫**：
+   a. `config/loader.py` 顶层段白名单改为公开常量 `KNOWN_TOP_LEVEL_SECTIONS`（并由 `LLM_SECTION_KEY` / `SEARCH_SECTION_KEY` 组成），未知键告警文案由常量生成；`config/search_registry.py` 的读取与 `_section_key` 引用同一常量，不再三处硬编码。
+   b. `config/wizard_generators.py` docstring 删除手写「当前 31 个」，改为「覆盖 `_ENV_SECTIONS` 全量登记前缀」。
+   c. 计数改为精确断言：`test_injection_rule_table_has_exact_kind_counts`（29 条 + 逐种类 10/5/8/4/2）与 `test_red_team_set_has_exact_template_counts`（55 总 / 29 阳 / 26 阴）。新增 `scripts/check_doc_counts.py`：从 `INJECTION_RULES`、红队模板表与生成器 `_ENV_SECTIONS` 派生计数，校验 `docs/backend/{defense.md,chat.md,config.md}` 内数字字面（解析失败 / 不一致即红）；backend `doc-counts` 任务接入根 gates 的 docs-truth 之后。
+   d. `scripts/prose_pin_check.py` 增加 `--gate` / `--baseline` / `--update`：当前 prose 计数（基线 `scripts/.prose_pin_baseline.json` = 75）不得高于基线，report 模式保留；根 gates 的 prose-pin 改为 `--gate`。
+   e. `scripts/red_probe.py --gate` 增加冻结数量棘轮：`backend/red_manifest.toml` 的 `[metadata].grandfathered_baseline = 190`，当前 `grandfathered` 条目数 190 不得高于基线（只冻结不收敛同样红），`--prune` 精简后同步下调。
+5. **缓解台账落档**：§6 新增「缓解台账（非根修，已排期）」表，逐项记录仍属缓解的 5 项（流式合规不重试 / 实时语音多段完成序 / TG 429 夹取单次重试 / 注释门测试面豁免 / 梦境 `stats`/`decisions` JSON 动态键），含现状、暂不根修理由与根修方案 / 目标批次；历史包裹与 TAG 前缀两条本批已根修，不再列入缓解表。
+
+**文档同步**：channels.md（表情收录归属改为本轮全部应答人格 + 逐人格去重 / 失败隔离）、defense.md（全部历史 user 包裹与线性开销、tag_mimicry 任意位置与残余跨行边界、红队 55 条分档与精确计数说明）、chat.md（compose 链 / 注入面 / 测试面索引去上限化 + 线性常数开销）、docs/README.md（doc-counts / prose 棘轮 / 红探针冻结数量棘轮）。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3322 / coverage-gates=24 组 / lint / typecheck=212 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-a09677e7.json`，canonical sha8=`a09677e7`（709 文件级证据；`--hash-only` 复算 `sha8=a09677e7 files=709` 一致）；`d41a6aa2` / `5a5446ad`（B2 中间树）、`fc26e182`（B1）与更早证据为历史，按 README 口径只认与当前 `--hash-only` 一致的一份）。
+- `cd backend && pixi run tests-all` → 0（3322 passed）；`pixi run coverage-gates` → 0（24 组 ≥80%：harness/channels 97.3%（3227/3315）、harness/chat 96.3%（1550/1610）、harness/config 96.6%（1542/1597）、app/main.py 93.9%（558/594）、app/api 85.2%（1257/1476））；`pixi run lint` → 0；`pixi run typecheck` → 0（212 源文件）；`pixi run conftest-env` → 0（228/228，豁免 0）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `02872633…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）。
+- 根 `pixi run gates` → 0（comment-gates violations=0 hints=23 / sync-test-ratchet +0 / noqa-freeze scripts 7≤7 其余 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 25 条覆盖 24 文件 + grandfathered 棘轮 190≤190 / docs-truth / doc-counts 12 项（规则 29 / 红队 55 / 配置分节 31）/ assertion-freeze asserts=9333 raises=679 / surface-check 42/42 + env 791 行 / bench-core PASS / api-smoke PASS / prose-pin 棘轮 75≤75）。
+- 无新增依赖 / env 键 / 迁移；前端未动（`--with-frontend` 未跑，源码零改动）。
+
 ## 6. 遗留与部署台账（非阻塞）
+
+### 缓解台账（非根修，已排期）
+
+| 项 | 现状 | 为何暂不根修 | 根修方案 + 目标批次 |
+|---|---|---|---|
+| 流式路径合规守卫不重试 | `stream_reply` 已逐块交付消费方，助手腔检测命中时不重试（只覆盖非流式 `reply`） | 流式输出无法回撤已发送块；重生成会造成可见重复 | 有界首段缓冲（首句成稿前完成检测）或在收尾时追加一次角色提醒纠偏；目标 R5-1 |
+| 实时语音多段转写完成序 | 多段转写可并行，最终稿按**转写完成序**进入待生成通道；客户端靠 `segment_id` 对齐 | 会话通道按到达序串行消费，暂无跨段排序状态；改动触及实时轮次状态机 | 携带段序并在生成入口做有界重排（超时即按完成序放行）；目标 R4-8 |
+| TG 429 `retry_after` 夹取 1..30s 单次重试 | 出站 429 按 `parameters.retry_after` 夹取到 1..30s 后单次重试，其余错误不重试 | 单次重试是成本 / 时延的可预测边界；持续限流需上层退避与再入队 | 可取消的预算内退避 + 失败消息再入队（不阻塞 send 调用）；目标 R5-1 |
+| 注释门对测试面豁免 | `check_chinese_comments.py` 整树豁免 `tests/` 与 `test_*.py` | 测试 docstring 以用例名 / 行为说明为主，强制 Google 段落会显著增噪 | 对测试 helper 采用放宽策略（仅要求中文说明，不强制 Args/Returns）；目标 R5-1 |
+| 梦境 `stats` / `decisions` JSON 动态键 | `ff_dream_runs.stats` / `decisions` 为 JSON 列，写入 `DreamRunStatsModel` / `DreamDecisionModel` 的 dump 形态，列类型仍是 `dict` / `list` | 无当前缺陷；转 Pydantic 列需 TypeDecorator + 迁移，成本高于本批收益 | **已记录例外**（不排期）；随 memory 域 schema 批次转模型时一并迁移 |
 
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
 - SmsForwarder 短信 / 通知转发通道已交付（默认关闭、仅入站；部署侧配置 `SMS_FORWARDER_*` 并在手机端配置 Webhook 与 token）；WhatsApp Cloud API 通道已交付（`WHATSAPP_ENABLED` 默认关闭；Meta 应用侧配置 webhook / 订阅 messages + 四项凭据；出站仅自由格式文本并受 24h 客户服务窗约束——窗外主动消息需模板发送（未实现）或属主先发消息；窗口状态与 wamid 去重均为进程内单实例语义）。

@@ -107,9 +107,11 @@ from packages.harness.chat.flow_models import (
 )
 from packages.harness.chat.persona_rotation import select_group_responders
 from packages.harness.chat.persona_rotation_models import (
+    GroupPersonaSelectionModel,
     GroupPersonaSettings,
     GroupResponderCandidateModel,
     GroupResponderStateModel,
+    GroupSelectionReason,
 )
 from packages.harness.chat.service import ChatService
 from packages.harness.core import time_utils
@@ -475,17 +477,25 @@ class ChannelRouter:
                     primary_state = await self._get_or_create_session(context)
                     gate_persona_id = primary_state.persona_id
                 else:
-                    # 群聊多人格：入站表情只收录进主人格（第一位候选，选择序
-                    # 稳定原料）的素材库——多应答者下表情归属本身歧义，取首位
-                    # 候选是确定性归属；应答侧各人格仍各用自己库的素材。
+                    # 门控关系查询用主人格（首选候选，选择序稳定原料）；
+                    # 表情收录另按本轮应答集合逐人执行（见下）。
                     gate_persona_id = group_pool[0].id
                 has_sticker = any(
                     attachment.kind is ChannelAttachmentKind.STICKER
                     for attachment in message.attachments
                 )
                 if has_sticker:
+                    # 群聊多人格：入站表情逐人收录到**本轮全部应答人格**各自
+                    # 的素材库（同一轮内去重；非应答人格不受影响）——应答侧
+                    # 各人格仍各用自己库的素材。单聊恒只收录主人格。
+                    if group_pool is None:
+                        ingest_persona_ids: Sequence[int] = [gate_persona_id]
+                    else:
+                        ingest_persona_ids = self._group_responder_persona_ids(
+                            context, group_pool, now_ms=self._clock()
+                        )
                     await self._ingest_sticker_attachments(
-                        message.attachments, gate_persona_id
+                        message.attachments, ingest_persona_ids
                     )
                 if self._flow_settings is not None:
                     gate_result = await self._apply_flow_gate(
@@ -905,13 +915,18 @@ class ChannelRouter:
     async def _ingest_sticker_attachments(
         self,
         attachments: Sequence[ChannelMessageAttachment],
-        persona_id: int,
+        persona_ids: Sequence[int],
     ) -> None:
-        """以应答人格上下文收录入站表情（失败仅告警——不阻断回复）。
+        """以每位应答人格的上下文逐人收录入站表情（单人格失败只告警）。
+
+        群聊多人格下同一张表情写入每个应答人格自己的素材库；桥内数据库
+        写入的人格作用域由 ``bind_persona_context`` 绑定，人格库之间的
+        哈希去重彼此独立。任一人的收录失败都不阻断其余人格与文本回复。
 
         Args:
             attachments: 入站附件列表（内部只筛 sticker 类）。
-            persona_id: 应答人格主键（桥内数据库写入的人格作用域）。
+            persona_ids: 本轮应答人格主键序列（单聊 = 主人格；群聊 =
+                本轮应答集合——调用方已按选择结论去重）。
         """
         hook = self._sticker_ingest_hook
         if hook is None:
@@ -923,15 +938,17 @@ class ChannelRouter:
         ]
         if not stickers:
             return
-        try:
-            async with bind_persona_context(persona_id):
-                await hook(stickers)
-        except Exception:
-            logger.opt(exception=True).warning(
-                "入站表情收录失败（跳过——不影响回复）: persona_id={}, count={}",
-                persona_id,
-                len(stickers),
-            )
+        for persona_id in dict.fromkeys(persona_ids):
+            try:
+                async with bind_persona_context(persona_id):
+                    await hook(stickers)
+            except Exception:
+                logger.opt(exception=True).warning(
+                    "入站表情收录失败（跳过该人格——不影响其余人格与回复）: "
+                    "persona_id={}, count={}",
+                    persona_id,
+                    len(stickers),
+                )
 
     # ------------------------------------------------------------------
     # 群聊多人格（选择 + 逐人格会话 + 投递归属）
@@ -990,6 +1007,73 @@ class ChannelRouter:
         ordered = sorted(records, key=lambda record: (0 if record.is_primary else 1, record.id))
         return ordered
 
+    def _select_group_responders(
+        self,
+        context: ChannelContextModel,
+        pool: Sequence[PersonaRecordDTO],
+        *,
+        now_ms: int,
+    ) -> GroupPersonaSelectionModel:
+        """按当前应答记忆给出本轮选择结论（纯读取——不消费 / 不推进状态）。
+
+        表达式只读取候选与选择记忆，因此入站表情收录与逐人格应答可以复用
+        同一结论：同一应答记忆与选择时刻下两次调用结果一致，收录路径不会
+        产生额外状态或改写选择结果。
+
+        Args:
+            context: 通道会话上下文（选择记忆按聊天隔离）。
+            pool: 启用人格候选（主人格在前）。
+            now_ms: 选择时刻（epoch 毫秒——冷却判定参考）。
+
+        Returns:
+            本轮选择结论（空应答列表 = 回退主人格单人格路径）。
+        """
+        settings = self._group_settings
+        if settings is None:
+            return GroupPersonaSelectionModel(reason=GroupSelectionReason.DISABLED)
+        key = self.session_key(context)
+        group_state = self._group_states.get(key, GroupResponderStateModel())
+        candidates = [
+            GroupResponderCandidateModel(
+                persona_id=record.id,
+                is_primary=record.is_primary,
+                last_reply_ms=group_state.last_reply_ms_by_persona.get(record.id),
+            )
+            for record in pool
+        ]
+        return select_group_responders(
+            candidates,
+            group_state,
+            settings,
+            now_ms=now_ms,
+            is_group_chat=True,
+        )
+
+    def _group_responder_persona_ids(
+        self,
+        context: ChannelContextModel,
+        pool: Sequence[PersonaRecordDTO],
+        *,
+        now_ms: int,
+    ) -> list[int]:
+        """取本轮应答人格主键（入站表情收录的人格集合）。
+
+        选择为空（理论上仅配置关闭 / 单聊，群聊候选非空时不会发生）时回退
+        首选候选——即主人格单人格路径的应答者，语义与回复路径一致。
+
+        Args:
+            context: 通道会话上下文。
+            pool: 启用人格候选（主人格在前）。
+            now_ms: 选择时刻（epoch 毫秒）。
+
+        Returns:
+            去重后的应答人格主键列表（与逐人格回答选择同源）。
+        """
+        selection = self._select_group_responders(context, pool, now_ms=now_ms)
+        if selection.responder_persona_ids:
+            return list(selection.responder_persona_ids)
+        return [pool[0].id]
+
     async def _reply_via_group(
         self,
         context: ChannelContextModel,
@@ -1026,21 +1110,7 @@ class ChannelRouter:
         key = self.session_key(context)
         now = self._clock()
         group_state = self._group_states.get(key, GroupResponderStateModel())
-        candidates = [
-            GroupResponderCandidateModel(
-                persona_id=record.id,
-                is_primary=record.is_primary,
-                last_reply_ms=group_state.last_reply_ms_by_persona.get(record.id),
-            )
-            for record in pool
-        ]
-        selection = select_group_responders(
-            candidates,
-            group_state,
-            settings,
-            now_ms=now,
-            is_group_chat=True,
-        )
+        selection = self._select_group_responders(context, pool, now_ms=now)
         if not selection.responder_persona_ids:
             logger.info(
                 "群聊多人格选择为空（回退主人格单人格路径）: key={}, reason={}",
