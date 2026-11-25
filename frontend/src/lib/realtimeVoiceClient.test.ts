@@ -8,6 +8,7 @@ import {
   type RealtimeMediaStreamLike,
   type RealtimeScriptProcessorLike,
   type RealtimeSocketLike,
+  type RealtimeTrackSettingsLike,
 } from './realtimeVoiceClient'
 import {
   base64ToBytes,
@@ -255,8 +256,10 @@ class FakeCaptureContext implements RealtimeCaptureContextLike {
   }
 }
 
-/** fake 媒体流（记录停轨次数）。 */
-function fakeStream(): { stream: RealtimeMediaStreamLike; stopped: () => number } {
+/** fake 媒体流（记录停轨次数；可回读采集能力设置）。 */
+function fakeStream(
+  settings: RealtimeTrackSettingsLike = {},
+): { stream: RealtimeMediaStreamLike; stopped: () => number } {
   let stops = 0
   const stream: RealtimeMediaStreamLike = {
     getTracks: () => [
@@ -264,10 +267,20 @@ function fakeStream(): { stream: RealtimeMediaStreamLike; stopped: () => number 
         stop: () => {
           stops += 1
         },
+        getSettings: () => settings,
       },
     ],
   }
   return { stream, stopped: () => stops }
+}
+
+/** 手动可控的 Promise（在用例内决定迟到结果的到达时刻）。 */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve: (value: T) => void = () => undefined
+  const promise = new Promise<T>((settle) => {
+    resolve = settle
+  })
+  return { promise, resolve }
 }
 
 describe('MicrophoneCapture', () => {
@@ -357,5 +370,79 @@ describe('MicrophoneCapture', () => {
     })
     await capture.start()
     expect(errors.join('')).toContain('Web Audio')
+  })
+
+  it('getUserMedia 未决时 stop：迟到媒体流被停轨，不建上下文、无残留', async () => {
+    const media = deferred<RealtimeMediaStreamLike>()
+    const { stream, stopped } = fakeStream({ echoCancellation: true })
+    const contexts: FakeCaptureContext[] = []
+    const capture = new MicrophoneCapture({
+      onFrameBase64: () => undefined,
+      audioContextFactory: () => {
+        const context = new FakeCaptureContext()
+        contexts.push(context)
+        return context
+      },
+      getUserMedia: () => media.promise,
+    })
+    const starting = capture.start()
+    const stopping = capture.stop()
+    media.resolve(stream)
+    await starting
+    await stopping
+    expect(stopped()).toBe(1)
+    expect(contexts).toHaveLength(0)
+    expect(capture.getCapabilities()).toBeNull()
+    expect(capture.isPaused()).toBe(false)
+  })
+
+  it('stop 后立即重开：旧 start 迟到结果不覆盖新会话能力与暂停态', async () => {
+    const firstMedia = deferred<RealtimeMediaStreamLike>()
+    const first = fakeStream({ echoCancellation: false })
+    const second = fakeStream({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    })
+    const secondContext = new FakeCaptureContext()
+    let mediaCalls = 0
+    let contextCalls = 0
+    const capture = new MicrophoneCapture({
+      onFrameBase64: () => undefined,
+      audioContextFactory: () => {
+        contextCalls += 1
+        return secondContext
+      },
+      getUserMedia: () => {
+        mediaCalls += 1
+        return mediaCalls === 1 ? firstMedia.promise : Promise.resolve(second.stream)
+      },
+    })
+    const startingOld = capture.start()
+    const stopping = capture.stop()
+    const startingNew = capture.start()
+    await startingNew
+    expect(capture.getCapabilities()).toEqual({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    })
+    await capture.pause()
+    expect(capture.isPaused()).toBe(true)
+    firstMedia.resolve(first.stream)
+    await startingOld
+    await stopping
+    expect(first.stopped()).toBe(1)
+    expect(contextCalls).toBe(1)
+    expect(capture.getCapabilities()).toEqual({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    })
+    expect(capture.isPaused()).toBe(true)
+    expect(second.stopped()).toBe(1)
+    expect(secondContext.closed).toBe(true)
+    await capture.stop()
+    expect(capture.getCapabilities()).toBeNull()
   })
 })

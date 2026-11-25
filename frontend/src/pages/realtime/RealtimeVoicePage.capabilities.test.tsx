@@ -136,20 +136,41 @@ describe('RealtimeVoicePage 能力公告与采集边界', () => {
     const user = userEvent.setup()
     const { client } = renderPage()
     await user.click(screen.getByRole('button', { name: /开始对话/ }))
-    act(() => {
+    await act(async () => {
       client.emit(ready)
+      await Promise.resolve()
     })
     expect(screen.getByText(/流式识别 开/)).toBeInTheDocument()
     expect(screen.getByText(/流式合成 开/)).toBeInTheDocument()
     expect(screen.getByText(/回声消除 开/)).toBeInTheDocument()
   })
 
+  it('采集能力回读：浏览器未生效 AEC 时摘要展示降级（服务端公告为开）', async () => {
+    const user = userEvent.setup()
+    const { client, capture } = renderPage()
+    capture.capabilities = {
+      echoCancellation: false,
+      noiseSuppression: true,
+      autoGainControl: true,
+    }
+    await user.click(screen.getByRole('button', { name: /开始对话/ }))
+    await act(async () => {
+      client.emit(ready)
+      await Promise.resolve()
+    })
+    expect(screen.getByText(/回声消除 降级/)).toBeInTheDocument()
+    expect(
+      screen.getByText('浏览器未生效回声消除（AEC），外放场景建议佩戴耳机'),
+    ).toBeInTheDocument()
+  })
+
   it('服务端公告 aec=false 时展示降级态', async () => {
     const user = userEvent.setup()
     const { client } = renderPage()
     await user.click(screen.getByRole('button', { name: /开始对话/ }))
-    act(() => {
+    await act(async () => {
       client.emit({ ...ready, aec: false })
+      await Promise.resolve()
     })
     expect(screen.getByText(/回声消除 降级/)).toBeInTheDocument()
   })

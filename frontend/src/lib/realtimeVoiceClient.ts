@@ -331,6 +331,19 @@ export interface MicrophoneCaptureLike {
   isPaused?(): boolean
 }
 
+/** 采集资源束（启动提交 / 停止释放的原子单元——迟到启动只清理自己的局部资源）。 */
+interface CaptureResources {
+  context: RealtimeCaptureContextLike | null
+  stream: RealtimeMediaStreamLike | null
+  processor: RealtimeScriptProcessorLike | null
+  workletNode: RealtimeWorkletNodeLike | null
+  sourceNode: {
+    connect(target: unknown): void
+    disconnect(): void
+  } | null
+  chunker: PcmFrameChunker | null
+}
+
 /** 读实际生效的音频约束（无 getSettings 的轨道按未生效处理）。 */
 function readCaptureCapabilities(stream: RealtimeMediaStreamLike): RealtimeCaptureCapabilities {
   const tracks = stream.getAudioTracks?.() ?? stream.getTracks()
@@ -369,34 +382,48 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
   private chunker: PcmFrameChunker | null = null
   private capabilities: RealtimeCaptureCapabilities | null = null
   private paused = false
-  private starting: Promise<void> | null = null
+  private generation = 0
+  private pendingStop = false
+  private starting: { generation: number; task: Promise<void> } | null = null
 
   constructor(options: MicrophoneCaptureOptions) {
     this.options = options
   }
 
-  /** 启动采集（权限被拒 / 环境不支持 → onError + 不抛；在途调用复用同一链路）。 */
+  /** 启动采集（权限被拒 / 环境不支持 → onError + 不抛；同世代在途调用复用同一链路）。 */
   async start(): Promise<void> {
     if (this.context !== null) {
       return
     }
+    this.pendingStop = false
     const inflight = this.starting
-    if (inflight !== null) {
-      await inflight
+    if (inflight !== null && inflight.generation === this.generation) {
+      await inflight.task
       return
     }
-    const task = this.startInternal()
-    this.starting = task
+    const generation = this.generation
+    const task = this.startInternal(generation)
+    const record = { generation, task }
+    this.starting = record
     try {
       await task
     } finally {
-      if (this.starting === task) {
+      if (this.starting === record) {
         this.starting = null
       }
     }
   }
 
-  private async startInternal(): Promise<void> {
+  private async startInternal(generation: number): Promise<void> {
+    let stream: RealtimeMediaStreamLike | null = null
+    let context: RealtimeCaptureContextLike | null = null
+    let processor: RealtimeScriptProcessorLike | null = null
+    let workletNode: RealtimeWorkletNodeLike | null = null
+    let sourceNode: {
+      connect(target: unknown): void
+      disconnect(): void
+    } | null = null
+    let chunker: PcmFrameChunker | null = null
     try {
       const getUserMedia =
         this.options.getUserMedia ??
@@ -418,52 +445,109 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
           }
           return new Context() as unknown as RealtimeCaptureContextLike
         })
-      const stream = await getUserMedia(REALTIME_AUDIO_CONSTRAINTS)
-      this.capabilities = readCaptureCapabilities(stream)
-      const context = audioContextFactory()
-      await context.resume?.()
-      const sourceNode = context.createMediaStreamSource(stream)
-      const chunker = new PcmFrameChunker((pcm) => {
+      const mediaStream = await getUserMedia(REALTIME_AUDIO_CONSTRAINTS)
+      stream = mediaStream
+      if (this.isStale(generation)) {
+        await this.releaseResources({
+          context: null,
+          stream,
+          processor: null,
+          workletNode: null,
+          sourceNode: null,
+          chunker: null,
+        })
+        return
+      }
+      const capabilities = readCaptureCapabilities(mediaStream)
+      const audioContext = audioContextFactory()
+      context = audioContext
+      await audioContext.resume?.()
+      if (this.isStale(generation)) {
+        await this.releaseResources({
+          context,
+          stream,
+          processor: null,
+          workletNode: null,
+          sourceNode: null,
+          chunker: null,
+        })
+        return
+      }
+      const mediaSource = audioContext.createMediaStreamSource(mediaStream)
+      sourceNode = mediaSource
+      const frameChunker = new PcmFrameChunker((pcm) => {
         this.options.onFrameBase64(pcm16ToBase64(pcm))
       }, this.options.frameSamples)
-      const usingWorklet = await this.tryStartWorklet(context, chunker)
-      if (!usingWorklet) {
-        const processor = context.createScriptProcessor(4096, 1, 1)
-        processor.onaudioprocess = (event) => {
-          const input = event.inputBuffer.getChannelData(0)
-          const resampled = downsampleTo16k(input, context.sampleRate)
-          chunker.push(resampled)
-        }
-        this.processor = processor
+      chunker = frameChunker
+      const node = await this.tryStartWorklet(audioContext, frameChunker, generation)
+      workletNode = node
+      if (this.isStale(generation)) {
+        await this.releaseResources({
+          context,
+          stream,
+          processor: null,
+          workletNode,
+          sourceNode,
+          chunker,
+        })
+        return
       }
-      this.connectOutput(context, sourceNode)
-      this.context = context
-      this.stream = stream
-      this.sourceNode = sourceNode
-      this.chunker = chunker
+      if (node === null) {
+        const scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1)
+        scriptProcessor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0)
+          const resampled = downsampleTo16k(input, audioContext.sampleRate)
+          frameChunker.push(resampled)
+        }
+        processor = scriptProcessor
+      }
+      this.connectOutput(audioContext, mediaSource, node, processor)
+      this.context = audioContext
+      this.stream = mediaStream
+      this.processor = processor
+      this.workletNode = node
+      this.sourceNode = mediaSource
+      this.chunker = frameChunker
+      this.capabilities = capabilities
       this.paused = false
     } catch (error) {
-      this.options.onError?.(
-        error instanceof Error ? error.message : '麦克风采集启动失败',
-      )
+      await this.releaseResources({ context, stream, processor, workletNode, sourceNode, chunker })
+      if (generation === this.generation) {
+        this.options.onError?.(
+          error instanceof Error ? error.message : '麦克风采集启动失败',
+        )
+      }
     }
   }
 
-  /** 停止采集（幂等）。 */
+  /** 停止采集（幂等；启动在途时等其迟到清理完成后再返回）。 */
   async stop(): Promise<void> {
-    await this.teardown()
+    this.generation += 1
+    this.pendingStop = true
+    const inflight = this.starting
+    const resources = this.takeResources()
     this.capabilities = null
     this.paused = false
+    try {
+      if (inflight !== null) {
+        await inflight.task
+      }
+      await this.releaseResources(resources)
+    } finally {
+      this.pendingStop = false
+    }
   }
 
   /** 暂停采集（移动端后台切换——保留 WS 会话与页面状态）。 */
   async pause(): Promise<void> {
-    if (this.context === null) {
-      this.paused = true
-      return
-    }
-    await this.teardown()
+    this.generation += 1
+    const inflight = this.starting
+    const resources = this.takeResources()
     this.paused = true
+    if (inflight !== null) {
+      await inflight.task
+    }
+    await this.releaseResources(resources)
   }
 
   /** 恢复采集（重新申请媒体流；会话不重连、不丢状态；失败保持暂停态）。 */
@@ -485,29 +569,39 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
     return this.paused
   }
 
+  private isStale(generation: number): boolean {
+    return generation !== this.generation || this.pendingStop
+  }
+
   private async tryStartWorklet(
     context: RealtimeCaptureContextLike,
     chunker: PcmFrameChunker,
-  ): Promise<boolean> {
+    generation: number,
+  ): Promise<RealtimeWorkletNodeLike | null> {
     const worklet = context.audioWorklet
     const moduleUrl = this.options.workletModuleUrl ?? captureWorkletModuleUrl
     if (worklet === undefined || moduleUrl === '') {
-      return false
+      return null
     }
     try {
       await worklet.addModule(moduleUrl)
+      if (this.isStale(generation)) {
+        return null
+      }
       const node = this.createWorkletNode(context)
+      if (this.isStale(generation)) {
+        node.disconnect()
+        return null
+      }
       node.port.onmessage = (event) => {
         const data = event.data
         if (data instanceof Float32Array) {
           chunker.push(downsampleTo16k(data, context.sampleRate))
         }
       }
-      this.workletNode = node
-      return true
+      return node
     } catch {
-      this.workletNode = null
-      return false
+      return null
     }
   }
 
@@ -531,20 +625,21 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
   private connectOutput(
     context: RealtimeCaptureContextLike,
     sourceNode: { connect(target: unknown): void },
+    workletNode: RealtimeWorkletNodeLike | null,
+    processor: RealtimeScriptProcessorLike | null,
   ): void {
-    if (this.workletNode !== null) {
-      sourceNode.connect(this.workletNode)
+    if (workletNode !== null) {
+      sourceNode.connect(workletNode)
       if (context.createGain !== undefined) {
         const silent = context.createGain()
         silent.gain.value = 0
-        this.workletNode.connect(silent)
+        workletNode.connect(silent)
         silent.connect(context.destination)
       } else {
-        this.workletNode.connect(context.destination)
+        workletNode.connect(context.destination)
       }
       return
     }
-    const processor = this.processor
     if (processor === null) {
       return
     }
@@ -559,20 +654,32 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
     sourceNode.connect(processor)
   }
 
-  private async teardown(): Promise<void> {
-    this.chunker?.flush()
-    this.processor?.disconnect()
-    this.workletNode?.disconnect()
-    this.sourceNode?.disconnect()
-    for (const track of this.stream?.getTracks() ?? []) {
-      track.stop()
+  private takeResources(): CaptureResources {
+    const resources: CaptureResources = {
+      context: this.context,
+      stream: this.stream,
+      processor: this.processor,
+      workletNode: this.workletNode,
+      sourceNode: this.sourceNode,
+      chunker: this.chunker,
     }
-    await this.context?.close?.()
     this.context = null
     this.stream = null
     this.processor = null
     this.workletNode = null
     this.sourceNode = null
     this.chunker = null
+    return resources
+  }
+
+  private async releaseResources(resources: CaptureResources): Promise<void> {
+    resources.chunker?.flush()
+    resources.processor?.disconnect()
+    resources.workletNode?.disconnect()
+    resources.sourceNode?.disconnect()
+    for (const track of resources.stream?.getTracks() ?? []) {
+      track.stop()
+    }
+    await resources.context?.close?.()
   }
 }

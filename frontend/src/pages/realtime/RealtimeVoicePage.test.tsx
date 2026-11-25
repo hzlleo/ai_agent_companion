@@ -163,8 +163,9 @@ describe('RealtimeVoicePage', () => {
     await user.click(screen.getByRole('button', { name: /开始对话/ }))
     expect(client.connects).toBe(1)
     expect(screen.getByLabelText('会话状态')).toHaveTextContent('连接中')
-    act(() => {
+    await act(async () => {
       client.emit(ready)
+      await Promise.resolve()
     })
     expect(screen.getByLabelText('会话状态')).toHaveTextContent('聆听中')
     expect(capture.starts).toBe(1)
@@ -177,9 +178,10 @@ describe('RealtimeVoicePage', () => {
     const user = userEvent.setup()
     const { client, playback } = renderPage()
     await user.click(screen.getByRole('button', { name: /开始对话/ }))
-    act(() => {
+    await act(async () => {
       client.emit(ready)
       client.emit({ type: 'partial_transcript', ts_ms: 2, segment_id: 'seg-1', text: '你好' })
+      await Promise.resolve()
     })
     expect(screen.getByText('你好')).toBeInTheDocument()
     expect(screen.getByText('识别中…')).toBeInTheDocument()
@@ -258,7 +260,7 @@ describe('RealtimeVoicePage', () => {
     const user = userEvent.setup()
     const { client, capture } = renderPage()
     await user.click(screen.getByRole('button', { name: /开始对话/ }))
-    act(() => {
+    await act(async () => {
       client.emit(ready)
       client.emit({
         type: 'error',
@@ -267,6 +269,7 @@ describe('RealtimeVoicePage', () => {
         message: '语音转写失败',
         recoverable: true,
       })
+      await Promise.resolve()
     })
     expect(screen.getByText('语音转写失败')).toBeInTheDocument()
     expect(screen.getByLabelText('会话状态')).toHaveTextContent('聆听中')
@@ -332,8 +335,9 @@ describe('RealtimeVoicePage', () => {
     const user = userEvent.setup()
     const { client } = renderPage()
     await user.click(screen.getByRole('button', { name: /开始对话/ }))
-    act(() => {
+    await act(async () => {
       client.emit({ ...ready, barge_in_enabled: false, tts_enabled: false })
+      await Promise.resolve()
     })
     expect(screen.getByRole('button', { name: /打断/ })).toBeDisabled()
     expect(screen.getByText('会话已就绪（TTS 未启用，仅显示字幕）')).toBeInTheDocument()
@@ -344,7 +348,7 @@ describe('RealtimeVoicePage', () => {
     const user = userEvent.setup()
     const { client } = renderPage({ playback: false })
     await user.click(screen.getByRole('button', { name: /开始对话/ }))
-    act(() => {
+    await act(async () => {
       client.emit(ready)
       client.emit({
         type: 'audio_chunk',
@@ -364,6 +368,7 @@ describe('RealtimeVoicePage', () => {
         duration_ms: 120,
         language: 'zh',
       })
+      await Promise.resolve()
     })
     expect(screen.getByText('测试字幕')).toBeInTheDocument()
   })
@@ -447,9 +452,10 @@ describe('RealtimeVoicePage', () => {
     const user = userEvent.setup()
     const { client, capture } = renderPage()
     await user.click(screen.getByRole('button', { name: /开始对话/ }))
-    act(() => {
+    await act(async () => {
       client.emit(ready)
       capture.onFrame?.('FRAME-A')
+      await Promise.resolve()
     })
     expect(client.frames).toEqual(['FRAME-A'])
   })
