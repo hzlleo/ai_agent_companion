@@ -9,8 +9,8 @@
       :func:`packages.harness.database.engine.create_database_engine` 同源
       的 DatabaseConfig），避免硬编码连接串；
     - **模型发现**：显式 import ORM 基类（``Base``）确保 metadata 可用；
-      本 chunk（P0-3）无域表——首个迁移为空基线，后续域 chunk 落地模型
-      时在此处补充 import；
+      迁移链起点无域表——首个迁移为空基线，后续域表落地模型时在此处
+      补充 import；
     - **路径修复**：``sys.path`` 注入 ``backend/src``，使从 backend/ 目录
       调用 ``alembic ...`` 时能找到 ``packages.*``。
 

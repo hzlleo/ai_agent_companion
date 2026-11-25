@@ -9,8 +9,9 @@
     - ``docs/backend/config.md``：生成器 ``_ENV_SECTIONS`` 登记表的分节行数；
     - 全仓措辞：每行内同时出现 ``MySQL`` 与「权威」、且不含 ``SeekDB`` 与
       「协议」即红（覆盖「MySQL 8.0.42 权威存储」/ 小写 ``mysql 8 权威`` /
-      「MySQL 5.7 权威」/「以 MySQL 8 作为权威库」）；裸「InnoDB」泛称同
-      样禁止（唯一白名单是 SeekDB 兼容变量名
+      「MySQL 5.7 权威」/「以 MySQL 8 作为权威库」；``MySQL8.0.42`` /
+      ``MySQL8`` 这类紧贴版本号的写法同样算命中，``mysqld`` 等更长标识符
+      不算）。裸「InnoDB」泛称同样禁止（唯一白名单是 SeekDB 兼容变量名
       ``innodb_lock_wait_timeout``）。权威存储统一表述为「SeekDB 权威存储
       （MySQL 协议）」/「MySQL 协议 / SeekDB 行锁语义」。
     - ``docs/LEDGER.md``：迁移链 head 必须与 ``backend/alembic/versions``
@@ -114,7 +115,9 @@ _WORDING_SKIP_PATH_PREFIXES: tuple[str, ...] = ("docs/evidence/logs",)
 _WORDING_SKIP_FILE_PATTERNS: tuple[str, ...] = ("docs/evidence/*.json",)
 
 #: 同行判定要素：MySQL 字样与「权威」同现、且该行不含 SeekDB 与「协议」。
-_MYSQL_WORD = re.compile(r"(?i)\bmysql\b")
+#: 词尾守卫放行紧贴版本号的写法（``MySQL8.0.42`` / ``MySQL8``），同时不把
+#: 更长的标识符（``mysqld`` 守护进程名）当成引擎泛称。
+_MYSQL_WORD = re.compile(r"(?i)\bmysql(?![a-z])")
 _SEEKDB_WORD = re.compile(r"(?i)\bseekdb\b")
 _AUTHORITY_WORD = "权威"
 _PROTOCOL_WORD = "协议"

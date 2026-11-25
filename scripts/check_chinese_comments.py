@@ -5,10 +5,12 @@
 落地时在本脚本 ``_TREE_ROOTS`` 登记）：
 
     - backend/src（排除 src/tests/）
+    - backend/alembic（迁移环境与版本文件——Python 面，与 backend/src 同规则）
     - docker 沙盒树 src + server.py
     - 仓库根 scripts/（工程级脚本）
-    - frontend/src（TypeScript / JavaScript——只检查注释内的编号残留；
-      前端没有 Python 式 docstring 契约，因此不套用存在性与中文要求）
+    - frontend/src 与 frontend/scripts（TypeScript / JavaScript——只检查注释
+      内的编号残留；前端没有 Python 式 docstring 契约，因此不套用存在性与
+      中文要求）
 
 测试文件豁免（约定不同）：路径含 ``tests/`` 的文件、``test_*.py`` /
 ``*_test.py`` / ``conftest.py``。
@@ -57,7 +59,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # 各树扫描根（相对仓库根）。
 _TREE_ROOTS: dict[str, list[str]] = {
-    "backend": ["backend/src"],
+    "backend": ["backend/src", "backend/alembic"],
     "tool-sandbox": [
         "docker/tool-sandbox-agent/src",
         "docker/tool-sandbox-agent/server.py",
@@ -67,7 +69,7 @@ _TREE_ROOTS: dict[str, list[str]] = {
         "docker/browser-sidecar/server.py",
     ],
     "scripts": ["scripts"],
-    "frontend": ["frontend/src"],
+    "frontend": ["frontend/src", "frontend/scripts"],
 }
 
 # 各树扫描的文件后缀；未登记的树按 Python 源码处理。

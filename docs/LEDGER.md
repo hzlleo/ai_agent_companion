@@ -182,7 +182,7 @@
 cd backend && pixi run tests-all            # 全量后端测试（数量以 canonical 证据 JSON 为准）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
 cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖/sandbox-drift；源文件数等明细以 canonical 证据 JSON 为准）
-cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎（迁移链 head 以 canonical 证据 JSON 为准；覆盖并发唯一键/行锁/混合检索/梦境单飞）
+cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎（迁移链 head 以 `backend/alembic/versions` 为准，由 doc-counts 机械校验；覆盖并发唯一键/行锁/混合检索/梦境单飞）
 cd frontend && pixi run test / coverage / lint / build   # 用例数与构建耗时以 canonical 证据 JSON 为准（高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
 cd frontend && pixi run build && pixi run bundle-check     # 体积门禁（需先 build）；聚合数字以 canonical 证据 JSON / bundle-check 输出为准
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
@@ -1876,6 +1876,25 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 - 根 `pixi run gates` → 0（comment-gates files=356 violations=0 / red-probe-gate 29 探针覆盖 28 文件 / doc-counts 13 项 / assertion-freeze asserts=9535 raises=702 / 其余门禁同链）。
 - 变异证据：N5 `le + 1` → 单源测试 failed；N6 注释写回 `R4` → exit 1、`R2D2` → exit 0；N7 8 形态 4 红 4 绿；N8 无条件删除孤儿清理 → F1 用例 failed；N10 临时新文件 → exit 1 → `--update` → exit 0；N11 迁移 head 0018 → exit 1；N12 删除 whatsapp 映射 → failed、单栈不变式 `or`→`and` → 4 failed。
 - 无新增依赖 / env 键 / 迁移；前端源码改动仅清理注释，后端与外键面未变。
+
+### 已完成切片：G2 终审修复（N9 / N7 / N6 / N3 / N11 逐条收口——本分支工作区）
+
+**背景**：G2 终审给出 5 条 P2（N9 finish 尾段收口仍可被取消打断、N7 措辞门把 `mysqld` 误当 MySQL 字样、N6 注释门未覆盖 `backend/alembic` 与 `frontend/scripts`、N3 企微用例 docstring 沿用旧「重投可重新消费」口径、N11 台账仍以证据 JSON 指代迁移链 head）。本批逐条根修并留守卫 / 变异；旧 canonical `eeed61b8`（G2 审计修复 B2）自本批起为历史。
+
+逐条（根修位置 → 守卫 / 变异证据）：
+
+1. **N9 finish 终段取消安全**：`asr_stream_client.finish()` 成功尾段的 `_shutdown` 与 `_wait_settled` 超时收尾改经 `_finalize_cancellation_safe`——收尾（关闭传输 + 回收派生任务 + 置终态）作为独立任务挂起，以 `asyncio.shield` 循环等待至完成，重复取消只记录不打断，收尾完成后原取消信号优先上抛（收尾异常不掩盖）。`cancel()` 与既有取消路径语义（cancel 事件 + 正常关闭 + 幂等）不变。守卫：`test_voice_stream_clients.py` 新增「传输 close 被门闩挂起时取消 finish → 关闭完成 / `_tasks` 清零 / 零新增挂起任务 / 二次 cancel 不重复关闭」与「关闭在途重复取消仍完整收口」；`test_voice_service_streaming.py` 新增真客户端同场景「零 usage 行」。变异：尾段改回直接 `await self._shutdown(...)` → 上述 3 用例红（3 failed / 37 passed）。
+2. **N7 措辞门词边界**：`check_doc_counts.py` 的 MySQL 判定改为 `(?i)\bmysql(?![a-z])`——`MySQL8.0.42` / `MySQL8` 这类紧贴版本号的写法仍算命中（缺 SeekDB / 协议限定即红），`mysqld` 守护进程名不再误伤；同行判定与裸行锁引擎泛称判定不变。变异矩阵 10 形态（5 红 5 绿）：原 4 条阳性 + `MySQL8.0.42 权威存储`（缺 SeekDB / 协议限定）→ 红；`mysqld 权威守护` + 原 4 条阴性（带 SeekDB 或「协议」限定）→ 绿。
+3. **N6 注释门扫描根补齐**：`check_chinese_comments.py` 的 `_TREE_ROOTS` 增 `backend/alembic`（Python 面同 backend/src 规则）与 `frontend/scripts`（TS/JS 注释词法面），模块 docstring 同步扫描范围。新暴露 8 行编号残留逐处按上下文语义化改写：`alembic/env.py`「迁移链起点无域表」、`000000000001_initial.py`「版本链锚点，无域表」、`009`「回合观测元数据」、`010`「swipes 候选重生成」、`011`「定时提醒落库」、`012`「置顶 / 冻结 / 检索强化的持久面」、`013`「事实 / 证据链 / 更正循环」、`check_bundle_budget.mjs` 去掉批次前缀。变异：`backend/alembic/env.py` 与 `frontend/scripts/check_bundle_budget.mjs` 注释各写 `R4` → exit 1（逐文件命中）；改写 `R2D2` → exit 0。门禁：files=377 violations=0 hints=23。
+4. **N3 企微用例口径**：`test_wecom_runner.py::test_queue_overflow_does_not_register_dropped_msgid` 的 docstring 改为「丢弃不登记去重：同 msgid 再次到达仍可消费（仅吸收平台偶发重复）」，与 `wecom_runner` 模块 docstring「满队丢弃即最终丢失；不登记去重仅吸收平台偶发重复」及 `channels.md` 同源。
+5. **N11 迁移 head 指针**：§5 门禁命令的迁移链说明改为「迁移链 head 以 `backend/alembic/versions` 为准，由 doc-counts 机械校验」；`check_doc_counts.py` 的 `_migration_facts`（从版本目录派生 head 并校验 LEDGER 字面）仍在 gates 链内。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3469 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=702 / frontend-coverage=96.08 / frontend-lint / frontend-build=2.66s；证据 `docs/evidence/r4-5-whatsapp-819c3f22.json`，canonical sha8=`819c3f22`（718 文件级证据；`--hash-only` 复算一致）；`eeed61b8`（G2 审计修复 B2）与更早证据均为历史）。
+- 变异证据：N9 尾段回退直接 await → 新 3 用例红（3 failed / 37 passed）；N7 10 形态 5 红 5 绿；N6 两扫描根写 `R4` → exit 1、写 `R2D2` → exit 0。
+- 根 `pixi run gates` → 0（comment-gates files=377 violations=0 / red-probe-gate 29 探针覆盖 28 文件 / doc-counts 13 项 / assertion-freeze asserts=9549 raises=705 / 其余门禁同链）。
+- `cd backend && pixi run tests-seekdb` → 0（15 passed；活容器 `seekdb-smoke`）。
+- 无迁移 / 无新增依赖 / 无新增 env 键；前端仅 `scripts/check_bundle_budget.mjs` 注释一行。
 
 ## 6. 遗留与部署台账（非阻塞）
 

@@ -291,7 +291,7 @@ class TestInbound:
             await asyncio.wait_for(task, timeout=2.0)
 
     async def test_queue_overflow_does_not_register_dropped_msgid(self) -> None:
-        """丢弃不登记去重：队列排空后平台重投同 msgid 可重新消费。"""
+        """丢弃不登记去重：同 msgid 再次到达仍可消费（仅吸收平台偶发重复）。"""
         router = FakeRouter()
         router.hold = asyncio.Event()
         client = FakeWeComClient()

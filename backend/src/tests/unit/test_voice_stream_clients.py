@@ -4,7 +4,8 @@
 
     - ASR：握手事件形状 / 握手确认 / 握手拒绝 / 握手超时 / partial 真增量
       回调 / final 落定 / 收尾事件序 / 中途断流（关闭码）/ 收尾超时 /
-      取消（cancel 事件 + 关闭码）/ 喂帧队列溢出丢最旧 / 关闭后喂帧拒绝 /
+      取消（cancel 事件 + 关闭码）/ 收尾关闭在途取消（含重复取消——收口
+      完成且零挂起）/ 喂帧队列溢出丢最旧 / 关闭后喂帧拒绝 /
       保活 ping / 非法事件 JSON / 采样率越界 / 连接失败映射；
     - TTS：分片顺序与字节一致性 / 完成事件收尾 / 消费侧取消（aclose 发
       cancel + 关闭）/ 服务端 error 事件 / 中途断流 / 文本越界零建连 /
@@ -42,6 +43,7 @@ from packages.harness.voice.tts_stream_client import (
     TTS_STREAM_EVENT_START,
     CosyVoiceStreamClient,
 )
+from tests.async_wait import drain_loop
 from tests.realtime_fakes import (
     FakeStreamTransport,
     make_stream_connector,
@@ -267,6 +269,66 @@ async def test_asr_finish_cancelled_closes_connection_and_clears_tasks() -> None
     assert handle._closed is True
     await handle.cancel()
     assert transport.close_calls == 1
+
+
+async def test_asr_finish_cancel_during_close_still_finalizes() -> None:
+    """收尾途中（传输关闭被门闩挂起）取消 finish：关闭完成、派生任务清零、零挂起。"""
+    transport = FakeStreamTransport()
+    _, _, handle = await _open_asr(transport)
+    await transport.push_event(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "收尾中",
+        }
+    )
+    transport.close_gate = asyncio.Event()
+    baseline = set(asyncio.all_tasks())
+    finish_task = asyncio.create_task(handle.finish())
+    await wait_until(
+        lambda: transport.close_started.is_set(), description="传输关闭在途"
+    )
+    finish_task.cancel()
+    transport.close_gate.set()
+    with pytest.raises(asyncio.CancelledError):
+        await finish_task
+    assert transport.closed == (STREAM_CLOSE_NORMAL, "session_finished")
+    assert transport.close_calls == 1
+    assert handle._tasks == set()
+    assert handle._closed is True
+    assert {
+        task for task in asyncio.all_tasks() if task not in baseline and not task.done()
+    } == set()
+    await handle.cancel()
+    assert transport.close_calls == 1
+
+
+async def test_asr_finish_repeated_cancel_during_close_still_finalizes() -> None:
+    """关闭在途的收口被重复取消：取消信号只记录，收口仍完整完成一次。"""
+    transport = FakeStreamTransport()
+    _, _, handle = await _open_asr(transport)
+    await transport.push_event(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "重复取消",
+        }
+    )
+    transport.close_gate = asyncio.Event()
+    finish_task = asyncio.create_task(handle.finish())
+    await wait_until(
+        lambda: transport.close_started.is_set(), description="传输关闭在途"
+    )
+    finish_task.cancel()
+    await drain_loop()
+    finish_task.cancel()
+    await drain_loop()
+    assert transport.closed is None
+    transport.close_gate.set()
+    with pytest.raises(asyncio.CancelledError):
+        await finish_task
+    assert transport.closed == (STREAM_CLOSE_NORMAL, "session_finished")
+    assert transport.close_calls == 1
+    assert handle._tasks == set()
+    assert handle._closed is True
 
 
 async def test_asr_midstream_close_fails_with_close_code() -> None:

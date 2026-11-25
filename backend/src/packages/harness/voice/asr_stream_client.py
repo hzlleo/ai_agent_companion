@@ -548,12 +548,17 @@ class AsrStreamHandle:
         收尾事件由发送工人按队列顺序发出（先于哨兵入队的音频分片全部落地
         后才发 ``commit`` / ``session.finish``）——本方法只投哨兵再等待。
 
+        三条出口（成功 / 业务失败 / 被外部取消）都经「关闭传输 + 回收派生
+        任务」收口，且收口本身不再可被打断：取消落在收尾等待或传输关闭
+        途中时，连接与派生任务仍会完整回收后再上抛取消。
+
         Returns:
             最终转写结果。
 
         Raises:
             BusinessException: 收尾超时 / 中途断流 / 服务端错误
                 （``LLM_CALL_FAILED``）。
+            asyncio.CancelledError: 收尾期间被外部取消（收口完成后原样上抛）。
         """
         self._raise_if_failed()
         if self._closed:
@@ -563,28 +568,51 @@ class AsrStreamHandle:
             await self._wait_finish_sent()
             result = await self._wait_settled()
         except BusinessException:
-            await self.cancel()
+            await self._finalize_cancellation_safe(self.cancel())
             raise
         except asyncio.CancelledError:
-            await self._shutdown_cancellation_safe()
+            await self._finalize_cancellation_safe(self.cancel())
             raise
-        await self._shutdown(STREAM_CLOSE_NORMAL, "session_finished", notify_cancel=False)
+        await self._finalize_cancellation_safe(
+            self._shutdown(STREAM_CLOSE_NORMAL, "session_finished", notify_cancel=False)
+        )
         return result
 
-    async def _shutdown_cancellation_safe(self) -> None:
-        """取消路径收口（屏蔽二次取消——传输关闭与派生任务回收必须完成）。
+    async def _finalize_cancellation_safe(self, finalize: Awaitable[None]) -> None:
+        """驱动收尾协程至完成（对重复取消容忍，取消信号不外泄给收尾）。
 
-        收尾等待被外部取消时不能把已打开的连接留给事件循环：以独立任务 +
-        ``asyncio.shield`` 驱动 ``cancel()`` 至完成（幂等），随后原取消信号
-        由调用方上抛。
+        收尾（关闭传输 + 回收派生任务 + 置终态）一经开始就必须走完——被
+        外部取消打断会把已打开的连接与派生任务留给事件循环。本方法把收尾
+        挂到独立任务上并以 ``asyncio.shield`` 循环等待：等待期间到达的取消
+        信号（含重复到达）只记录、继续等待；收尾完成后以 ``CancelledError``
+        回应调用方，取消信号优先于收尾异常。
+
+        Args:
+            finalize: 收尾协程（``cancel`` 或 ``_shutdown`` 调用）。
+
+        Raises:
+            asyncio.CancelledError: 等待期间收到取消（收尾已完成）。
         """
-        cleanup = asyncio.ensure_future(self.cancel())
-        while not cleanup.done():
+        task = asyncio.ensure_future(finalize)
+        cancelled = False
+        while not task.done():
             try:
-                await asyncio.shield(cleanup)
+                await asyncio.shield(task)
             except asyncio.CancelledError:
-                continue
-        cleanup.result()
+                cancelled = True
+            except Exception:
+                if not cancelled:
+                    raise
+        if cancelled:
+            if not task.cancelled():
+                try:
+                    task.result()
+                except Exception:
+                    logger.opt(exception=True).debug(
+                        "流式识别收尾异常让位于取消信号: endpoint={}", self._endpoint
+                    )
+            raise asyncio.CancelledError
+        task.result()
 
     async def cancel(self) -> None:
         """取消并关闭连接（幂等；不产出最终稿）。"""
@@ -639,7 +667,9 @@ class AsrStreamHandle:
             reason="流式识别收尾等待超时",
             close_code=self._transport.last_close_code,
         ))
-        await self._shutdown(STREAM_CLOSE_GOING_AWAY, "settle_timeout", notify_cancel=False)
+        await self._finalize_cancellation_safe(
+            self._shutdown(STREAM_CLOSE_GOING_AWAY, "settle_timeout", notify_cancel=False)
+        )
         raise self._failure_future.result()
 
     def _enqueue_sentinel(self) -> None:

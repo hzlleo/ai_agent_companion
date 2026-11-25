@@ -25,9 +25,16 @@ from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.persona.chara_card import CharaCardModel
 from packages.harness.persona.dtos import PersonaRecordDTO
 from packages.harness.persona.models import PersonaStatus
+from packages.harness.voice.asr_stream_client import Qwen3AsrStreamClient
+from packages.harness.voice.stream_models import STREAM_CLOSE_NORMAL
 from packages.harness.voice.voice_models import VoiceProfileModel, VoiceUsageEvent
 from packages.harness.voice.voice_service import VoiceService
-from tests.realtime_fakes import FakeAsrStreamHandle
+from tests.realtime_fakes import (
+    FakeAsrStreamHandle,
+    FakeStreamTransport,
+    make_stream_connector,
+    wait_until,
+)
 
 
 class _FakeStreamAsrClient:
@@ -286,6 +293,45 @@ async def test_asr_stream_finish_cancelled_then_cleanup_records_no_usage_row() -
     assert recorder.events == []
     await handle.cancel()
     assert client.handle.cancelled is True
+    assert recorder.events == []
+
+
+async def test_asr_stream_finish_cancel_during_close_records_no_usage_row() -> None:
+    """收尾途中（真客户端传输关闭在途）取消：连接收口完成且零用量行。"""
+    transport = FakeStreamTransport()
+    await transport.push_event({"type": "session.updated"})
+    client = Qwen3AsrStreamClient(
+        make_stream_connector(transport),
+        endpoint="ws://asr.test/v1/realtime",
+        model="qwen3-asr-flash-realtime",
+        timeout_seconds=1.0,
+        heartbeat_interval_seconds=60.0,
+    )
+    recorder = _UsageRecorder()
+    service = VoiceService(
+        settings=_settings(), asr_stream_client=client, usage_recorder=recorder
+    )
+    handle = await service.open_asr_stream(
+        sample_rate_hz=16000, on_partial=_no_partial, persona=_persona()
+    )
+    await transport.push_event(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "收尾中",
+        }
+    )
+    transport.close_gate = asyncio.Event()
+    finish_task = asyncio.create_task(handle.finish())
+    await wait_until(
+        lambda: transport.close_started.is_set(), description="传输关闭在途"
+    )
+    finish_task.cancel()
+    transport.close_gate.set()
+    with pytest.raises(asyncio.CancelledError):
+        await finish_task
+    assert transport.closed == (STREAM_CLOSE_NORMAL, "session_finished")
+    assert recorder.events == []
+    await handle.cancel()
     assert recorder.events == []
 
 

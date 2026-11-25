@@ -2,8 +2,8 @@
   "version": 1,
   "note": "单元测试断言基线——计数只降不升；再生成: python scripts/assertion_freeze.py --update",
   "totals": {
-    "asserts": 9535,
-    "raises": 702,
+    "asserts": 9549,
+    "raises": 705,
     "files": 225
   },
   "files": {
@@ -1053,9 +1053,9 @@
       "digest": "6ca208c80a0789785999b7d67639eb75e5305f0e18ada2f9bae1f61c7e05b84d"
     },
     "backend/src/tests/unit/test_voice_service_streaming.py": {
-      "asserts": 43,
-      "raises": 6,
-      "digest": "2ad30dc752f470eb10a4094b848ef82fcd3a794ce5d71ab27e202cdff2a5c706"
+      "asserts": 46,
+      "raises": 7,
+      "digest": "a54907bccfb661587d2c510062e24d923ccf470d8dcfbb429d37491ba0fb6812"
     },
     "backend/src/tests/unit/test_voice_settings.py": {
       "asserts": 28,
@@ -1063,9 +1063,9 @@
       "digest": "b58487c81673c8375ce09a4a1e433ba25319f5197ddc9389df32ec8192dc8dcf"
     },
     "backend/src/tests/unit/test_voice_stream_clients.py": {
-      "asserts": 64,
-      "raises": 14,
-      "digest": "a9e4b027a9088160c215d25a023ab9063ca8a1a47d675f3e511a95bee86141db"
+      "asserts": 75,
+      "raises": 16,
+      "digest": "92295388691c632942024dfdbe9669e763848cba27433aceb7124448f572f3d0"
     },
     "backend/src/tests/unit/test_voice_stream_transport.py": {
       "asserts": 17,
