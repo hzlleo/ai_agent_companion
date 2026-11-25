@@ -2,8 +2,8 @@
   "version": 1,
   "note": "单元测试断言基线——计数只降不升；再生成: python scripts/assertion_freeze.py --update",
   "totals": {
-    "asserts": 9549,
-    "raises": 705,
+    "asserts": 9570,
+    "raises": 708,
     "files": 225
   },
   "files": {
@@ -1063,9 +1063,9 @@
       "digest": "b58487c81673c8375ce09a4a1e433ba25319f5197ddc9389df32ec8192dc8dcf"
     },
     "backend/src/tests/unit/test_voice_stream_clients.py": {
-      "asserts": 75,
-      "raises": 16,
-      "digest": "92295388691c632942024dfdbe9669e763848cba27433aceb7124448f572f3d0"
+      "asserts": 96,
+      "raises": 19,
+      "digest": "aa1aded2dcf7b1775a7979c9bef1afad88eec5135480fc4e68d8cb98b79e9c98"
     },
     "backend/src/tests/unit/test_voice_stream_transport.py": {
       "asserts": 17,

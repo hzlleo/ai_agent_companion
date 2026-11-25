@@ -1890,11 +1890,36 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 5. **N11 迁移 head 指针**：§5 门禁命令的迁移链说明改为「迁移链 head 以 `backend/alembic/versions` 为准，由 doc-counts 机械校验」；`check_doc_counts.py` 的 `_migration_facts`（从版本目录派生 head 并校验 LEDGER 字面）仍在 gates 链内。
 
 **实测（命令 + 退出码；最终树）**：
-- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3469 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=702 / frontend-coverage=96.08 / frontend-lint / frontend-build=2.66s；证据 `docs/evidence/r4-5-whatsapp-819c3f22.json`，canonical sha8=`819c3f22`（718 文件级证据；`--hash-only` 复算一致）；`eeed61b8`（G2 审计修复 B2）与更早证据均为历史）。
+- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3469 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=702 / frontend-coverage=96.08 / frontend-lint / frontend-build=2.66s；证据 `docs/evidence/r4-5-whatsapp-819c3f22.json`，canonical sha8=`819c3f22`（718 文件级证据；`--hash-only` 复算一致；**G2 五审修复后由 `87fc56e8` 取代，本行为历史**）；`eeed61b8`（G2 审计修复 B2）与更早证据均为历史）。
 - 变异证据：N9 尾段回退直接 await → 新 3 用例红（3 failed / 37 passed）；N7 10 形态 5 红 5 绿；N6 两扫描根写 `R4` → exit 1、写 `R2D2` → exit 0。
 - 根 `pixi run gates` → 0（comment-gates files=377 violations=0 / red-probe-gate 29 探针覆盖 28 文件 / doc-counts 13 项 / assertion-freeze asserts=9549 raises=705 / 其余门禁同链）。
 - `cd backend && pixi run tests-seekdb` → 0（15 passed；活容器 `seekdb-smoke`）。
 - 无迁移 / 无新增依赖 / 无新增 env 键；前端仅 `scripts/check_bundle_budget.mjs` 注释一行。
+
+### 已完成切片：G2 五审修复（N9 三条取消安全守卫 + 证据 / 注释门覆盖边角——本分支工作区）
+
+**背景**：G2 五审唯一 P2——`asr_stream_client.finish()` 的四处 `_finalize_cancellation_safe` 接入中，此前只有成功尾段有「关闭在途取消仍收口」的红守卫；收尾超时、业务失败、外部取消三条出口的守卫缺失，回退为直接 `await` 不会变红。本批补三条门闩用例，并收口两个覆盖边角（证据哈希根覆盖注释门已纳入的树、注释门前端配置面）；旧 canonical `819c3f22`（G2 终审修复）自本批起为历史。
+
+逐条（守卫 → 断言面 / 变异证据）：
+
+1. **收尾超时出口守卫**：`test_asr_settle_timeout_close_cancel_still_finalizes`——final 事件永不到达触发 settle 超时，`close_gate` 把 `_shutdown(STREAM_CLOSE_GOING_AWAY, "settle_timeout")` 挂在传输关闭在途；此时取消 `finish` → 断言关闭码 `(1001, "settle_timeout")`、`close_calls == 1`、`handle._tasks` 为空、`_closed` 为真，取消信号上抛。
+2. **业务失败出口守卫**：`test_asr_business_failure_cancel_still_finalizes`——收尾事件出站后注入对端 1011 断流触发 `BusinessException` 出口，`cancel()` 收口挂在关闭在途；关闭在途重复取消两次 → 断言 `session.cancel` 出站、关闭码 `(1000, "client_cancel")`、连接只关一次、`handle._tasks` 为空，取消信号上抛（不暴露业务失败异常）。
+3. **外部取消出口守卫**：`test_asr_cancel_exit_second_cancel_still_finalizes`——外部取消进入 `CancelledError` 出口的 `cancel()` 收口并挂在关闭在途；期间二次取消 → 断言连接只关一次、`_tasks` 为空、无新增挂起任务、取消信号上抛，收口完成后幂等 `cancel()` 不重复关闭。
+4. **变异矩阵（四接入点；逐处临时回退为直接 `await`，复原后 29 passed）**：业务失败出口 `_finalize_cancellation_safe(self.cancel())` → `await self.cancel()` → 仅用例 2 红（1 failed / 28 passed）；外部取消出口同改 → 仅用例 3 红（1 failed / 28 passed）；收尾超时出口 `_finalize_cancellation_safe(self._shutdown(STREAM_CLOSE_GOING_AWAY, "settle_timeout", ...))` → 直接 `await` → 仅用例 1 红（1 failed / 28 passed）；成功尾段 `_finalize_cancellation_safe(self._shutdown(STREAM_CLOSE_NORMAL, "session_finished", ...))` → 直接 `await` → 既有两条成功尾段守卫同时红（2 failed / 27 passed）。
+5. **证据哈希根覆盖边角**：`verify_slice.py` 的 `_HASH_ROOTS` 增 `backend/alembic` 与 `frontend/scripts`（与注释门扫描根对齐——证据哈希须覆盖被门禁约束的树）。新增根枚举 22 个源文件（21 个 Alembic 环境 / 迁移文件 + 1 个前端预算脚本），`__pycache__` 按既有跳过口径剔除，无缓存 / 生成物。canonical 由 718 文件增至 740 文件级证据。
+6. **注释门前端配置面**：`check_chinese_comments.py` 的 `_TREE_ROOTS["frontend"]` 增 `frontend/eslint.config.js` / `frontend/vite.config.ts` / `frontend/vitest.config.ts`（TS/JS 注释词法面），模块 docstring 同步。前端树 files=111 violations=0；全链 comment-gates files=380 violations=0 hints=23（原 377——新增三文件均无编号残留，无需清理暴露项）。
+7. **断言基线**：三条守卫新增断言后运行 `pixi run python ../scripts/assertion_freeze.py --update`（exit 0），基线 asserts 9549→9570（+21）、raises 705→708（+3）、文件 225 不变；`--enforce` 复跑 exit 0。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run pytest src/tests/unit/test_voice_stream_clients.py -q --asyncio-mode=auto` → 0（29 passed——既有 26 + 新增 3）。
+- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=702 / frontend-coverage=96.08 / frontend-lint / frontend-build=3.36s；证据 `docs/evidence/r4-5-whatsapp-87fc56e8.json`，canonical sha8=`87fc56e8`（740 文件级证据；`--hash-only` 复算 `sha8=87fc56e8 files=740` 一致）；`819c3f22` 与更早证据均为历史）。
+- `cd backend && pixi run coverage-gates` → 0（24 组 ≥80%：harness/voice 93.0%（2667/2868）、harness/channels 97.4%（3276/3362）、app/api 85.3%（1249/1465）、app/main.py 93.9%（558/594）等全组 PASS）。
+- `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0（216 源文件）；`pixi run conftest-env` → 0（228/228，豁免 0）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `e756beba…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）。
+- 根 `pixi run gates` → 0（comment-gates files=380 violations=0 hints=23 / sync-test-ratchet 无回升 / noqa-freeze 基线 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 源文件 215、冻结基线 190、探针 29 条覆盖 28 文件 / docs-truth / doc-counts 13 项（规则 29 / 红队 55 / 配置分节 31 / 措辞扫描 817 文件）/ assertion-freeze asserts=9570 raises=708 / surface-check 62 已登记 + 42 豁免、env 791 行 / bench-core PASS 6 项 / api-smoke PASS 4 端点 / prose-pin 75≤75）。
+- `cd backend && pixi run tests-seekdb` → 0（15 passed；活容器 `seekdb-smoke`）。
+- 变异矩阵见逐条第 4 项；复原后源文件与 HEAD 零差异（`_finalize_cancellation_safe` 四处接入原样）。
+- 无迁移 / 无新增依赖 / 无新增 env 键；前端仅新增三处配置扫描根（源码零改动）。
 
 ## 6. 遗留与部署台账（非阻塞）
 

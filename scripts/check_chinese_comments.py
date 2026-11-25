@@ -8,9 +8,9 @@
     - backend/alembic（迁移环境与版本文件——Python 面，与 backend/src 同规则）
     - docker 沙盒树 src + server.py
     - 仓库根 scripts/（工程级脚本）
-    - frontend/src 与 frontend/scripts（TypeScript / JavaScript——只检查注释
-      内的编号残留；前端没有 Python 式 docstring 契约，因此不套用存在性与
-      中文要求）
+    - frontend/src、frontend/scripts 与前端构建 / 校验配置（eslint / vite /
+      vitest——TypeScript / JavaScript；只检查注释内的编号残留，前端没有
+      Python 式 docstring 契约，因此不套用存在性与中文要求）
 
 测试文件豁免（约定不同）：路径含 ``tests/`` 的文件、``test_*.py`` /
 ``*_test.py`` / ``conftest.py``。
@@ -69,7 +69,13 @@ _TREE_ROOTS: dict[str, list[str]] = {
         "docker/browser-sidecar/server.py",
     ],
     "scripts": ["scripts"],
-    "frontend": ["frontend/src", "frontend/scripts"],
+    "frontend": [
+        "frontend/src",
+        "frontend/scripts",
+        "frontend/eslint.config.js",
+        "frontend/vite.config.ts",
+        "frontend/vitest.config.ts",
+    ],
 }
 
 # 各树扫描的文件后缀；未登记的树按 Python 源码处理。
