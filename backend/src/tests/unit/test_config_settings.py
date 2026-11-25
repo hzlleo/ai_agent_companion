@@ -29,7 +29,7 @@ async def test_settings_singleton_reads_conftest_env() -> None:
     """全局单例捕获根 conftest 硬覆盖的 env 值（防 shell 泄漏语义）。"""
     assert settings.database.type == "sqlite"
     assert settings.database.host == "localhost"
-    assert settings.database.port == 3306
+    assert settings.database.port == 2881
     assert settings.database.name == "test_db"
     assert settings.database.user == "test_user"
     assert settings.database.password.get_secret_value() == "test_pass"
@@ -70,7 +70,7 @@ async def test_settings_llm_env_section_maps_env() -> None:
 async def test_settings_seekdb_section_maps_env() -> None:
     """seekdb 分节与 SEEKDB_* env 面对齐（默认关闭——测试恒走回退存储）。"""
     assert settings.seekdb.enabled is False
-    assert settings.seekdb.host == "127.0.0.1"
+    assert settings.seekdb.host == "localhost"
     assert settings.seekdb.port == 2881
     assert settings.seekdb.user == "test_user"
     assert settings.seekdb.password_env == "SEEKDB_TEST_PASSWORD"
@@ -99,14 +99,20 @@ async def test_seekdb_settings_defaults_and_pool_bounds(monkeypatch) -> None:
         monkeypatch.delenv(key, raising=False)
     default = SeekDBSettings(env_file=None)
     assert default.enabled is False
-    assert default.host == "127.0.0.1"
-    assert default.port == 2881
-    assert default.user == "root"
-    assert default.password_env == "SEEKDB_PASSWORD"
-    assert default.database == "test"
+    assert default.host is None
+    assert default.port is None
+    assert default.user is None
+    assert default.password_env is None
+    assert default.database == "ai_agent_companion_search"
     assert default.vector_dim == 1024
     assert default.pool_min == 1
     assert default.pool_max == 4
+
+    blank = SeekDBSettings(host="", port="", user="", password_env="", env_file=None)
+    assert blank.host is None
+    assert blank.port is None
+    assert blank.user is None
+    assert blank.password_env is None
 
     with pytest.raises(ValidationError):
         SeekDBSettings(pool_min=4, pool_max=1, env_file=None)

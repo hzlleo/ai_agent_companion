@@ -6,10 +6,14 @@
     - ``docs/backend/defense.md``：注入规则总数、逐种类规则计数、红队模板
       总数 / 阳性 / 阴性分档；
     - ``docs/backend/chat.md``：红队模板总数；
-    - ``docs/backend/config.md``：生成器 ``_ENV_SECTIONS`` 登记表的分节行数。
+    - ``docs/backend/config.md``：生成器 ``_ENV_SECTIONS`` 登记表的分节行数；
+    - 全仓措辞：禁止「MySQL 8 权威」类表述与裸「InnoDB」泛称（唯一白名单
+      是 SeekDB 兼容变量名 ``innodb_lock_wait_timeout``）——权威存储统一
+      表述为「SeekDB 权威存储（MySQL 协议）」/「MySQL 协议 / SeekDB 行锁
+      语义」。
 
-计数不从文档回读，而是导入规则表、红队模板表与生成器登记表后派生——
-文档数字只能跟随代码变化，不能独立漂移。
+计数与措辞不从文档回读，而是导入规则表、红队模板表与生成器登记表后派生
+——文档只能跟随代码变化，不能独立漂移。
 
 用法::
 
@@ -47,6 +51,33 @@ _DOCS_ROOT = REPO_ROOT / "docs"
 #: config.md 生成块标记（分节行只在块内计数）。
 _CONFIG_MARKER_START = "<!-- generated:env-sections -->"
 _CONFIG_MARKER_END = "<!-- /generated:env-sections -->"
+
+#: 措辞扫描根（文档 / 生成模板 / 工程说明 / 源码 docstring）。
+_WORDING_ROOTS: tuple[Path, ...] = (
+    REPO_ROOT / "docs",
+    REPO_ROOT / "README.md",
+    REPO_ROOT / "backend" / ".env.example",
+    REPO_ROOT / "pixi.toml",
+    REPO_ROOT / "scripts",
+    REPO_ROOT / "backend" / "src",
+)
+
+#: 措辞扫描后缀（文档 / 配置模板 / 工程说明 / Python docstring）。
+_WORDING_SUFFIXES: frozenset[str] = frozenset({".md", ".py", ".toml", ".example"})
+
+#: 禁止的权威存储表述（旧口径「MySQL 8 权威…」）。
+_FORBIDDEN_WORDING: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("MySQL 8 权威", re.compile(r"MySQL\s*8\s*[（(]?\s*权威")),
+)
+
+#: 唯一允许出现的 InnoDB 字面（SeekDB 兼容占位变量名）。
+_INNODB_VARIABLE = re.compile(r"innodb_lock_wait_timeout", re.IGNORECASE)
+
+#: 裸 InnoDB 泛称（白名单剥离后仍出现即红）。
+_INNODB_GENERIC = re.compile(r"\bInnoDB\b", re.IGNORECASE)
+
+#: 措辞扫描的自身排除（规则定义文本包含被禁字面本身）。
+_WORDING_SELF_EXCLUDED = frozenset({Path(__file__).resolve()})
 
 
 @dataclass(frozen=True)
@@ -203,6 +234,50 @@ def _table_data_rows(block: str) -> list[str]:
     ]
 
 
+def _wording_files() -> list[Path]:
+    """枚举措辞扫描文件（按根展开；跳过缓存与自身）。
+
+    Returns:
+        待扫描文件路径列表（去重、稳定排序）。
+    """
+    files: set[Path] = set()
+    for root in _WORDING_ROOTS:
+        if not root.exists():
+            continue
+        candidates = [root] if root.is_file() else sorted(root.rglob("*"))
+        for path in candidates:
+            if not path.is_file() or path.suffix not in _WORDING_SUFFIXES:
+                continue
+            if "__pycache__" in path.parts or path.resolve() in _WORDING_SELF_EXCLUDED:
+                continue
+            files.add(path)
+    return sorted(files)
+
+
+def _wording_problems() -> list[str]:
+    """扫描全仓禁用措辞（旧权威表述 / 裸行锁引擎泛称）。
+
+    Returns:
+        问题列表（``路径:行号:命中规则``；空 = 一致）。
+    """
+    problems: list[str] = []
+    for path in _wording_files():
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError:
+            continue
+        relative = path.relative_to(REPO_ROOT)
+        for number, line in enumerate(lines, start=1):
+            for label, pattern in _FORBIDDEN_WORDING:
+                if pattern.search(line):
+                    problems.append(f"{relative}:{number}: 禁用表述「{label}」")
+            if _INNODB_GENERIC.search(_INNODB_VARIABLE.sub("", line)):
+                problems.append(
+                    f"{relative}:{number}: 裸「InnoDB」泛称（改「MySQL 协议 / SeekDB 行锁语义」）"
+                )
+    return problems
+
+
 def main() -> int:
     """CLI 入口：逐条核对文档数字真相。
 
@@ -219,15 +294,16 @@ def main() -> int:
     for fact in facts:
         problems.extend(_evaluate_fact(fact))
     problems.extend(_evaluate_config_rows())
+    problems.extend(_wording_problems())
     if problems:
-        print("[check_doc_counts] 文档数字与代码常量不一致:", file=sys.stderr)
+        print("[check_doc_counts] 文档数字 / 措辞与代码常量不一致:", file=sys.stderr)
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         return 1
     print(
-        f"[check_doc_counts] 文档数字一致：{len(facts) + 1} 项"
+        f"[check_doc_counts] 文档数字与措辞一致：{len(facts) + 1} 项"
         f"（规则 {len(INJECTION_RULES)} 条 / 红队 {len(RED_TEAM_TEMPLATES)} 条"
-        f" / 配置分节 {len(_ENV_SECTIONS)} 项）"
+        f" / 配置分节 {len(_ENV_SECTIONS)} 项 / 措辞扫描 {len(_wording_files())} 文件）"
     )
     return 0
 

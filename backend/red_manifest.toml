@@ -381,3 +381,11 @@ symbol = "packages.harness.voice.voiceprint_audio:probe_audio"
 tests = [
     "tests/unit/test_voiceprint_audio.py::test_probe_wav_reads_header_duration_and_rate",
 ]
+
+[[probes]]
+name = "transaction-conflict-retry-removal"
+symbol = "packages.harness.database.conflict_retry:run_with_conflict_retry"
+tests = [
+    "tests/unit/test_sticker_service.py::test_transaction_conflict_retries_upload_as_duplicate",
+    "tests/unit/test_sticker_service.py::test_transaction_conflict_retries_ingest_to_existing_record",
+]

@@ -6,7 +6,7 @@
 
 - **多人格注册表**：chara card v2 人设卡 + L/M/S 三层心理状态 + 人格切换/复制，记忆与平台账号按人格隔离
 - **三层记忆**：情景（append-only 事件日志 + 每日日记）/ 策展（MEMORY.md + USER.md + 关系状态）/ 夜间梦境整理（规则门控 + provenance 分级）
-- **统一检索**：SeekDB（向量 + BM25 + 标量过滤单一引擎，MySQL 协议原生 async）+ MySQL 权威关系库；双时间线先以关系建模落地
+- **统一检索**：SeekDB（向量 + BM25 + 标量过滤单一引擎，MySQL 协议原生 async）+ SeekDB 权威关系库（与检索同实例、不同库名）；双时间线先以关系建模落地
 - **值班轮 + 调度**：任务书（charter）模式 + 写入类平台工具经 safety 审批门接入（规划中）+ 全量审计
 - **工具层**：OpenAI 兼容原生工具调用 + docker 沙盒隔离执行 + `look_at` 视觉理解（本地 Qwen3-VL，主模型无需多模态）
 - **管理后台**：人格/记忆/配置/工具全管理 + Token 用量多维分析（时间 × 模型 × 用途 × 输入/输出/总量）
@@ -23,7 +23,7 @@
 |---|---|
 | 后端 | Python 3.12 + FastAPI + Pydantic v2 + SQLAlchemy 2.0 async |
 | 前端 | React 19 + Vite |
-| 关系库 | MySQL 8.x（aiomysql 异步驱动） |
+| 关系库 | SeekDB 权威存储（MySQL 协议，aiomysql 驱动） |
 | 检索 | SeekDB（AI-native 搜索数据库，MySQL 协议） |
 | 主 LLM | 远端 vLLM 0.32+（多 provider 网关，OpenAI 兼容） |
 | 辅助模型 | Qwen3-VL（look_at）/ Qwen3-Embedding-0.6B / bge-m3（备）/ CosyVoice3 / Qwen3-ASR —— 全部独立本地服务进程 |

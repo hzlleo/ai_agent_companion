@@ -2,7 +2,8 @@
 
 方言分派（锁定决策）：
 
-    - **MySQL 8 权威存储**（``mysql+aiomysql``）——生产路径；连接池参数
+    - **SeekDB 权威存储**（MySQL 协议，``mysql+aiomysql`` 驱动）——生产
+      路径；连接池参数
       全部来自 :class:`DatabaseConfig`（pool_size / max_overflow /
       pool_recycle 防 wait_timeout 断连 / pool_pre_ping 取连接前健康检查）。
     - **SQLite 测试**（``sqlite+aiosqlite``）——``DatabaseConfig.type

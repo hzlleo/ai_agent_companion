@@ -181,6 +181,8 @@ Content-Disposition: form-data; name="question"
 
 唯一键 `uq_ff_stickers_persona_sha (persona_id, sha256)`；索引 `ix_ff_stickers_annotation_status`。文件写入采用「临时文件 + fsync + `os.replace`」原子换名，目录按人格哈希与哈希前缀分段（不同人格同文件互不覆盖）。
 
+**并发冲突语义（锁定，根修）**：同人格同哈希并发写入按唯一键收敛——插入撞 1062（重复键）时以共享锁定读（`SELECT ... LOCK IN SHARE MODE`）解析已提交胜者行（不请求排他锁，消除唯一键检查共享锁 → 胜者查询排他锁的 S→X 升级死锁）；胜者路径与本次写入路径相同时保留文件，否则清理落败文件。SeekDB 可重复读旧快照下的新增键冲突实测以瞬态事务冲突（驱动错误 6235；死锁 1213）抛出——调用方（`upload_batch` / `ingest_bytes`）回滚后按已提交胜者单次重试：预读命中即收敛为既有记录 / 重复拒收（零 500），二次冲突上抛。SeekDB 的旧快照不因锁定读而跨越新增键，重试是收敛前提而非缓解。
+
 ### 链路顺序（上传 / 标注）
 
 ```

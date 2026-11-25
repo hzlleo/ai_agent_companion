@@ -51,6 +51,7 @@ from packages.harness.pools.llm_pool import LlmEntryPool
 from packages.harness.pools.seekdb_compat import (
     SeekDbPoolProtocol,
     create_seekdb_pool,
+    resolve_seekdb_config,
     resolve_seekdb_password,
 )
 
@@ -101,14 +102,20 @@ class PoolManager:
         幂等：已 start 时为 no-op（重复 start 直接返回）。
 
         Raises:
-            BusinessException: SeekDB 池创建失败（``enabled=True`` 且
-                实例不可达——fail loud，部署顺序契约：SeekDB 先于 app
-                就绪；``INTERNAL_ERROR``）。失败路径先释放已建共享
-                HTTP client（aclose 并置 None），不留半装配资源。
+            BusinessException: SeekDB 单栈不变式违反（``enabled=True`` 且
+                检索池显式 host / port 与权威库不一致——``CONFIG_INVALID``）；
+                或 SeekDB 池创建失败（实例不可达——fail loud，部署顺序
+                契约：SeekDB 先于 app 就绪；``INTERNAL_ERROR``）。失败路径
+                先释放已建共享 HTTP client（aclose 并置 None），不留半装配
+                资源。
         """
         if self._started:
             return
         pools = self._settings.pools
+        seekdb_settings = self._settings.seekdb
+        resolved_seekdb = (
+            resolve_seekdb_config(self._settings) if seekdb_settings.enabled else None
+        )
 
         # 1. core 共享线程池——同步库下沉（jwt.decode / zipfile / 同步 SDK）
         init_shared_thread_pool(pools.thread_pool_size)
@@ -119,19 +126,19 @@ class PoolManager:
         # 3. LLM 条目池——per-entry 信号量 + 熔断器（网关消费；信号量惰性注册）
         self.llm_entry_pool = LlmEntryPool(pools)
 
-        # 4. SeekDB 检索池——aiomysql plain pool（仅 enabled 时启动）
-        seekdb_settings = self._settings.seekdb
-        if seekdb_settings.enabled:
-            password = resolve_seekdb_password(seekdb_settings.password_env)
+        # 4. SeekDB 检索池——aiomysql plain pool（仅 enabled 时启动；单栈
+        #    不变式已在任何资源装配前校验——违反即零资源 fail loud）
+        if resolved_seekdb is not None:
+            password = resolve_seekdb_password(resolved_seekdb.password_env)
             try:
                 self.seekdb_pool = await create_seekdb_pool(
-                    host=seekdb_settings.host,
-                    port=seekdb_settings.port,
-                    user=seekdb_settings.user,
+                    host=resolved_seekdb.host,
+                    port=resolved_seekdb.port,
+                    user=resolved_seekdb.user,
                     password=password,
-                    database=seekdb_settings.database,
-                    pool_min=seekdb_settings.pool_min,
-                    pool_max=seekdb_settings.pool_max,
+                    database=resolved_seekdb.database,
+                    pool_min=resolved_seekdb.pool_min,
+                    pool_max=resolved_seekdb.pool_max,
                 )
             except Exception as exc:
                 # 已建的共享 HTTP client 先释放（aclose 并置 None）——

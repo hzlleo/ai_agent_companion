@@ -17,7 +17,7 @@ active / superseded 行语义不变；归档行的单 active 守卫标记
 （``active_marker``）由服务层同步置 NULL，使同主题可重新起链。
 
 升级顺序：先加列（server_default 覆盖存量行）再放开默认值——两方言
-（MySQL 8 / SQLite）对 ``ALTER TABLE ADD COLUMN`` + 默认值的支持面
+（MySQL 协议 / SQLite）对 ``ALTER TABLE ADD COLUMN`` + 默认值的支持面
 一致（本迁移不涉外键 / 索引，故无 5320 方言面）。
 
 降级：删四列（生命周期状态丢弃——降级语义，文档化）；``archived``

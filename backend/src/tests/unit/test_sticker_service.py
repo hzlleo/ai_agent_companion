@@ -16,9 +16,11 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import pymysql
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.dialects import mysql
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import packages.harness.multimodal.sticker_orm as sticker_orm  # noqa: F401  模型注册副作用导入（共享建表）
@@ -37,13 +39,20 @@ from packages.harness.multimodal.sticker_models import (
     StickerUploadItemModel,
 )
 from packages.harness.multimodal.sticker_orm import StickerRow
-from packages.harness.multimodal.sticker_service import StickerService, _winner_select
+from packages.harness.multimodal.sticker_service import (
+    StickerInsertOutcome,
+    StickerService,
+    _winner_select,
+)
 from packages.harness.persona.service import bind_persona_context
 
 #: 测试人格上下文轴（PersonaMixin 无外键——任意字符串 ID 即隔离轴）。
 PERSONA_A = "sticker-alpha"
 PERSONA_B = "sticker-beta"
 PNG = b"\x89PNG\r\n\x1a\nfake-png"
+
+#: 冲突胜者查询的方言编译期望（共享锁定读——非排他锁）。
+_SHARED_LOCK_CLAUSE = "LOCK IN SHARE MODE"
 
 
 class FakeGateway:
@@ -100,6 +109,59 @@ class _RacingStickerService(StickerService):
                 )
             )
         return path
+
+
+class _ConflictInjectingService(StickerService):
+    """在指定次数内抛出瞬态事务冲突的测试服务（可选先提交同哈希胜者）。
+
+    模拟 SeekDB 可重复读旧快照下的唯一键冲突形态：驱动错误 6235 / 1213
+    在插入阶段抛出，重试预读才会看到本类预先提交的胜者行。
+    """
+
+    def __init__(
+        self,
+        *,
+        codes: Sequence[int],
+        winner_path: Path | None,
+        **kwargs: Any,
+    ) -> None:
+        """初始化（codes 逐次消费；winner_path 仅首个冲突前提交一次）。"""
+        super().__init__(**kwargs)
+        self._codes = list(codes)
+        self._winner_path = winner_path
+        self.attempts = 0
+
+    async def _insert_sticker(
+        self, session: AsyncSession, **kwargs: Any
+    ) -> StickerInsertOutcome:
+        """首个插入前抛驱动冲突；提供胜者时先提交同哈希胜者行。"""
+        self.attempts += 1
+        if not self._codes:
+            return await super()._insert_sticker(session, **kwargs)
+        code = self._codes.pop(0)
+        if self._winner_path is not None:
+            payload = kwargs["payload"]
+            digest = kwargs["digest"]
+            session.add(
+                StickerRow(
+                    sha256=digest,
+                    content_type="image/png",
+                    storage_path=str(self._winner_path),
+                    size_bytes=len(payload),
+                    tags="[]",
+                    description="并发胜者",
+                    source_note="并发来源",
+                    annotation_status=StickerAnnotationStatus.PENDING.value,
+                    annotation_error=None,
+                    annotation_model_entry=None,
+                    annotated_at_ms=None,
+                )
+            )
+            await session.commit()
+            self._winner_path = None
+        raise OperationalError(
+            "INSERT INTO ff_stickers", {}, pymysql.err.OperationalError(code, "conflict")
+        )
 
 
 def _settings(**overrides: object) -> StickerSettings:
@@ -544,10 +606,10 @@ async def test_insert_sticker_conflict_resolves_winner_and_keeps_file(
     assert binary.content == PNG
 
 
-async def test_winner_select_uses_locking_read() -> None:
-    """冲突收敛查询是当前读：MySQL 方言编译含 FOR UPDATE（快照读回归即红）。"""
-    compiled = str(_winner_select("sha-guard").compile(dialect=mysql.dialect()))
-    assert compiled.rstrip().endswith("UPDATE")
+async def test_winner_select_uses_shared_locking_read() -> None:
+    """冲突收敛查询是共享锁读：方言编译含 LOCK IN SHARE MODE（快照 / 排他锁回归即红）。"""
+    compiled = str(_winner_select("sha-guard").compile(dialect=mysql.dialect())).rstrip()
+    assert compiled.endswith(_SHARED_LOCK_CLAUSE)
     assert "ff_stickers.sha256" in compiled
 
 
@@ -636,3 +698,94 @@ async def test_upload_dimension_guards_batch_and_annotation_payload() -> None:
     with pytest.raises(ValueError):
         _extract_annotation_payload("[1, 2]")
     assert json.loads(json.dumps(payload)) == payload
+
+
+async def test_transaction_conflict_retries_upload_as_duplicate(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """一次性 6235：批量上传回滚重试后收敛为重复拒收（零异常）。"""
+    winner_path = tmp_path / "winner.png"
+    service = _ConflictInjectingService(
+        codes=[6235],
+        winner_path=winner_path,
+        settings=_settings(),
+        gateway=FakeGateway(),
+        resolver=_resolver(),
+        storage_root=tmp_path,
+    )
+    async with bind_persona_context(PERSONA_A):
+        result = await service.upload_batch(
+            db_session, StickerBatchUploadDTO(items=[_item()])
+        )
+        rows = list((await db_session.execute(select(StickerRow))).scalars().all())
+    # 重试在新事务中预读命中胜者 → 不再触达插入（收敛于预读，非二次插入）。
+    assert service.attempts == 1
+    assert result.created == []
+    assert [item.reason for item in result.rejected] == [StickerRejectReason.DUPLICATE]
+    assert len(rows) == 1
+    assert rows[0].storage_path == str(winner_path)
+
+
+async def test_transaction_conflict_retries_ingest_to_existing_record(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """一次性 1213：通道收录回滚重试后返回既有胜者记录（零异常）。"""
+    winner_path = tmp_path / "winner.png"
+    service = _ConflictInjectingService(
+        codes=[1213],
+        winner_path=winner_path,
+        settings=_settings(),
+        gateway=FakeGateway(),
+        resolver=_resolver(),
+        storage_root=tmp_path,
+    )
+    async with bind_persona_context(PERSONA_A):
+        record = await service.ingest_bytes(
+            db_session, PNG, "image/webp", source_note="通道入站表情"
+        )
+    # 重试在新事务中预读命中胜者 → 返回既有记录，不再触达插入。
+    assert service.attempts == 1
+    assert record is not None
+    assert record.id > 0
+    assert record.description == "并发胜者"
+
+
+async def test_transaction_conflict_twice_propagates(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """连续两次瞬态冲突：只重试一次，第二次原样上抛。"""
+    service = _ConflictInjectingService(
+        codes=[6235, 6235],
+        winner_path=None,
+        settings=_settings(),
+        gateway=FakeGateway(),
+        resolver=_resolver(),
+        storage_root=tmp_path,
+    )
+    async with bind_persona_context(PERSONA_A):
+        with pytest.raises(OperationalError) as exc_info:
+            await service.ingest_bytes(
+                db_session, PNG, "image/png", source_note="通道入站表情"
+            )
+    assert service.attempts == 2
+    assert str(exc_info.value.orig.args[0]) == "6235"
+
+
+async def test_non_conflict_operational_error_is_not_retried(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """非 6235 / 1213 的驱动错误：不回滚重试，一次即上抛。"""
+    service = _ConflictInjectingService(
+        codes=[1042],
+        winner_path=None,
+        settings=_settings(),
+        gateway=FakeGateway(),
+        resolver=_resolver(),
+        storage_root=tmp_path,
+    )
+    async with bind_persona_context(PERSONA_A):
+        with pytest.raises(OperationalError):
+            await service.ingest_bytes(
+                db_session, PNG, "image/png", source_note="通道入站表情"
+            )
+    assert service.attempts == 1

@@ -14,8 +14,8 @@
 模块内容（按配置域拆分）：
 
     - ``ServerConfig``       —— Web 服务（env_prefix=``SERVER_``）
-    - ``DatabaseConfig``     —— 数据库连接（env_prefix=``DATABASE_``；MySQL 8
-      权威存储 aiomysql，测试 SQLite aiosqlite）
+    - ``DatabaseConfig``     —— 数据库连接（env_prefix=``DATABASE_``；SeekDB
+      权威存储（MySQL 协议，aiomysql 驱动），测试 SQLite aiosqlite）
     - ``LogConfig``          —— 日志（env_prefix=``LOG_``；映射 core.LoggingConfig）
     - ``PoolsConfig``        —— 共享池（env_prefix=``POOLS_``；线程池 / HTTP 池 /
       LLM 信号量 / 熔断阈值）
@@ -210,34 +210,37 @@ class ServerConfig(BaseSettings):
 class DatabaseConfig(BaseSettings):
     """数据库连接配置（env_prefix=``DATABASE_``）。
 
-    MySQL 8 为权威存储（aiomysql 驱动）；SQLite（aiosqlite）用于测试与
-    本地开发。``type`` 切换方言，``name`` 在 sqlite 方言下为库文件路径
-    （``:memory:`` 表示内存库）。
+    SeekDB 权威存储（MySQL 线协议，aiomysql 驱动）；SQLite（aiosqlite）
+    用于测试与本地开发。``type`` 切换方言，``name`` 在 sqlite 方言下为
+    库文件路径（``:memory:`` 表示内存库）。单栈决策：权威库与检索库同
+    实例（不同库名），默认端口即 SeekDB MySQL 线协议端口 2881。
 
     Attributes:
         type: 数据库类型（``mysql`` / ``sqlite``）。
-        host: MySQL 主机地址（sqlite 方言忽略）。
-        port: MySQL 端口（sqlite 方言忽略）。
-        name: MySQL 数据库名；sqlite 方言下为库文件路径（``:memory:`` 内存库）。
-        user: MySQL 用户名。
-        password: MySQL 密码（SecretStr 存储，repr 不泄露）。
-        pool_size: 连接池常驻连接数（MySQL 方言）。
-        max_overflow: 连接池溢出上限（MySQL 方言）。
-        pool_recycle: 连接回收周期秒数（防 MySQL wait_timeout 断连）。
+        host: 权威库主机地址（SeekDB 实例；sqlite 方言忽略）。
+        port: 权威库端口（SeekDB MySQL 线协议；sqlite 方言忽略）。
+        name: 权威库数据库名；sqlite 方言下为库文件路径（``:memory:`` 内存库）。
+        user: 权威库连接用户名。
+        password: 权威库密码（SecretStr 存储，repr 不泄露）。
+        pool_size: 连接池常驻连接数（MySQL 协议方言）。
+        max_overflow: 连接池溢出上限（MySQL 协议方言）。
+        pool_recycle: 连接回收周期秒数（防服务端 wait_timeout 断连）。
         pool_pre_ping: 取出连接前是否做一次健康检查。
     """
 
     type: Literal["mysql", "sqlite"] = Field(
         default="mysql", description="数据库类型：mysql（生产权威）/ sqlite（测试）"
     )
-    host: str = Field(default="127.0.0.1", description="MySQL 主机地址")
-    port: int = Field(default=3306, ge=1, le=65535, description="MySQL 端口")
+    host: str = Field(default="127.0.0.1", description="权威库主机地址（SeekDB 实例）")
+    port: int = Field(
+        default=2881, ge=1, le=65535, description="权威库端口（SeekDB MySQL 线协议）"
+    )
     name: str = Field(
         default="ai_agent_companion",
-        description="MySQL 数据库名；sqlite 方言下为库文件路径（:memory: 内存库）",
+        description="权威库数据库名；sqlite 方言下为库文件路径（:memory: 内存库）",
     )
-    user: str = Field(default="root", description="MySQL 用户名")
-    password: SecretStr = Field(default=SecretStr(""), description="MySQL 密码")
+    user: str = Field(default="root", description="权威库连接用户名")
+    password: SecretStr = Field(default=SecretStr(""), description="权威库密码")
     pool_size: int = Field(default=10, ge=1, description="连接池常驻连接数")
     max_overflow: int = Field(default=20, ge=0, description="连接池溢出上限")
     pool_recycle: int = Field(default=3600, ge=0, description="连接回收周期（秒）")
@@ -456,28 +459,32 @@ class LlmEndpointConfig(BaseSettings):
 
 
 class SeekDBSettings(BaseSettings):
-    """SeekDB 检索存储配置（env_prefix=``SEEKDB_``——记忆检索层消费）。
+    """SeekDB 检索池配置（env_prefix=``SEEKDB_``——记忆检索层消费）。
 
     SeekDB（v1.4.0，MySQL 线协议 server 模式 2881 端口）承载记忆检索
     索引表 ``ff_memory_index``（向量 + 全文 + 标量混合检索，见
     docs/backend/memory.md 检索层一节）。
+
+    单栈决策（锁定）：权威库与检索池**同实例、不同库名**——``host`` /
+    ``port`` / ``user`` / ``password_env`` 留空即继承
+    :class:`DatabaseConfig`（权威库），显式设置时必须与权威库 host / port
+    一致（启动期 fail loud；拆分实例需另立决策）。密码经环境变量间接
+    （与 llm 条目 ``api_key_env`` 同模式——密码永不落 yaml / 配置树）；
+    留空时继承权威库密码变量 ``DATABASE_PASSWORD``。
 
     锁定决策：``enabled=False``（默认）——全工程走 SQLite 回退存储
     （keyword 模式），零配置开发可用、测试 hermetic；``enabled=True``
     时 PoolManager 启动期创建共享 aiomysql 池（SeekDB 不可达 fail
     loud——部署顺序契约：SeekDB 先于 app 就绪）。
 
-    密码经环境变量间接（与 llm 条目 ``api_key_env`` 同模式——密码
-    永不落 yaml / 配置树）：本配置只持有变量名 ``password_env``，
-    实际密码由存储 / 池装配层从该变量读取。
-
     Attributes:
-        enabled: 是否启用 SeekDB 检索存储（False = SQLite 回退）。
-        host: SeekDB 服务地址（server 模式）。
-        port: SeekDB MySQL 线协议端口（server / docker 模式 2881）。
-        user: 连接用户名。
-        password_env: 密码环境变量名（实际密码从该变量读取）。
-        database: 连接库名。
+        enabled: 是否启用 SeekDB 检索池（False = SQLite 回退）。
+        host: 检索池主机覆盖（None = 继承权威库 host）。
+        port: 检索池端口覆盖（None = 继承权威库端口）。
+        user: 检索池用户名覆盖（None = 继承权威库 user）。
+        password_env: 密码环境变量名覆盖（None = 继承
+            ``DATABASE_PASSWORD``——权威库密码变量）。
+        database: 检索库名（与权威库同实例、不同库名）。
         vector_dim: 向量维度（插值进索引表 DDL 的 VECTOR(dim)；须与
             embed 角色模型输出一致——默认 1024 = Qwen3-Embedding-0.6B）。
         pool_min: 连接池常驻连接数（启动期即建立）。
@@ -485,15 +492,20 @@ class SeekDBSettings(BaseSettings):
     """
 
     enabled: bool = Field(
-        default=False, description="是否启用 SeekDB 检索存储（False = SQLite 回退）"
+        default=False, description="是否启用 SeekDB 检索池（False = SQLite 回退）"
     )
-    host: str = Field(default="127.0.0.1", description="SeekDB 服务地址")
-    port: int = Field(default=2881, ge=1, le=65535, description="SeekDB MySQL 线协议端口")
-    user: str = Field(default="root", description="SeekDB 连接用户名")
-    password_env: str = Field(
-        default="SEEKDB_PASSWORD", min_length=1, description="SeekDB 密码环境变量名"
+    host: str | None = Field(default=None, description="检索池主机覆盖（留空 = 继承权威库）")
+    port: int | None = Field(
+        default=None, ge=1, le=65535, description="检索池端口覆盖（留空 = 继承权威库）"
     )
-    database: str = Field(default="test", description="SeekDB 连接库名")
+    user: str | None = Field(default=None, description="检索池用户名覆盖（留空 = 继承权威库）")
+    password_env: str | None = Field(
+        default=None,
+        description="密码环境变量名覆盖（留空 = 继承权威库 DATABASE_PASSWORD）",
+    )
+    database: str = Field(
+        default="ai_agent_companion_search", description="检索库名（与权威库同实例、不同库名）"
+    )
     vector_dim: int = Field(
         default=1024, ge=1, le=65535, description="向量维度（须与 embed 模型输出一致）"
     )
@@ -506,6 +518,36 @@ class SeekDBSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @field_validator("host", "user", "password_env", mode="before")
+    @classmethod
+    def _blank_text_to_none(cls, value: object) -> object:
+        """env 面空字符串 / 纯空白归一为 None（= 继承权威库）。
+
+        Args:
+            value: 原始值（``.env.example`` 留空复制为 ``.env`` 时为空串）。
+
+        Returns:
+            空 / 纯空白字符串归一为 None；其余原样返回。
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("port", mode="before")
+    @classmethod
+    def _blank_port_to_none(cls, value: object) -> object:
+        """env 面空字符串端口归一为 None（= 继承权威库端口）。
+
+        Args:
+            value: 原始值（空串否则会触发 int 校验失败）。
+
+        Returns:
+            空 / 纯空白字符串归一为 None；其余原样返回。
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @model_validator(mode="after")
     def _verify_pool_bounds(self) -> SeekDBSettings:

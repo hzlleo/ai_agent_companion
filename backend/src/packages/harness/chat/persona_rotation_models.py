@@ -39,8 +39,8 @@ class GroupPersonaSettings(BaseSettings):
             既有语义零变化）。
         max_responders: 单条群消息的应答人格数量上限（1 = 轮流单人格
             应答；>1 = 多人格依次接续同一轮对话）。
-        cooldown_ms: 人格应答冷却毫秒（同一人格两次应答之间的最小间隔；
-            0 = 不设冷却）。
+        cooldown_ms: 人格应答冷却毫秒（**自该轮入站时刻起**，同一人格两次
+            应答之间的最小间隔；0 = 不设冷却）。
     """
 
     enabled: bool = Field(default=False, description="是否启用群聊多人格应答")
@@ -51,7 +51,9 @@ class GroupPersonaSettings(BaseSettings):
         description="单条群消息的应答人格数量上限（1-4）",
     )
     cooldown_ms: int = Field(
-        default=60000, ge=0, description="同一人格两次应答之间的冷却毫秒"
+        default=60000,
+        ge=0,
+        description="同一人格两次应答之间的冷却毫秒（自该轮入站时刻起）",
     )
 
     model_config = SettingsConfigDict(
@@ -87,14 +89,15 @@ class GroupResponderCandidateModel(BaseModel):
     Attributes:
         persona_id: 人格主键。
         is_primary: 是否主人格（选择序的稳定参考值）。
-        last_reply_ms: 该人格在本群聊的最近应答时刻（epoch 毫秒；None =
-            尚未发言）。
+        last_reply_ms: 该人格最近一次应答所属轮次的**入站时刻**（epoch
+            毫秒——与调用方单次时钟读数一致；None = 尚未发言）。
     """
 
     persona_id: int = Field(gt=0, description="人格主键")
     is_primary: bool = Field(default=False, description="是否主人格")
     last_reply_ms: int | None = Field(
-        default=None, description="最近应答时刻（epoch 毫秒；None = 未发言）"
+        default=None,
+        description="最近一次应答所属轮次的入站时刻（epoch 毫秒；None = 未发言）",
     )
 
 
@@ -102,14 +105,15 @@ class GroupResponderStateModel(BaseModel):
     """群聊应答记忆（路由器按会话身份键持有——内存态）。
 
     Attributes:
-        last_reply_ms_by_persona: 人格主键 → 最近应答时刻（epoch 毫秒）；
-            冷却判定原料。
+        last_reply_ms_by_persona: 人格主键 → 最近一次应答所属轮次的入站
+            时刻（epoch 毫秒；冷却判定原料）。
         last_responder_ids: 上一轮应答人格主键列表（重复抑制原料——
             优先让上一轮未发言的人格接话）。
     """
 
     last_reply_ms_by_persona: dict[int, int] = Field(
-        default_factory=dict, description="人格主键 → 最近应答时刻（epoch 毫秒）"
+        default_factory=dict,
+        description="人格主键 → 最近一次应答所属轮次的入站时刻（epoch 毫秒）",
     )
     last_responder_ids: list[int] = Field(
         default_factory=list, description="上一轮应答人格主键列表"

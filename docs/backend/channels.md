@@ -306,7 +306,7 @@ v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语�
 
 `synthetic=True` = 机器生成事件上浮（heartflow / mood / 平台系统消息），非人类消息：**路由器恒跳过，与 `FLOW_ENABLED` 无关**——不建会话、不回调心流判定、不回复，跳过计数只进 debug 日志（`synthetic_skip_count` 为观测面）。入站 `silent` 为平台上报的无通知上下文标记位（预留）。
 
-入站消息携带 `has_user_text`（适配器按平台 wire 语义声明是否含用户字面文本）：纯媒体 / 纯表情 / 纯文件（含 WeCom / 抖音以 `[图片]` 等占位文本承载的形态、QQ 段数组与 CQ 码字符串、Telegram 无 caption 媒体）一律 `has_user_text=False`——路由器照常收录附件、推进心流游标，但**不调用生成**（不写空回合、不发兜底文案），跳过计数 `no_user_text_skip_count` 只进 debug 日志。**占位文本不算用户文本，所有 wire 形态一致**（文本为空时模型校验强制 `has_user_text=False`）；既无用户文本也无任何非文本内容的消息才由产生方丢弃（不进路由器）。
+入站消息携带 `has_user_text`（适配器按平台 wire 语义声明是否含用户字面文本）：纯媒体 / 纯表情 / 纯文件（含 WeCom / 抖音以 `[图片]` 等占位文本承载的形态、QQ 段数组与 CQ 码字符串、Telegram 无 caption 媒体）一律 `has_user_text=False`——路由器照常收录附件、推进心流游标，但**不调用生成**（不写空回合、不发兜底文案），跳过计数 `no_user_text_skip_count` 只进 debug 日志。**占位文本不算用户文本，所有 wire 形态一致**（文本为空时模型校验强制 `has_user_text=False`）；既无用户文本也无任何非文本内容的消息才由产生方丢弃（不进路由器）。**语义区分（锁定）**：纯媒体占位（`[图片]` / `[视频]` / `[文件]` / `[表情]`）不算用户文本；位置 / 按钮 / 交互回执属用户动作——其空字段回退占位（`[位置]` / `[按钮]` / `[交互回复]`）按含内容处理（`has_user_text=True`，照常触发生成）。
 
 **OutboundMessageModel v2 字段**（`attachments: list = []` / `silent: bool = False`）：
 

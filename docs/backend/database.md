@@ -1,6 +1,6 @@
 # database — 数据库域
 
-`backend/src/packages/harness/database/` 承载 SQLAlchemy 2.0 async 引擎工厂（MySQL 8 权威 / SQLite 测试）、声明式基类与 Mixin（含 PersonaMixin 人格作用域自动隔离）、会话门面与引擎持有器；`backend/alembic/` 承载异步迁移环境。
+`backend/src/packages/harness/database/` 承载 SQLAlchemy 2.0 async 引擎工厂（SeekDB 权威存储（MySQL 协议，aiomysql 驱动） / SQLite 测试）、声明式基类与 Mixin（含 PersonaMixin 人格作用域自动隔离）、会话门面与引擎持有器；`backend/alembic/` 承载异步迁移环境。
 
 ## 模块一览
 
@@ -18,10 +18,12 @@
 
 | 方言 | 触发 | URL 形态 | 池语义 |
 |---|---|---|---|
-| MySQL 8（权威，aiomysql） | `DATABASE_TYPE=mysql` | `mysql+aiomysql://user:pwd@host:port/db?charset=utf8mb4` | `pool_size` / `max_overflow` / `pool_recycle`（防 wait_timeout 断连）/ `pool_pre_ping` 全量生效 |
+| SeekDB（权威，MySQL 协议 aiomysql） | `DATABASE_TYPE=mysql` | `mysql+aiomysql://user:pwd@host:port/db?charset=utf8mb4` | `pool_size` / `max_overflow` / `pool_recycle`（防 wait_timeout 断连）/ `pool_pre_ping` 全量生效；默认端口 2881（SeekDB MySQL 线协议） |
 | SQLite（测试，aiosqlite） | `DATABASE_TYPE=sqlite` | `sqlite+aiosqlite:///{name}` | `name=":memory:"` → `StaticPool`（单连接共享——SQLite 内存库 per-connection 语义的必然选择）；文件库默认 QueuePool |
 
-`BigIntIdMixin` 主键在 SQLite 方言渲染为 INTEGER（`with_variant`）——SQLite 仅对 `INTEGER PRIMARY KEY` 启用 rowid 自增；MySQL 侧保持 BIGINT AUTOINCREMENT。
+`BigIntIdMixin` 主键在 SQLite 方言渲染为 INTEGER（`with_variant`）——SQLite 仅对 `INTEGER PRIMARY KEY` 启用 rowid 自增；MySQL 协议方言侧保持 BIGINT AUTOINCREMENT。
+
+**单栈 SeekDB（锁定）**：权威库与检索库同实例、不同库名——`DatabaseConfig` 即 SeekDB 连接（默认 `127.0.0.1:2881` / root / 空密码 / `ai_agent_companion`），`SeekDBSettings` 的 host / port / user / password 留空即继承权威库，显式设置时必须与权威库一致（启动期 `BusinessException(CONFIG_INVALID)` fail loud；拆分实例需另立决策）。行锁语义沿用 MySQL 协议 / SeekDB 术语——`innodb_lock_wait_timeout` 仅为 SeekDB 兼容占位变量，生效旋钮是 `ob_trx_lock_timeout`。
 
 ## Mixin 字段表
 

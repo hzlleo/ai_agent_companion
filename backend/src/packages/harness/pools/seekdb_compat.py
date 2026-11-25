@@ -26,19 +26,100 @@ from __future__ import annotations
 import os
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
-from typing import Any, Protocol, cast
+from typing import Any, Final, NamedTuple, Protocol, cast
 
 import aiomysql
 from loguru import logger
 
+from packages.harness.config.models import Settings
+from packages.harness.core.errors import BusinessException, ErrorCode
+
 __all__ = [
+    "AUTHORITY_PASSWORD_ENV",
     "SeekDbCursorProtocol",
     "SeekDbConnectionProtocol",
     "SeekDbPoolProtocol",
+    "SeekDbResolvedConfig",
     "create_seekdb_pool",
+    "resolve_seekdb_config",
     "resolve_seekdb_password",
     "seekdb_error_base",
 ]
+
+#: 权威库密码环境变量名（单栈继承口径——``SeekDBSettings.password_env``
+#: 留空时检索池使用与权威库相同的密码变量）。
+AUTHORITY_PASSWORD_ENV: Final[str] = "DATABASE_PASSWORD"
+
+
+class SeekDbResolvedConfig(NamedTuple):
+    """单栈 SeekDB 解析产物（检索池 / 存储装配的唯一连接真源）。
+
+    Attributes:
+        host: 检索池主机（继承权威库或显式一致覆盖）。
+        port: 检索池端口（继承权威库或显式一致覆盖）。
+        user: 检索池用户名（继承权威库或显式覆盖）。
+        password_env: 密码环境变量名（留空继承 `DATABASE_PASSWORD`）。
+        database: 检索库名（与权威库同实例、不同库名）。
+        vector_dim: 向量维度。
+        pool_min: 连接池常驻连接数。
+        pool_max: 连接池连接上限。
+    """
+
+    host: str
+    port: int
+    user: str
+    password_env: str
+    database: str
+    vector_dim: int
+    pool_min: int
+    pool_max: int
+
+
+def resolve_seekdb_config(settings: Settings) -> SeekDbResolvedConfig:
+    """解析并校验单栈 SeekDB 连接目标（权威库与检索池同实例不变式）。
+
+    检索池字段留空即继承权威库（`DatabaseConfig`）；显式设置 host / port
+    时必须与权威库一致——单栈决策不允许两个实例，拆分需另立决策。开发与
+    生产同口径 fail loud（不变式一致）。
+
+    Args:
+        settings: 生效 Settings（权威库 + 检索池配置）。
+
+    Returns:
+        检索池连接目标（host / port / user / 密码变量名 / 库名 / 池边界）。
+
+    Raises:
+        BusinessException: `seekdb.enabled=True` 且检索池显式 host / port
+            与权威库不一致（`CONFIG_INVALID`）。
+    """
+    seekdb = settings.seekdb
+    authority = settings.database
+    host = seekdb.host if seekdb.host is not None else authority.host
+    port = seekdb.port if seekdb.port is not None else authority.port
+    if seekdb.enabled and (host != authority.host or port != authority.port):
+        raise BusinessException(
+            code=ErrorCode.CONFIG_INVALID,
+            message=(
+                "单栈 SeekDB：权威库与检索池必须同实例；拆分需另立决策"
+                f"（检索池 {host}:{port} / 权威库 {authority.host}:{authority.port}）"
+            ),
+            details={
+                "seekdb_host": host,
+                "seekdb_port": port,
+                "authority_host": authority.host,
+                "authority_port": authority.port,
+            },
+        )
+    return SeekDbResolvedConfig(
+        host=host,
+        port=port,
+        user=seekdb.user if seekdb.user is not None else authority.user,
+        password_env=seekdb.password_env or AUTHORITY_PASSWORD_ENV,
+        database=seekdb.database,
+        vector_dim=seekdb.vector_dim,
+        pool_min=seekdb.pool_min,
+        pool_max=seekdb.pool_max,
+    )
 
 
 class SeekDbCursorProtocol(Protocol):

@@ -75,7 +75,7 @@ class Base(DeclarativeBase):
 class BigIntIdMixin:
     """主键 Mixin——BigInteger 自增主键（全工程统一主键形态）。
 
-    MySQL 8 下 ``BIGINT AUTO_INCREMENT``；SQLite 测试方言下渲染为
+    MySQL 协议方言下 ``BIGINT AUTO_INCREMENT``；SQLite 测试方言下渲染为
     ``INTEGER``（``with_variant``）——SQLite 仅对 ``INTEGER PRIMARY KEY``
     启用 rowid 自增，BIGINT 主键会静默失去自增（NOT NULL 违约）。
     """

@@ -62,10 +62,10 @@ os.environ["SERVER_ADMIN_TOKEN_ENV"] = "ADMIN_AUTH_TOKEN"
 # monkeypatch 本变量）
 os.environ["ADMIN_AUTH_TOKEN"] = ""
 
-# --- 数据库（DATABASE_ 前缀 → DatabaseConfig；MySQL 8 权威 / 测试 sqlite） ---
+# --- 数据库（DATABASE_ 前缀 → DatabaseConfig；SeekDB 权威 / 测试 sqlite） ---
 os.environ["DATABASE_TYPE"] = "sqlite"
 os.environ["DATABASE_HOST"] = "localhost"
-os.environ["DATABASE_PORT"] = "3306"
+os.environ["DATABASE_PORT"] = "2881"
 os.environ["DATABASE_NAME"] = "test_db"
 os.environ["DATABASE_USER"] = "test_user"
 os.environ["DATABASE_PASSWORD"] = "test_pass"
@@ -128,7 +128,7 @@ os.environ["LLM_INTIMATE_MIN_INTIMACY_LEVEL"] = "2"
 #     SQLite 回退存储，零真实连接；S3 硬覆盖模式——开发者 shell 导出的
 #     同名真实配置不得泄入测试） ---
 os.environ["SEEKDB_ENABLED"] = "false"
-os.environ["SEEKDB_HOST"] = "127.0.0.1"
+os.environ["SEEKDB_HOST"] = "localhost"
 os.environ["SEEKDB_PORT"] = "2881"
 os.environ["SEEKDB_USER"] = "test_user"
 os.environ["SEEKDB_PASSWORD_ENV"] = "SEEKDB_TEST_PASSWORD"
