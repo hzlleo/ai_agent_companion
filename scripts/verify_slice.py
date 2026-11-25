@@ -73,6 +73,9 @@ _HASH_ROOTS: tuple[str, ...] = (
     "frontend/src",
     "frontend/package.json",
     "frontend/pixi.toml",
+    "frontend/eslint.config.js",
+    "frontend/vite.config.ts",
+    "frontend/vitest.config.ts",
     "pixi.toml",
 )
 

@@ -1890,7 +1890,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 5. **N11 迁移 head 指针**：§5 门禁命令的迁移链说明改为「迁移链 head 以 `backend/alembic/versions` 为准，由 doc-counts 机械校验」；`check_doc_counts.py` 的 `_migration_facts`（从版本目录派生 head 并校验 LEDGER 字面）仍在 gates 链内。
 
 **实测（命令 + 退出码；最终树）**：
-- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3469 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=702 / frontend-coverage=96.08 / frontend-lint / frontend-build=2.66s；证据 `docs/evidence/r4-5-whatsapp-819c3f22.json`，canonical sha8=`819c3f22`（718 文件级证据；`--hash-only` 复算一致；**G2 五审修复后由 `87fc56e8` 取代，本行为历史**）；`eeed61b8`（G2 审计修复 B2）与更早证据均为历史）。
+- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3469 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=702 / frontend-coverage=96.08 / frontend-lint / frontend-build=2.66s；证据 `docs/evidence/r4-5-whatsapp-819c3f22.json`，canonical sha8=`819c3f22`（718 文件级证据；`--hash-only` 复算一致；**G2 五审修复后由 `87fc56e8`、其后由 `5eb1d5ea` 取代，本行为历史**）；`eeed61b8`（G2 审计修复 B2）与更早证据均为历史）。
 - 变异证据：N9 尾段回退直接 await → 新 3 用例红（3 failed / 37 passed）；N7 10 形态 5 红 5 绿；N6 两扫描根写 `R4` → exit 1、写 `R2D2` → exit 0。
 - 根 `pixi run gates` → 0（comment-gates files=377 violations=0 / red-probe-gate 29 探针覆盖 28 文件 / doc-counts 13 项 / assertion-freeze asserts=9549 raises=705 / 其余门禁同链）。
 - `cd backend && pixi run tests-seekdb` → 0（15 passed；活容器 `seekdb-smoke`）。
@@ -1912,7 +1912,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 
 **实测（命令 + 退出码；最终树）**：
 - `cd backend && pixi run pytest src/tests/unit/test_voice_stream_clients.py -q --asyncio-mode=auto` → 0（29 passed——既有 26 + 新增 3）。
-- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=702 / frontend-coverage=96.08 / frontend-lint / frontend-build=3.36s；证据 `docs/evidence/r4-5-whatsapp-87fc56e8.json`，canonical sha8=`87fc56e8`（740 文件级证据；`--hash-only` 复算 `sha8=87fc56e8 files=740` 一致）；`819c3f22` 与更早证据均为历史）。
+- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=702 / frontend-coverage=96.08 / frontend-lint / frontend-build=3.36s；证据 `docs/evidence/r4-5-whatsapp-5eb1d5ea.json`，canonical sha8=`5eb1d5ea`（743 文件级证据；`--hash-only` 复算一致；G2 六审边角并入后由本行取代 `87fc56e8`，后者为历史）；`819c3f22` 与更早证据均为历史）。
 - `cd backend && pixi run coverage-gates` → 0（24 组 ≥80%：harness/voice 93.0%（2667/2868）、harness/channels 97.4%（3276/3362）、app/api 85.3%（1249/1465）、app/main.py 93.9%（558/594）等全组 PASS）。
 - `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0（216 源文件）；`pixi run conftest-env` → 0（228/228，豁免 0）。
 - `cd backend && pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `e756beba…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）。
@@ -1920,6 +1920,10 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 - `cd backend && pixi run tests-seekdb` → 0（15 passed；活容器 `seekdb-smoke`）。
 - 变异矩阵见逐条第 4 项；复原后源文件与 HEAD 零差异（`_finalize_cancellation_safe` 四处接入原样）。
 - 无迁移 / 无新增依赖 / 无新增 env 键；前端仅新增三处配置扫描根（源码零改动）。
+
+**G2 六审边角并入**：`scripts/verify_slice.py` 的 `_HASH_ROOTS` 增补
+`frontend/eslint.config.js` / `frontend/vite.config.ts` / `frontend/vitest.config.ts`
+（注释门扫描根与证据哈希根对齐；文件数 740→743，canonical 更新为 `5eb1d5ea`）。
 
 ## 6. 遗留与部署台账（非阻塞）
 
