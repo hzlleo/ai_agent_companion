@@ -7,17 +7,22 @@
 
 判定面与文档边界：保护路由清单与豁免契约归 ``app/main.py`` 的
 ``_include_routers`` 唯一权威；本模块只回答「生产环境是否允许以当前
-凭据配置启动」。
+凭据配置启动」。豁免 webhook 路由的 path 前缀与对应检查函数登记在
+:data:`WEBHOOK_PATH_AUTH_CHECKS`——新增豁免入站端点时必须同时登记检查项，
+结构测试据此对照 ``app/main.py`` 的挂载表。
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
+from typing import Final
 
 from packages.harness.config.models import RuntimeEnv, Settings
 from packages.harness.core.errors import BusinessException, ErrorCode
 
 __all__ = [
+    "WEBHOOK_PATH_AUTH_CHECKS",
     "ensure_auth_policy",
     "resolve_admin_token",
     "resolve_qq_webhook_token",
@@ -65,37 +70,16 @@ def resolve_sms_forwarder_token(settings: Settings) -> str:
     return settings.channels.sms_forwarder.token.get_secret_value().strip()
 
 
-def ensure_auth_policy(settings: Settings) -> None:
-    """启动期鉴权策略校验（生产环境 fail-closed）。
-
-    规则（锁定）：``settings.env`` 为 ``prod`` 时，管理面 owner token
-    必须非空；QQ / SmsForwarder 通道启用时其入站 token 同样必须非空；
-    WhatsApp 通道启用时 hub 校验 token / 应用密钥 / 访问令牌 / 企业号码 ID
-    四项必须全部非空。开发 / 测试环境保持既有「空 = 鉴权关闭」行为
-    （零配置开发可用）。
+def _ensure_qq_webhook_auth(settings: Settings) -> None:
+    """生产环境 QQ 通道启用时的入站 token 校验。
 
     Args:
-        settings: 生效 Settings（运行环境标识 / 管理面 token 变量名 /
-            QQ / SmsForwarder / WhatsApp 通道开关与其凭据配置）。
+        settings: 生效 Settings。
 
     Raises:
-        BusinessException: 生产环境 ``ADMIN_AUTH_TOKEN`` 解析为空
-            （``CONFIG_INVALID``）；生产环境 QQ 通道启用但
-            ``QQ_WEBHOOK_TOKEN`` 解析为空（同码）；生产环境 SmsForwarder
-            通道启用但 ``SMS_FORWARDER_TOKEN`` 为空（同码）；生产环境
-            WhatsApp 通道启用但四项凭据任一为空（同码）。
+        BusinessException: ``ENV=prod`` 且 QQ 通道启用但 webhook token
+            为空（``CONFIG_INVALID``）。
     """
-    if settings.env is not RuntimeEnv.PROD:
-        return
-    if not resolve_admin_token(settings):
-        raise BusinessException(
-            code=ErrorCode.CONFIG_INVALID,
-            message=(
-                "生产环境必须设置 ADMIN_AUTH_TOKEN："
-                f"环境变量 {settings.server.admin_token_env} 为空"
-            ),
-            details={"admin_token_env": settings.server.admin_token_env, "env": settings.env.value},
-        )
     if settings.channels.qq.enabled and not resolve_qq_webhook_token(settings):
         raise BusinessException(
             code=ErrorCode.CONFIG_INVALID,
@@ -108,29 +92,99 @@ def ensure_auth_policy(settings: Settings) -> None:
                 "env": settings.env.value,
             },
         )
+
+
+def _ensure_sms_forwarder_webhook_auth(settings: Settings) -> None:
+    """生产环境 SmsForwarder 通道启用时的入站 token 校验。
+
+    Args:
+        settings: 生效 Settings。
+
+    Raises:
+        BusinessException: ``ENV=prod`` 且 SmsForwarder 通道启用但 token
+            为空（``CONFIG_INVALID``）。
+    """
     if settings.channels.sms_forwarder.enabled and not resolve_sms_forwarder_token(settings):
         raise BusinessException(
             code=ErrorCode.CONFIG_INVALID,
             message="生产环境启用 SmsForwarder 通道时必须设置 SMS_FORWARDER_TOKEN",
             details={"env": settings.env.value},
         )
-    if settings.channels.whatsapp.enabled:
-        whatsapp = settings.channels.whatsapp
-        required_credentials = {
-            "WHATSAPP_VERIFY_TOKEN": whatsapp.verify_token.get_secret_value().strip(),
-            "WHATSAPP_APP_SECRET": whatsapp.app_secret.get_secret_value().strip(),
-            "WHATSAPP_ACCESS_TOKEN": whatsapp.access_token.get_secret_value().strip(),
-            "WHATSAPP_PHONE_NUMBER_ID": whatsapp.phone_number_id.strip(),
-        }
-        missing = [name for name, value in required_credentials.items() if not value]
-        if missing:
-            raise BusinessException(
-                code=ErrorCode.CONFIG_INVALID,
-                message=(
-                    "生产环境启用 WhatsApp 通道时必须设置 WHATSAPP_VERIFY_TOKEN / "
-                    "WHATSAPP_APP_SECRET / WHATSAPP_ACCESS_TOKEN / "
-                    "WHATSAPP_PHONE_NUMBER_ID（缺失："
-                    f"{', '.join(missing)}）"
-                ),
-                details={"missing": ", ".join(missing), "env": settings.env.value},
-            )
+
+
+def _ensure_whatsapp_webhook_auth(settings: Settings) -> None:
+    """生产环境 WhatsApp 通道启用时的四项凭据校验。
+
+    Args:
+        settings: 生效 Settings。
+
+    Raises:
+        BusinessException: ``ENV=prod`` 且 WhatsApp 通道启用但
+            hub 校验 token / 应用密钥 / 访问令牌 / 企业号码 ID 任一为空
+            （``CONFIG_INVALID``）。
+    """
+    if not settings.channels.whatsapp.enabled:
+        return
+    whatsapp = settings.channels.whatsapp
+    required_credentials = {
+        "WHATSAPP_VERIFY_TOKEN": whatsapp.verify_token.get_secret_value().strip(),
+        "WHATSAPP_APP_SECRET": whatsapp.app_secret.get_secret_value().strip(),
+        "WHATSAPP_ACCESS_TOKEN": whatsapp.access_token.get_secret_value().strip(),
+        "WHATSAPP_PHONE_NUMBER_ID": whatsapp.phone_number_id.strip(),
+    }
+    missing = [name for name, value in required_credentials.items() if not value]
+    if missing:
+        raise BusinessException(
+            code=ErrorCode.CONFIG_INVALID,
+            message=(
+                "生产环境启用 WhatsApp 通道时必须设置 WHATSAPP_VERIFY_TOKEN / "
+                "WHATSAPP_APP_SECRET / WHATSAPP_ACCESS_TOKEN / "
+                "WHATSAPP_PHONE_NUMBER_ID（缺失："
+                f"{', '.join(missing)}）"
+            ),
+            details={"missing": ", ".join(missing), "env": settings.env.value},
+        )
+
+
+#: 豁免鉴权的入站 webhook path 前缀 → 对应生产环境凭据检查函数。
+#: 新增豁免入站端点时必须在此登记，否则结构测试对照 ``app/main.py``
+#: 的挂载表即红。
+WEBHOOK_PATH_AUTH_CHECKS: Final[dict[str, Callable[[Settings], None]]] = {
+    "/api/v1/channels/qq": _ensure_qq_webhook_auth,
+    "/api/v1/channels/sms-forwarder": _ensure_sms_forwarder_webhook_auth,
+    "/api/v1/channels/whatsapp": _ensure_whatsapp_webhook_auth,
+}
+
+
+def ensure_auth_policy(settings: Settings) -> None:
+    """启动期鉴权策略校验（生产环境 fail-closed）。
+
+    规则（锁定）：``settings.env`` 为 ``prod`` 时，管理面 owner token
+    必须非空；随后按 :data:`WEBHOOK_PATH_AUTH_CHECKS` 逐项执行入站通道
+    凭据检查（QQ / SmsForwarder 启用时其入站 token 必须非空；WhatsApp
+    通道启用时 hub 校验 token / 应用密钥 / 访问令牌 / 企业号码 ID 四项
+    必须全部非空）。开发 / 测试环境保持既有「空 = 鉴权关闭」行为
+    （零配置开发可用）。
+
+    Args:
+        settings: 生效 Settings（运行环境标识 / 管理面 token 变量名 /
+            QQ / SmsForwarder / WhatsApp 通道开关与其凭据配置）。
+
+    Raises:
+        BusinessException: 生产环境 ``ADMIN_AUTH_TOKEN`` 解析为空
+            （``CONFIG_INVALID``）；或任一启用通道的入站凭据缺失
+            （同码，逐项明细见各检查函数）。
+    """
+    if settings.env is not RuntimeEnv.PROD:
+        return
+    if not resolve_admin_token(settings):
+        raise BusinessException(
+            code=ErrorCode.CONFIG_INVALID,
+            message=(
+                "生产环境必须设置 ADMIN_AUTH_TOKEN："
+                f"环境变量 {settings.server.admin_token_env} 为空"
+            ),
+            details={"admin_token_env": settings.server.admin_token_env, "env": settings.env.value},
+        )
+    for check in WEBHOOK_PATH_AUTH_CHECKS.values():
+        check(settings)

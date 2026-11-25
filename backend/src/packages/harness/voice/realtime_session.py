@@ -13,7 +13,7 @@
         CosyVoice 逐句合成）
         ↓ WAV 字节按块 base64 下行（audio_chunk）
 
-双轨取材（R4-3 增强；开关默认关闭）：``VOICE_ASR_STREAMING_ENABLED`` /
+双轨取材（可选流式增强；开关默认关闭）：``VOICE_ASR_STREAMING_ENABLED`` /
 ``VOICE_TTS_STREAMING_ENABLED`` 为真且客户端已装配时，转写走真流式通道
 （语段起点后台握手、握手窗口音频进有界缓冲回放、进行中事件即下行
 ``partial_transcript``、切段后收尾取最终稿），合成走逐句流式通道（分片在
@@ -21,7 +21,7 @@
 失败（握手失败 / 中途断流 / 收尾失败 / 空音频）→ 本会话降级回既有批量
 路径：一次告警 + 指标计数（``stream_asr_fallbacks`` /
 ``stream_tts_fallbacks``），会话与后续轮次不中断。开关关闭时零握手、
-零额外连接——批量主链行为与 R2f 完全一致。
+零额外连接——批量主链行为与未启用流式通道的既有形态完全一致。
 
 转写与 VAD 并发：切段后转写以独立任务执行（登记进统一任务集合），音频
 工人只做切段投递——转写窗口内 VAD 照常收帧、起说与打断判定不受影响。
@@ -903,7 +903,8 @@ class RealtimeVoiceSession:
         except BusinessException as exc:
             if exc.code == ErrorCode.RATE_LIMITED:
                 # 预算拒绝不是通道故障：不清可用性、不计数、不告警；该语段
-                # 按 R4-2 语义走批量并由批量闸拒绝收尾（realtime-voice.md）。
+                # 按分面预算语义降级到批量路径，并由批量闸拒绝收尾
+                # （realtime-voice.md）。
                 self._stream_asr_pending = None
                 return
             await self._degrade_stream_asr(f"握手失败({exc.code})")

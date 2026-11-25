@@ -7,13 +7,20 @@
 
 from __future__ import annotations
 
+import ast
+import importlib
+import inspect
 from pathlib import Path
 
 import pytest
 
 import app.main as app_main
+import packages.harness.config.auth_policy as auth_policy
 from app.main import create_app, startup_app_state
-from packages.harness.config.auth_policy import ensure_auth_policy
+from packages.harness.config.auth_policy import (
+    WEBHOOK_PATH_AUTH_CHECKS,
+    ensure_auth_policy,
+)
 from packages.harness.config.models import (
     ChannelsSettings,
     QqChannelSettings,
@@ -23,6 +30,10 @@ from packages.harness.config.models import (
 )
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.core.errors import BusinessException, ErrorCode
+from tests.unit.test_inbound_body_structure import (
+    _direct_exempt_router_names,
+    _imported_router_modules,
+)
 
 #: 管理面 token 的 env 间接变量名（与 conftest 硬覆盖一致）。
 _ADMIN_TOKEN_ENV = "ADMIN_AUTH_TOKEN"
@@ -104,3 +115,96 @@ async def test_startup_calls_auth_policy_before_components(
         assert calls == [isolated]
     finally:
         await app_main.shutdown_app_state(app)
+
+
+def _router_prefix(tree: ast.Module) -> str:
+    """取 API 模块内 ``router = APIRouter(prefix=...)`` 的路由前缀。
+
+    Args:
+        tree: API 模块 AST。
+
+    Returns:
+        路由前缀字符串（缺失即断言失败）。
+    """
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        if "router" not in targets or not isinstance(node.value, ast.Call):
+            continue
+        for keyword in node.value.keywords:
+            if keyword.arg == "prefix" and isinstance(keyword.value, ast.Constant):
+                return str(keyword.value.value)
+    raise AssertionError("API 模块缺少 router = APIRouter(prefix=...)")
+
+
+def _post_subpaths(tree: ast.Module) -> list[str]:
+    """取模块内 ``@router.post(<path>)`` 的子路径。
+
+    Args:
+        tree: API 模块 AST。
+
+    Returns:
+        子路径列表（空字符串表示前缀本身）。
+    """
+    subpaths: list[str] = []
+    for node in tree.body:
+        if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
+            continue
+        for decorator in node.decorator_list:
+            if not isinstance(decorator, ast.Call):
+                continue
+            func = decorator.func
+            if not (
+                isinstance(func, ast.Attribute)
+                and func.attr == "post"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "router"
+            ):
+                continue
+            if decorator.args and isinstance(decorator.args[0], ast.Constant):
+                subpaths.append(str(decorator.args[0].value))
+            else:
+                subpaths.append("")
+    return subpaths
+
+
+async def test_exempt_post_routes_have_auth_policy_entry() -> None:
+    """main.py 豁免鉴权的 POST 路由全部登记在 path 前缀→检查项映射中。"""
+    main_tree = ast.parse(Path(app_main.__file__).read_text())
+    imported = _imported_router_modules(main_tree)
+    direct = _direct_exempt_router_names(main_tree)
+
+    checked = 0
+    for router_name in sorted(direct):
+        module_name = imported.get(router_name)
+        if module_name is None:
+            continue
+        module = importlib.import_module(module_name)
+        module_path = inspect.getsourcefile(module)
+        assert module_path is not None
+        module_tree = ast.parse(Path(module_path).read_text())
+        prefix = _router_prefix(module_tree)
+        for subpath in _post_subpaths(module_tree):
+            full_path = prefix + subpath
+            assert any(
+                full_path.startswith(prefix_key)
+                for prefix_key in WEBHOOK_PATH_AUTH_CHECKS
+            ), f"豁免 POST 路由 {full_path} 缺少 auth-policy 检查项"
+            checked += 1
+    assert checked == 3
+
+
+async def test_prod_startup_dispatches_every_webhook_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """生产环境启动策略逐项执行映射表内的全部入站凭据检查（无遗漏分支）。"""
+    monkeypatch.setenv(_ADMIN_TOKEN_ENV, "test-only-prod-admin-token")
+    calls: list[str] = []
+    patched = {
+        prefix: (lambda _settings, key=prefix: calls.append(key))
+        for prefix in WEBHOOK_PATH_AUTH_CHECKS
+    }
+    monkeypatch.setattr(auth_policy, "WEBHOOK_PATH_AUTH_CHECKS", patched)
+    ensure_auth_policy(_prod_settings())
+    assert calls == list(WEBHOOK_PATH_AUTH_CHECKS)

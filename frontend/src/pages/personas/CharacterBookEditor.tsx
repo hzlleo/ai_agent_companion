@@ -24,7 +24,7 @@ export interface CharacterBookEditorProps {
  *
  * 条目字段面（与后端 chara card v2 契约一致）：keys / secondary_keys /
  * content / insertion_order / constant / case_sensitive / selective /
- * position + R2b 高级触发五字段（depth 深度槽 / recursive 正文递归 /
+ * position + 高级触发五字段（depth 深度槽 / recursive 正文递归 /
  * include_group 互斥分组 / trigger_probability 概率门 / cooldown_turns
  * 冷却回合）。keywords 以逗号分隔编辑；selective 未开启时副触发键
  * 置灰（规格一致性：非选择性条目不得携带副键）；开启时副触发键

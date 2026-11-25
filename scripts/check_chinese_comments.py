@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """中文注释门禁（Chinese comment gate）——扫描非测试源码的 docstring 合规性。
 
-扫描范围（当前仓库树：backend + 沙盒树 + 根级 scripts/——新树落地时在
-本脚本 ``_TREE_ROOTS`` 登记）：
+扫描范围（当前仓库树：backend + 沙盒树 + 根级 scripts/ + 前端源码——新树
+落地时在本脚本 ``_TREE_ROOTS`` 登记）：
 
     - backend/src（排除 src/tests/）
     - docker 沙盒树 src + server.py
     - 仓库根 scripts/（工程级脚本）
+    - frontend/src（TypeScript / JavaScript——只检查注释内的编号残留；
+      前端没有 Python 式 docstring 契约，因此不套用存在性与中文要求）
 
 测试文件豁免（约定不同）：路径含 ``tests/`` 的文件、``test_*.py`` /
 ``*_test.py`` / ``conftest.py``。
@@ -53,7 +55,7 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# 各树扫描根（相对仓库根）；frontend 树无 Python 源码，无需登记。
+# 各树扫描根（相对仓库根）。
 _TREE_ROOTS: dict[str, list[str]] = {
     "backend": ["backend/src"],
     "tool-sandbox": [
@@ -65,7 +67,16 @@ _TREE_ROOTS: dict[str, list[str]] = {
         "docker/browser-sidecar/server.py",
     ],
     "scripts": ["scripts"],
+    "frontend": ["frontend/src"],
 }
+
+# 各树扫描的文件后缀；未登记的树按 Python 源码处理。
+_TREE_SUFFIXES: dict[str, tuple[str, ...]] = {
+    "frontend": (".ts", ".tsx", ".js", ".mjs"),
+}
+
+#: 前端源码后缀（无 Python AST——只解析注释面）。
+_FRONTEND_SUFFIXES: frozenset[str] = frozenset(_TREE_SUFFIXES["frontend"])
 
 # 模块 docstring 同样要求中文；以下目录/文件模式视为测试，整树豁免。
 _TEST_MARKERS = ("tests", "testing")
@@ -75,7 +86,9 @@ _TEST_FILE_NAMES = ("conftest.py",)
 def _is_test_file(path: Path) -> bool:
     if path.name in _TEST_FILE_NAMES or path.name.startswith("test_") or path.name.endswith("_test.py"):
         return True
-    return any(part in _TEST_MARKERS for part in path.parts[:-1])
+    if path.name.endswith((".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx")):
+        return True
+    return any(part in _TEST_MARKERS or part == "test" for part in path.parts[:-1])
 
 
 def _has_cjk(text: str) -> bool:
@@ -90,9 +103,10 @@ _METADATA_EXEMPT_FILES: frozenset[str] = frozenset({"scripts/check_chinese_comme
 #: 前置字符守卫排除「MP3」「UUID4」「chunk_index」这类技术词——只认真正
 #: 作为独立记号出现的编号。
 _METADATA_CODE_RE = re.compile(
-    r"(?<![A-Za-z0-9])D\d+\s*[=＝]"
-    r"|(?<![A-Za-z0-9])P\d+\b"
-    r"|R2[a-z]?-\d+"
+    r"(?<![A-Za-z0-9])R\d[a-z]?(?:-\d+)?(?![A-Za-z0-9])"
+    r"|(?<![A-Za-z0-9])G\d+(?![A-Za-z0-9])"
+    r"|(?<![A-Za-z0-9])D\d+(?:-\d+)?(?![A-Za-z0-9])"
+    r"|(?<![A-Za-z0-9])P\d+(?![A-Za-z0-9])"
     r"|(?<![A-Za-z0-9])chunk \d"
 )
 
@@ -125,6 +139,104 @@ def _iter_annotation_texts(path: Path, source: str, tree: ast.Module) -> Iterato
             yield token.start[0], token.string
 
 
+def _iter_frontend_comments(source: str) -> Iterator[tuple[int, str]]:
+    """枚举 TypeScript / JavaScript 源码内的行注释与块注释文本。
+
+    以最小词法状态机跳过字符串与模板字符串，只产出真正的注释内容——
+    字符串字面量（错误文案 / 键名）不在编号残留检查面内。正则字面量按
+    普通代码处理，其内容极少包含注释起始符，不影响本规则。
+
+    Args:
+        source: 前端源码文本。
+
+    Yields:
+        ``(起始行号, 注释文本)`` 二元组。
+    """
+    index = 0
+    line = 1
+    state = "code"
+    start_line = 0
+    buffer: list[str] = []
+    length = len(source)
+    while index < length:
+        char = source[index]
+        if state == "code":
+            if char == "/" and index + 1 < length and source[index + 1] == "/":
+                state = "line"
+                start_line = line
+                buffer = []
+                index += 2
+                continue
+            if char == "/" and index + 1 < length and source[index + 1] == "*":
+                state = "block"
+                start_line = line
+                buffer = []
+                index += 2
+                continue
+            if char in ("'", '"', "`"):
+                state = char
+            if char == "\n":
+                line += 1
+            index += 1
+            continue
+        if state == "line":
+            if char == "\n":
+                yield start_line, "".join(buffer)
+                state = "code"
+                line += 1
+                index += 1
+                continue
+            buffer.append(char)
+            index += 1
+            continue
+        if state == "block":
+            if char == "*" and index + 1 < length and source[index + 1] == "/":
+                yield start_line, "".join(buffer)
+                state = "code"
+                index += 2
+                continue
+            buffer.append(char)
+            if char == "\n":
+                line += 1
+            index += 1
+            continue
+        # 字符串 / 模板字符串：转义跳过；普通字符串遇换行视为未闭合并复位。
+        if char == "\\":
+            index += 2
+            continue
+        if char == state:
+            state = "code"
+            index += 1
+            continue
+        if char == "\n":
+            line += 1
+            if state != "`":
+                state = "code"
+        index += 1
+
+
+def _report_metadata_matches(
+    path: Path, texts: Iterator[tuple[int, str]], stats: _ScanStats
+) -> None:
+    """对注释 / docstring 文本应用规则 4 并记录命中。
+
+    Args:
+        path: 源文件路径。
+        texts: ``(起始行号, 文本)`` 迭代器。
+        stats: 扫描计数（命中即记违规）。
+    """
+    for lineno, text in texts:
+        for match in _METADATA_CODE_RE.finditer(text):
+            hit_line = lineno + text[: match.start()].count("\n")
+            stats.add_violation(
+                path,
+                hit_line,
+                "comment-metadata",
+                match.group(0).strip(),
+                "残留切片 / 拍板编号（改为自证语义，编号归 docs/LEDGER.md）",
+            )
+
+
 def _check_metadata_codes(
     path: Path, source: str, tree: ast.Module, stats: _ScanStats
 ) -> None:
@@ -138,27 +250,35 @@ def _check_metadata_codes(
     """
     if path.relative_to(_REPO_ROOT).as_posix() in _METADATA_EXEMPT_FILES:
         return
-    for lineno, text in _iter_annotation_texts(path, source, tree):
-        for match in _METADATA_CODE_RE.finditer(text):
-            hit_line = lineno + text[: match.start()].count("\n")
-            stats.add_violation(
-                path,
-                hit_line,
-                "comment-metadata",
-                match.group(0).strip(),
-                "残留切片 / 拍板编号（改为自证语义，编号归 docs/LEDGER.md）",
-            )
+    _report_metadata_matches(path, _iter_annotation_texts(path, source, tree), stats)
+
+
+def _check_frontend_file(path: Path, stats: _ScanStats) -> None:
+    """前端源码检查（只扫描注释文本内的编号残留）。
+
+    Args:
+        path: 前端源文件路径。
+        stats: 扫描计数（命中即记违规）。
+    """
+    stats.files += 1
+    try:
+        source = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        stats.add_violation(path, 0, "module", path.name, "源码不是 UTF-8")
+        return
+    _report_metadata_matches(path, _iter_frontend_comments(source), stats)
 
 
 def _iter_tree_files(tree: str) -> Iterator[Path]:
+    suffixes = _TREE_SUFFIXES.get(tree, (".py",))
     for root in _TREE_ROOTS[tree]:
         p = _REPO_ROOT / root
         if p.is_file():
-            if p.suffix == ".py" and not _is_test_file(p):
+            if p.suffix in suffixes and not _is_test_file(p):
                 yield p
             continue
-        for f in sorted(p.rglob("*.py")):
-            if not _is_test_file(f):
+        for f in sorted(p.rglob("*")):
+            if f.is_file() and f.suffix in suffixes and not _is_test_file(f):
                 yield f
 
 
@@ -306,6 +426,9 @@ def _check_class(node: ast.ClassDef, path: Path, stats: _ScanStats) -> None:
 
 
 def _check_module(path: Path, stats: _ScanStats) -> None:
+    if path.suffix in _FRONTEND_SUFFIXES:
+        _check_frontend_file(path, stats)
+        return
     stats.files += 1
     try:
         source = path.read_text(encoding="utf-8")

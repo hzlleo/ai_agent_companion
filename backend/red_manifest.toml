@@ -403,3 +403,10 @@ symbol = "packages.harness.channels.inbound_timestamp:resolve_epoch_ms_timestamp
 tests = [
     "tests/unit/test_channel_timestamp.py::test_channel_timestamp_matrix",
 ]
+
+[[probes]]
+name = "daily-budget-limit-single-source-removal"
+symbol = "packages.harness.usage.budget_limits:budget_count_capacity"
+tests = [
+    "tests/unit/test_config_settings.py::test_daily_budget_limit_is_single_source_across_config_and_counters",
+]

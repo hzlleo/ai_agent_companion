@@ -30,6 +30,8 @@ from typing import Protocol
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from packages.harness.usage.budget_limits import DAILY_BUDGET_MAX
+
 __all__ = [
     "VOICEPRINT_AUDIO_BASE64_MAX_LENGTH",
     "VOICEPRINT_AUDIO_MIME_ALLOWLIST",
@@ -187,7 +189,7 @@ class VoiceprintSettings(BaseSettings):
     daily_budget_global: int = Field(
         default=0,
         ge=0,
-        le=10_000,
+        le=DAILY_BUDGET_MAX,
         description=(
             "全局每日声纹向量提取调用数上限（0 = 不限；有效上限 10,000——"
             "计数页帽 50×200；按 usage 行计数，跨 worker 近似一致）"
@@ -196,7 +198,7 @@ class VoiceprintSettings(BaseSettings):
     daily_budget_persona: int = Field(
         default=0,
         ge=0,
-        le=10_000,
+        le=DAILY_BUDGET_MAX,
         description=(
             "单人格每日声纹向量提取调用数上限（0 = 不限；有效上限 10,000——"
             "计数页帽 50×200；仅人格上下文调用受约束）"

@@ -7,13 +7,19 @@
       总数 / 阳性 / 阴性分档；
     - ``docs/backend/chat.md``：红队模板总数；
     - ``docs/backend/config.md``：生成器 ``_ENV_SECTIONS`` 登记表的分节行数；
-    - 全仓措辞：禁止「MySQL 8 权威」类表述与裸「InnoDB」泛称（唯一白名单
-      是 SeekDB 兼容变量名 ``innodb_lock_wait_timeout``）——权威存储统一
-      表述为「SeekDB 权威存储（MySQL 协议）」/「MySQL 协议 / SeekDB 行锁
-      语义」。
+    - 全仓措辞：每行内同时出现 ``MySQL`` 与「权威」、且不含 ``SeekDB`` 与
+      「协议」即红（覆盖「MySQL 8.0.42 权威存储」/ 小写 ``mysql 8 权威`` /
+      「MySQL 5.7 权威」/「以 MySQL 8 作为权威库」）；裸「InnoDB」泛称同
+      样禁止（唯一白名单是 SeekDB 兼容变量名
+      ``innodb_lock_wait_timeout``）。权威存储统一表述为「SeekDB 权威存储
+      （MySQL 协议）」/「MySQL 协议 / SeekDB 行锁语义」。
+    - ``docs/LEDGER.md``：迁移链 head 必须与 ``backend/alembic/versions``
+      目录内最大版本号一致（head 从目录派生，文档只能跟随代码）。
 
 扫描面为仓库根全树（后缀 ``.md`` / ``.py`` / ``.toml`` / ``.ini`` /
-``.yml`` / ``.yaml`` / ``.example``）。跳过以下路径，理由逐条列明：
+``.yml`` / ``.yaml`` / ``.example`` / ``.ts`` / ``.tsx`` / ``.js`` /
+``.mjs`` / ``.json`` / ``.cfg`` / ``.sh``，以及无后缀的 ``Dockerfile`` /
+``Makefile``）。跳过以下路径，理由逐条列明（跳过清单保持不变）：
 
     - ``.git``：版本库内部对象（二进制 / 历史文本，不属当前表述）；
     - ``.pixi``：依赖环境（第三方包自带旧口径，不属本仓表述）；
@@ -72,8 +78,26 @@ _WORDING_ROOT = REPO_ROOT
 
 #: 措辞扫描后缀（文档 / 配置模板 / 工程说明 / Python docstring）。
 _WORDING_SUFFIXES: frozenset[str] = frozenset(
-    {".md", ".py", ".toml", ".ini", ".yml", ".yaml", ".example"}
+    {
+        ".md",
+        ".py",
+        ".toml",
+        ".ini",
+        ".yml",
+        ".yaml",
+        ".example",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".mjs",
+        ".json",
+        ".cfg",
+        ".sh",
+    }
 )
+
+#: 措辞扫描的无后缀文件名（构建 / 容器入口）。
+_WORDING_EXTENSIONLESS_NAMES: frozenset[str] = frozenset({"Dockerfile", "Makefile"})
 
 #: 措辞扫描跳过目录名（任意层级；理由见模块 docstring）。
 _WORDING_SKIP_DIRS: frozenset[str] = frozenset(
@@ -89,10 +113,14 @@ _WORDING_SKIP_PATH_PREFIXES: tuple[str, ...] = ("docs/evidence/logs",)
 #: 措辞扫描跳过文件模式（相对仓库根；理由见模块 docstring）。
 _WORDING_SKIP_FILE_PATTERNS: tuple[str, ...] = ("docs/evidence/*.json",)
 
-#: 禁止的权威存储表述（旧口径「MySQL 8 权威…」/「MySQL 权威」）。
-_FORBIDDEN_WORDING: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("MySQL 权威", re.compile(r"MySQL\s*(8(\.\d+(\.x)?)?)?\s*[（(]?\s*权威")),
-)
+#: 同行判定要素：MySQL 字样与「权威」同现、且该行不含 SeekDB 与「协议」。
+_MYSQL_WORD = re.compile(r"(?i)\bmysql\b")
+_SEEKDB_WORD = re.compile(r"(?i)\bseekdb\b")
+_AUTHORITY_WORD = "权威"
+_PROTOCOL_WORD = "协议"
+
+#: 迁移链 head 的版本目录（文档数字从此派生）。
+_ALEMBIC_VERSIONS_ROOT = REPO_ROOT / "backend" / "alembic" / "versions"
 
 #: 唯一允许出现的 InnoDB 字面（SeekDB 兼容占位变量名）。
 _INNODB_VARIABLE = re.compile(r"innodb_lock_wait_timeout", re.IGNORECASE)
@@ -189,6 +217,39 @@ def _red_team_facts() -> list[DocCountFact]:
     ]
 
 
+def _migration_head() -> int:
+    """从 Alembic 版本目录派生当前迁移链 head。
+
+    Returns:
+        最大迁移版本号（整型；文档以四位零填充展示）。
+
+    Raises:
+        RuntimeError: 版本目录缺失或没有任何迁移文件（门禁无法判定）。
+    """
+    if not _ALEMBIC_VERSIONS_ROOT.is_dir():
+        raise RuntimeError(f"迁移版本目录缺失: {_ALEMBIC_VERSIONS_ROOT}")
+    revisions = [
+        int(match.group(1))
+        for path in _ALEMBIC_VERSIONS_ROOT.glob("*.py")
+        if (match := re.match(r"(\d{12})_", path.name)) is not None
+    ]
+    if not revisions:
+        raise RuntimeError("迁移版本目录内没有可识别的版本文件")
+    return max(revisions)
+
+
+def _migration_facts() -> list[DocCountFact]:
+    """按迁移目录派生 LEDGER 的迁移链 head 校验项。"""
+    return [
+        DocCountFact(
+            doc="LEDGER.md",
+            label="迁移链 head",
+            pattern=r"数据库迁移链 0001\.\.(\d{4})",
+            expected=(_migration_head(),),
+        )
+    ]
+
+
 def _evaluate_fact(fact: DocCountFact) -> list[str]:
     """读取文档并按正则核对单条数字事实。
 
@@ -274,7 +335,10 @@ def _wording_files() -> list[Path]:
         )
         for name in filenames:
             path = directory / name
-            if path.suffix not in _WORDING_SUFFIXES:
+            if (
+                path.suffix not in _WORDING_SUFFIXES
+                and path.name not in _WORDING_EXTENSIONLESS_NAMES
+            ):
                 continue
             relative = path.relative_to(REPO_ROOT)
             if str(relative).startswith(_WORDING_SKIP_PATH_PREFIXES):
@@ -301,9 +365,16 @@ def _wording_problems() -> list[str]:
             continue
         relative = path.relative_to(REPO_ROOT)
         for number, line in enumerate(lines, start=1):
-            for label, pattern in _FORBIDDEN_WORDING:
-                if pattern.search(line):
-                    problems.append(f"{relative}:{number}: 禁用表述「{label}」")
+            if (
+                _MYSQL_WORD.search(line)
+                and _AUTHORITY_WORD in line
+                and not _SEEKDB_WORD.search(line)
+                and _PROTOCOL_WORD not in line
+            ):
+                problems.append(
+                    f"{relative}:{number}: 禁用表述「MySQL 权威」"
+                    "（同行须带 SeekDB 或「协议」限定）"
+                )
             if _INNODB_GENERIC.search(_INNODB_VARIABLE.sub("", line)):
                 problems.append(
                     f"{relative}:{number}: 裸「InnoDB」泛称（改「MySQL 协议 / SeekDB 行锁语义」）"
@@ -318,7 +389,7 @@ def main() -> int:
         0 = 全部一致；1 = 存在不一致；2 = 计数派生失败。
     """
     try:
-        facts = _rule_facts() + _red_team_facts()
+        facts = _rule_facts() + _red_team_facts() + _migration_facts()
     except Exception as exc:  # 计数派生失败 = 门禁无法判定，直接红
         print(f"[check_doc_counts] 文档计数派生失败: {exc}", file=sys.stderr)
         return 2

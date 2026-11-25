@@ -741,7 +741,9 @@ class StickerService:
         文件先落盘再插入；撞 ``uq_ff_stickers_persona_sha`` 时只回滚本条目的
         保存点，以**共享锁定读**（``SELECT ... LOCK IN SHARE MODE``）解析胜者
         行并按路径判定清理落败文件：胜者路径与本次写入路径相同（人格作用域
-        确定性命名）时保留文件，避免删除胜者仍在引用的字节。共享锁定读在 MySQL
+        确定性命名）时保留文件，避免删除胜者仍在引用的字节；同路径尝试仍留在
+        调用方的落盘日志中，终态失败由 ``_remove_unreferenced_files`` 按已提交
+        行判定保留（不依赖把尝试移出日志）。共享锁定读在 MySQL
         协议族的当前读面恒见已提交胜者行，且不请求排他锁——
         避免「唯一键检查已持共享锁 → 胜者查询升级排他锁」的 S→X 升级死锁。
         SeekDB 在可重复读 + 旧快照下对新增键的锁定读仍落在快照内（实测），
@@ -793,9 +795,6 @@ class StickerService:
             winner = (await session.execute(_winner_select(digest))).scalars().first()
             if winner is None or winner.storage_path != str(path):
                 await self._remove_files([path])
-            elif written is not None:
-                # 胜者行引用本次路径：文件归胜者所有，移出本次清理日志（对象身份）。
-                written[:] = [entry for entry in written if entry is not attempt]
             return StickerInsertOutcome(row=winner, created=False, path=path)
         return StickerInsertOutcome(row=row, created=True, path=path)
 

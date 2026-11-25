@@ -23,6 +23,8 @@ from packages.harness.config.models import (
 )
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.core.logging_models import LoggingConfig
+from packages.harness.usage.budget_limits import DAILY_BUDGET_MAX, budget_count_capacity
+from packages.harness.voice.voiceprint_models import VoiceprintSettings
 
 
 async def test_settings_singleton_reads_conftest_env() -> None:
@@ -248,10 +250,45 @@ async def test_llm_logprobs_env_surface_and_validation() -> None:
 
 
 async def test_llm_daily_budget_effective_ceiling_validation() -> None:
-    """LLM 日预算上限：10,000（计数页帽 50×200）通过，10,001 拒绝。"""
-    assert LlmEndpointConfig(daily_budget_global=10_000).daily_budget_global == 10_000
-    assert LlmEndpointConfig(daily_budget_persona=10_000).daily_budget_persona == 10_000
+    """LLM 日预算上限：单源常量通过，常量 + 1 拒绝。"""
+    assert (
+        LlmEndpointConfig(daily_budget_global=DAILY_BUDGET_MAX).daily_budget_global
+        == DAILY_BUDGET_MAX
+    )
+    assert (
+        LlmEndpointConfig(daily_budget_persona=DAILY_BUDGET_MAX).daily_budget_persona
+        == DAILY_BUDGET_MAX
+    )
     with pytest.raises(ValidationError):
-        LlmEndpointConfig(daily_budget_global=10_001)
+        LlmEndpointConfig(daily_budget_global=DAILY_BUDGET_MAX + 1)
     with pytest.raises(ValidationError):
-        LlmEndpointConfig(daily_budget_persona=10_001)
+        LlmEndpointConfig(daily_budget_persona=DAILY_BUDGET_MAX + 1)
+
+
+async def test_daily_budget_limit_is_single_source_across_config_and_counters() -> None:
+    """配置 le 上限与两处预算计数器的页容量同源（单一常量）。"""
+    from packages.harness.config.models import AsrSettings, TtsSettings
+    from packages.harness.llm import gateway
+    from packages.harness.voice import voice_budget
+
+    assert gateway.BUDGET_COUNT_PAGE_LIMIT == voice_budget.BUDGET_COUNT_PAGE_LIMIT
+    assert gateway.BUDGET_COUNT_PAGE_CAP == voice_budget.BUDGET_COUNT_PAGE_CAP
+    assert (
+        gateway.BUDGET_COUNT_PAGE_LIMIT * gateway.BUDGET_COUNT_PAGE_CAP
+        == DAILY_BUDGET_MAX
+    )
+    assert budget_count_capacity() == DAILY_BUDGET_MAX
+
+    checked = 0
+    for model in (LlmEndpointConfig, TtsSettings, AsrSettings, VoiceprintSettings):
+        for name, field in model.model_fields.items():
+            if not name.startswith("daily_budget_"):
+                continue
+            le_values = [
+                getattr(meta, "le", None)
+                for meta in field.metadata
+                if getattr(meta, "le", None) is not None
+            ]
+            assert le_values == [DAILY_BUDGET_MAX], (model.__name__, name, le_values)
+            checked += 1
+    assert checked == 8

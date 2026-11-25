@@ -10,15 +10,15 @@
       参数的规范化 dump 的 sha256）。
 
 gate 模式下**计数下降即红**（新增用例请在评审后 ``--update`` 抬高基线）；
-**基线内文件整删同样判红**——否则整文件删除等于把该文件的全部断言清零却
-不留计数下降痕迹；合法整删必须评审后 ``--update`` 重建基线（与计数下降
-同口径）。AST 摘要变化只报告（等量重写合法，但需要审查者看见）。基线只
-覆盖扫描时刻存在的既有文件：新文件不在基线内属正常增量，报告列出，更新
-基线时并入。
+**基线外新增测试文件同样判红**——新文件必须先经评审，再由 ``--update``
+并入基线，避免整文件新增绕过逐文件棘轮；**基线内文件整删同样判红**——
+否则整文件删除等于把该文件的全部断言清零却不留计数下降痕迹；合法整删
+必须评审后 ``--update`` 重建基线（与计数下降同口径）。AST 摘要变化只报告
+（等量重写合法，但需要审查者看见）。
 
 用法::
 
-    python scripts/assertion_freeze.py --enforce   # 门禁（计数下降 / 整删 exit 1）
+    python scripts/assertion_freeze.py --enforce   # 门禁（计数下降 / 整删 / 基线外新文件 exit 1）
     python scripts/assertion_freeze.py             # 报告（对照基线但不阻断）
     python scripts/assertion_freeze.py --update    # 重建基线（人工审阅后提交）
 
@@ -223,9 +223,11 @@ def _report(
     new_files = sorted(set(stats) - set(baseline))
     removed = sorted(set(baseline) - set(stats))
     if new_files:
-        print(f"[assertion_freeze] 基线外新文件 {len(new_files)} 份（--update 并入）:")
+        print(f"[assertion_freeze] 基线外新文件 {len(new_files)} 份（评审后 --update 并入）:")
         for path in new_files[:10]:
             print(f"  - {path}")
+        for path in new_files:
+            drops.append(f"{path}: 基线外新测试文件（评审后 --update 并入基线）")
     if removed:
         print(
             f"[assertion_freeze] 基线内已删除文件 {len(removed)} 份"
@@ -269,7 +271,10 @@ def main(argv: list[str] | None = None) -> int:
     baseline = _load_baseline() if args.enforce or BASELINE_PATH.is_file() else None
     drops, _ = _report(stats, baseline)
     if args.enforce and drops:
-        print("[assertion_freeze] 断言侵蚀（计数下降或基线内测试文件缺失）:", file=sys.stderr)
+        print(
+            "[assertion_freeze] 断言侵蚀（计数下降 / 基线内文件缺失 / 基线外新文件）:",
+            file=sys.stderr,
+        )
         for item in drops:
             print(f"  - {item}", file=sys.stderr)
         print(
@@ -278,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     if args.enforce:
-        print("[assertion_freeze] 棘轮通过（无计数下降、无基线内文件缺失）")
+        print("[assertion_freeze] 棘轮通过（无计数下降、无基线内外文件缺口）")
     return 0
 
 

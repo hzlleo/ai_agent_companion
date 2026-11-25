@@ -58,7 +58,7 @@
     - ``JsonSchema`` / ``ExtensionTool`` / ``ExtensionsConfig`` —— extensions_config.json
       的运行时表示
 
-依赖方向：config → core（合法；core 不反向 import config）。
+依赖方向：config → core / usage.budget_limits（纯常量），合法；被依赖方不反向 import config。
 """
 
 from __future__ import annotations
@@ -78,6 +78,7 @@ from packages.harness.core.logging_models import LoggingConfig
 from packages.harness.intent.intent_models import IntentSettings
 from packages.harness.multimodal.sticker_models import StickerSettings
 from packages.harness.rhythm.rhythm_models import RhythmSettings
+from packages.harness.usage.budget_limits import DAILY_BUDGET_MAX
 from packages.harness.voice.realtime_models import RealtimeVoiceSettings
 from packages.harness.voice.voiceprint_models import VoiceprintSettings
 
@@ -229,7 +230,7 @@ class DatabaseConfig(BaseSettings):
     """
 
     type: Literal["mysql", "sqlite"] = Field(
-        default="mysql", description="数据库类型：mysql（生产权威）/ sqlite（测试）"
+        default="mysql", description="数据库类型：mysql（生产权威库，SeekDB 实例）/ sqlite（测试）"
     )
     host: str = Field(default="127.0.0.1", description="权威库主机地址（SeekDB 实例）")
     port: int = Field(
@@ -417,7 +418,7 @@ class LlmEndpointConfig(BaseSettings):
     daily_budget_global: int = Field(
         default=0,
         ge=0,
-        le=10_000,
+        le=DAILY_BUDGET_MAX,
         description=(
             "全局每日模型调用行数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"
             "按 usage 记录计数，跨 worker 近似一致）"
@@ -426,7 +427,7 @@ class LlmEndpointConfig(BaseSettings):
     daily_budget_persona: int = Field(
         default=0,
         ge=0,
-        le=10_000,
+        le=DAILY_BUDGET_MAX,
         description=(
             "单人格每日模型调用行数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"
             "仅人格上下文调用受约束）"
@@ -1327,7 +1328,7 @@ class TtsSettings(BaseSettings):
     daily_budget_global: int = Field(
         default=0,
         ge=0,
-        le=10_000,
+        le=DAILY_BUDGET_MAX,
         validation_alias="TTS_DAILY_BUDGET_GLOBAL",
         description=(
             "全局每日 TTS 合成调用数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"
@@ -1337,7 +1338,7 @@ class TtsSettings(BaseSettings):
     daily_budget_persona: int = Field(
         default=0,
         ge=0,
-        le=10_000,
+        le=DAILY_BUDGET_MAX,
         validation_alias="TTS_DAILY_BUDGET_PERSONA",
         description=(
             "单人格每日 TTS 合成调用数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"
@@ -1428,7 +1429,7 @@ class AsrSettings(BaseSettings):
     daily_budget_global: int = Field(
         default=0,
         ge=0,
-        le=10_000,
+        le=DAILY_BUDGET_MAX,
         validation_alias="ASR_DAILY_BUDGET_GLOBAL",
         description=(
             "全局每日 ASR 转写调用数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"
@@ -1438,7 +1439,7 @@ class AsrSettings(BaseSettings):
     daily_budget_persona: int = Field(
         default=0,
         ge=0,
-        le=10_000,
+        le=DAILY_BUDGET_MAX,
         validation_alias="ASR_DAILY_BUDGET_PERSONA",
         description=(
             "单人格每日 ASR 转写调用数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"

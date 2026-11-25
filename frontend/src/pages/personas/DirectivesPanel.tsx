@@ -26,7 +26,7 @@ export interface DirectivesPanelProps {
 const DIRECTIVE_CONTENT_MAX_LENGTH = 500
 
 /**
- * 常备指令面板（R2b D7-14——USER.md 式持久指令的编辑面）。
+ * 常备指令面板（USER.md 式持久指令的编辑面）。
  *
  * 语义（文档化）：现行指令在每轮对话组装的系统提示里恒常注入
  * （【长期指令】块——20 条 / 2000 字符帽）；编辑保存经同 topic

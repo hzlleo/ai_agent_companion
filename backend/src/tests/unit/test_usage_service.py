@@ -23,6 +23,9 @@ from packages.harness.usage.dtos import (
     UsageRecordDTO,
 )
 from packages.harness.usage.models import (
+    BUDGET_PURPOSE_GROUPS,
+    LLM_BUDGET_PURPOSES,
+    BudgetPurposeGroup,
     UsageGroupBy,
     UsagePurpose,
     UsageStatus,
@@ -30,6 +33,18 @@ from packages.harness.usage.models import (
 )
 from packages.harness.usage.orm import UsageRecordRow
 from packages.harness.usage.service import UsageService
+
+
+async def test_budget_purpose_partition_covers_usage_enum_without_overlap() -> None:
+    """用途分区单源：每种 UsagePurpose 恰好归入一个预算分区（新增未分类即红）。"""
+    groups = set(BUDGET_PURPOSE_GROUPS)
+    assert groups == set(BudgetPurposeGroup)
+    seen: set[UsagePurpose] = set()
+    for members in BUDGET_PURPOSE_GROUPS.values():
+        assert not (seen & members), f"用途分区重叠: {seen & members}"
+        seen |= members
+    assert seen == set(UsagePurpose)
+    assert BUDGET_PURPOSE_GROUPS[BudgetPurposeGroup.LLM] == LLM_BUDGET_PURPOSES
 
 
 @pytest.fixture

@@ -86,6 +86,10 @@ from packages.harness.llm.llm_models import (
 )
 from packages.harness.pools.llm_pool import LlmEntryPool
 from packages.harness.pools.manager import PoolManager, get_pool_manager
+from packages.harness.usage.budget_limits import (
+    BUDGET_COUNT_PAGE_CAP,
+    BUDGET_COUNT_PAGE_LIMIT,
+)
 
 __all__ = [
     "LlmGateway",
@@ -103,10 +107,6 @@ UsageCounter = Callable[[str | None, int], Awaitable[int]]
 
 #: UTC 日桶宽（毫秒）——预算「今日」边界（与 usage 域 time_bucket=day 同口径）。
 DAY_BUCKET_MS: Final[int] = 86_400_000
-#: 预算计数分页大小（usage 域上限 200）。
-_BUDGET_COUNT_PAGE_LIMIT: Final[int] = 200
-#: 预算计数页数安全上限（防异常记录集拖死调用路径）。
-_BUDGET_COUNT_PAGE_CAP: Final[int] = 50
 #: 慢调用 WARN 阈值毫秒（仅 WARN——不重试、不中断）。
 SLOW_CALL_WARN_MS: Final[int] = 10_000
 
@@ -981,14 +981,14 @@ def wire_default_usage_counter() -> UsageCounter:
         """游标分页统计当日 LLM 用途行数（页数安全上限防异常膨胀）。"""
         total = 0
         cursor: str | None = None
-        for _ in range(_BUDGET_COUNT_PAGE_CAP):
+        for _ in range(BUDGET_COUNT_PAGE_CAP):
             page = await service.query(
                 UsageQueryDTO(
                     persona_id=persona_id,
                     start_ms=day_start_ms,
                     purposes=tuple(LLM_BUDGET_PURPOSES),
                     cursor=cursor,
-                    limit=_BUDGET_COUNT_PAGE_LIMIT,
+                    limit=BUDGET_COUNT_PAGE_LIMIT,
                 )
             )
             total += len(page.items)
