@@ -9,6 +9,7 @@ import {
   type RealtimeScriptProcessorLike,
   type RealtimeSocketLike,
   type RealtimeTrackSettingsLike,
+  type RealtimeWorkletNodeLike,
 } from './realtimeVoiceClient'
 import {
   base64ToBytes,
@@ -237,7 +238,29 @@ class FakeCaptureContext implements RealtimeCaptureContextLike {
   processor = new FakeProcessor()
   resumed = false
   closed = false
+  closeCalls = 0
+  closeRejects = false
+  sourceError = false
+  addModuleCalls = 0
+  onAddModule: (() => void) | null = null
+  onClose: (() => void) | null = null
+  addModuleGate: Promise<void> | null = null
+  closeGate: Promise<void> | null = null
+  audioWorklet: { addModule(url: string): Promise<void> } | undefined = undefined
+  /** 打开 worklet 面（默认关闭，既有用例继续走 ScriptProcessor 路径）。 */
+  enableWorklet(): void {
+    this.audioWorklet = {
+      addModule: (_url: string): Promise<void> => {
+        this.addModuleCalls += 1
+        this.onAddModule?.()
+        return this.addModuleGate ?? Promise.resolve()
+      },
+    }
+  }
   createMediaStreamSource(): { connect(target: unknown): void; disconnect(): void } {
+    if (this.sourceError) {
+      throw new Error('媒体源创建失败')
+    }
     return { connect: () => undefined, disconnect: () => undefined }
   }
   createScriptProcessor(): RealtimeScriptProcessorLike {
@@ -252,7 +275,22 @@ class FakeCaptureContext implements RealtimeCaptureContextLike {
   }
   close(): Promise<void> {
     this.closed = true
-    return Promise.resolve()
+    this.closeCalls += 1
+    this.onClose?.()
+    return this.closeRejects ? Promise.reject(new Error('关闭上下文失败')) : this.closeGate ?? Promise.resolve()
+  }
+}
+
+/** fake worklet 节点。 */
+class FakeWorkletNode implements RealtimeWorkletNodeLike {
+  port: { onmessage: ((event: { data: unknown }) => void) | null } = { onmessage: null }
+  connected = 0
+  disconnected = 0
+  connect(): void {
+    this.connected += 1
+  }
+  disconnect(): void {
+    this.disconnected += 1
   }
 }
 
@@ -278,6 +316,15 @@ function fakeStream(
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve: (value: T) => void = () => undefined
   const promise = new Promise<T>((settle) => {
+    resolve = settle
+  })
+  return { promise, resolve }
+}
+
+/** 手动可控的 void 门闩（无载荷信号的到达时刻）。 */
+function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: () => void = () => undefined
+  const promise = new Promise<void>((settle) => {
     resolve = settle
   })
   return { promise, resolve }
@@ -444,5 +491,125 @@ describe('MicrophoneCapture', () => {
     expect(secondContext.closed).toBe(true)
     await capture.stop()
     expect(capture.getCapabilities()).toBeNull()
+  })
+
+  it('stop 落在 worklet addModule 窗口：迟到模块加载不建节点、不提交能力，资源收口', async () => {
+    const moduleGate = deferredSignal()
+    const entered = deferredSignal()
+    const context = new FakeCaptureContext()
+    context.enableWorklet()
+    context.addModuleGate = moduleGate.promise
+    context.onAddModule = () => entered.resolve()
+    const { stream, stopped } = fakeStream({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    })
+    const node = new FakeWorkletNode()
+    let nodeCalls = 0
+    const capture = new MicrophoneCapture({
+      onFrameBase64: () => undefined,
+      audioContextFactory: () => context,
+      getUserMedia: () => Promise.resolve(stream),
+      workletNodeFactory: () => {
+        nodeCalls += 1
+        return node
+      },
+    })
+    const starting = capture.start()
+    await entered.promise
+    const stopping = capture.stop()
+    moduleGate.resolve()
+    await starting
+    await stopping
+    expect(stopped()).toBe(1)
+    expect(context.closed).toBe(true)
+    expect(context.closeCalls).toBe(1)
+    expect(nodeCalls).toBe(0)
+    expect(node.disconnected).toBe(0)
+    expect(capture.getCapabilities()).toBeNull()
+    expect(capture.isPaused()).toBe(false)
+  })
+
+  it('pause 落在 getUserMedia 窗口：迟到媒体流停轨且不建上下文，暂停态保持', async () => {
+    const media = deferred<RealtimeMediaStreamLike>()
+    const { stream, stopped } = fakeStream({ echoCancellation: true })
+    const contexts: FakeCaptureContext[] = []
+    const capture = new MicrophoneCapture({
+      onFrameBase64: () => undefined,
+      audioContextFactory: () => {
+        const context = new FakeCaptureContext()
+        contexts.push(context)
+        return context
+      },
+      getUserMedia: () => media.promise,
+    })
+    const starting = capture.start()
+    const pausing = capture.pause()
+    media.resolve(stream)
+    await starting
+    await pausing
+    expect(capture.isPaused()).toBe(true)
+    expect(stopped()).toBe(1)
+    expect(contexts).toHaveLength(0)
+    expect(capture.getCapabilities()).toBeNull()
+  })
+
+  it('stop 等待在途启动的迟到清理：close 挂起期间 stop 不提前 settle', async () => {
+    const moduleGate = deferredSignal()
+    const moduleEntered = deferredSignal()
+    const closeGate = deferredSignal()
+    const closeEntered = deferredSignal()
+    const context = new FakeCaptureContext()
+    context.enableWorklet()
+    context.addModuleGate = moduleGate.promise
+    context.onAddModule = () => moduleEntered.resolve()
+    context.closeGate = closeGate.promise
+    context.onClose = () => closeEntered.resolve()
+    const { stream, stopped } = fakeStream({ echoCancellation: true })
+    const capture = new MicrophoneCapture({
+      onFrameBase64: () => undefined,
+      audioContextFactory: () => context,
+      getUserMedia: () => Promise.resolve(stream),
+      workletNodeFactory: () => new FakeWorkletNode(),
+    })
+    const starting = capture.start()
+    await moduleEntered.promise
+    let settled = false
+    const stopping = capture.stop().then(() => {
+      settled = true
+    })
+    moduleGate.resolve()
+    await closeEntered.promise
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    closeGate.resolve()
+    await starting
+    await stopping
+    expect(settled).toBe(true)
+    expect(context.closeCalls).toBe(1)
+    expect(stopped()).toBe(1)
+  })
+
+  it('启动失败且上下文关闭拒绝：start 正常结束、onError 一次、无二次释放', async () => {
+    const errors: string[] = []
+    const context = new FakeCaptureContext()
+    context.sourceError = true
+    context.closeRejects = true
+    const { stream, stopped } = fakeStream({ echoCancellation: true })
+    const capture = new MicrophoneCapture({
+      onFrameBase64: () => undefined,
+      onError: (message) => errors.push(message),
+      audioContextFactory: () => context,
+      getUserMedia: () => Promise.resolve(stream),
+    })
+    await expect(capture.start()).resolves.toBeUndefined()
+    expect(errors).toEqual(['媒体源创建失败'])
+    expect(context.closeCalls).toBe(1)
+    expect(stopped()).toBe(1)
+    await capture.stop()
+    expect(context.closeCalls).toBe(1)
+    expect(stopped()).toBe(1)
+    expect(errors).toHaveLength(1)
   })
 })

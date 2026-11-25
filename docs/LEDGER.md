@@ -1931,20 +1931,46 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 
 逐条（根修位置 → 守卫 / 变异证据）：
 
-1. **测试根修（8 处）**：`RealtimeVoicePage.capabilities.test.tsx`（2 处）与 `RealtimeVoicePage.test.tsx`（6 处）中「同步 emit ready 后立即断言」的块改为 `await act(async () => { client.emit(...); await Promise.resolve() })`；内层 `await` 满足 `require-await`，断言保持原样（未改为 `findBy` / `waitFor`）。`src/pages/realtime` 复跑：34 passed、输出中 `not wrapped in act` 计数 0。
+1. **测试根修（8 处）**：`RealtimeVoicePage.capabilities.test.tsx`（2 处）与 `RealtimeVoicePage.test.tsx`（6 处）中「同步 emit ready 后立即断言」的块改为 `await act(async () => { client.emit(...); await Promise.resolve() })`；内层 `await` 满足 `require-await`，断言保持原样（未改为 `findBy` / `waitFor`）。`src/pages/realtime` 复跑：21 passed（7+14）、输出中 `not wrapped in act` 计数 0。
 2. **能力回读补强**：新增「浏览器未生效 AEC 时摘要展示降级（服务端公告为开）」用例——fake 采集注入 `echoCancellation:false`，断言摘要行 `回声消除 降级` 与 AEC 提示条。把该用例的 act 临时改回同步后，断言立即失败（`Unable to find ... /回声消除 降级/`）并同时触发 2 条 act 告警，证明该语义锁定的是异步回读链路而非默认值兜底。
 3. **页面会话身份守卫**：`ready` 异步续体在 `await capture.start()` 后与每次回写前检查 `captureRef.current === capture`，不等则直接返回；`resumeCapture` 的 `await capture.resume()` 后同样校验。停止 / 重开的旧会话结果不再覆盖新状态（原「可恢复错误」用例的迟到回写也被该守卫消除——这正是修复前门禁实测需要同时回退该守卫才能复现 8 例的原因）。
 4. **采集世代 / pending-stop**：`MicrophoneCapture` 增加世代计数与 `pendingStop` 标记；`stop()` / `pause()` 自增世代，`startInternal` 在 `getUserMedia`、`AudioContext.resume`、worklet 加载（含节点创建）后的每个 `await` 检查世代，过期时停轨、断开节点、关闭上下文并返回；启动资源改为局部束、成功后才提交实例字段，迟到启动无法覆盖新会话。`stop()` 在启动在途时会等待其迟到清理完成（`finally` 复位 `pendingStop`），重复 stop 幂等；新会话在 stop 等待期间启动时不会误清其资源。
 5. **两例生命周期测试**：`realtimeVoiceClient.test.ts` 新增「`getUserMedia` 未决时 stop → 迟到媒体流被停轨、不建上下文、无残留」与「stop 后立即重开 → 旧 start 迟到结果不覆盖新会话能力 / 暂停态（旧轨停止、新上下文保留、暂停态不被改写）」；以手动 deferred Promise 驱动，无真实等待。
-6. **act 门禁**：`src/test/setup.ts` 包装 `console.error`，仅匹配 `not wrapped in act(...)` 文案并计数，其余日志原样透传；`beforeEach` 经 `context.onTestFinished` 在用例结束（微任务排空后、`afterEach` cleanup 之前）按条数与用例名抛错，未使用 `afterEach` 以避免逆序跳过 RTL 卸载造成连锁失败。
+6. **act 门禁**：`src/test/setup.ts` 包装 `console.error`，仅匹配 `not wrapped in act(...)` 文案并计数，其余日志原样透传；`beforeEach` 经 `context.onTestFinished` 在用例结束（宏任务排空 + afterAll 兜底；onTestFinished 晚于 `afterEach`（含 RTL cleanup））按条数与用例名抛错。
 
 **实测（命令 + 退出码；最终树）**：
 - 修复前门禁复现（临时回退 8 处 async act 与页面身份守卫）：`cd frontend && pixi run npx vitest run src/pages/realtime --reporter=default` → 8 failed / 12 passed；失败用例与修复前采集到的 8 条 act 告警逐条对应（capabilities 2 + RealtimeVoicePage 6）。
-- `cd frontend && pixi run npx vitest run src/pages/realtime --reporter=default` → 0（20 passed；`not wrapped in act` 计数 0、门禁告警 0）。
+- `cd frontend && pixi run npx vitest run src/pages/realtime --reporter=default` → 0（21 passed（7+14）；`not wrapped in act` 计数 0、门禁告警 0）。
 - `cd frontend && pixi run test` → 0（705 passed；相对修复前 702 增加 3 个用例——2 个采集生命周期 + 1 个能力回读；全量 act 门禁 0 告警）。
 - `cd frontend && pixi run coverage` → 0（statements 95.86% / branches 91.87% / functions 95.75% / lines 96.05%，perFile ≥80% 门禁通过）；`pixi run lint` → 0；`pixi run build` → 0（3.31s，初始 chunk 389.80 kB / gzip 123.62 kB）。
 - `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=705 / frontend-coverage=95.86 / frontend-lint / frontend-build=3.28s；证据 `docs/evidence/r4-5-whatsapp-f8403536.json`，canonical sha8=`f8403536`（743 文件级证据）；`5eb1d5ea` 与更早证据均为历史）。
 - 无后端改动 / 无新增依赖 / 无新增 env 键 / 无迁移；前端改动文件：`src/pages/realtime/RealtimeVoicePage.tsx`、`src/pages/realtime/RealtimeVoicePage.capabilities.test.tsx`、`src/pages/realtime/RealtimeVoicePage.test.tsx`、`src/lib/realtimeVoiceClient.ts`、`src/lib/realtimeVoiceClient.test.ts`、`src/test/setup.ts`。
+
+### 已完成切片：前端实时语音承载性守卫 + act 门禁宏任务归属 + 清理异常收口（本分支工作区）
+
+**背景**：复审（`bbf0592`）给出 2 P1 / 4 P2：采集层三处承载性检查（worklet 窗口 stop、getUserMedia 窗口 pause、stop 等待在途清理）无红守卫；页面两处会话身份守卫无红守卫；启动失败时清理异常会掩盖 `onError`；`pendingStop` 为死字段且建节点后同步复核不可达；act 门禁仅排空微任务，迟到宏任务告警与文件末条 / afterAll 残留会漏记。本批逐条根修并留守卫 / 变异；旧 canonical `f8403536` 自本批起为历史。
+
+逐条（根修位置 → 守卫 / 变异证据）：
+
+1. **采集承载性守卫（P1-1）**：`MicrophoneCapture` 的 `stop` / `pause` 世代与在途等待语义由三条 deferred 门闩用例锁定（无真实等待）：
+   - 「stop 落在 worklet addModule 窗口」——addModule 挂起时 stop、放行后断言停轨 1 / 关上下文 1 / `getCapabilities()===null` / 不建 worklet 节点；删除 `startInternal` 中 worklet 后的过期检查 → 1 failed / 16 skipped。
+   - 「pause 落在 getUserMedia 窗口」——媒体流挂起时 pause、放行后断言 `isPaused()===true` / 停轨 1 / 未建上下文；删除 `pause()` 的世代自增 → 1 failed / 16 skipped。
+   - 「stop 等待在途启动的迟到清理」——addModule 放行后 context.close 挂起，断言 stop 在 close 放行前未 settle；删除 `stop()` 的 `await inflight.task` → 1 failed / 16 skipped。
+2. **页面会话身份守卫（P1-2）**：`RealtimeVoicePage.capabilities.test.tsx` 的 FakeCapture 支持挂起 start / resume，并在 `stop()` 清空 capabilities（与真实采集一致）。两条用例覆盖「停止→重开→旧 ready 的 start 迟到」与「停止→重开→旧 resume 迟到」：旧会话回读不得覆盖新会话能力 / 暂停提示。删除 ready / AEC 公告 / resume 三处身份守卫 → 2 failed / 7 skipped；复原后 9 passed（`src/pages/realtime` 现 23 条 = 9 + 14）。
+3. **清理异常不掩盖启动失败（P2-1）**：`startInternal` 的业务失败出口与三处过期清理统一改为 `await this.releaseResources(...).catch(() => undefined)` 后再 `onError`（过期路径同样吞清理异常，避免二次释放）。新增「启动失败 + context.close reject」用例：`start()` resolve、`onError` 一次、关上下文 1 次、停轨 1 次；回退该 `.catch` → 1 failed / 16 skipped。
+4. **死字段与不可达复核（P2-2）**：删除 `pendingStop` 字段及全部读写（`isStale` 仅保留世代比较），删除 `createWorkletNode` 后的同步复核（建节点为同步调用，世代不可能在该区间变化）。`stop()` 的世代自增是过期判定的唯一来源，删后语义不变；全量 713 用例保持绿。
+5. **act 门禁宏任务归属（P2-3）**：门禁逻辑抽到 `src/test/actWarningGate.ts`；`onTestFinished` 先排空一个宏任务（真实计时 `setTimeout(0)`；`vi.isFakeTimers()` 为真时 `vi.advanceTimersByTime(0)`），再按条数 / 用例名判错并清空归属；`afterAll` 经 `finishRun` 对尝试收尾后的残留按无归属判错，覆盖文件末条 / afterAll 告警。新增两条门禁单测（收尾抛错并清空、afterAll 残留判错）。
+   - 临时探针实测：迟到宏任务告警在有排空时归属到该用例（1 failed / 1 passed）；删除排空后 2 passed（漏记）。afterAll 告警 → `残留告警 1 条（无归属...）` 文件级失败；retry 首轮告警后次轮干净 → 1 passed（首轮告警不记到次轮）。
+6. **说明与台账（P2-4）**：`setup.ts` 注释更正为「onTestFinished 在 afterEach（含 RTL cleanup）之后执行，见 vitest 4 生命周期」；上文两处 `src/pages/realtime` 实数按实测改为 21（7+14）。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd frontend && pixi run npx vitest run` → 0（713 passed；新增 8 条：采集承载性 3 + 清理 1 + 页面身份 2 + 门禁 2；全量 act 门禁 0 告警）。
+- `cd frontend && pixi run npx vitest run --coverage` → 0（statements 95.98% / branches 92.12% / functions 95.5% / lines 96.18%，perFile ≥80% 通过）。
+- `cd frontend && pixi run lint` → 0；`pixi run build` → 0（3.24s，初始 chunk 389.80 kB / gzip 123.62 kB）。
+- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=713 / frontend-coverage=95.98 / frontend-lint / frontend-build=2.94s；证据 `docs/evidence/r4-5-whatsapp-5eb8fd3b.json`，canonical sha8=`5eb8fd3b`（745 文件级证据；`--hash-only` 复算一致）；`f8403536` 与更早证据均为历史）。
+- 根 `pixi run gates` → 0（comment-gates files=380 violations=0 hints=23 / red-probe 29 探针覆盖 28 文件 / assertion-freeze asserts=9570 raises=708 / prose-pin 75≤75 / 其余门禁同链）。
+- 变异清单见逐条第 1-3、5 项；复原后 `git status` 仅本批预期改动。
+- 无后端改动 / 无新增依赖 / 无新增 env 键 / 无迁移；前端改动文件：`src/lib/realtimeVoiceClient.ts`、`src/lib/realtimeVoiceClient.test.ts`、`src/pages/realtime/RealtimeVoicePage.capabilities.test.tsx`、`src/test/setup.ts`、`src/test/actWarningGate.ts`、`src/test/actWarningGate.test.ts`、`docs/LEDGER.md`。
 
 ## 6. 遗留与部署台账（非阻塞）
 

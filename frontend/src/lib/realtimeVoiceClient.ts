@@ -383,7 +383,6 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
   private capabilities: RealtimeCaptureCapabilities | null = null
   private paused = false
   private generation = 0
-  private pendingStop = false
   private starting: { generation: number; task: Promise<void> } | null = null
 
   constructor(options: MicrophoneCaptureOptions) {
@@ -395,7 +394,6 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
     if (this.context !== null) {
       return
     }
-    this.pendingStop = false
     const inflight = this.starting
     if (inflight !== null && inflight.generation === this.generation) {
       await inflight.task
@@ -455,7 +453,7 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
           workletNode: null,
           sourceNode: null,
           chunker: null,
-        })
+        }).catch(() => undefined)
         return
       }
       const capabilities = readCaptureCapabilities(mediaStream)
@@ -470,7 +468,7 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
           workletNode: null,
           sourceNode: null,
           chunker: null,
-        })
+        }).catch(() => undefined)
         return
       }
       const mediaSource = audioContext.createMediaStreamSource(mediaStream)
@@ -489,7 +487,7 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
           workletNode,
           sourceNode,
           chunker,
-        })
+        }).catch(() => undefined)
         return
       }
       if (node === null) {
@@ -511,7 +509,14 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
       this.capabilities = capabilities
       this.paused = false
     } catch (error) {
-      await this.releaseResources({ context, stream, processor, workletNode, sourceNode, chunker })
+      await this.releaseResources({
+        context,
+        stream,
+        processor,
+        workletNode,
+        sourceNode,
+        chunker,
+      }).catch(() => undefined)
       if (generation === this.generation) {
         this.options.onError?.(
           error instanceof Error ? error.message : '麦克风采集启动失败',
@@ -523,19 +528,14 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
   /** 停止采集（幂等；启动在途时等其迟到清理完成后再返回）。 */
   async stop(): Promise<void> {
     this.generation += 1
-    this.pendingStop = true
     const inflight = this.starting
     const resources = this.takeResources()
     this.capabilities = null
     this.paused = false
-    try {
-      if (inflight !== null) {
-        await inflight.task
-      }
-      await this.releaseResources(resources)
-    } finally {
-      this.pendingStop = false
+    if (inflight !== null) {
+      await inflight.task
     }
+    await this.releaseResources(resources)
   }
 
   /** 暂停采集（移动端后台切换——保留 WS 会话与页面状态）。 */
@@ -570,7 +570,7 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
   }
 
   private isStale(generation: number): boolean {
-    return generation !== this.generation || this.pendingStop
+    return generation !== this.generation
   }
 
   private async tryStartWorklet(
@@ -589,10 +589,6 @@ export class MicrophoneCapture implements MicrophoneCaptureLike {
         return null
       }
       const node = this.createWorkletNode(context)
-      if (this.isStale(generation)) {
-        node.disconnect()
-        return null
-      }
       node.port.onmessage = (event) => {
         const data = event.data
         if (data instanceof Float32Array) {
