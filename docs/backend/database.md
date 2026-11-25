@@ -23,7 +23,7 @@
 
 `BigIntIdMixin` 主键在 SQLite 方言渲染为 INTEGER（`with_variant`）——SQLite 仅对 `INTEGER PRIMARY KEY` 启用 rowid 自增；MySQL 协议方言侧保持 BIGINT AUTOINCREMENT。
 
-**单栈 SeekDB（锁定）**：权威库与检索库同实例、不同库名——`DatabaseConfig` 即 SeekDB 连接（默认 `127.0.0.1:2881` / root / 空密码 / `ai_agent_companion`），`SeekDBSettings` 的 host / port / user / password 留空即继承权威库，显式设置时必须与权威库一致（启动期 `BusinessException(CONFIG_INVALID)` fail loud；拆分实例需另立决策）。行锁语义沿用 MySQL 协议 / SeekDB 术语——`innodb_lock_wait_timeout` 仅为 SeekDB 兼容占位变量，生效旋钮是 `ob_trx_lock_timeout`。
+**单栈 SeekDB（锁定）**：权威库与检索库同实例、不同库名——`DatabaseConfig` 即 SeekDB 连接（默认 `127.0.0.1:2881` / root / 空密码 / `ai_agent_companion`），`SeekDBSettings` 的 host / port / user / password 留空即继承权威库，显式设置时必须与权威库一致（启动期 `BusinessException(CONFIG_INVALID)` fail loud；拆分实例需另立决策）。不变式按 host / port 字面比较，`DATABASE_TYPE=sqlite` 时同样执行（dev 同口径，无方言豁免；仅在 `seekdb.enabled=true` 时校验）。行锁语义沿用 MySQL 协议 / SeekDB 术语——`innodb_lock_wait_timeout` 仅为 SeekDB 兼容占位变量，生效旋钮是 `ob_trx_lock_timeout`。
 
 ## Mixin 字段表
 

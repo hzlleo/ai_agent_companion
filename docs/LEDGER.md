@@ -1749,7 +1749,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 
 逐条（原修复位置 → 根修位置 → 结构性守卫）：
 
-1. **P2-1 快照读（MySQL 协议 / SeekDB 行锁语义）**：冲突后胜者解析原为普通 ``SELECT``（RR 下可能落入事务早先读视图而看不到对方已提交行）。根修：`multimodal/sticker_service.py` 抽出 `_winner_select`，胜者查询带共享锁定读（当前读；MySQL 协议可重复读的并发收敛前提）。守卫：`test_winner_select_uses_locking_read`（MySQL 方言编译断言锁定子句——快照读回归即红）+ SeekDB `test_sticker_conflict_across_connections_uses_current_read`（显式 RR 引擎、B 先建读视图、A 提交后同哈希落败：单行、胜者文件存在、败者文件已清、胜者主键一致）；同连接冲突分支既有用例保留。
+1. **P2-1 快照读（MySQL 协议 / SeekDB 行锁语义）**：冲突后胜者解析原为普通 ``SELECT``（RR 下可能落入事务早先读视图而看不到对方已提交行）。根修：`multimodal/sticker_service.py` 抽出 `_winner_select`，胜者查询带 ``with_for_update()`` 行锁（当前读，规避快照读（行锁语义）落入事务早先读视图）。守卫：`test_winner_select_uses_locking_read`（现已更名为 `test_winner_select_uses_shared_locking_read`；MySQL 方言编译断言锁定子句——快照读回归即红）+ SeekDB `test_sticker_conflict_across_connections_uses_current_read`（现已更名为 `test_sticker_conflict_stale_snapshot_retries_to_winner`；显式 RR 引擎、B 先建读视图、A 提交后同哈希落败：单行、胜者文件存在、败者文件已清、胜者主键一致）；同连接冲突分支既有用例保留。
 2. **P2-2 可忽略集补全**：原剔除面为 `Cf` + 少量不可见 `Mn` + Hangul 填充符，漏 Khmer 固有元音 / 蒙古文 FVS4 / 未赋值可忽略段。根修：`chat/text_normalization.py` 改为 Unicode `Default_Ignorable_Code_Point` 属性全族区间表（含 U+17B4–17B5、U+180B–180F、U+FFF0–FFF8、U+E0000–E0FFF 等；保留 `Cf` 超集面）。守卫：`test_chat_text_normalization.py` 新增 9 个码点参数 + 句首 / 「忽略」中间 / 句尾逐位置同分（检测得分与归一副本一致）+ 可见组合符 / 常规 Hangul 字母与音节阴性集；defense.md 写明「默认可忽略属性全族」。
 3. **P2-9 不可解析容器回落**：LEDGER §6 缓解台账新增「声纹不可解析容器（MP3/OGG/WebM/MP4）回落声明值」行（现状 / 原因 / 根修方案：容器头探测或供应商元数据 / 目标 R5-2）；voice.md 校验链与数据模型表改为「WAV / PCM 以实测为准；不可解析容器回落声明并见缓解台账」。
 4. **P2-3 WhatsApp 映射守卫**：`test_whatsapp_models.py` 回退矩阵新增 `has_user_text` 期望列（文本 / caption True；媒体纯占位 False）并断言映射结果——与 QQ / Telegram / WeCom / 抖音四适配器的 `has_user_text` 断言一致（五适配器映射面完整）。
@@ -1799,13 +1799,36 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 **文档同步**：multimodal.md（并发冲突语义：1062 共享锁定读 / 6235+1213 回滚单次重试 / 胜者文件保护）、database.md（单栈）、config.md（单栈配置）、pools.md、channels.md（占位语义区分）、voiceprint_audio 首行、persona_rotation_models 冷却口径、test-strategy/README（四模块 + 双形态收敛 + 权威引擎用例）、LEDGER §4/§6。
 
 **实测（命令 + 退出码；最终树）**：
-- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3359 / coverage-gates=24 组 / lint / typecheck=213 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-5f3a5e42.json`，canonical sha8=`5f3a5e42`（711 文件级证据；`--hash-only` 复算一致）；`18ba54f1` / `ddc4fb27`（本批中间树）与 `a9b45231` 及更早证据为历史）。
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3359 / coverage-gates=24 组 / lint / typecheck=213 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-5f3a5e42.json`，canonical sha8=`5f3a5e42`（711 文件级证据；**G1 四审修复后由 `ee6fa370` 取代，本行与证据为历史**；`18ba54f1` / `ddc4fb27`（本批中间树）与 `a9b45231` 及更早证据为历史）。
 - `cd backend && pixi run tests-all` → 0（3359 passed）；`pixi run coverage-gates` → 0（24 组 ≥80%：harness/database 93.5%（215/230）、harness/multimodal 94.0%（694/738）、harness/pools 100.0%（271/271）、harness/channels 97.3%（3226/3316）、harness/chat 96.3%（1547/1607）、harness/config 96.6%（1554/1609）、harness/memory 94.8%（1904/2009）、harness/persona 95.6%（1790/1872）、harness/voice 93.1%（2628/2822）、app/main.py 93.9%（558/594）、app/api 85.2%（1257/1476））。
 - `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0（Success: no issues found in 213 source files）；`pixi run conftest-env` → 0（228/228，豁免 0）。
 - `cd backend && pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `1df4d48c…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`——`.env.example` 因配置面变更更新且复跑 byte-stable）。
 - 根 `pixi run gates` → 0（comment-gates files=246 violations=0 hints=23 / sync-test-ratchet 无回升 / noqa-freeze 基线 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 212 源文件 26 探针覆盖 25 文件 + grandfathered 190≤190 / docs-truth / doc-counts 12 项（规则 29 / 红队 55 / 配置分节 31 / 措辞扫描 505 文件）/ assertion-freeze asserts=9399 raises=684 / surface-check 42/42 + env 791 行 / bench-core PASS / api-smoke PASS / prose-pin 75≤75）。
 - `cd backend && pixi run red-probe --all` → 0（26 条全部 RED，errors=0）。
 - `cd backend && pixi run tests-seekdb` → 0（15 passed：迁移链 / 并发不变式（含双形态表情收敛）/ 混合检索往返 / 权威引擎单栈 round-trip；活容器 `seekdb-smoke`）。
+- 无迁移 / 无新增依赖 / 无新增 env 键；前端未动（`--with-frontend` 未跑，源码零改动）。
+
+### 已完成切片：G1 四审 4×P2 修复（本分支工作区）
+
+**背景**：G1 四审给出 4 条 P2——同扩展名胜者文件在终态失败时被误删、重试前失败留下孤儿文件、措辞门禁未覆盖仓库根三处残留、复审段历史断言被后续批次改写。本批逐条根修并留守卫；旧 canonical `5f3a5e42` 自本批起为历史，中间树 `06d6b7a5`（补 `dist` 跳过前的验收树）亦为历史。
+
+逐条（原缺陷位置 → 根修位置 → 结构性守卫）：
+
+1. **F1 同扩展名胜者文件误删**：`multimodal/sticker_service.py` 的 `_insert_sticker` 在 1062 分支保留胜者路径文件后，未把该次落盘尝试移出 `written`；后续终态提交失败会按日志清理该路径，删掉胜者仍引用的字节。根修：以对象身份从 `written` 移除该尝试（非按位置假设）。守卫：`test_same_path_winner_file_survives_terminal_commit_failure`（同人格同哈希同扩展名胜者行已提交 → 批内 1062 → 终局提交抛非冲突 2013 → 胜者行与其文件均在）；`test_different_extension_winner_still_removes_loser_file`（异扩展名胜者：落败文件仍按路径判定清理）。
+2. **F2 重试前失败孤儿文件**：`_discard_loser_attempts` 清理并清空 `written` 后，重试若在预读阶段即抛非冲突错误，前一次保留的落盘文件无人跟踪而残留。根修：该方法返回「文件保留、本次行未提交」的尝试集合；`_insert_sticker` 重写同一路径即从该集合移除（重写者接管清理责任）；`upload_batch` / `ingest_bytes` 的终态失败路径改走 `_remove_unreferenced_files`——按同一人格哈希面查询已提交行，仅删除路径无任何已提交行引用的文件（查询失败保留文件，不掩盖原异常）。守卫：`test_retry_pre_read_failure_removes_orphan_file`（6235 清理保留 X → 重试预读 2013 → X 清除、无行残留）、`test_retry_pre_read_failure_keeps_winner_referenced_file`（同一路径已有已提交胜者行 → X 不删）。
+3. **F3 措辞门禁全仓化**：`scripts/check_doc_counts.py` 的扫描根由限定清单改为仓库根全树（后缀 `.md/.py/.toml/.ini/.yml/.yaml/.example`），跳过 `.git` / `.pixi` / `node_modules` / `dist` / `coverage*` / `docs/evidence/logs` / `docs/evidence/*.json` / `__pycache__` / 脚本自身（跳过清单与理由写入模块 docstring）；禁用正则放宽为 `MySQL\s*(8(\.\d+(\.x)?)?)?\s*[（(]?\s*权威`（「MySQL 协议」不误伤）。同时修 3 处残留：`backend/alembic.ini:4`、`database/units/engine_holder.py:33`、`database/engine.py:56` 统一改为「SeekDB 权威存储（MySQL 协议）/ SQLite 测试」。变异实证：把旧句写进 `backend/alembic/env.py`（旧门禁扫不到）→ 新门禁 exit 1；`alembic.ini` 回旧句 → exit 1；写入「MySQL 协议权威」→ exit 0。
+4. **F4 台账历史段还原**：`docs/LEDGER.md` 的 G1 复审段恢复当时事实——`_winner_select` 当时为 `with_for_update()` 行锁（当前读，规避快照读（行锁语义）落入事务早先读视图），不改写为后续批次的「共享锁定读」；两个守卫用例名加注现名（`test_winner_select_uses_shared_locking_read` / `test_sticker_conflict_stale_snapshot_retries_to_winner`）；同段其余历史断言逐条核对未被本批改写。
+5. **备注项**：multimodal.md 并发语义补「SeekDB 共享锁互斥 → 1205 不在重试集合（仅 6235 / 1213）；当前两入口均先预读故不可达；未来新增不预读调用方需补 1205 处理」；database.md / config.md 单栈段写明 `DATABASE_TYPE=sqlite` 时不变式仍按 host / port 字面比较（dev 同口径，无方言豁免；仅 `seekdb.enabled=true` 时校验）。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3363 / coverage-gates=24 组 / lint / typecheck=213 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-ee6fa370.json`，canonical sha8=`ee6fa370`（711 文件级证据；`--hash-only` 复算 `sha8=ee6fa370 files=711` 一致）；`06d6b7a5`（本批中间树）与 `5f3a5e42` 及更早证据为历史）。
+- `cd backend && pixi run tests-all` → 0（3363 passed）。
+- `cd backend && pixi run coverage-gates` → 0（24 组 ≥80%：harness/multimodal 95.3%（733/769）、harness/database 93.5%（215/230）、harness/channels 97.3%（3226/3316）、harness/chat 96.3%（1547/1607）、harness/config 96.6%（1554/1609）、harness/persona 95.6%（1790/1872）、harness/voice 93.1%（2628/2822）、app/main.py 93.9%（558/594）、app/api 85.2%（1257/1476））。
+- `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0（213 源文件）；`pixi run conftest-env` → 0（228/228，豁免 0）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `1df4d48c…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）。
+- 根 `pixi run gates` → 0（comment-gates files=246 violations=0 hints=23 / sync-test-ratchet 无回升 / noqa-freeze 基线 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 212 源文件 26 探针覆盖 25 文件 + grandfathered 190≤190 / docs-truth / doc-counts 12 项（规则 29 / 红队 55 / 配置分节 31 / 措辞扫描 575 文件）/ assertion-freeze asserts=9420 raises=687 / surface-check 42/42 + env 791 行 / bench-core PASS / api-smoke PASS / prose-pin 75≤75）。
+- `cd backend && pixi run tests-seekdb` → 0（15 passed：迁移链 / 并发不变式（含双形态表情收敛）/ 混合检索往返 / 权威引擎单栈 round-trip；活容器 `seekdb-smoke`）。
+- F3 变异实证（退出码）：`backend/alembic/env.py` 写旧句 → 1（命中 `env.py:116`）；`backend/alembic.ini` 回旧句 → 1（命中 `alembic.ini:4`）；写「MySQL 协议权威」→ 0（不误伤）。
 - 无迁移 / 无新增依赖 / 无新增 env 键；前端未动（`--with-frontend` 未跑，源码零改动）。
 
 ## 6. 遗留与部署台账（非阻塞）

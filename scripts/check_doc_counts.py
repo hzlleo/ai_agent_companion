@@ -12,6 +12,21 @@
       表述为「SeekDB 权威存储（MySQL 协议）」/「MySQL 协议 / SeekDB 行锁
       语义」。
 
+扫描面为仓库根全树（后缀 ``.md`` / ``.py`` / ``.toml`` / ``.ini`` /
+``.yml`` / ``.yaml`` / ``.example``）。跳过以下路径，理由逐条列明：
+
+    - ``.git``：版本库内部对象（二进制 / 历史文本，不属当前表述）；
+    - ``.pixi``：依赖环境（第三方包自带旧口径，不属本仓表述）；
+    - ``node_modules``：前端依赖；
+    - ``dist``：前端构建产物；
+    - ``coverage*``：覆盖率工具产物（``coverage.json`` / ``coverage`` 目录，
+      每次运行重写）；
+    - ``docs/evidence/logs``：验收日志（当次运行输出快照，含历史措辞）；
+    - ``docs/evidence/*.json``：验收证据（冻结的历史源码哈希与步骤输出；
+      后缀集本不含 ``.json``，显式列出防未来扩展误扫）；
+    - ``__pycache__``：字节码缓存；
+    - 本脚本自身：规则定义文本包含被禁字面。
+
 计数与措辞不从文档回读，而是导入规则表、红队模板表与生成器登记表后派生
 ——文档只能跟随代码变化，不能独立漂移。
 
@@ -52,22 +67,31 @@ _DOCS_ROOT = REPO_ROOT / "docs"
 _CONFIG_MARKER_START = "<!-- generated:env-sections -->"
 _CONFIG_MARKER_END = "<!-- /generated:env-sections -->"
 
-#: 措辞扫描根（文档 / 生成模板 / 工程说明 / 源码 docstring）。
-_WORDING_ROOTS: tuple[Path, ...] = (
-    REPO_ROOT / "docs",
-    REPO_ROOT / "README.md",
-    REPO_ROOT / "backend" / ".env.example",
-    REPO_ROOT / "pixi.toml",
-    REPO_ROOT / "scripts",
-    REPO_ROOT / "backend" / "src",
-)
+#: 措辞扫描根（仓库根全树；跳过清单见模块 docstring）。
+_WORDING_ROOT = REPO_ROOT
 
 #: 措辞扫描后缀（文档 / 配置模板 / 工程说明 / Python docstring）。
-_WORDING_SUFFIXES: frozenset[str] = frozenset({".md", ".py", ".toml", ".example"})
+_WORDING_SUFFIXES: frozenset[str] = frozenset(
+    {".md", ".py", ".toml", ".ini", ".yml", ".yaml", ".example"}
+)
 
-#: 禁止的权威存储表述（旧口径「MySQL 8 权威…」）。
+#: 措辞扫描跳过目录名（任意层级；理由见模块 docstring）。
+_WORDING_SKIP_DIRS: frozenset[str] = frozenset(
+    {".git", ".pixi", "node_modules", "dist", "__pycache__"}
+)
+
+#: 措辞扫描跳过目录名前缀（工具产物；理由见模块 docstring）。
+_WORDING_SKIP_DIR_PREFIXES: tuple[str, ...] = ("coverage",)
+
+#: 措辞扫描跳过路径前缀（相对仓库根；理由见模块 docstring）。
+_WORDING_SKIP_PATH_PREFIXES: tuple[str, ...] = ("docs/evidence/logs",)
+
+#: 措辞扫描跳过文件模式（相对仓库根；理由见模块 docstring）。
+_WORDING_SKIP_FILE_PATTERNS: tuple[str, ...] = ("docs/evidence/*.json",)
+
+#: 禁止的权威存储表述（旧口径「MySQL 8 权威…」/「MySQL 权威」）。
 _FORBIDDEN_WORDING: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("MySQL 8 权威", re.compile(r"MySQL\s*8\s*[（(]?\s*权威")),
+    ("MySQL 权威", re.compile(r"MySQL\s*(8(\.\d+(\.x)?)?)?\s*[（(]?\s*权威")),
 )
 
 #: 唯一允许出现的 InnoDB 字面（SeekDB 兼容占位变量名）。
@@ -235,20 +259,29 @@ def _table_data_rows(block: str) -> list[str]:
 
 
 def _wording_files() -> list[Path]:
-    """枚举措辞扫描文件（按根展开；跳过缓存与自身）。
+    """枚举措辞扫描文件（仓库根全树；跳过清单见模块 docstring）。
 
     Returns:
         待扫描文件路径列表（去重、稳定排序）。
     """
     files: set[Path] = set()
-    for root in _WORDING_ROOTS:
-        if not root.exists():
-            continue
-        candidates = [root] if root.is_file() else sorted(root.rglob("*"))
-        for path in candidates:
-            if not path.is_file() or path.suffix not in _WORDING_SUFFIXES:
+    for directory, dirnames, filenames in _WORDING_ROOT.walk():
+        dirnames[:] = sorted(
+            name
+            for name in dirnames
+            if name not in _WORDING_SKIP_DIRS
+            and not name.startswith(_WORDING_SKIP_DIR_PREFIXES)
+        )
+        for name in filenames:
+            path = directory / name
+            if path.suffix not in _WORDING_SUFFIXES:
                 continue
-            if "__pycache__" in path.parts or path.resolve() in _WORDING_SELF_EXCLUDED:
+            relative = path.relative_to(REPO_ROOT)
+            if str(relative).startswith(_WORDING_SKIP_PATH_PREFIXES):
+                continue
+            if any(relative.match(pattern) for pattern in _WORDING_SKIP_FILE_PATTERNS):
+                continue
+            if path.resolve() in _WORDING_SELF_EXCLUDED:
                 continue
             files.add(path)
     return sorted(files)

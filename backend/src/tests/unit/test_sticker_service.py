@@ -32,6 +32,7 @@ from packages.harness.multimodal.sticker_models import (
     StickerAnnotationStatus,
     StickerBatchDeleteRequest,
     StickerBatchUploadDTO,
+    StickerBatchUploadResultModel,
     StickerQueryDTO,
     StickerRejectReason,
     StickerSettings,
@@ -40,8 +41,10 @@ from packages.harness.multimodal.sticker_models import (
 )
 from packages.harness.multimodal.sticker_orm import StickerRow
 from packages.harness.multimodal.sticker_service import (
+    STICKER_MIME_EXTENSIONS,
     StickerInsertOutcome,
     StickerService,
+    _StickerWriteAttempt,
     _winner_select,
 )
 from packages.harness.persona.service import bind_persona_context
@@ -58,7 +61,9 @@ _SHARED_LOCK_CLAUSE = "LOCK IN SHARE MODE"
 class FakeGateway:
     """测试用视觉标注网关（返回固定文本 / 可注入异常）。"""
 
-    def __init__(self, content: str = '{"description": "开心地笑", "tags": ["开心", "笑"]}') -> None:
+    def __init__(
+        self, content: str = '{"description": "开心地笑", "tags": ["开心", "笑"]}'
+    ) -> None:
         self.content = content
         self.calls: list[str] = []
         self.failure: BusinessException | None = None
@@ -131,9 +136,7 @@ class _ConflictInjectingService(StickerService):
         self._winner_path = winner_path
         self.attempts = 0
 
-    async def _insert_sticker(
-        self, session: AsyncSession, **kwargs: Any
-    ) -> StickerInsertOutcome:
+    async def _insert_sticker(self, session: AsyncSession, **kwargs: Any) -> StickerInsertOutcome:
         """首个插入前抛驱动冲突；提供胜者时先提交同哈希胜者行。"""
         self.attempts += 1
         if not self._codes:
@@ -211,13 +214,9 @@ def _item(
     )
 
 
-async def _upload(
-    service: StickerService, session: AsyncSession, payload: bytes = PNG
-):
+async def _upload(service: StickerService, session: AsyncSession, payload: bytes = PNG):
     """铺底上传一条表情。"""
-    return await service.upload_batch(
-        session, StickerBatchUploadDTO(items=[_item(payload)])
-    )
+    return await service.upload_batch(session, StickerBatchUploadDTO(items=[_item(payload)]))
 
 
 async def test_settings_default_disabled() -> None:
@@ -315,9 +314,7 @@ async def test_upload_rejects_invalid_items_partially(
     assert rejected_indexes == set(range(1, 8))
 
 
-async def test_upload_deduplicates_same_hash(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_upload_deduplicates_same_hash(db_session: AsyncSession, tmp_path: Path) -> None:
     """同人格同文件重复上传 → duplicate 拒收。"""
     service = StickerService(
         settings=_settings(), gateway=FakeGateway(), resolver=_resolver(), storage_root=tmp_path
@@ -370,9 +367,7 @@ async def test_list_filters_tags_and_annotation_status(
     async with bind_persona_context(PERSONA_A):
         await service.upload_batch(
             db_session,
-            StickerBatchUploadDTO(
-                items=[_item(tags=["开心"]), _item(b"second", tags=["难过"])]
-            ),
+            StickerBatchUploadDTO(items=[_item(tags=["开心"]), _item(b"second", tags=["难过"])]),
         )
         by_tag = await service.list_stickers(db_session, StickerQueryDTO(tag="开心"))
         pending = await service.list_stickers(
@@ -442,9 +437,7 @@ async def test_delete_batch_partial_and_removes_files(
     assert list(tmp_path.rglob("*.png")) == []
 
 
-async def test_get_binary_missing_file_not_found(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_get_binary_missing_file_not_found(db_session: AsyncSession, tmp_path: Path) -> None:
     """记录存在但文件被外部删除 → get_binary 404。"""
     service = StickerService(
         settings=_settings(), gateway=FakeGateway(), resolver=_resolver(), storage_root=tmp_path
@@ -523,9 +516,7 @@ async def test_annotate_invalid_json_and_resolver_failure(
     assert "视觉条目解析失败" in missing.message
 
 
-async def test_annotate_missing_file_failed(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_annotate_missing_file_failed(db_session: AsyncSession, tmp_path: Path) -> None:
     """落盘文件缺失时标注写 failed 状态。"""
     service = StickerService(
         settings=_settings(), gateway=FakeGateway(), resolver=_resolver(), storage_root=tmp_path
@@ -539,17 +530,13 @@ async def test_annotate_missing_file_failed(
     assert "文件缺失" in result.message
 
 
-async def test_channel_bridge_ingest_and_pick(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_channel_bridge_ingest_and_pick(db_session: AsyncSession, tmp_path: Path) -> None:
     """通道桥：入站收录去重 / 空类型拒收 / 出站取最新 / 关闭回表情不发。"""
     service = StickerService(
         settings=_settings(), gateway=FakeGateway(), resolver=_resolver(), storage_root=tmp_path
     )
     async with bind_persona_context(PERSONA_A):
-        first = await service.ingest_bytes(
-            db_session, PNG, "image/png", source_note="通道入站表情"
-        )
+        first = await service.ingest_bytes(db_session, PNG, "image/png", source_note="通道入站表情")
         duplicate = await service.ingest_bytes(
             db_session, PNG, "image/png", source_note="通道入站表情"
         )
@@ -583,9 +570,7 @@ async def test_insert_sticker_conflict_resolves_winner_and_keeps_file(
         settings=_settings(), gateway=FakeGateway(), resolver=_resolver(), storage_root=tmp_path
     )
     async with bind_persona_context(PERSONA_A):
-        winner = await service.ingest_bytes(
-            db_session, PNG, "image/png", source_note="并发胜者"
-        )
+        winner = await service.ingest_bytes(db_session, PNG, "image/png", source_note="并发胜者")
         assert winner is not None
         outcome = await service._insert_sticker(
             db_session,
@@ -621,9 +606,7 @@ async def test_ingest_same_hash_twice_single_row_and_file(
         settings=_settings(), gateway=FakeGateway(), resolver=_resolver(), storage_root=tmp_path
     )
     async with bind_persona_context(PERSONA_A):
-        first = await service.ingest_bytes(
-            db_session, PNG, "image/png", source_note="通道入站表情"
-        )
+        first = await service.ingest_bytes(db_session, PNG, "image/png", source_note="通道入站表情")
         second = await service.ingest_bytes(
             db_session, PNG, "image/png", source_note="通道入站表情"
         )
@@ -637,18 +620,13 @@ async def test_ingest_same_hash_twice_single_row_and_file(
     assert binary.content == PNG
 
 
-async def test_channel_bridge_skips_when_disabled(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_channel_bridge_skips_when_disabled(db_session: AsyncSession, tmp_path: Path) -> None:
     """功能关闭时入站收录返回 None（通道桥零写入）。"""
     service = StickerService(
         settings=StickerSettings(enabled=False), gateway=FakeGateway(), storage_root=tmp_path
     )
     async with bind_persona_context(PERSONA_A):
-        assert (
-            await service.ingest_bytes(db_session, PNG, "image/png", source_note="x")
-            is None
-        )
+        assert await service.ingest_bytes(db_session, PNG, "image/png", source_note="x") is None
 
 
 async def test_pick_channel_reply_skips_missing_files(
@@ -670,9 +648,7 @@ async def test_pick_channel_reply_skips_missing_files(
     assert newer.id != older.id
 
 
-async def test_persona_isolation_allows_same_hash(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_persona_isolation_allows_same_hash(db_session: AsyncSession, tmp_path: Path) -> None:
     """同一文件在两个人格下各自入库（去重键含人格轴）。"""
     service = StickerService(
         settings=_settings(), gateway=FakeGateway(), resolver=_resolver(), storage_root=tmp_path
@@ -714,9 +690,7 @@ async def test_transaction_conflict_retries_upload_as_duplicate(
         storage_root=tmp_path,
     )
     async with bind_persona_context(PERSONA_A):
-        result = await service.upload_batch(
-            db_session, StickerBatchUploadDTO(items=[_item()])
-        )
+        result = await service.upload_batch(db_session, StickerBatchUploadDTO(items=[_item()]))
         rows = list((await db_session.execute(select(StickerRow))).scalars().all())
     # 重试在新事务中预读命中胜者 → 不再触达插入（收敛于预读，非二次插入）。
     assert service.attempts == 1
@@ -764,9 +738,7 @@ async def test_transaction_conflict_twice_propagates(
     )
     async with bind_persona_context(PERSONA_A):
         with pytest.raises(OperationalError) as exc_info:
-            await service.ingest_bytes(
-                db_session, PNG, "image/png", source_note="通道入站表情"
-            )
+            await service.ingest_bytes(db_session, PNG, "image/png", source_note="通道入站表情")
     assert service.attempts == 2
     assert str(exc_info.value.orig.args[0]) == "6235"
 
@@ -785,7 +757,239 @@ async def test_non_conflict_operational_error_is_not_retried(
     )
     async with bind_persona_context(PERSONA_A):
         with pytest.raises(OperationalError):
-            await service.ingest_bytes(
-                db_session, PNG, "image/png", source_note="通道入站表情"
-            )
+            await service.ingest_bytes(db_session, PNG, "image/png", source_note="通道入站表情")
     assert service.attempts == 1
+
+
+def _winner_row(
+    *,
+    digest: str,
+    content_type: str,
+    path: Path,
+    payload: bytes,
+    description: str,
+) -> StickerRow:
+    """构造一条同人格同哈希胜者行（并发提交模拟）。"""
+    return StickerRow(
+        sha256=digest,
+        content_type=content_type,
+        storage_path=str(path),
+        size_bytes=len(payload),
+        tags="[]",
+        description=description,
+        source_note="并发来源",
+        annotation_status=StickerAnnotationStatus.PENDING.value,
+        annotation_error=None,
+        annotation_model_entry=None,
+        annotated_at_ms=None,
+    )
+
+
+class _CommittedWinnerAfterWriteService(StickerService):
+    """落盘后提交同哈希胜者行（预读窗口外并发提交；可指定异扩展名）。"""
+
+    def __init__(
+        self,
+        race_session: AsyncSession,
+        *,
+        winner_extension: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """初始化并保存竞态会话与胜者扩展名。"""
+        super().__init__(**kwargs)
+        self._race_session = race_session
+        self._winner_extension = winner_extension
+        self._winner_committed = False
+        self.winner_path: Path | None = None
+
+    async def _write_file(self, digest: str, extension: str, payload: bytes) -> Path:
+        """落盘后提交同哈希胜者行（同路径或指定异扩展名路径）。"""
+        path = await super()._write_file(digest, extension, payload)
+        if self._winner_committed:
+            return path
+        self._winner_committed = True
+        winner_path = path
+        winner_type = "image/png"
+        if self._winner_extension is not None:
+            winner_path = await super()._write_file(digest, self._winner_extension, payload)
+            winner_type = "image/webp"
+        self.winner_path = winner_path
+        self._race_session.add(
+            _winner_row(
+                digest=digest,
+                content_type=winner_type,
+                path=winner_path,
+                payload=payload,
+                description="并发胜者",
+            )
+        )
+        await self._race_session.commit()
+        return path
+
+
+class _CommittedWinnerCommitFailureService(_CommittedWinnerAfterWriteService):
+    """胜者行提交后让终局提交抛非冲突 2013（回滚不影响已提交胜者）。"""
+
+    @staticmethod
+    async def _commit(session: AsyncSession) -> None:
+        raise OperationalError("COMMIT", {}, pymysql.err.OperationalError(2013, "lost"))
+
+
+async def test_same_path_winner_file_survives_terminal_commit_failure(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """同扩展名胜者：1062 后终局提交 2013，胜者行与其文件均保留。"""
+    service = _CommittedWinnerCommitFailureService(
+        db_session,
+        settings=_settings(),
+        gateway=FakeGateway(),
+        resolver=_resolver(),
+        storage_root=tmp_path,
+    )
+    digest = hashlib.sha256(PNG).hexdigest()
+    async with bind_persona_context(PERSONA_A):
+        with pytest.raises(OperationalError) as exc_info:
+            await service.upload_batch(db_session, StickerBatchUploadDTO(items=[_item()]))
+        rows = list((await db_session.execute(select(StickerRow))).scalars().all())
+    assert exc_info.value.orig.args[0] == 2013
+    assert service.winner_path is not None
+    assert service.winner_path.exists()
+    assert len(rows) == 1
+    assert rows[0].storage_path == str(service.winner_path)
+    assert rows[0].sha256 == digest
+
+
+async def test_different_extension_winner_still_removes_loser_file(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """异扩展名胜者：落败文件仍按路径判定清理（F1 修复不改既有语义）。"""
+    service = _CommittedWinnerAfterWriteService(
+        db_session,
+        winner_extension=".webp",
+        settings=_settings(),
+        gateway=FakeGateway(),
+        resolver=_resolver(),
+        storage_root=tmp_path,
+    )
+    async with bind_persona_context(PERSONA_A):
+        result = await service.upload_batch(db_session, StickerBatchUploadDTO(items=[_item()]))
+        rows = list((await db_session.execute(select(StickerRow))).scalars().all())
+    assert [item.reason for item in result.rejected] == [StickerRejectReason.DUPLICATE]
+    assert service.winner_path is not None and service.winner_path.exists()
+    assert list(tmp_path.rglob("*.png")) == []
+    assert [path.read_bytes() for path in tmp_path.rglob("*.webp")] == [PNG]
+    assert len(rows) == 1
+    assert rows[0].storage_path == str(service.winner_path)
+
+
+class _InsertConflictThenPreReadFailureService(StickerService):
+    """首次插入后抛 6235（行未提交）；重试预读前抛 2013（可先提交胜者）。"""
+
+    def __init__(
+        self,
+        *,
+        digest: str,
+        commit_winner_on_retry: bool,
+        **kwargs: Any,
+    ) -> None:
+        """初始化并记录首次尝试的落败文件路径（重试期判定用）。"""
+        super().__init__(**kwargs)
+        self._digest = digest
+        self._commit_winner_on_retry = commit_winner_on_retry
+        self._conflict_pending = True
+        self.pre_read_calls = 0
+        self.loser_path: Path | None = None
+
+    async def _insert_sticker(self, session: AsyncSession, **kwargs: Any) -> StickerInsertOutcome:
+        """首次只落盘不插行即抛 6235（复刻事务冲突前的未提交文件）。"""
+        if not self._conflict_pending:
+            return await super()._insert_sticker(session, **kwargs)
+        self._conflict_pending = False
+        digest = kwargs["digest"]
+        path = await self._write_file(
+            digest,
+            STICKER_MIME_EXTENSIONS[kwargs["content_type"]],
+            kwargs["payload"],
+        )
+        written = kwargs.get("written")
+        if written is not None:
+            written.append(_StickerWriteAttempt(digest=digest, path=path))
+        retained = kwargs.get("retained")
+        if retained is not None:
+            retained[:] = [entry for entry in retained if entry.path != path]
+        self.loser_path = path
+        raise OperationalError(
+            "INSERT INTO ff_stickers", {}, pymysql.err.OperationalError(6235, "conflict")
+        )
+
+    async def _upload_batch_once(
+        self,
+        session: AsyncSession,
+        dto: StickerBatchUploadDTO,
+        settings: StickerSettings,
+        written: list[_StickerWriteAttempt],
+        retained: list[_StickerWriteAttempt],
+    ) -> StickerBatchUploadResultModel:
+        """重试预读前抛非冲突 2013（可先提交引用落败路径的胜者行）。"""
+        self.pre_read_calls += 1
+        if self.pre_read_calls == 2:
+            if self._commit_winner_on_retry and self.loser_path is not None:
+                session.add(
+                    _winner_row(
+                        digest=self._digest,
+                        content_type="image/png",
+                        path=self.loser_path,
+                        payload=PNG,
+                        description="并发胜者",
+                    )
+                )
+                await session.commit()
+            raise OperationalError(
+                "SELECT ff_stickers.sha256", {}, pymysql.err.OperationalError(2013, "lost")
+            )
+        return await super()._upload_batch_once(session, dto, settings, written, retained)
+
+
+async def test_retry_pre_read_failure_removes_orphan_file(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """6235 清理保留 X → 重试预读 2013：无已提交行引用 → X 文件清除。"""
+    service = _InsertConflictThenPreReadFailureService(
+        digest=hashlib.sha256(PNG).hexdigest(),
+        commit_winner_on_retry=False,
+        settings=_settings(),
+        gateway=FakeGateway(),
+        resolver=_resolver(),
+        storage_root=tmp_path,
+    )
+    async with bind_persona_context(PERSONA_A):
+        with pytest.raises(OperationalError) as exc_info:
+            await service.upload_batch(db_session, StickerBatchUploadDTO(items=[_item()]))
+        rows = list((await db_session.execute(select(StickerRow))).scalars().all())
+    assert exc_info.value.orig.args[0] == 2013
+    assert service.pre_read_calls == 2
+    assert service.loser_path is not None
+    assert not service.loser_path.exists()
+    assert rows == []
+
+
+async def test_retry_pre_read_failure_keeps_winner_referenced_file(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """6235 清理保留 X → 重试前胜者行引用 X → 终态 2013 时文件不删。"""
+    service = _InsertConflictThenPreReadFailureService(
+        digest=hashlib.sha256(PNG).hexdigest(),
+        commit_winner_on_retry=True,
+        settings=_settings(),
+        gateway=FakeGateway(),
+        resolver=_resolver(),
+        storage_root=tmp_path,
+    )
+    async with bind_persona_context(PERSONA_A):
+        with pytest.raises(OperationalError):
+            await service.upload_batch(db_session, StickerBatchUploadDTO(items=[_item()]))
+        rows = list((await db_session.execute(select(StickerRow))).scalars().all())
+    assert service.loser_path is not None
+    assert service.loser_path.exists()
+    assert len(rows) == 1
+    assert rows[0].storage_path == str(service.loser_path)

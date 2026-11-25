@@ -79,7 +79,7 @@ env 面与 yaml 面职责分离：基础设施参数（连接 / 端点 / 池）�
 
 分节与 `.env.example` 逐分节对齐（生成器 `scripts/generate_examples_env.py` 的 `_ENV_SECTIONS` 登记表为序——键面以 `.env.example` 为真源且每个键带字段说明注释；本表为分节索引，字段级语义见 example 注释与各域文档；敏感字段在 example 中恒留空）。
 
-**单栈 SeekDB（锁定）**：`DATABASE_*` 即 SeekDB 权威库连接（默认 `127.0.0.1:2881` / root / 空密码 / `ai_agent_companion`）；`SEEKDB_*` 的 host / port / user / password 留空即继承权威库，显式设置时必须与权威库 host / port 一致（启动期 `BusinessException(CONFIG_INVALID)` fail loud——拆分实例需另立决策）；检索库名与权威库同实例、不同库名。各分节语义详见所属域文档（channels / duty / tools-sandbox / voice / realtime-voice / multimodal）；声纹与表情包分节见 [voice.md](voice.md#声纹档案pipl-合规面) 与 [multimodal.md](multimodal.md#表情包库与-vlm-标注sticker_-env-面默认关闭)。
+**单栈 SeekDB（锁定）**：`DATABASE_*` 即 SeekDB 权威库连接（默认 `127.0.0.1:2881` / root / 空密码 / `ai_agent_companion`）；`SEEKDB_*` 的 host / port / user / password 留空即继承权威库，显式设置时必须与权威库 host / port 一致（启动期 `BusinessException(CONFIG_INVALID)` fail loud——拆分实例需另立决策）；检索库名与权威库同实例、不同库名。不变式按 host / port 字面比较，`DATABASE_TYPE=sqlite` 时同样执行（dev 同口径，无方言豁免；仅在 `seekdb.enabled=true` 时校验）。各分节语义详见所属域文档（channels / duty / tools-sandbox / voice / realtime-voice / multimodal）；声纹与表情包分节见 [voice.md](voice.md#声纹档案pipl-合规面) 与 [multimodal.md](multimodal.md#表情包库与-vlm-标注sticker_-env-面默认关闭)。
 
 - `LLM_DAILY_BUDGET_GLOBAL` / `LLM_DAILY_BUDGET_PERSONA` 的有效上限为 **10,000**（计数页帽 50×200；配置层 `le=10_000` 拒绝更大值——超出则预算永远无法触发）；0 = 不限。该闸只计 LLM 用途行（chat / duty / dream / look_at / embed / tool）。
 

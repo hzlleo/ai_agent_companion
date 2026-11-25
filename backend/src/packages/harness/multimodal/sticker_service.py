@@ -154,9 +154,7 @@ class StickerService:
             clock: 时钟（epoch 毫秒——标注时间轴）。
         """
         self._settings = settings
-        self._gateway: StickerAnnotateGatewayFace = (
-            gateway if gateway is not None else LlmGateway()
-        )
+        self._gateway: StickerAnnotateGatewayFace = gateway if gateway is not None else LlmGateway()
         self._resolver = resolver
         self._storage_root = storage_root
         self._clock = clock
@@ -200,19 +198,23 @@ class StickerService:
                 },
             )
         written: list[_StickerWriteAttempt] = []
+        retained: list[_StickerWriteAttempt] = []
 
         async def _attempt() -> StickerBatchUploadResultModel:
-            return await self._upload_batch_once(session, dto, settings, written)
+            return await self._upload_batch_once(session, dto, settings, written, retained)
+
+        async def _cleanup() -> None:
+            retained.extend(await self._discard_loser_attempts(session, written))
 
         try:
             result = await run_with_conflict_retry(
                 session,
                 _attempt,
-                cleanup=lambda: self._discard_loser_attempts(session, written),
+                cleanup=_cleanup,
             )
         except Exception:
             await self._rollback_quietly(session)
-            await self._remove_files([attempt.path for attempt in written])
+            await self._remove_unreferenced_files(session, [*written, *retained])
             raise
         logger.info(
             "表情包批量上传完成: created={}, rejected={}",
@@ -227,6 +229,7 @@ class StickerService:
         dto: StickerBatchUploadDTO,
         settings: StickerSettings,
         written: list[_StickerWriteAttempt],
+        retained: list[_StickerWriteAttempt],
     ) -> StickerBatchUploadResultModel:
         """批量上传的单次执行体（预读 → 逐条目插入 → 提交）。
 
@@ -235,6 +238,7 @@ class StickerService:
             dto: 批量上传入参。
             settings: 已启用的表情包配置。
             written: 本次落盘尝试日志（冲突回滚后的落败文件清理原料）。
+            retained: 重试前保留的落盘尝试（重写同一路径即移除）。
 
         Returns:
             本次尝试的上传结果（成功记录 + 被拒条目）。
@@ -243,9 +247,7 @@ class StickerService:
             OperationalError: 驱动层瞬态事务冲突 / 其余驱动错误（由调用方
                 的重试助手裁决）。
         """
-        existing_hashes = set(
-            (await session.execute(select(StickerRow.sha256))).scalars().all()
-        )
+        existing_hashes = set((await session.execute(select(StickerRow.sha256))).scalars().all())
         created: list[StickerRecordDTO] = []
         rejected: list[StickerRejectedItemModel] = []
         for index, item in enumerate(dto.items):
@@ -273,6 +275,7 @@ class StickerService:
                 description=description,
                 source_note=source_note,
                 written=written,
+                retained=retained,
             )
             if not outcome.created:
                 rejected.append(
@@ -328,6 +331,7 @@ class StickerService:
             return None
         digest = hashlib.sha256(payload).hexdigest()
         written: list[_StickerWriteAttempt] = []
+        retained: list[_StickerWriteAttempt] = []
 
         async def _attempt() -> StickerRecordDTO | None:
             return await self._ingest_bytes_once(
@@ -338,17 +342,21 @@ class StickerService:
                 source_note=source_note,
                 settings=settings,
                 written=written,
+                retained=retained,
             )
+
+        async def _cleanup() -> None:
+            retained.extend(await self._discard_loser_attempts(session, written))
 
         try:
             return await run_with_conflict_retry(
                 session,
                 _attempt,
-                cleanup=lambda: self._discard_loser_attempts(session, written),
+                cleanup=_cleanup,
             )
         except Exception:
             await self._rollback_quietly(session)
-            await self._remove_files([attempt.path for attempt in written])
+            await self._remove_unreferenced_files(session, [*written, *retained])
             raise
 
     async def _ingest_bytes_once(
@@ -361,6 +369,7 @@ class StickerService:
         source_note: str,
         settings: StickerSettings,
         written: list[_StickerWriteAttempt],
+        retained: list[_StickerWriteAttempt],
     ) -> StickerRecordDTO | None:
         """通道入站收录的单次执行体（预读 → 插入 → 提交）。
 
@@ -372,6 +381,7 @@ class StickerService:
             source_note: 来源备注（按配置截断）。
             settings: 已启用的表情包配置。
             written: 本次落盘尝试日志（冲突回滚后的落败文件清理原料）。
+            retained: 重试前保留的落盘尝试（重写同一路径即移除）。
 
         Returns:
             本次尝试入库或既有的记录（并发落败且无胜者行时为 None）。
@@ -381,11 +391,7 @@ class StickerService:
                 的重试助手裁决）。
         """
         existing = (
-            (
-                await session.execute(
-                    select(StickerRow).where(StickerRow.sha256 == digest)
-                )
-            )
+            (await session.execute(select(StickerRow).where(StickerRow.sha256 == digest)))
             .scalars()
             .first()
         )
@@ -401,6 +407,7 @@ class StickerService:
             description="",
             source_note=note,
             written=written,
+            retained=retained,
         )
         if not outcome.created:
             # 并发同哈希：返回既有胜者行（落败文件已按胜者路径判定清理）。
@@ -428,9 +435,7 @@ class StickerService:
         self._require_enabled()
         stmt = select(StickerRow).order_by(desc(StickerRow.id))
         if query.annotation_status is not None:
-            stmt = stmt.where(
-                StickerRow.annotation_status == query.annotation_status.value
-            )
+            stmt = stmt.where(StickerRow.annotation_status == query.annotation_status.value)
         rows = list((await session.execute(stmt)).scalars().all())
         tag = query.tag.strip() if query.tag is not None else None
         matches: list[StickerRow] = []
@@ -466,9 +471,7 @@ class StickerService:
         row = await self._require_row(session, sticker_id)
         return await self._record_with_optional_data(row, include_data=include_data)
 
-    async def get_binary(
-        self, session: AsyncSession, sticker_id: int
-    ) -> StickerBinaryModel:
+    async def get_binary(self, session: AsyncSession, sticker_id: int) -> StickerBinaryModel:
         """读取表情包字节（标注 / 通道发送面）。
 
         Args:
@@ -570,9 +573,7 @@ class StickerService:
         """
         self._require_enabled()
         rows = list(
-            (
-                await session.execute(select(StickerRow).where(StickerRow.id.in_(dto.ids)))
-            )
+            (await session.execute(select(StickerRow).where(StickerRow.id.in_(dto.ids))))
             .scalars()
             .all()
         )
@@ -618,9 +619,7 @@ class StickerService:
         row = await self._require_row(session, sticker_id)
         content = await self._read_file(row.storage_path)
         if content is None:
-            return await self._mark_failed(
-                session, row, "表情包文件缺失，无法标注"
-            )
+            return await self._mark_failed(session, row, "表情包文件缺失，无法标注")
         messages: list[ChatMessageModel] = [
             ChatMessageModel(
                 role=ChatMessageRole.SYSTEM,
@@ -639,18 +638,14 @@ class StickerService:
             ),
         ]
         try:
-            resolver = (
-                self._resolver if self._resolver is not None else get_model_resolver()
-            )
+            resolver = self._resolver if self._resolver is not None else get_model_resolver()
             chain = resolve_multimodal_chain(resolver.resolve(ModelRole.LOOK_AT))
         except BusinessException as exc:
             return await self._mark_failed(session, row, f"视觉条目解析失败：{exc.message}")
         last_error = "视觉回退链未返回可用标注"
         for entry in chain:
             try:
-                response = await self._gateway.chat_for_entry(
-                    entry, messages, purpose="look_at"
-                )
+                response = await self._gateway.chat_for_entry(entry, messages, purpose="look_at")
             except BusinessException as exc:
                 last_error = f"{entry.name}: {exc.message}"
                 logger.warning(
@@ -661,9 +656,7 @@ class StickerService:
                 continue
             try:
                 payload = _extract_annotation_payload(response.content)
-                description = _normalize_annotation_description(
-                    payload, self._resolve_settings()
-                )
+                description = _normalize_annotation_description(payload, self._resolve_settings())
                 tags = _annotation_tags(payload, self._resolve_settings())
             except ValueError as exc:
                 last_error = f"{entry.name}: 标注 JSON 非法（{exc}）"
@@ -701,9 +694,7 @@ class StickerService:
         if not settings.enabled or not settings.channel_reply_enabled:
             return None
         rows = list(
-            (
-                await session.execute(select(StickerRow).order_by(desc(StickerRow.id)))
-            )
+            (await session.execute(select(StickerRow).order_by(desc(StickerRow.id))))
             .scalars()
             .all()
         )
@@ -743,6 +734,7 @@ class StickerService:
         description: str,
         source_note: str,
         written: list[_StickerWriteAttempt] | None = None,
+        retained: list[_StickerWriteAttempt] | None = None,
     ) -> StickerInsertOutcome:
         """保存点插入表情包行（唯一键冲突收敛——上传与通道桥共用）。
 
@@ -767,14 +759,19 @@ class StickerService:
             source_note: 来源备注。
             written: 落盘尝试日志（提供时追加本次写入——瞬态冲突回滚后的
                 落败文件清理原料；None = 调用方无需清理）。
+            retained: 重试前保留的落盘尝试（提供时按同一路径移除——本次
+                重写即接管该文件的清理责任）。
 
         Returns:
             插入结局（行 / 是否胜出 / 本次写入路径）。
         """
         extension = STICKER_MIME_EXTENSIONS[content_type]
         path = await self._write_file(digest, extension, payload)
+        attempt = _StickerWriteAttempt(digest=digest, path=path)
         if written is not None:
-            written.append(_StickerWriteAttempt(digest=digest, path=path))
+            written.append(attempt)
+        if retained is not None:
+            retained[:] = [entry for entry in retained if entry.path != path]
         row = StickerRow(
             sha256=digest,
             content_type=content_type,
@@ -793,11 +790,12 @@ class StickerService:
                 session.add(row)
                 await session.flush()
         except IntegrityError:
-            winner = (
-                (await session.execute(_winner_select(digest))).scalars().first()
-            )
+            winner = (await session.execute(_winner_select(digest))).scalars().first()
             if winner is None or winner.storage_path != str(path):
                 await self._remove_files([path])
+            elif written is not None:
+                # 胜者行引用本次路径：文件归胜者所有，移出本次清理日志（对象身份）。
+                written[:] = [entry for entry in written if entry is not attempt]
             return StickerInsertOutcome(row=winner, created=False, path=path)
         return StickerInsertOutcome(row=row, created=True, path=path)
 
@@ -882,9 +880,7 @@ class StickerService:
             await self._rollback_quietly(session)
             raise
         logger.warning("表情包标注失败（可重试）: sticker_id={}, error={}", row.id, message)
-        return StickerAnnotationResultModel(
-            ok=False, record=self._record(row), message=message
-        )
+        return StickerAnnotationResultModel(ok=False, record=self._record(row), message=message)
 
     def _record(self, row: StickerRow) -> StickerRecordDTO:
         """行 → 读取 DTO（不含文件数据）。"""
@@ -914,9 +910,7 @@ class StickerService:
         content = await self._read_file(row.storage_path)
         if content is None:
             return record
-        return record.model_copy(
-            update={"data_base64": base64.b64encode(content).decode("ascii")}
-        )
+        return record.model_copy(update={"data_base64": base64.b64encode(content).decode("ascii")})
 
     def _storage_dir(self) -> Path:
         """文件落盘根目录（注入优先；缺省 config.storage_dir）。"""
@@ -950,39 +944,79 @@ class StickerService:
 
     async def _discard_loser_attempts(
         self, session: AsyncSession, written: list[_StickerWriteAttempt]
-    ) -> None:
-        """清理冲突回滚后无已提交行引用的落败文件（胜者路径保留）。
+    ) -> list[_StickerWriteAttempt]:
+        """清理冲突回滚后无已提交行引用的落败文件（返回保留项）。
 
         瞬态事务冲突回滚后按哈希查询已提交胜者行：胜者路径与本次写入路径
-        相同（人格作用域确定性命名）时保留文件——避免删除胜者仍在引用的
-        字节；无已提交行时同样保留（本次普通写入会在重试中复用 / 提交）。
-        清理后清空日志，使重试只记录新一次尝试的写入。
+        不同时删除落败文件；胜者路径相同或尚无已提交行时保留文件。清理后
+        清空日志，并返回文件保留但本次行未提交的尝试集合——重试若重写同一
+        路径即由 :meth:`_insert_sticker` 移除；重试终态失败时调用方对剩余
+        项做胜者路径判定后补删（无任何已提交行引用其路径才删）。
 
         Args:
             session: 注入的异步 Session（回滚后已进入新事务）。
             written: 本次已回滚尝试的落盘日志（清理后清空）。
+
+        Returns:
+            保留文件、但本次行未提交的尝试列表（重试重写同一路径即移除）。
         """
         if not written:
-            return
-        digests = {attempt.digest for attempt in written}
+            return []
+        attempts = list(written)
+        digests = {attempt.digest for attempt in attempts}
         winner_paths = {
             row.sha256: row.storage_path
             for row in (
-                await session.execute(
-                    select(StickerRow).where(StickerRow.sha256.in_(digests))
-                )
+                await session.execute(select(StickerRow).where(StickerRow.sha256.in_(digests)))
             )
             .scalars()
             .all()
         }
-        losers = [
-            attempt.path
-            for attempt in written
-            if winner_paths.get(attempt.digest) not in (None, str(attempt.path))
-        ]
+        written.clear()
+        losers: list[Path] = []
+        retained: list[_StickerWriteAttempt] = []
+        for attempt in attempts:
+            winner_path = winner_paths.get(attempt.digest)
+            if winner_path is None or winner_path == str(attempt.path):
+                retained.append(attempt)
+            else:
+                losers.append(attempt.path)
         if losers:
             await self._remove_files(losers)
-        written.clear()
+        return retained
+
+    async def _remove_unreferenced_files(
+        self, session: AsyncSession, attempts: list[_StickerWriteAttempt]
+    ) -> None:
+        """终态失败后删除无已提交行引用的落盘文件（胜者路径恒保留）。
+
+        重试终态失败时，前一次尝试保留的落盘文件可能从未被任何已提交行
+        引用（如重试在预读阶段即抛错）。按同人格哈希面查询已提交行，仅删除
+        路径未被任何行引用的文件；查询自身失败时保留文件（残留文件不参与
+        查询，优于误删胜者字节）。
+
+        Args:
+            session: 注入的异步 Session（已回滚——只读已提交行）。
+            attempts: 待判定尝试（当前尝试 + 重试前保留项的并集）。
+        """
+        if not attempts:
+            return
+        digests = {attempt.digest for attempt in attempts}
+        try:
+            committed_paths = {
+                row.storage_path
+                for row in (
+                    await session.execute(select(StickerRow).where(StickerRow.sha256.in_(digests)))
+                )
+                .scalars()
+                .all()
+            }
+        except Exception:  # 查询失败保留文件（不掩盖原异常；残留文件不参与查询）
+            logger.opt(exception=True).warning("表情包终态清理查询失败，保留落盘文件")
+            return
+        orphans = [attempt.path for attempt in attempts if str(attempt.path) not in committed_paths]
+        if orphans:
+            await self._remove_files(orphans)
 
     @staticmethod
     async def _commit(session: AsyncSession) -> None:
@@ -1088,9 +1122,7 @@ def _annotation_tags(payload: dict[str, Any], settings: StickerSettings) -> list
     return tags
 
 
-def _normalize_annotation_description(
-    payload: dict[str, Any], settings: StickerSettings
-) -> str:
+def _normalize_annotation_description(payload: dict[str, Any], settings: StickerSettings) -> str:
     """从模型 JSON 中提取并截断描述（空描述视为解析失败）。"""
     raw = payload.get("description")
     if not isinstance(raw, str) or not raw.strip():
@@ -1136,4 +1168,3 @@ def _extract_annotation_payload(content: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("JSON 根节点不是对象")
     return payload
-

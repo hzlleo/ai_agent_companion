@@ -53,7 +53,7 @@ db_engine_holder = EngineHolder()
 
 
 def create_database_engine(config: DatabaseConfig) -> AsyncEngine:
-    """按配置创建异步引擎（方言分派：MySQL 生产 / SQLite 测试）。
+    """按配置创建异步引擎（方言分派：SeekDB 权威存储（MySQL 协议）/ SQLite 测试）。
 
     Args:
         config: 数据库配置（``type`` 分派方言；MySQL 侧连接池参数全量
