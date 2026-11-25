@@ -248,6 +248,27 @@ async def test_asr_finish_keeps_queued_appends_before_commit_and_finish() -> Non
     assert result.text == "你好呀"
 
 
+async def test_asr_finish_cancelled_closes_connection_and_clears_tasks() -> None:
+    """finish 挂起时外部取消：取消事件出站、传输关闭、派生任务清零。"""
+    transport = FakeStreamTransport()
+    _, _, handle = await _open_asr(transport)
+    finish_task = asyncio.create_task(handle.finish())
+    await wait_until(
+        lambda: transport.events_of(ASR_STREAM_EVENT_FINISH) != [],
+        description="收尾事件出站",
+    )
+    finish_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await finish_task
+    assert transport.events_of(ASR_STREAM_EVENT_CANCEL)
+    assert transport.closed == (STREAM_CLOSE_NORMAL, "client_cancel")
+    assert transport.close_calls == 1
+    assert handle._tasks == set()
+    assert handle._closed is True
+    await handle.cancel()
+    assert transport.close_calls == 1
+
+
 async def test_asr_midstream_close_fails_with_close_code() -> None:
     """收尾前对端关闭：失败上抛并携带关闭码（回退批量依据）。"""
     transport = FakeStreamTransport()

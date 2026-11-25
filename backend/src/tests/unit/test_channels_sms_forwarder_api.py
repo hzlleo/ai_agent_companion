@@ -18,6 +18,7 @@ from httpx import ASGITransport, AsyncClient
 import app.api.channels_sms_forwarder as sms_forwarder_api
 from app.api.channels_sms_forwarder import (
     SMS_FORWARDER_MAX_BODY_BYTES,
+    receive_sms_forwarder_webhook,
 )
 from app.api.channels_sms_forwarder import (
     router as sms_forwarder_channels_router,
@@ -36,7 +37,9 @@ from packages.harness.config.models import (
     SmsForwarderChannelSettings,
 )
 from packages.harness.config.settings import build_isolated_settings
+from packages.harness.core.errors import BusinessException, ErrorCode
 from tests.async_wait import wait_until
+from tests.request_fakes import ReceiveRecorder, chunked_messages, raw_request
 
 _TEST_TOKEN = "test-only-sms-forwarder-token"
 
@@ -424,6 +427,93 @@ class TestBodyValidation:
             )
         assert response.status_code == 400
         assert response.json()["code"] == "BAD_REQUEST"
+
+
+class TestQueueFullAck:
+    """满队丢弃后端点仍 200（丢弃即最终丢失——上报方不会因队列满重试）。"""
+
+    async def test_queue_full_drop_still_returns_ok(self) -> None:
+        """队列满丢弃：端点仍 200 + dropped_inbound 计数。"""
+        runner = SmsForwarderWebhookRunner(
+            router=FakeChannelRouter(),
+            notifications_enabled=False,
+            owner_numbers=frozenset(),
+            inbound_queue_size=1,
+        )
+        app = FastAPI(docs_url=None, redoc_url=None)
+        app.include_router(sms_forwarder_channels_router)
+        register_exception_handlers(app)
+        app.state.settings = _settings()
+        app.state.channels_sms_forwarder_runner = runner
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            first = await client.post(
+                "/api/v1/channels/sms-forwarder",
+                json=_payload(msgid="9201"),
+                headers=_auth_headers(),
+            )
+            second = await client.post(
+                "/api/v1/channels/sms-forwarder",
+                json=_payload(msgid="9202"),
+                headers=_auth_headers(),
+            )
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert second.json() == {"status": "ok"}
+        assert runner.pending_inbound == 1
+        assert runner.dropped_inbound == 1
+
+
+class TestBoundedBodyRead:
+    """SmsForwarder 公开入站体有界（64 KiB 短文本上限）。"""
+
+    async def test_chunked_oversize_stops_reading_after_limit(self) -> None:
+        """端点 chunked 超限：400 且后续块未被索取（提前中止）。"""
+        chunks = [b"a" * (40 * 1024), b"b" * (40 * 1024), b"c"]
+        receive = ReceiveRecorder(chunked_messages(chunks))
+        app = FastAPI(docs_url=None, redoc_url=None)
+        app.state.settings = _settings()
+        request = raw_request(
+            receive=receive,
+            headers=[
+                (b"content-type", b"application/json"),
+                (b"authorization", _auth_headers()["Authorization"].encode("ascii")),
+            ],
+            path="/api/v1/channels/sms-forwarder",
+            app=app,
+        )
+        with pytest.raises(BusinessException) as exc_info:
+            await receive_sms_forwarder_webhook(request)
+        assert exc_info.value.code is ErrorCode.BAD_REQUEST
+        assert receive.calls == 2
+
+    async def test_declared_oversize_rejected_without_reading_stream(self) -> None:
+        """声明 Content-Length 超限：400 且 ASGI 流一次都不读。"""
+        app = FastAPI(docs_url=None, redoc_url=None)
+        app.state.settings = _settings()
+        reads: list[str] = []
+
+        async def receive() -> dict[str, Any]:
+            reads.append("read")
+            raise AssertionError("声明超限时不应读取请求体")
+
+        request = raw_request(
+            receive=receive,
+            headers=[
+                (b"content-type", b"application/json"),
+                (b"authorization", _auth_headers()["Authorization"].encode("ascii")),
+                (
+                    b"content-length",
+                    str(SMS_FORWARDER_MAX_BODY_BYTES + 1).encode("ascii"),
+                ),
+            ],
+            path="/api/v1/channels/sms-forwarder",
+            app=app,
+        )
+        with pytest.raises(BusinessException) as exc_info:
+            await receive_sms_forwarder_webhook(request)
+        assert exc_info.value.code is ErrorCode.BAD_REQUEST
+        assert reads == []
 
 
 class TestRouterNotAssembled:

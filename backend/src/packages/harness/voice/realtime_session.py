@@ -1012,6 +1012,7 @@ class RealtimeVoiceSession:
         try:
             result = await handle.finish()
         except asyncio.CancelledError:
+            await self._cancel_handle_cancellation_safe(handle)
             raise
         except BusinessException as exc:
             await self._degrade_stream_asr(f"收尾失败({exc.code})")
@@ -1081,6 +1082,33 @@ class RealtimeVoiceSession:
             return
         try:
             await handle.cancel()
+        except Exception:
+            logger.opt(exception=True).debug("流式识别连接取消失败（忽略）")
+
+    @staticmethod
+    async def _cancel_handle_cancellation_safe(handle: AsrStreamHandleFace | None) -> None:
+        """取消连接句柄并屏蔽二次取消（取消路径必须先收口再上抛）。
+
+        收尾任务被外部取消时，``finish()`` 可能在挂起等待中直接抛
+        ``CancelledError``；若此处不再收口，连接会泄漏。以独立任务 +
+        ``asyncio.shield`` 驱动 ``cancel()`` 至完成——幂等取消且屏蔽再次
+        到达的取消信号，随后原取消照常上抛。
+
+        Args:
+            handle: 待取消句柄（None 跳过）。
+        """
+        if handle is None:
+            return
+        cleanup = asyncio.ensure_future(handle.cancel())
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                continue
+        try:
+            cleanup.result()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.opt(exception=True).debug("流式识别连接取消失败（忽略）")
 

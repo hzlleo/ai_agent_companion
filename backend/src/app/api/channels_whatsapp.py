@@ -28,12 +28,13 @@
     - **签名校验**：``WHATSAPP_APP_SECRET`` 为空 = 签名校验关闭（同上
       fail-closed 边界）。签名在请求体解析与去重之前完成——被拒请求不
       消耗去重窗口；``X-Hub-Signature-256`` 必须带 ``sha256=`` 前缀。
-    - **请求体校验**：仅接受 ``application/json``；体大小上限
-      :data:`WHATSAPP_MAX_BODY_BYTES`（webhook 载荷是消息文本 / 状态回执，
-      64 KiB 已远超正常推送）——声明的 Content-Length 超限 → 400（先于
-      读取）；无 Content-Length 的 chunked 请求按上限逐块累计，累计超限
-      立即 400（后续块不再读取）；非法 JSON / 非 JSON 对象 / 深层嵌套
-      （``RecursionError``）→ 400。对象内字段合法性由
+    - **请求体校验**：仅接受 ``application/json``；体读取经共享有界读取器
+      （:mod:`app.api.inbound_body`）——上限
+      :data:`app.api.inbound_body.WHATSAPP_MAX_BODY_BYTES`（64 KiB；消息
+      文本 / 状态回执的 webhook 载荷）；声明 Content-Length 超限 → 400
+      （先于读取）；无 Content-Length 的 chunked 请求按上限逐块累计，累计
+      超限立即 400（后续块不再读取）；空体 / 非法 JSON / 非 JSON 对象 /
+      深层嵌套（``RecursionError``）→ 400。对象内字段合法性由
       ``whatsapp_models`` 容错解析承担（隔离确认——不进 HTTP 错误面）。
     - **入站消纳（有界队列）**：通道启用时 lifespan 装配
       ``app.state.channels_whatsapp_runner``（``WhatsAppWebhookRunner``）——
@@ -53,7 +54,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import secrets
 from typing import Final, cast
 
@@ -62,6 +62,11 @@ from fastapi.responses import PlainTextResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from app.api.inbound_body import (
+    WHATSAPP_MAX_BODY_BYTES,
+    parse_json_object,
+    read_bounded_body,
+)
 from packages.harness.channels.phone_numbers import parse_whatsapp_owner_numbers
 from packages.harness.channels.whatsapp.whatsapp_models import (
     process_whatsapp_webhook_payload,
@@ -80,9 +85,6 @@ __all__ = [
 ]
 
 router = APIRouter(prefix="/api/v1/channels/whatsapp", tags=["channels-whatsapp"])
-
-#: 请求体字节上限（消息文本 / 状态回执的 webhook 载荷——64 KiB 已远超正常推送）。
-WHATSAPP_MAX_BODY_BYTES: Final[int] = 64 * 1024
 
 #: Meta 签名头名称（Cloud API 固定形态 ``sha256=<hex>``）。
 _SIGNATURE_HEADER: Final[str] = "x-hub-signature-256"
@@ -185,20 +187,6 @@ def verify_whatsapp_signature(
     return secrets.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
 
 
-def _declared_length_exceeds(declared_length: str, limit: int) -> bool:
-    """判定声明的 Content-Length 是否超过上限（缺失 / 非数值视为不超限）。
-
-    Args:
-        declared_length: 原始 ``Content-Length`` 头值。
-        limit: 字节上限。
-
-    Returns:
-        True = 声明值可解析且超过上限（先于实读拒绝——避免读大包）。
-    """
-    value = declared_length.strip()
-    return value.isdigit() and int(value) > limit
-
-
 def _require_json_content_type(request: Request) -> None:
     """校验请求 Content-Type（仅接受 application/json）。
 
@@ -215,78 +203,6 @@ def _require_json_content_type(request: Request) -> None:
             code=ErrorCode.BAD_REQUEST,
             message="WhatsApp webhook 仅接受 application/json 请求体",
         )
-
-
-async def _read_request_body_bounded(request: Request, limit: int) -> bytes:
-    """按块读取请求体并在累计超限时立即中止（不整包读入内存）。
-
-    Content-Length 可缺失（chunked 传输），声明值预检不能在读取阶段兜底，
-    因此逐块累计并在累计超过 ``limit`` 的瞬间抛受控 400——异常传播终止
-    ``request.stream()`` 迭代，后续块不再读取。
-
-    Args:
-        request: 原始 ASGI 请求（请求体消费面）。
-        limit: 允许的最大字节数。
-
-    Returns:
-        原始请求体字节（长度 ≤ ``limit``）。
-
-    Raises:
-        BusinessException: 读取失败 / 空体 / 累计超过 ``limit``
-            （``BAD_REQUEST`` → 400）。
-    """
-    chunks: list[bytes] = []
-    total = 0
-    try:
-        async for chunk in request.stream():
-            total += len(chunk)
-            if total > limit:
-                raise BusinessException(
-                    code=ErrorCode.BAD_REQUEST,
-                    message=f"WhatsApp webhook 请求体超过上限：{limit} 字节",
-                )
-            if chunk:
-                chunks.append(chunk)
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise BusinessException(
-            code=ErrorCode.BAD_REQUEST,
-            message="WhatsApp webhook 请求体读取失败",
-        ) from exc
-    raw_body = b"".join(chunks)
-    if not raw_body.strip():
-        raise BusinessException(
-            code=ErrorCode.BAD_REQUEST,
-            message="WhatsApp webhook 请求体为空",
-        )
-    return raw_body
-
-
-def _parse_json_object(raw_body: bytes) -> dict[str, object]:
-    """解析请求体为 JSON 对象（非法 / 非对象 / 深嵌套受控 400）。
-
-    Args:
-        raw_body: 已通过上限校验的原始请求体。
-
-    Returns:
-        解析后的 JSON 对象（字段合法性交给 ``whatsapp_models`` 容错解析）。
-
-    Raises:
-        BusinessException: 非法 JSON / 非 JSON 对象 / 超深嵌套
-            （``BAD_REQUEST`` → 400）。
-    """
-    try:
-        payload = json.loads(raw_body)
-    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
-        raise BusinessException(
-            code=ErrorCode.BAD_REQUEST,
-            message="WhatsApp webhook 请求体不是合法 JSON",
-        ) from exc
-    if not isinstance(payload, dict):
-        raise BusinessException(
-            code=ErrorCode.BAD_REQUEST,
-            message="WhatsApp webhook 请求体须为 JSON 对象（Cloud API 推送形态）",
-        )
-    return payload
 
 
 @router.get("", response_class=PlainTextResponse)
@@ -332,17 +248,11 @@ async def receive_whatsapp_webhook(request: Request) -> WhatsAppAckDTO:
     settings = _resolve_settings(request)
     whatsapp = settings.channels.whatsapp
     _require_json_content_type(request)
-    if _declared_length_exceeds(
-        request.headers.get("content-length", ""), WHATSAPP_MAX_BODY_BYTES
-    ):
-        raise BusinessException(
-            code=ErrorCode.BAD_REQUEST,
-            message=(
-                "WhatsApp webhook 请求体超过上限："
-                f"{WHATSAPP_MAX_BODY_BYTES} 字节"
-            ),
-        )
-    raw_body = await _read_request_body_bounded(request, WHATSAPP_MAX_BODY_BYTES)
+    raw_body = await read_bounded_body(
+        request,
+        limit=WHATSAPP_MAX_BODY_BYTES,
+        channel_label="WhatsApp",
+    )
     if not verify_whatsapp_signature(
         raw_body,
         request.headers.get(_SIGNATURE_HEADER, ""),
@@ -352,7 +262,11 @@ async def receive_whatsapp_webhook(request: Request) -> WhatsAppAckDTO:
             code=ErrorCode.FORBIDDEN,
             message="WhatsApp webhook 签名校验失败：X-Hub-Signature-256 缺失或不匹配",
         )
-    payload = _parse_json_object(raw_body)
+    payload = parse_json_object(
+        raw_body,
+        channel_label="WhatsApp",
+        object_label="Cloud API 推送形态",
+    )
     runner: WhatsAppWebhookRunner | None = getattr(
         request.app.state, "channels_whatsapp_runner", None
     )

@@ -20,6 +20,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
+
 from packages.harness.config.models import VoiceSettings
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.voice.realtime_models import RealtimeVoiceSettings
@@ -348,6 +350,46 @@ async def test_session_close_settles_streaming_asr_and_clears_tasks() -> None:
     assert harness.session is not None
     assert harness.session.active_task_count == 0
     assert harness.messages("closed")[0]["reason"] == "client_end"
+
+
+async def test_external_cancel_during_stream_finish_cancels_handle_and_clears_tasks() -> None:
+    """外部取消（服务停机）落在 finish 挂起时：句柄收口、任务集合清零。"""
+    harness = StreamSessionHarness(stream_asr=True)
+    await harness.boot()
+    await _start_segment_with_stream(harness)
+    handle = harness.voice.asr_stream_handle
+    assert handle is not None
+    handle.finish_gate = asyncio.Event()
+    await harness.push_frames([loud_frame(), silence_frame()], start_seq=2)
+    await wait_until(lambda: handle.finish_started.is_set(), description="流式收尾挂起")
+    assert harness.task is not None
+    harness.task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(harness.task, timeout=_WAIT_TIMEOUT)
+    assert handle.cancelled is True
+    assert handle.finished is False
+    assert harness.session is not None
+    assert harness.session.active_task_count == 0
+    assert harness.messages("final_transcript") == []
+
+
+async def test_transport_close_during_stream_finish_cancels_handle_and_clears_tasks() -> None:
+    """对端断开落在 finish 挂起时：会话关闭路径同样收口句柄（零残留）。"""
+    harness = StreamSessionHarness(stream_asr=True)
+    await harness.boot()
+    await _start_segment_with_stream(harness)
+    handle = harness.voice.asr_stream_handle
+    assert handle is not None
+    handle.finish_gate = asyncio.Event()
+    await harness.push_frames([loud_frame(), silence_frame()], start_seq=2)
+    await wait_until(lambda: handle.finish_started.is_set(), description="流式收尾挂起")
+    assert harness.task is not None
+    await harness.transport.push_disconnect()
+    await asyncio.wait_for(harness.task, timeout=_WAIT_TIMEOUT)
+    assert handle.cancelled is True
+    assert harness.session is not None
+    assert harness.session.active_task_count == 0
+    assert harness.transport.closed is not None
 
 
 async def test_stream_asr_handshake_buffer_replays_last_fifty_once() -> None:

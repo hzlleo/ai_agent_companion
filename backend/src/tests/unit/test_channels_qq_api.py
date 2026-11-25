@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from collections.abc import AsyncIterator
 from typing import Any
@@ -22,6 +23,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from app.api.channels_qq import QQ_MAX_BODY_BYTES, receive_qq_webhook
 from app.api.channels_qq import router as qq_channels_router
 from app.middleware.error_handler import register_exception_handlers
 from packages.harness.channels.channel_models import (
@@ -29,7 +31,10 @@ from packages.harness.channels.channel_models import (
     ChannelType,
     InboundMessageModel,
 )
+from packages.harness.channels.qq.qq_runner import QqWebhookRunner
+from packages.harness.core.errors import BusinessException, ErrorCode
 from tests.async_wait import wait_until
+from tests.request_fakes import ReceiveRecorder, chunked_messages, raw_request
 
 #: conftest 硬覆盖的测试专用 webhook token 变量（webhook_token_env 指向形态）。
 _TEST_WEBHOOK_TOKEN_ENV = "QQ_TEST_WEBHOOK_TOKEN"
@@ -250,6 +255,127 @@ class TestBodyValidation:
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
         assert qq_app[1].handled == []
+
+
+class TestQueueFullAck:
+    """满队丢弃后端点仍 200（丢弃即最终丢失——上报方不会因队列满重试）。"""
+
+    async def test_queue_full_drop_still_returns_ok(self) -> None:
+        """队列满丢弃：端点仍 200 + dropped_inbound 计数。"""
+        runner = QqWebhookRunner(router=FakeChannelRouter(), inbound_queue_size=1)
+        app = FastAPI(docs_url=None, redoc_url=None)
+        app.include_router(qq_channels_router)
+        register_exception_handlers(app)
+        app.state.channels_qq_runner = runner
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            first = await client.post(
+                "/api/v1/channels/qq/webhook",
+                json=_message_event(message_id=9201),
+                headers=_auth_headers(),
+            )
+            second = await client.post(
+                "/api/v1/channels/qq/webhook",
+                json=_message_event(message_id=9202),
+                headers=_auth_headers(),
+            )
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert second.json() == {"status": "ok"}
+        assert runner.pending_inbound == 1
+        assert runner.dropped_inbound == 1
+
+
+class TestBoundedBodyRead:
+    """QQ 公开入站体有界（8 MiB 上限容纳合法 base64 段）。"""
+
+    async def test_chunked_oversize_stops_reading_after_limit(self) -> None:
+        """端点 chunked 超限：400 且后续块未被索取（提前中止）。"""
+        megabyte = 1024 * 1024
+        chunks = [b"a" * (5 * megabyte), b"b" * (5 * megabyte), b"c"]
+        receive = ReceiveRecorder(chunked_messages(chunks))
+        app = FastAPI(docs_url=None, redoc_url=None)
+        request = raw_request(
+            receive=receive,
+            headers=[(b"authorization", _auth_headers()["Authorization"].encode("ascii"))],
+            path="/api/v1/channels/qq/webhook",
+            app=app,
+        )
+        with pytest.raises(BusinessException) as exc_info:
+            await receive_qq_webhook(request)
+        assert exc_info.value.code is ErrorCode.BAD_REQUEST
+        assert receive.calls == 2
+
+    async def test_declared_oversize_rejected_without_reading_stream(self) -> None:
+        """声明 Content-Length 超限：400 且 ASGI 流一次都不读。"""
+        reads: list[str] = []
+
+        async def receive() -> dict[str, Any]:
+            reads.append("read")
+            raise AssertionError("声明超限时不应读取请求体")
+
+        app = FastAPI(docs_url=None, redoc_url=None)
+        request = raw_request(
+            receive=receive,
+            headers=[
+                (b"authorization", _auth_headers()["Authorization"].encode("ascii")),
+                (b"content-length", str(QQ_MAX_BODY_BYTES + 1).encode("ascii")),
+            ],
+            path="/api/v1/channels/qq/webhook",
+            app=app,
+        )
+        with pytest.raises(BusinessException) as exc_info:
+            await receive_qq_webhook(request)
+        assert exc_info.value.code is ErrorCode.BAD_REQUEST
+        assert reads == []
+
+    async def test_base64_segment_within_limit_accepted(self) -> None:
+        """8 MiB 内 base64 媒体段：通过并路由（合法图片段不被短文本帽误拒）。"""
+        fake_router = FakeChannelRouter()
+        app = FastAPI(docs_url=None, redoc_url=None)
+        app.include_router(qq_channels_router)
+        register_exception_handlers(app)
+        app.state.channels_router = fake_router
+        event = _message_event(message_id=8101)
+        event["message"] = [
+            {
+                "type": "image",
+                "data": {
+                    "file": "base64://" + "A" * (QQ_MAX_BODY_BYTES - 64 * 1024)
+                },
+            }
+        ]
+        body = json.dumps(event).encode("utf-8")
+        assert len(body) <= QQ_MAX_BODY_BYTES
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/channels/qq/webhook", content=body, headers=_auth_headers()
+            )
+        assert response.status_code == 200
+        assert len(fake_router.handled) == 1
+
+    async def test_base64_segment_over_limit_rejected(self) -> None:
+        """超过 8 MiB 的 base64 体：400（通道上限拒绝）。"""
+        fake_router = FakeChannelRouter()
+        app = FastAPI(docs_url=None, redoc_url=None)
+        app.include_router(qq_channels_router)
+        register_exception_handlers(app)
+        app.state.channels_router = fake_router
+        event = _message_event(message_id=8102)
+        event["message"] = [
+            {"type": "image", "data": {"file": "base64://" + "A" * QQ_MAX_BODY_BYTES}}
+        ]
+        body = json.dumps(event).encode("utf-8")
+        assert len(body) > QQ_MAX_BODY_BYTES
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/channels/qq/webhook", content=body, headers=_auth_headers()
+            )
+        assert response.status_code == 400
+        assert response.json()["code"] == "BAD_REQUEST"
+        assert fake_router.handled == []
 
 
 class TestRouterNotAssembled:

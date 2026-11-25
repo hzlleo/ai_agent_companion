@@ -134,8 +134,8 @@ class TestQueueBackpressure:
             for message in captured
         )
 
-    async def test_dropped_message_is_not_dedup_registered_and_retry_succeeds(self) -> None:
-        """丢弃不登记去重：腾出队列后同 msgid 重投可重新消费。"""
+    async def test_dropped_message_not_dedup_registered_so_repeat_can_be_consumed(self) -> None:
+        """丢弃不登记去重：腾出队列后同 msgid 再次到达（偶发重复）仍可消费。"""
         runner = _runner(router=RecordingRouter(), clock=_Clock(), inbound_queue_size=1)
         assert runner.submit(_message_event(10)) is True
         assert runner.submit(_message_event(11)) is False

@@ -17,11 +17,11 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from starlette.requests import Request
 
 import app.api.channels_whatsapp as whatsapp_api
 from app.api.channels_whatsapp import WHATSAPP_MAX_BODY_BYTES
 from app.api.channels_whatsapp import router as whatsapp_channels_router
+from app.api.inbound_body import read_bounded_body
 from app.middleware.error_handler import register_exception_handlers
 from packages.harness.channels.channel_models import (
     ChannelDeliveryResultModel,
@@ -41,6 +41,7 @@ from packages.harness.config.models import (
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.core.errors import BusinessException, ErrorCode
 from tests.async_wait import wait_until
+from tests.request_fakes import ReceiveRecorder, chunked_messages, raw_request
 
 _VERIFY_TOKEN = "test-only-verify-token"
 _APP_SECRET = "test-only-app-secret"
@@ -516,62 +517,42 @@ class TestBodyValidation:
         assert len(fake_router.handled) == 1
 
 
-class _ReceiveRecorder:
-    """ASGI receive 记录器（逐条投放预置消息并计数）。"""
-
-    def __init__(self, messages: list[dict[str, Any]]) -> None:
-        self._messages = messages
-        self.calls = 0
-
-    async def __call__(self) -> dict[str, Any]:
-        message = self._messages[self.calls]
-        self.calls += 1
-        return message
-
-
-def _raw_request(
-    *,
-    receive: Any,
-    headers: list[tuple[bytes, bytes]],
-    app: FastAPI | None = None,
-) -> Request:
-    """手工构造 ASGI 请求（body 消费面可记录——不经过传输层）。"""
-    scope: dict[str, Any] = {
-        "type": "http",
-        "asgi": {"version": "3.0", "spec_version": "2.3"},
-        "http_version": "1.1",
-        "method": "POST",
-        "scheme": "http",
-        "path": _URL,
-        "raw_path": _URL.encode("utf-8"),
-        "query_string": b"",
-        "root_path": "",
-        "headers": headers,
-        "client": ("test", 12345),
-        "server": ("test", 80),
-    }
-    if app is not None:
-        scope["app"] = app
-    return Request(scope, receive)
-
-
 class TestBoundedBodyRead:
     """无 Content-Length 的 chunked 体按上限逐块读取（超限即停）。"""
 
     async def test_bounded_body_reader_stops_reading_after_limit(self) -> None:
         """逐块累计超限：立即受控 400，后续块不再向 ASGI 流索取。"""
-        receive = _ReceiveRecorder(
+        receive = ReceiveRecorder(
             [
                 {"type": "http.request", "body": b"a" * 6, "more_body": True},
                 {"type": "http.request", "body": b"b" * 6, "more_body": True},
                 {"type": "http.request", "body": b"c", "more_body": False},
             ]
         )
-        request = _raw_request(
-            receive=receive, headers=[(b"content-type", b"application/json")]
+        request = raw_request(
+            receive=receive,
+            headers=[(b"content-type", b"application/json")],
+            path=_URL,
         )
         with pytest.raises(BusinessException) as exc_info:
-            await whatsapp_api._read_request_body_bounded(request, 8)
+            await read_bounded_body(request, limit=8, channel_label="WhatsApp")
+        assert exc_info.value.code is ErrorCode.BAD_REQUEST
+        assert receive.calls == 2
+
+    async def test_whatsapp_endpoint_stops_reading_after_limit(self) -> None:
+        """端点 chunked 超限：400 且后续块未被索取（提前中止）。"""
+        chunks = [b"a" * (40 * 1024), b"b" * (40 * 1024), b"c"]
+        receive = ReceiveRecorder(chunked_messages(chunks))
+        app = FastAPI(docs_url=None, redoc_url=None)
+        app.state.settings = _settings()
+        request = raw_request(
+            receive=receive,
+            headers=[(b"content-type", b"application/json")],
+            path=_URL,
+            app=app,
+        )
+        with pytest.raises(BusinessException) as exc_info:
+            await whatsapp_api.receive_whatsapp_webhook(request)
         assert exc_info.value.code is ErrorCode.BAD_REQUEST
         assert receive.calls == 2
 
@@ -585,7 +566,7 @@ class TestBoundedBodyRead:
             reads.append("read")
             raise AssertionError("声明超限时不应读取请求体")
 
-        request = _raw_request(
+        request = raw_request(
             receive=receive,
             headers=[
                 (b"content-type", b"application/json"),
@@ -594,6 +575,7 @@ class TestBoundedBodyRead:
                     str(WHATSAPP_MAX_BODY_BYTES + 1).encode("ascii"),
                 ),
             ],
+            path=_URL,
             app=app,
         )
         with pytest.raises(BusinessException) as exc_info:

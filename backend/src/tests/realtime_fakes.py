@@ -515,6 +515,7 @@ class FakeAsrStreamHandle:
         self.feed_error: BusinessException | None = None
         self.finish_error: BusinessException | None = None
         self.finish_gate: asyncio.Event | None = None
+        self.finish_started = asyncio.Event()
         self.result = AsrResultModel(text="流式转写", language="zh")
         self.cancel_count = 0
 
@@ -526,6 +527,7 @@ class FakeAsrStreamHandle:
 
     async def finish(self) -> AsrResultModel:
         """收尾（返回脚本结果 / 注入故障 / 门闩阻塞）。"""
+        self.finish_started.set()
         if self.finish_gate is not None:
             await self.finish_gate.wait()
         self.finished = True

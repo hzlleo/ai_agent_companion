@@ -1831,6 +1831,29 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 - F3 变异实证（退出码）：`backend/alembic/env.py` 写旧句 → 1（命中 `env.py:116`）；`backend/alembic.ini` 回旧句 → 1（命中 `alembic.ini:4`）；写「MySQL 协议权威」→ 0（不误伤）。
 - 无迁移 / 无新增依赖 / 无新增 env 键；前端未动（`--with-frontend` 未跑，源码零改动）。
 
+### 已完成切片：G2 全局审计 5×P2 运行时正确性根修（本分支工作区）
+
+**背景**：G2 全局审计给出 5 条运行时正确性 P2（N1 公开入站体无界、N2 出站私网守卫可被非规范形态 / 自动重定向绕过、N3 满队丢弃文案与端点恒 200 实现矛盾、N4 时间戳解析双实现且 SMS 非有限值可能抛错、N9 流式收尾句柄被外部取消时泄漏）。本批逐条根修并留守卫；旧 canonical `ee6fa370`（G1 四审）自本批起为历史。
+
+逐条（原缺陷位置 → 根修位置 → 结构性守卫）：
+
+1. **N1 公开入站体有界（三端点统一）**：QQ / SmsForwarder 端点此前分别整包 `request.json()` / `request.body()`（chunked 无 Content-Length 时无上限），WhatsApp 仅有局部实现。根修：新增 `backend/src/app/api/inbound_body.py` 单源模块——`read_bounded_body` 以 `request.stream()` 逐块累计（累计超限瞬间抛受控 400，异常传播终止迭代、后续块不再索取），声明 Content-Length 预检保留；`parse_json_object` / `read_bounded_json_object` 统一空体 / 非法 JSON / 非对象错误面；per-channel 上限常量单源（QQ 8 MiB——容纳 OneBot `base64://` 媒体段，按出站附件 8 MiB 帽与表情单文件 5 MiB 的 base64 膨胀留余量；SmsForwarder / WhatsApp 64 KiB）。三端点全部接入。守卫：三端点 chunked 超限伪 stream 提前中止（`test_channels_{qq,sms_forwarder,whatsapp}_api.py`）、声明超限零读取、QQ 8 MiB 内 base64 通过 / 超 8 MiB 拒；`test_inbound_body_structure.py` AST 枚举 `main.py` 豁免鉴权 POST 路由，断言每个处理函数调用共享读取器且不直接 `request.json()/body()`（新增豁免 POST 未接即红）。
+2. **N2 出站目标守卫（防 SSRF 绕过）**：`outbound_guard` 此前仅拒绝可被 `ipaddress` 直接解析的私网字面量，且 `wecom_runner._fetch_url` 依赖 httpx 自动重定向（首跳校验后可直接跳到私网）。根修：`validate_http_url` 改为「主机归一（去空白 / 尾点 / 方括号 / 大小写）→ 可注入 resolver（默认 `asyncio` 事件循环 `socket.getaddrinfo`）→ 全部地址判公网（loopback / link-local / private / reserved / multicast / unspecified / IPv6 / v4-mapped）」，解析失败 / 空结果 fail-closed；非规范 IPv4 形态（`127.1` / `2130706433` / `0x7f.1` / `0177.0.0.1` / `0`）一律按解析结果判定。`wecom_runner._fetch_url` 改手动重定向循环（≤3 跳、每跳重新校验目标、3xx 无 `Location` 受控失败），客户端自动跟随关闭；流式限读与 8 MiB 帽保留。守卫：`test_outbound_guard.py` 七类非规范 / 特殊形态全部拒绝、多地址任一私网拒绝、公网通过、resolver 抛错 / 空结果 / 非法地址 fail-closed、主机归一矩阵；`test_wecom_runner.py` 重定向链逐跳校验、重定向到私网、无 Location、超跳数、resolver 失败；既有企微 URL 用例同步列明并注入 fake resolver（`test_url_attachment_downloaded_via_shared_client` / `test_url_http_error_reported_per_attachment` / `test_url_transport_error_reported_per_attachment` / `test_url_response_over_size_cap_fails_per_attachment`）。
+3. **N3 丢弃语义文案单源**：QQ / SMS / 企微 runner 的模块 docstring、队列常量注释、满队 ERROR 文案与 `channels.md` 多处旧口径「平台 / 手机端重投可重新消费」与端点恒 200（仅非 200 重试）矛盾。根修：统一为真源口径「端点恒 200（上报方仅非 200 重试）→ 满队丢弃即最终丢失；不登记去重仅吸收偶发重复」；企微长连接按「回调即时确认（平台仅对失败回调重试）」同义收口。用例更名 `test_dropped_message_not_dedup_registered_so_repeat_can_be_consumed`（QQ / SMS），并各补「满队丢弃后端点仍 200」端点用例（`TestQueueFullAck::test_queue_full_drop_still_returns_ok`）。
+4. **N4 时间戳解析单源**：SMS 与 WhatsApp 各持一份解析实现，SMS 缺 `math.isfinite` / `OverflowError` 护栏（非有限值可能抛错）。根修：新增 `backend/src/packages/harness/channels/inbound_timestamp.py` 共享实现（入口标识 `channel_label` 仅用于诊断），非有限值（`NaN` / `Infinity` / `"nan"` / `"inf"` / `"Infinity"` / `"1e999"`）与溢出 / 非法 / 缺失 / 非正统一回落服务端 Epoch 毫秒；SMS / WhatsApp 的 `resolve_*_timestamp_ms` 仅保留自有名字与 docstring 并委托共享实现；删除 SMS 旧实现与 §6 对应遗留行。守卫：`test_channel_timestamp.py` 两通道同一参数化矩阵（秒 / 毫秒 / 非有限 / 非法字符串 / 缺失 / 布尔 / 非正）与逐值一致性。
+5. **N9 流式收尾句柄收口**：`realtime_session._finish_stream_segment` 对 `CancelledError` 仅原样上抛，挂起中的 `finish()` 被外部取消时连接句柄无人收口；`asr_stream_client.finish()` 取消路径同样未关闭传输；用量包装在收尾未落定时会被清理 cancel 补记。根修：`_finish_stream_segment` 捕获取消后以独立任务 + `asyncio.shield` 驱动 `handle.cancel()` 至完成（幂等、屏蔽二次取消）再上抛；`asr_stream_client.finish()` 取消路径经同样的 shield 收口（传输关闭 + 派生任务回收）；`_StreamAsrUsageHandle` 标记「finish 已发起但未落定」，随后的清理 `cancel()` 只关闭连接、不补记 usage 行（与 finish 失败回退批量口径一致）；会话关闭 / 对端断开路径经 `_finalize` 的 stale 任务取消链同步收口。守卫：`test_realtime_session_streaming.py` 外部取消 / 传输断开落在 finish 挂起时句柄已取消、任务集合清零、无 final；`test_voice_stream_clients.py` finish 取消后 cancel 事件出站、传输关闭、`_tasks` 清零、cancel 幂等；`test_voice_service_streaming.py` 取消后清理不留 usage 行；`voice.md` 计次表补「finish 被外部取消 → 0 行」行。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3442 / coverage-gates=24 组 / lint / typecheck=215 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-ac48f039.json`，canonical sha8=`ac48f039`（716 文件级证据；`--hash-only` 复算 `sha8=ac48f039 files=716` 一致）；`6fd7efc8`（本批最终文案收口前树）、`ee6fa370`（G1 四审）与更早证据为历史）。
+- `cd backend && pixi run tests-all` → 0（3442 passed；G1 四审基线 3363，本批 +79）。
+- `cd backend && pixi run coverage-gates` → 0（24 组 ≥80%：app/api 85.3%（1249/1465）、harness/channels 97.5%（3277/3362）、harness/voice 93.0%（2657/2857）、harness/database 93.5%（215/230）、harness/multimodal 95.3%（733/769）、harness/persona 95.6%（1790/1872）、app/main.py 93.9%（558/594））。
+- `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0（215 源文件）；`pixi run conftest-env` → 0（228/228，豁免 0）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `1df4d48c…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）。
+- 根 `pixi run gates` → 0（comment-gates files=248 violations=0 hints=23 / sync-test-ratchet +0 / noqa-freeze 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 源文件 214、冻结基线 190、探针 28 条覆盖 27 文件 / docs-truth / doc-counts 12 项（规则 29 / 红队 55 / 配置分节 31 / 措辞扫描 580 文件）/ assertion-freeze files=224 asserts=9506 raises=700 / surface-check app/api 104→62 已登记 + 42 豁免、env 791 行 / bench-core PASS 6 项 / api-smoke PASS 4 端点 / prose-pin 75≤75）。
+- 红探针 adhoc：`app.api.inbound_body:read_bounded_body` → RED（failed=1）；`packages.harness.channels.inbound_timestamp:resolve_epoch_ms_timestamp` → RED（failed=42）。
+- `cd backend && pixi run tests-seekdb` → 0（15 passed；活容器 `seekdb-smoke`）。
+- 无迁移 / 无新增依赖 / 无新增 env 键；前端未动（`--with-frontend` 未跑，源码零改动）。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 ### 缓解台账（非根修，已排期）
@@ -1847,13 +1870,11 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
 - SmsForwarder 短信 / 通知转发通道已交付（默认关闭、仅入站；部署侧配置 `SMS_FORWARDER_*` 并在手机端配置 Webhook 与 token）；WhatsApp Cloud API 通道已交付（`WHATSAPP_ENABLED` 默认关闭；Meta 应用侧配置 webhook / 订阅 messages + 四项凭据；出站仅自由格式文本并受 24h 客户服务窗约束——窗外主动消息需模板发送（未实现）或属主先发消息；窗口状态与 wamid 去重均为进程内单实例语义）。
 - SmsForwarder 通知发送者归一碰撞面：仅点位置不同的包名共用会话（`com.example.app` / `com.exampleapp` → 同一 `sms:` 会话键），可选收紧归一（需评审）。
-- SmsForwarder 时间戳非有限值同病遗留：`resolve_sms_forwarder_timestamp_ms` 未做 `math.isfinite` / `OverflowError` 护栏——载荷传入 `NaN` / `Infinity` 时可能抛异常而非回落服务端时钟（WhatsApp 侧已在本切片修复并测试）；下一批补同样护栏与矩阵用例。
 - SmsForwarder runner 队列满分支同形遗留：`sms_forwarder/sms_runner.py` 的 `QueueFull` 分支为「计数 + ERROR + `return False`」单条短路形态——当前 `submit` 仅承单条载荷故无少计；若后续扩展为批载荷，需按 WhatsApp runner 同法对批内每条分别计数与告警。本批不改。
 - 声纹（PIPL 合规）与表情包素材法律边界提示义务已随 R2d-2 交付（默认关闭，部署侧按需配置 `VOICEPRINT_*` / `STICKER_*` 并起说话人向量服务）。
 - 预算边界（R3-2 → R4-2 已分面）：LLM 日预算只计 LLM 用途行；ASR / TTS / voiceprint 各自独立预算（按 purpose 计数，见 [usage.md](backend/usage.md#分面日预算asr--tts--voiceprint)）。
 - 实时语音（R2f）遗留：AEC/移动端已由 R4-3 前置（浏览器 AEC/Worklet），残余：真实设备验证、真流式供应商连通验证（双轨默认关闭；步骤见 docs/backend/realtime-voice.md「部署侧一次性真机验证」）；实时语音轮次不注入工具面（需要搜索/沙盒走文字通道）。
 - 流式 ASR 起始边界（R4-3 记录，后续排期）：流式通道从 SPEECH_START 帧起喂，VAD 防抖候选帧（默认 3 帧）仅入批量缓冲，流式最终稿可能缺句首约 200ms；`test_realtime_session_streaming.py` 的 `frames[1:]` 已固化该行为。
-- 流式收尾句柄（R4-3 记录，既有风险）：`finish()` 被外部取消时句柄未必收口（非会话路径，代码走读发现），后续排期补用例与收口。
 - 已知部署机注意：开发机无 NVIDIA GPU（Iris Xe）；GPU/模型项一律在 Clevo 机执行。
 
 ## 7. 恢复指引（新会话首读）

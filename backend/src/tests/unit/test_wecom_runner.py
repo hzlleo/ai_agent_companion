@@ -28,7 +28,10 @@ from packages.harness.channels.channel_models import (
     ChannelMessageAttachment,
     OutboundMessageModel,
 )
-from packages.harness.channels.outbound_guard import OUTBOUND_ATTACHMENT_MAX_BYTES
+from packages.harness.channels.outbound_guard import (
+    OUTBOUND_ATTACHMENT_MAX_BYTES,
+    HostAddressResolver,
+)
 from packages.harness.channels.wecom.wecom_models import (
     WECOM_MARKDOWN_MAX_BYTES,
     WeComCallbackFrameModel,
@@ -64,12 +67,29 @@ class _Clock:
         self.now_ms += delta_ms
 
 
+def _resolver(addresses: dict[str, tuple[str, ...]]) -> HostAddressResolver:
+    """构造主机名 → 地址集合的 fake resolver（出站 URL 守卫测试）。
+
+    Args:
+        addresses: 主机名到地址元组的映射（未命中返回空元组）。
+
+    Returns:
+        异步解析函数。
+    """
+
+    async def _resolve(host: str) -> tuple[str, ...]:
+        return addresses.get(host, ())
+
+    return _resolve
+
+
 def _runner(
     *,
     client: Any = None,
     router: Any = None,
     clock: _Clock | None = None,
     http_client: httpx.AsyncClient | None = None,
+    host_resolver: HostAddressResolver | None = None,
     reply_window_seconds: float = 86400.0,
     inbound_queue_size: int = 16,
     worker_count: int = 1,
@@ -82,6 +102,7 @@ def _runner(
         router: 路由器替身（None = 新建）。
         clock: 测试时钟（None = 新建）。
         http_client: 共享 HTTP 替身（附件 url 源）。
+        host_resolver: 出站附件 URL 主机解析替身（None = 系统解析）。
         reply_window_seconds: 回复窗口秒数。
         inbound_queue_size: 入站队列容量。
         worker_count: 入站 worker 数。
@@ -95,6 +116,7 @@ def _runner(
         router=router if router is not None else FakeRouter(),
         reply_window_seconds=reply_window_seconds,
         http_client=http_client,
+        host_resolver=host_resolver,
         inbound_queue_size=inbound_queue_size,
         worker_count=worker_count,
         dedup_capacity=dedup_capacity,
@@ -510,9 +532,12 @@ class TestOutboundAttachments:
             return httpx.Response(status_code=200, content=b"remote-bytes")
 
         transport = httpx.MockTransport(_handler)
+        resolver = _resolver({"cdn.example.com": ("93.184.216.34",)})
         async with httpx.AsyncClient(transport=transport) as http_client:
             client = FakeWeComClient()
-            runner = _runner(client=client, http_client=http_client)
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=resolver
+            )
             attachment = ChannelMessageAttachment(
                 kind=ChannelAttachmentKind.IMAGE, url="https://cdn.example.com/a.png"
             )
@@ -522,6 +547,177 @@ class TestOutboundAttachments:
         assert requests == ["https://cdn.example.com/a.png"]
         assert client.uploaded_content == [b"remote-bytes"]
         assert result.attachment_results[0].ok is True
+
+    async def test_url_redirect_chain_follows_and_revalidates_each_hop(self) -> None:
+        """重定向链：每跳重新过守卫（公网→公网）后跟随，最终下载成功。"""
+        requests: list[str] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            requests.append(str(request.url))
+            if request.url.host == "cdn.example.com":
+                return httpx.Response(
+                    status_code=302,
+                    headers={"location": "https://cdn2.example.com/b.png"},
+                )
+            return httpx.Response(status_code=200, content=b"redirected-bytes")
+
+        resolver = _resolver(
+            {
+                "cdn.example.com": ("93.184.216.34",),
+                "cdn2.example.com": ("93.184.216.35",),
+            }
+        )
+        transport = httpx.MockTransport(_handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = FakeWeComClient()
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=resolver
+            )
+            result = await runner.send_message(
+                OutboundMessageModel(
+                    chat_id="single:u1",
+                    text="远程图",
+                    attachments=[
+                        ChannelMessageAttachment(
+                            kind=ChannelAttachmentKind.IMAGE,
+                            url="https://cdn.example.com/a.png",
+                        )
+                    ],
+                )
+            )
+        assert requests == [
+            "https://cdn.example.com/a.png",
+            "https://cdn2.example.com/b.png",
+        ]
+        assert client.uploaded_content == [b"redirected-bytes"]
+        assert result.attachment_results[0].ok is True
+
+    async def test_url_redirect_to_private_rejected_before_second_request(self) -> None:
+        """重定向到私网：第二跳守卫拒绝，不发出第二次请求。"""
+        requests: list[str] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            requests.append(str(request.url))
+            return httpx.Response(
+                status_code=307,
+                headers={"location": "http://internal.example.com/secret.png"},
+            )
+
+        resolver = _resolver(
+            {
+                "cdn.example.com": ("93.184.216.34",),
+                "internal.example.com": ("10.0.0.7",),
+            }
+        )
+        transport = httpx.MockTransport(_handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = FakeWeComClient()
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=resolver
+            )
+            result = await runner.send_message(
+                OutboundMessageModel(
+                    chat_id="single:u1",
+                    text="远程图",
+                    attachments=[
+                        ChannelMessageAttachment(
+                            kind=ChannelAttachmentKind.IMAGE,
+                            url="https://cdn.example.com/a.png",
+                        )
+                    ],
+                )
+            )
+        assert requests == ["https://cdn.example.com/a.png"]
+        assert result.attachment_results[0].ok is False
+        assert "私网" in (result.attachment_results[0].error or "")
+
+    async def test_url_redirect_without_location_fails_controlled(self) -> None:
+        """3xx 缺少 Location：受控失败（不无限循环 / 不整包读）。"""
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(status_code=302)
+        )
+        resolver = _resolver({"cdn.example.com": ("93.184.216.34",)})
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = FakeWeComClient()
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=resolver
+            )
+            result = await runner.send_message(
+                OutboundMessageModel(
+                    chat_id="single:u1",
+                    text="远程图",
+                    attachments=[
+                        ChannelMessageAttachment(
+                            kind=ChannelAttachmentKind.IMAGE,
+                            url="https://cdn.example.com/a.png",
+                        )
+                    ],
+                )
+            )
+        assert result.attachment_results[0].ok is False
+        assert "Location" in (result.attachment_results[0].error or "")
+
+    async def test_url_redirect_exceeds_max_hops_fails_controlled(self) -> None:
+        """重定向超过 3 跳：受控失败（初始请求 + 3 跳后第 4 个 3xx 触发）。"""
+        requests: list[str] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            requests.append(str(request.url))
+            return httpx.Response(
+                status_code=302, headers={"location": "/next.png"}
+            )
+
+        resolver = _resolver({"cdn.example.com": ("93.184.216.34",)})
+        transport = httpx.MockTransport(_handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = FakeWeComClient()
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=resolver
+            )
+            result = await runner.send_message(
+                OutboundMessageModel(
+                    chat_id="single:u1",
+                    text="远程图",
+                    attachments=[
+                        ChannelMessageAttachment(
+                            kind=ChannelAttachmentKind.IMAGE,
+                            url="https://cdn.example.com/a.png",
+                        )
+                    ],
+                )
+            )
+        assert len(requests) == 4
+        assert result.attachment_results[0].ok is False
+        assert "重定向超过" in (result.attachment_results[0].error or "")
+
+    async def test_url_resolver_failure_fails_closed_per_attachment(self) -> None:
+        """resolver 失败：逐附件受控失败（fail-closed），文本照常投递。"""
+        async def _boom(host: str) -> tuple[str, ...]:
+            raise OSError("dns down")
+
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(status_code=200, content=b"never")
+        )
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = FakeWeComClient()
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=_boom
+            )
+            result = await runner.send_message(
+                OutboundMessageModel(
+                    chat_id="single:u1",
+                    text="远程图",
+                    attachments=[
+                        ChannelMessageAttachment(
+                            kind=ChannelAttachmentKind.IMAGE,
+                            url="https://cdn.example.com/a.png",
+                        )
+                    ],
+                )
+            )
+        assert result.attachment_results[0].ok is False
+        assert "fail-closed" in (result.attachment_results[0].error or "")
+        assert len(client.markdown_pushes) == 1
 
     async def test_url_without_http_client_fails_per_attachment(self) -> None:
         """未装配共享 HTTP 客户端 → 该附件 ok=False（文本照常投递）。"""
@@ -686,7 +882,9 @@ class TestAttachmentFailureSurfaces:
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
             client = FakeWeComClient()
-            runner = _runner(client=client, http_client=http_client)
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=_resolver({"cdn.example.com": ("93.184.216.34",)})
+            )
             attachment = ChannelMessageAttachment(
                 kind=ChannelAttachmentKind.IMAGE, url="https://cdn.example.com/gone.png"
             )
@@ -704,7 +902,9 @@ class TestAttachmentFailureSurfaces:
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
             client = FakeWeComClient()
-            runner = _runner(client=client, http_client=http_client)
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=_resolver({"cdn.example.com": ("93.184.216.34",)})
+            )
             attachment = ChannelMessageAttachment(
                 kind=ChannelAttachmentKind.IMAGE, url="https://cdn.example.com/x.png"
             )
@@ -737,7 +937,9 @@ class TestAttachmentFailureSurfaces:
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
             client = FakeWeComClient()
-            runner = _runner(client=client, http_client=http_client)
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=_resolver({"cdn.example.com": ("93.184.216.34",)})
+            )
             attachment = ChannelMessageAttachment(
                 kind=ChannelAttachmentKind.IMAGE, url="https://cdn.example.com/big.png"
             )

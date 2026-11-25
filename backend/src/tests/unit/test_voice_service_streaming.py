@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -264,6 +265,28 @@ async def test_asr_stream_cancel_records_one_row_and_is_idempotent() -> None:
     await handle.cancel()
     assert client.handle.cancel_count == 2
     assert len(recorder.events) == 1
+
+
+async def test_asr_stream_finish_cancelled_then_cleanup_records_no_usage_row() -> None:
+    """finish 挂起时外部取消：清理 cancel 不再补记用量（与失败回退口径一致）。"""
+    client = _FakeStreamAsrClient()
+    client.handle.finish_gate = asyncio.Event()
+    recorder = _UsageRecorder()
+    service = VoiceService(
+        settings=_settings(), asr_stream_client=client, usage_recorder=recorder
+    )
+    handle = await service.open_asr_stream(
+        sample_rate_hz=16000, on_partial=_no_partial
+    )
+    finish_task = asyncio.create_task(handle.finish())
+    await client.handle.finish_started.wait()
+    finish_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await finish_task
+    assert recorder.events == []
+    await handle.cancel()
+    assert client.handle.cancelled is True
+    assert recorder.events == []
 
 
 async def test_asr_stream_open_failure_records_no_usage_row() -> None:

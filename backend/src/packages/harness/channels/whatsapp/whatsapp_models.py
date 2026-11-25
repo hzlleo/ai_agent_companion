@@ -33,7 +33,6 @@ WhatsApp Cloud API 是 **Meta 托管**的消息通道：入站只能经 Meta 的
 
 from __future__ import annotations
 
-import math
 from collections import deque
 from collections.abc import Callable
 from typing import Any, Final, Protocol
@@ -46,6 +45,7 @@ from packages.harness.channels.channel_models import (
     ChannelType,
     InboundMessageModel,
 )
+from packages.harness.channels.inbound_timestamp import resolve_epoch_ms_timestamp
 from packages.harness.channels.phone_numbers import normalize_whatsapp_wa_id
 from packages.harness.core import time_utils
 
@@ -83,12 +83,6 @@ WHATSAPP_DEDUP_WINDOW_SIZE: Final[int] = 1024
 #: 24 小时客户服务窗毫秒（Cloud API 官方：用户最后一条消息起 24 小时内可
 #: 发送自由格式消息；超出必须使用模板消息——本通道暂未实现模板发送）。
 WHATSAPP_SERVICE_WINDOW_MS: Final[int] = 24 * 60 * 60 * 1000
-
-#: 秒级时间戳下界（低于该值视为非法——回落到服务端时钟）。
-_EPOCH_SECONDS_MIN: Final[int] = 1_000_000_000
-
-#: 毫秒级时间戳下界（达到该值按毫秒解释，避免二次放大）。
-_EPOCH_MILLIS_MIN: Final[int] = 1_000_000_000_000
 
 #: 媒体 / 结构化消息的文本占位标签（无 caption / 无文本回退时的正文）。
 _MEDIA_PLACEHOLDERS: Final[dict[str, str]] = {
@@ -606,9 +600,12 @@ def resolve_whatsapp_timestamp_ms(
 ) -> int:
     """解析 Cloud API 时间戳为 epoch 毫秒（非法 / 缺失回落服务端时钟）。
 
-    支持形态：秒级数值 / 数值字符串（×1000）、毫秒数值（原样）。负值 /
-    零值 / 过小数值 / 非数值文本 / 非有限浮点（``NaN`` / ``Infinity`` /
-    字符串 ``"nan"`` / ``"inf"``）视为非法（回落 ``fallback_ms``）。
+    委托共享实现 :func:`packages.harness.channels.inbound_timestamp.
+    resolve_epoch_ms_timestamp`（与 SmsForwarder 同源）：秒级数值 /
+    数值字符串（×1000）、毫秒数值（原样）。负值 / 零值 / 过小数值 /
+    非数值文本 / 非有限浮点（``NaN`` / ``Infinity`` / 字符串 ``"nan"`` /
+    ``"inf"`` / ``"Infinity"`` / ``"1e999"``）/ 溢出视为非法（回落
+    ``fallback_ms``）。
 
     Args:
         value: 原始时间戳（数值 / 数值字符串 / None）。
@@ -617,41 +614,9 @@ def resolve_whatsapp_timestamp_ms(
     Returns:
         epoch 毫秒时间戳（恒正）。
     """
-    if isinstance(value, bool):
-        return fallback_ms
-    if isinstance(value, (int, float)):
-        if isinstance(value, float) and not math.isfinite(value):
-            return fallback_ms
-        try:
-            candidate = int(value)
-        except (OverflowError, ValueError):
-            return fallback_ms
-    elif isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return fallback_ms
-        try:
-            candidate = int(text)
-        except ValueError:
-            try:
-                parsed = float(text)
-            except ValueError:
-                return fallback_ms
-            if not math.isfinite(parsed):
-                return fallback_ms
-            try:
-                candidate = int(parsed)
-            except (OverflowError, ValueError):
-                return fallback_ms
-    else:
-        return fallback_ms
-    if candidate <= 0:
-        return fallback_ms
-    if candidate >= _EPOCH_MILLIS_MIN:
-        return candidate
-    if candidate >= _EPOCH_SECONDS_MIN:
-        return candidate * 1000
-    return fallback_ms
+    return resolve_epoch_ms_timestamp(
+        value, fallback_ms=fallback_ms, channel_label="WhatsApp"
+    )
 
 
 def _resolve_message_text(message: WhatsAppMessageModel) -> str:

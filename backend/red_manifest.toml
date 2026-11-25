@@ -389,3 +389,17 @@ tests = [
     "tests/unit/test_sticker_service.py::test_transaction_conflict_retries_upload_as_duplicate",
     "tests/unit/test_sticker_service.py::test_transaction_conflict_retries_ingest_to_existing_record",
 ]
+
+[[probes]]
+name = "inbound-body-bounded-reader-removal"
+symbol = "app.api.inbound_body:read_bounded_body"
+tests = [
+    "tests/unit/test_channels_qq_api.py::TestBoundedBodyRead::test_chunked_oversize_stops_reading_after_limit",
+]
+
+[[probes]]
+name = "inbound-timestamp-shared-resolve-removal"
+symbol = "packages.harness.channels.inbound_timestamp:resolve_epoch_ms_timestamp"
+tests = [
+    "tests/unit/test_channel_timestamp.py::test_channel_timestamp_matrix",
+]

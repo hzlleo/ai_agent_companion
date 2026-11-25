@@ -36,6 +36,7 @@ from packages.harness.channels.channel_models import (
     ChannelType,
     InboundMessageModel,
 )
+from packages.harness.channels.inbound_timestamp import resolve_epoch_ms_timestamp
 from packages.harness.channels.phone_numbers import (
     normalize_phone_identifier,
     parse_phone_owner_numbers,
@@ -65,12 +66,6 @@ SMS_FORWARDER_CONTENT_DEDUP_WINDOW_MS: Final[int] = 120_000
 
 #: 去重窗口容量（已见键上限——超出按 FIFO 淘汰；进程重启清零）。
 SMS_FORWARDER_DEDUP_WINDOW_SIZE: Final[int] = 1024
-
-#: 秒级时间戳下界（低于该值视为非法——回落到服务端时钟）。
-_EPOCH_SECONDS_MIN: Final[int] = 1_000_000_000
-
-#: 毫秒级时间戳下界（达到该值按毫秒解释，避免二次放大）。
-_EPOCH_MILLIS_MIN: Final[int] = 1_000_000_000_000
 
 
 class SmsForwarderKind(StrEnum):
@@ -332,10 +327,11 @@ def resolve_sms_forwarder_timestamp_ms(
 ) -> int:
     """解析手机端时间戳为 epoch 毫秒（非法 / 缺失回落服务端时钟）。
 
-    支持形态：毫秒数值、秒级数值（自动 ×1000）、数值字符串。ISO 文本 /
-    负值 / 零值 / 过小数值视为非法（SmsForwarder 模板默认输出数值）。
-    秒级下界用于区分秒与毫秒（``1e9`` 秒约 2001 年，``1e12`` 毫秒约
-    2001 年）；低于秒级下界的数值不作为时间使用。
+    委托共享实现 :func:`packages.harness.channels.inbound_timestamp.
+    resolve_epoch_ms_timestamp`（与 WhatsApp 同源）：秒级数值自动 ×1000、
+    毫秒数值原样；ISO 文本 / 负值 / 零值 / 过小数值 / 非法字符串 /
+    非有限值（``NaN`` / ``Infinity`` / ``"inf"`` / ``"1e999"``）/ 溢出
+    一律回落服务端时钟（SmsForwarder 模板默认输出数值）。
 
     Args:
         value: 原始时间戳（数值 / 数值字符串 / None）。
@@ -344,30 +340,9 @@ def resolve_sms_forwarder_timestamp_ms(
     Returns:
         epoch 毫秒时间戳（恒正）。
     """
-    if isinstance(value, bool):
-        return fallback_ms
-    if isinstance(value, (int, float)):
-        candidate = int(value)
-    elif isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return fallback_ms
-        try:
-            candidate = int(text)
-        except ValueError:
-            try:
-                candidate = int(float(text))
-            except ValueError:
-                return fallback_ms
-    else:
-        return fallback_ms
-    if candidate <= 0:
-        return fallback_ms
-    if candidate >= _EPOCH_MILLIS_MIN:
-        return candidate
-    if candidate >= _EPOCH_SECONDS_MIN:
-        return candidate * 1000
-    return fallback_ms
+    return resolve_epoch_ms_timestamp(
+        value, fallback_ms=fallback_ms, channel_label="SmsForwarder"
+    )
 
 
 def _resolve_body(payload: SmsForwarderPayloadModel) -> str:

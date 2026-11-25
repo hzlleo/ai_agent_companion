@@ -565,8 +565,26 @@ class AsrStreamHandle:
         except BusinessException:
             await self.cancel()
             raise
+        except asyncio.CancelledError:
+            await self._shutdown_cancellation_safe()
+            raise
         await self._shutdown(STREAM_CLOSE_NORMAL, "session_finished", notify_cancel=False)
         return result
+
+    async def _shutdown_cancellation_safe(self) -> None:
+        """取消路径收口（屏蔽二次取消——传输关闭与派生任务回收必须完成）。
+
+        收尾等待被外部取消时不能把已打开的连接留给事件循环：以独立任务 +
+        ``asyncio.shield`` 驱动 ``cancel()`` 至完成（幂等），随后原取消信号
+        由调用方上抛。
+        """
+        cleanup = asyncio.ensure_future(self.cancel())
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                continue
+        cleanup.result()
 
     async def cancel(self) -> None:
         """取消并关闭连接（幂等；不产出最终稿）。"""
