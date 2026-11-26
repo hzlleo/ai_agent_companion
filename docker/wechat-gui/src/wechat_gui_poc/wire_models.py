@@ -1,26 +1,46 @@
 """GUI 微信沙盒的数据模型与 wire 契约（本树自持，与逻辑代码分离）。
 
-本模块集中三类载荷：
+本模块集中四类载荷：
 
 - **控制面协议**：Unix socket 上的单请求单响应 JSON 行——``ping`` /
   ``key`` / ``move`` / ``click`` / ``shutdown`` 各自的请求模型与响应模型
   （含健康探测的附加字段）；
+- **agent HTTP 契约**：仅回环监听的 ``GET /health`` 与 ``POST /invoke``
+  载荷（与后端 ``channels/wechat_gui/wechat_gui_wire_models.py`` 文本
+  镜像——恒 200 携带成败终态，401 / 422 属传输层失败）；
 - **设备制品**：uinputd 落盘的 ``uinput-devices.json`` 模型；
 - **门禁载荷**：外部命令输出、X 属性解析结果与门禁报告的模型。
 
 模型只描述字段与序列化出口（``to_wire()``）；协议解码、设备注入与步骤
-编排在 ``uinputd`` / ``uinput_devices`` / ``poc_gate`` 中，二者分离。
-容器内控制面仅本机可见：socket 权限 0666，不承载机密，只承载注入指令。
+编排在 ``uinputd`` / ``uinput_devices`` / ``poc_gate`` / ``agent`` 中，二者
+分离。容器内控制面仅本机可见：socket 权限 0666，不承载机密，只承载注入
+指令；agent HTTP 面同样只监听回环并强制 Bearer 鉴权。
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 __all__ = [
+    "ClickToolArgs",
+    "OpenChatToolArgs",
+    "PressKeyToolArgs",
+    "ScreenshotToolArgs",
+    "TypeTextToolArgs",
+    "InvokeRequestModel",
+    "InvokeResponseModel",
+    "HealthResponseModel",
+    "DEFAULT_AGENT_HOST",
+    "DEFAULT_AGENT_PORT",
+    "MAX_AGENT_REQUEST_BYTES",
+    "TITLE_REGION_HEIGHT",
+    "WECHAT_GUI_AGENT_TOOLS",
+    "WECHAT_GUI_HEALTH_PATH",
+    "WECHAT_GUI_INVOKE_PATH",
     "ClickRequest",
     "CommandOutcome",
     "CommandOutput",
@@ -578,3 +598,288 @@ class StepSpec:
 
     name: str
     runner: Callable[[GateContext], Awaitable[str]]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# agent HTTP 契约：部署常量与五工具参数模型
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: agent 监听地址（仅回环——后端与沙盒同机部署时经本机回环访问）。
+DEFAULT_AGENT_HOST = "127.0.0.1"
+#: agent 监听端口（compose 仅映射到宿主回环）。
+DEFAULT_AGENT_PORT = 8090
+#: 单次 agent 请求体上限（字节；协议消息很小，超限即视为客户端异常）。
+MAX_AGENT_REQUEST_BYTES = 1_048_576
+#: agent health 端点路径（后端客户端探测面）。
+WECHAT_GUI_HEALTH_PATH = "/health"
+#: agent invoke 端点路径（后端客户端调用面）。
+WECHAT_GUI_INVOKE_PATH = "/invoke"
+#: 标题栏截图区域高度（像素；1280x800 布局顶部标题条）。
+TITLE_REGION_HEIGHT = 140
+
+#: screenshot 工具名（agent 运行时唯一标识）。
+SCREENSHOT_TOOL = "screenshot"
+#: click 工具名。
+CLICK_TOOL = "click"
+#: type_text 工具名。
+TYPE_TEXT_TOOL = "type_text"
+#: press_key 工具名。
+PRESS_KEY_TOOL = "press_key"
+#: open_chat 工具名。
+OPEN_CHAT_TOOL = "open_chat"
+
+#: agent 工具面（顺序即协议清单顺序——未知工具回 ok=false）。
+WECHAT_GUI_AGENT_TOOLS: tuple[str, ...] = (
+    SCREENSHOT_TOOL,
+    CLICK_TOOL,
+    TYPE_TEXT_TOOL,
+    PRESS_KEY_TOOL,
+    OPEN_CHAT_TOOL,
+)
+
+
+def _require_int_arg(arguments: Mapping[str, object], key: str) -> int:
+    """读取必填非负整数字段（拒绝 bool）。
+
+    Args:
+        arguments: 工具调用参数对象。
+        key: 字段名。
+
+    Returns:
+        字段值。
+
+    Raises:
+        ValueError: 字段缺失、类型不符或为负数。
+    """
+    value = arguments.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"参数 {key} 必须是非负整数")
+    return value
+
+
+def _require_text_arg(arguments: Mapping[str, object], key: str) -> str:
+    """读取必填非空字符串字段。
+
+    Args:
+        arguments: 工具调用参数对象。
+        key: 字段名。
+
+    Returns:
+        字段原文（调用方按需裁剪空白）。
+
+    Raises:
+        ValueError: 字段缺失、类型不符或为空白。
+    """
+    value = arguments.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"参数 {key} 必须是非空字符串")
+    return value
+
+
+@dataclass(frozen=True)
+class ScreenshotToolArgs:
+    """screenshot 工具参数（无参数——空对象校验锚点）。"""
+
+    @classmethod
+    def from_arguments(cls, arguments: Mapping[str, object]) -> ScreenshotToolArgs:
+        """从 wire 参数对象构造（拒绝多余字段）。
+
+        Args:
+            arguments: 工具调用参数对象。
+
+        Returns:
+            参数模型。
+
+        Raises:
+            ValueError: 携带了未声明的字段。
+        """
+        if arguments:
+            raise ValueError(f"screenshot 不接受参数：{sorted(arguments)}")
+        return cls()
+
+
+@dataclass(frozen=True)
+class ClickToolArgs:
+    """click 工具参数（绝对坐标点击）。
+
+    Attributes:
+        x: 目标 X 坐标（像素，非负）。
+        y: 目标 Y 坐标（像素，非负）。
+    """
+
+    x: int
+    y: int
+
+    @classmethod
+    def from_arguments(cls, arguments: Mapping[str, object]) -> ClickToolArgs:
+        """从 wire 参数对象构造（字段类型与取值范围校验）。
+
+        Args:
+            arguments: 工具调用参数对象。
+
+        Returns:
+            参数模型。
+
+        Raises:
+            ValueError: 字段缺失或非法。
+        """
+        return cls(
+            x=_require_int_arg(arguments, "x"),
+            y=_require_int_arg(arguments, "y"),
+        )
+
+
+@dataclass(frozen=True)
+class TypeTextToolArgs:
+    """type_text 工具参数（文本注入——经剪贴板粘贴以覆盖非 ASCII 文本）。
+
+    Attributes:
+        text: 待输入文本（非空白）。
+    """
+
+    text: str
+
+    @classmethod
+    def from_arguments(cls, arguments: Mapping[str, object]) -> TypeTextToolArgs:
+        """从 wire 参数对象构造（文本非空白校验）。
+
+        Args:
+            arguments: 工具调用参数对象。
+
+        Returns:
+            参数模型。
+
+        Raises:
+            ValueError: 文本缺失或为空白。
+        """
+        return cls(text=_require_text_arg(arguments, "text"))
+
+
+@dataclass(frozen=True)
+class PressKeyToolArgs:
+    """press_key 工具参数（按键 / 组合键）。
+
+    Attributes:
+        key: 按键表达式（如 ``enter`` / ``esc`` / ``ctrl+f``）。
+    """
+
+    key: str
+
+    @classmethod
+    def from_arguments(cls, arguments: Mapping[str, object]) -> PressKeyToolArgs:
+        """从 wire 参数对象构造。
+
+        Args:
+            arguments: 工具调用参数对象。
+
+        Returns:
+            参数模型。
+
+        Raises:
+            ValueError: 按键表达式缺失或为空白。
+        """
+        return cls(key=_require_text_arg(arguments, "key").strip())
+
+
+@dataclass(frozen=True)
+class OpenChatToolArgs:
+    """open_chat 工具参数（按联系人备注名搜索并打开会话）。
+
+    Attributes:
+        remark_name: 联系人备注名（非空白——搜索框输入原文）。
+    """
+
+    remark_name: str
+
+    @classmethod
+    def from_arguments(cls, arguments: Mapping[str, object]) -> OpenChatToolArgs:
+        """从 wire 参数对象构造。
+
+        Args:
+            arguments: 工具调用参数对象。
+
+        Returns:
+            参数模型。
+
+        Raises:
+            ValueError: 备注名缺失或为空白。
+        """
+        return cls(remark_name=_require_text_arg(arguments, "remark_name").strip())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# agent HTTP 契约：wire 模型（与后端 wechat_gui_wire_models.py 文本镜像）
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class HealthResponseModel:
+    """GUI 微信 agent 健康探测响应（GET /health 载荷——无鉴权存活面）。
+
+    Attributes:
+        status: 存活状态（恒 ``"ok"``——后端启动期探测的判定面）。
+    """
+
+    status: str = "ok"
+
+    def to_wire(self) -> dict[str, object]:
+        """转换为单行 JSON 可序列化载荷。
+
+        Returns:
+            健康探测响应对象。
+        """
+        return {"status": self.status}
+
+
+@dataclass(frozen=True)
+class InvokeRequestModel:
+    """GUI 微信 agent 工具调用请求（backend → 沙盒 wire 契约——POST /invoke 载荷）。
+
+    Attributes:
+        tool: 工具名（agent 运行时内唯一标识——五工具面见 agent.py）。
+        arguments: 调用参数（JSON 对象——agent 侧校验后进入执行器）。
+    """
+
+    tool: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+    def to_wire(self) -> dict[str, object]:
+        """转换为单行 JSON 可序列化载荷。
+
+        Returns:
+            工具调用请求对象。
+        """
+        return {"tool": self.tool, "arguments": self.arguments}
+
+
+@dataclass(frozen=True)
+class InvokeResponseModel:
+    """GUI 微信 agent 工具调用响应（沙盒 → backend wire 契约——恒携带成败终态）。
+
+    Attributes:
+        ok: 是否成功（未知工具 / 参数校验失败 / 执行失败 / 执行异常均归一
+            为本形态，agent 端点恒 200 携带）。
+        result: 结果 JSON（成功时为工具执行器返回 dict；失败恒空 dict）。
+        error: 失败原因（成功为 None；人读中文字符串）。
+        latency_ms: agent 侧单次执行时延（epoch 毫秒差；含失败路径耗时）。
+    """
+
+    ok: bool = True
+    result: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+    latency_ms: int = 0
+
+    def to_wire(self) -> dict[str, object]:
+        """转换为单行 JSON 可序列化载荷。
+
+        Returns:
+            协议响应对象（``ok`` / ``result`` / ``latency_ms`` / 可选 ``error``）。
+        """
+        payload: dict[str, object] = {
+            "ok": self.ok,
+            "result": self.result,
+            "latency_ms": self.latency_ms,
+        }
+        if self.error is not None:
+            payload["error"] = self.error
+        return payload

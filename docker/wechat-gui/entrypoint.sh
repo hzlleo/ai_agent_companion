@@ -7,8 +7,9 @@
 #      Xorg 静态配置、把事件节点交给运行用户、开放控制面 socket；
 #   3. 以运行用户启动 Xorg（dummy 1280x800x24、AutoAddDevices 关闭）；
 #   4. 设置根窗口织纹（截图校验需要非全同色画面）；
-#   5. 启动 x11vnc（-forever -shared -passwdfile）与 websockify/noVNC；
-#   6. `serve` 模式等待子进程；`poc` 模式执行门脚本并按门禁结果退出。
+#   5. 以运行用户启动 agent（仅回环 HTTP 工具面，Bearer 鉴权）；
+#   6. 启动 x11vnc（-forever -shared -passwdfile）与 websockify/noVNC；
+#   7. `serve` 模式等待子进程；`poc` 模式执行门脚本并按门禁结果退出。
 #
 # 用法：
 #   entrypoint.sh serve            # 常驻（compose / 手工运行）
@@ -38,6 +39,9 @@ readonly XORG_LOG="${RUNTIME_DIR}/xorg.log"
 readonly X11VNC_LOG="${RUNTIME_DIR}/x11vnc.log"
 readonly NOVNC_LOG="${RUNTIME_DIR}/novnc.log"
 readonly SOURCE_PASSFILE="${WECHAT_GUI_VNC_PASSWDFILE:-/run/secrets/wechat_gui_vnc_password}"
+readonly SOURCE_AGENT_TOKEN="${WECHAT_GUI_AGENT_TOKEN_FILE:-/run/secrets/wechat_gui_agent_token}"
+readonly AGENT_PORT="${WECHAT_GUI_AGENT_PORT:-8090}"
+readonly AGENT_LOG="${RUNTIME_DIR}/agent.log"
 readonly RUN_USER="wechat"
 readonly HOST_FLOAT_TIMEOUT="${WECHAT_GUI_HOST_FLOAT_TIMEOUT:-60}"
 
@@ -106,8 +110,32 @@ resolve_vnc_passfile() {
     printf '%s\n' "${target}"
 }
 
+# 解析 agent Bearer token 文件。运行用户可读时原样使用；root 可读而运行
+# 用户不可读时复制到运行目录并交给运行用户（0400）。两者都不可读即整体
+# 失败（agent 拒绝在无 token 状态启动）。
+resolve_agent_token_file() {
+    local source="$1"
+    local user="$2"
+    local runtime_dir="$3"
+    local source_probe="${4:-probe_readable_as_user}"
+    local target="${runtime_dir}/agent.token"
+    if run_user_can_read "${source}" "${user}" "${source_probe}"; then
+        printf '%s\n' "${source}"
+        return 0
+    fi
+    if [[ ! -r "${source}" ]]; then
+        return 1
+    fi
+    rm -f -- "${target}" || return 1
+    install -m 0400 "${source}" "${target}" || return 1
+    chown "${user}:${user}" "${target}" || return 1
+    run_user_can_read "${target}" "${user}" || return 1
+    printf '%s\n' "${target}"
+}
+
 main() {
     local PASSFILE
+    local AGENT_TOKEN_FILE
     local pids=()
 
     cleanup() {
@@ -174,7 +202,7 @@ main() {
     # 重启面：上一轮运行用户写出的日志归 wechat；chown -R 会把它改成
     # root:wechat 且组无写位，重启后 Xorg / x11vnc 打开日志即 Permission
     # denied。运行期日志先行删除（设备信息 / socket 由 root 重写）。
-    rm -f -- "${XORG_LOG}" "${X11VNC_LOG}" "${NOVNC_LOG}"
+    rm -f -- "${XORG_LOG}" "${X11VNC_LOG}" "${NOVNC_LOG}" "${AGENT_LOG}"
     # root 持有目录（写设备信息 / socket），wechat 组可写（Xorg / VNC 日志）。
     chown -R "root:${RUN_USER}" "${RUNTIME_DIR}"
     chmod 0770 "${RUNTIME_DIR}"
@@ -195,6 +223,12 @@ main() {
         exit 1
     fi
     log "VNC 密码来源就绪：${PASSFILE}"
+
+    if ! AGENT_TOKEN_FILE="$(resolve_agent_token_file "${SOURCE_AGENT_TOKEN}" "${RUN_USER}" "${RUNTIME_DIR}")"; then
+        log "agent token 不可用：${SOURCE_AGENT_TOKEN} 对 ${RUN_USER} 不可读（复制失败）"
+        exit 1
+    fi
+    log "agent token 来源就绪：${AGENT_TOKEN_FILE}"
 
     log "启动 uinput 控制面（键盘 + 绝对指针）"
     python3 -m wechat_gui_poc.uinputd \
@@ -249,6 +283,19 @@ main() {
     # 根窗口织纹：dummy 屏默认全黑，截图校验要求非全同色画面。
     start_as_user xsetroot -display "${DISPLAY_NUM}" -mod 4 4 || true
 
+    log "启动微信 agent（127.0.0.1:${AGENT_PORT}）"
+    start_as_user python3 -m wechat_gui_poc.agent \
+        --host 127.0.0.1 \
+        --port "${AGENT_PORT}" \
+        --token-file "${AGENT_TOKEN_FILE}" \
+        --control-socket "${CONTROL_SOCKET}" \
+        --display "${DISPLAY_NUM}" \
+        --width "${WIDTH}" \
+        --height "${HEIGHT}" \
+        >"${AGENT_LOG}" 2>&1 &
+    pids+=("$!")
+    wait_for_tcp 127.0.0.1 "${AGENT_PORT}" 200
+
     log "启动 x11vnc（${VNC_PORT}）"
     start_as_user x11vnc -display "${DISPLAY_NUM}" \
         -forever -shared -noxdamage -rfbport "${VNC_PORT}" \
@@ -262,7 +309,7 @@ main() {
     pids+=("$!")
     wait_for_tcp 127.0.0.1 "${NOVNC_PORT}" 200
 
-    log "栈就绪：X ${DISPLAY_NUM} / VNC ${VNC_PORT} / noVNC ${NOVNC_PORT}"
+    log "栈就绪：X ${DISPLAY_NUM} / agent ${AGENT_PORT} / VNC ${VNC_PORT} / noVNC ${NOVNC_PORT}"
 
     if [[ "${1:-serve}" == "poc" ]]; then
         shift

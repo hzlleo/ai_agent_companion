@@ -17,7 +17,8 @@
     - **时间一律 epoch 毫秒**（``core.time_utils.now_ms``——Telegram wire
       层的 epoch 秒在 runner 映射时 ×1000 归一）；
     - ``ChannelType`` 为 StrEnum 值域（telegram / qq / wecom / douyin /
-      sms_forwarder / whatsapp——多通道扩展在此追加成员，B站等后续通道同点追加）。
+      sms_forwarder / whatsapp / wechat_gui——多通道扩展在此追加成员，B站等
+      后续通道同点追加）。
 
 协议 v2（附件 / 静默 / 合成事件——additive 扩展，v1 形态缺省保持）：
 
@@ -73,7 +74,8 @@ ATTACHMENT_BASE64_SIZE_GUIDE_BYTES: Final[int] = 10 * 1024 * 1024
 
 
 class ChannelType(StrEnum):
-    """通道类型值域（telegram / qq / wecom / douyin / sms_forwarder / whatsapp）。
+    """通道类型值域（telegram / qq / wecom / douyin / sms_forwarder / whatsapp /
+    wechat_gui）。
 
     继承 ``StrEnum`` 保证与字符串比较兼容——``ChannelType.TELEGRAM ==
     "telegram"`` 为 ``True``（与 core ``ErrorCode`` 同约定）。
@@ -85,6 +87,7 @@ class ChannelType(StrEnum):
     DOUYIN = "douyin"
     SMS_FORWARDER = "sms_forwarder"
     WHATSAPP = "whatsapp"
+    WECHAT_GUI = "wechat_gui"
 
 
 class ChannelContextModel(BaseModel):

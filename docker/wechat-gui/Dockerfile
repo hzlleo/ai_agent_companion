@@ -67,14 +67,17 @@ ENV PYTHONUNBUFFERED=1 \
     WECHAT_GUI_DISPLAY=:99 \
     WECHAT_GUI_WIDTH=1280 \
     WECHAT_GUI_HEIGHT=800 \
-    WECHAT_GUI_VNC_PASSWDFILE=/run/secrets/wechat_gui_vnc_password
+    WECHAT_GUI_VNC_PASSWDFILE=/run/secrets/wechat_gui_vnc_password \
+    WECHAT_GUI_AGENT_TOKEN_FILE=/run/secrets/wechat_gui_agent_token \
+    WECHAT_GUI_AGENT_PORT=8090
 
-# 暴露面：x11vnc 与 noVNC/websockify（compose 仅映射到宿主回环地址）。
-EXPOSE 5900 6080
+# 暴露面：agent 工具面（仅回环）与 x11vnc / noVNC（compose 仅映射到宿主
+# 回环地址）。
+EXPOSE 8090 5900 6080
 
-# 存活探测：X 服务可连接 + noVNC 页面可访问（stdlib；镜像无 curl）。
+# 存活探测：X 服务可连接 + agent /health 可用（stdlib；镜像无 curl）。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD ["python3", "-c", "import subprocess, urllib.request; subprocess.run(['xdpyinfo', '-display', ':99'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3); urllib.request.urlopen('http://127.0.0.1:6080/vnc.html', timeout=3).read(1)"]
+    CMD ["python3", "-c", "import subprocess, urllib.request; subprocess.run(['xdpyinfo', '-display', ':99'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3); urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3).read(1)"]
 
 # tini 作 PID 1（信号转发 + 子进程收割）；入口脚本编排 Xorg / VNC / noVNC。
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]

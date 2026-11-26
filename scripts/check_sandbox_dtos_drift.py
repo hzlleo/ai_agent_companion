@@ -4,7 +4,7 @@
 契约常量行）以文本镜像方式耦合——本脚本对两侧定义做文本比对：任一侧
 漂移即红（红灯输出首个差异的 unified diff 上下文）。
 
-比对项（19 模型块 + 19 常量行，共 38 项）：
+比对项（22 模型块 + 19 常量行，共 41 项）：
 
     - ``InvokeRequestModel`` / ``InvokeResponseModel`` /
       ``HealthResponseModel``（backend ``harness/tools/sandbox_models.py``
@@ -30,7 +30,11 @@
     - 八个 ``*_TOOL_NAME`` 浏览器工具名常量行（同上文件）；
     - ``BROWSER_SIDECAR_INVOKE_PATH`` / ``BROWSER_SIDECAR_HEALTH_PATH`` /
       ``BROWSER_SIDECAR_TOKEN_ENV_DEFAULT`` 部署契约常量行（backend
-      ``harness/tools/browser.py`` ↔ sidecar 树 ``server.py``）。
+      ``harness/tools/browser.py`` ↔ sidecar 树 ``server.py``）；
+    - GUI 微信 agent wire 三模型 ``InvokeRequestModel`` /
+      ``InvokeResponseModel`` / ``HealthResponseModel``（backend
+      ``harness/channels/wechat_gui/wechat_gui_wire_models.py`` ↔ 沙盒树
+      ``wechat_gui_poc/wire_models.py``——REST 同构镜像，独立比对项）。
 
 块提取口径：从定义行（``class <名>(`` 顶层起点 / 常量赋值行）到下一个
 顶层定义行或文件尾，去除块尾空行——其余文本（含 docstring 与注释）
@@ -88,8 +92,19 @@ _BROWSER_CLIENT: Path = REPO_ROOT / "backend/src/packages/harness/tools/browser.
 #: sidecar 树侧部署契约常量文件（路由定义 / token env 同名镜像）。
 _BROWSER_SERVER: Path = REPO_ROOT / "docker/browser-sidecar/server.py"
 
-#: 顶层定义行模式（class 定义 / 常量赋值 / 函数定义——块边界）。
-_TOP_LEVEL_DEF: re.Pattern[str] = re.compile(r"^(class\s+\w+|[A-Z][A-Z0-9_]+\s*[:=]|def\s+\w+)")
+#: backend 侧 GUI 微信 agent 契约文件。
+_WECHAT_GUI_MODELS: Path = (
+    REPO_ROOT / "backend/src/packages/harness/channels/wechat_gui/wechat_gui_wire_models.py"
+)
+
+#: 沙盒树侧 GUI 微信 agent wire 契约文件。
+_WECHAT_GUI_WIRE: Path = REPO_ROOT / "docker/wechat-gui/src/wechat_gui_poc/wire_models.py"
+
+#: 顶层定义行模式（class 定义 / 常量赋值 / 函数定义 / 装饰器——块边界；
+#: 装饰器计入边界避免把下一类的 ``@dataclass(...)`` 行带入本类块）。
+_TOP_LEVEL_DEF: re.Pattern[str] = re.compile(
+    r"^(class\s+\w+|[A-Z][A-Z0-9_]+\s*[:=]|def\s+\w+|@\w)"
+)
 
 
 def _extract_class_block(text: str, class_name: str) -> str:
@@ -106,8 +121,9 @@ def _extract_class_block(text: str, class_name: str) -> str:
         ValueError: 定义行未找到。
     """
     lines = text.splitlines()
+    pattern = re.compile(rf"^class\s+{re.escape(class_name)}\b")
     start = next(
-        (i for i, line in enumerate(lines) if line.startswith(f"class {class_name}(")),
+        (i for i, line in enumerate(lines) if pattern.match(line)),
         None,
     )
     if start is None:
@@ -175,6 +191,8 @@ def main() -> int:
         _BROWSER_TOOLS,
         _BROWSER_CLIENT,
         _BROWSER_SERVER,
+        _WECHAT_GUI_MODELS,
+        _WECHAT_GUI_WIRE,
     ]
     missing = [str(p.relative_to(REPO_ROOT)) for p in paths if not p.is_file()]
     if missing:
@@ -192,6 +210,8 @@ def main() -> int:
     browser_tools_text = _BROWSER_TOOLS.read_text(encoding="utf-8")
     browser_client_text = _BROWSER_CLIENT.read_text(encoding="utf-8")
     browser_server_text = _BROWSER_SERVER.read_text(encoding="utf-8")
+    wechat_gui_models_text = _WECHAT_GUI_MODELS.read_text(encoding="utf-8")
+    wechat_gui_wire_text = _WECHAT_GUI_WIRE.read_text(encoding="utf-8")
 
     items: list[tuple[str, str, str]] = [
         (
@@ -306,6 +326,14 @@ def main() -> int:
             "BROWSER_SIDECAR_HEALTH_PATH",
             "BROWSER_SIDECAR_TOKEN_ENV_DEFAULT",
         )
+    )
+    items.extend(
+        (
+            name,
+            _extract_class_block(wechat_gui_models_text, name),
+            _extract_class_block(wechat_gui_wire_text, name),
+        )
+        for name in ("InvokeRequestModel", "InvokeResponseModel", "HealthResponseModel")
     )
 
     drifted = False

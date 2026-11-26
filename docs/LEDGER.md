@@ -96,12 +96,12 @@
 | R3-2 限流与背压 | QQ 入站有界 / 实时语音 TTS 队列与会话帽 / LLM 日预算闸 / 多 worker 语义 / 最小观测面 / 前端 Node 护栏与构建体积基线（P1×1 + P2×7；复审 6×P2 闭环） | ✅ merged（PR #36；证据 `fe261c9a`；PR body 引用的 `0276c1a5` 为首提交树证据，终态以 `fe261c9a` 为准） |
 | R3-3 性能基线 | `bench_core.py` 6 项纯函数微基准 + `api_smoke.py` 4 端点进程内冒烟 + 门禁链落位（复审 4×P2 闭环；终局复核 7×P2 闭环） | ✅ merged（PR #37 → main `3f313a6`；评审 head `66b14b3`，终态含 `ecb7714`/`ee9381a`；canonical 证据 `16b07c7c`，历史 `bc71f261`） |
 
-| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（R4-6a PoC 门制品 + 本机栈实测；R4-6b 通道本体待过门；Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 已合并（PR #44 → main `215317c`）；R4-6a 本分支（`feat/r4-6-wechat-gui`）工作区（本机栈 PoC PASS；R4-6b 待过门后实现）；R4-1 / R4-2 / R4-3 已合并；R4-7 / R4-8 待开工 |
+| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（R4-6a PoC 门制品 + 本机栈实测，已合并 PR #45 → `b065bf4`；R4-6b 通道本体本分支实现态；Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 已合并（PR #44 → main `215317c`）；R4-6a 已合并（PR #45 → main `b065bf4`）；R4-6b 本分支（`feat/r4-6b-wechat-gui-channel`）工作区（沙盒 agent + 后端通道实现态；Live 待统一阶段）；R4-1 / R4-2 / R4-3 已合并；R4-7 / R4-8 待开工 |
 
 **当前分支状态**：
 - main：`215317c`（PR#34–#44 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
 - `feat/r3-perf`：R3-3 性能基线，已合并（PR #37），可删除。
-- R4：R4-4 已合并（PR #43 → `f8eb398`）；R4-5 已合并（PR #44 → `215317c`）；R4-6a 在当前分支 `feat/r4-6-wechat-gui` 工作区（本机栈 PoC PASS）；R4-1 / R4-2 / R4-3 已合并；R4-6b（通道本体）待过门，R4-7 / R4-8 待排期。
+- R4：R4-4 已合并（PR #43 → `f8eb398`）；R4-5 已合并（PR #44 → `215317c`）；R4-6a 已合并（PR #45 → `b065bf4`）；R4-6b（通道本体）在当前分支 `feat/r4-6b-wechat-gui-channel` 工作区；R4-1 / R4-2 / R4-3 已合并；R4-7 / R4-8 待排期。
 - 历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入 main，可删除；工作区 clean。
 
 ## 4. 全部拍板记录（原文语义）
@@ -2528,6 +2528,84 @@ api-smoke / prose-pin）全绿。
   （`ignored_basis=udev_positive`），真实 float 路径以历史证据（规则安装前）
   与 hermetic 用例覆盖。
 - 部署机 udev 复验与微信客户端 Live 仍随统一阶段。
+
+### 已完成切片：R4-6b GUI 微信实验轨通道（沙盒 agent + 后端通道，本分支工作区）
+
+**背景**：R4-6a 的 Xorg + uinput PoC 门已通过并合并（PR #45 → `b065bf4`）。
+本片按「生产主轨仍为企微；GUI 微信为实验轨、默认关闭、Live 推迟」落地：
+沙盒树新增仅回环 HTTP agent（Bearer 鉴权 + 五工具），后端新增
+`channels/wechat_gui/` 通道（wire 镜像 / 设置 / 提示词 Unit / 客户端 /
+视觉解析 / 轮询 runner / 出站适配器）并接入 `ChannelType` / 配置四表面 /
+lifespan 装配。
+
+**改动面（文件）**：
+- 沙盒树：`docker/wechat-gui/src/wechat_gui_poc/wire_models.py`（新增 agent
+  HTTP 契约 + 五工具参数模型，三 wire 模型与后端文本镜像）、`agent.py`
+  （stdlib `ThreadingHTTPServer`；`/health` 无鉴权；`/invoke` Bearer 恒时
+  比较；五工具；open_chat 有界等待；恒 200 `ok=false` 归一）、`uinputd.py`
+  （同步控制面客户端 + 共用响应解码）、`entrypoint.sh`（Xorg 就绪后以运行
+  用户启动 agent、token 文件解析）、`Dockerfile`（HEALTHCHECK 改查
+  `/health`）、`docker/docker-compose.wechat-gui.yml`（8090 回环映射 +
+  agent token secret）、`agent.token.default`、README、单测
+  `test_agent.py` / `test_entrypoint_password.py` 增补。
+- 后端：`channels/wechat_gui/{wechat_gui_wire_models,wechat_gui_models,
+  wechat_gui_prompts,wechat_gui_client,wechat_gui_reader,wechat_gui_runner,
+  wechat_gui_adapter}.py`；`channel_models.py`（`ChannelType.WECHAT_GUI`）；
+  `config/models.py`（`WechatGuiSettings` 聚合）；`app/main.py`（lifespan
+  装配 / 停机 / 默认关闭零对象）；`scripts/generate_examples_env.py` /
+  `config/wizard_generators.py` / `src/conftest.py` / `.env.example` /
+  `docs/backend/config.md`；`scripts/check_sandbox_dtos_drift.py`（纳入
+  wechat-gui 镜像对，块起点支持无括号 dataclass）；`backend/red_manifest.toml`
+  （7 条新探针）；单测 `test_wechat_gui_*` / `test_app_wechat_gui_channels_lifespan`
+  / `tests/wechat_gui_fakes.py` / `test_channels_models.py` 值域同步。
+- 文档：`docs/backend/channels.md`「GUI 微信实验轨」整节改实现态；
+  `docker/wechat-gui/README.md` agent 面 / 安全边界 / 测试面同步。
+
+**五工具 → uinputd / 子进程映射**：`screenshot` = `import -window root
+png:-`（base64 + sha256）；`click{x,y}` = `move` + `click`（左键）经
+uinputd 控制面；`type_text{text}` = `xclip -selection clipboard -in` +
+`ctrl+v` 序列（覆盖中文）；`press_key{key}` = 键名 / 组合键解析后的
+`key` 序列（按下 → 抬起逆序）；`open_chat{remark_name}` = `ctrl+f` → 粘贴
+备注名 → `enter` → 有界等待标题区域变化 → 标题区域 + 全屏截图。
+
+**标题校验与 fail-closed 用例**：入站解析标题与 open_chat 目标不一致默认
+`skip` 并计数（`title_mismatch_action=fail` 时触发退避）；出站 open_chat
+后先视觉校验标题，不一致拒绝发送；解析非 JSON / 缺字段 / 置信度低于阈值
+一律 `LLM_CALL_FAILED`；客户端把恒 200 `ok=false` / 401 / 超时 / wire 破坏
+归一 `CHANNEL_API_ERROR`；token 缺失时装配跳过且 invoke 短路失败。
+
+**命令 + 退出码（最终树）**：
+- `cd docker/wechat-gui && pixi run tests-unit` → 0（141 passed；总覆盖率
+  93.96%；agent 95%、wire_models 100%）；`pixi run lint` → 0；
+  `pixi run typecheck` → 0（7 源文件）。
+- `cd backend && pixi run pytest src/tests/unit -k "wechat_gui or channel_type"
+  --asyncio-mode=auto` → 0（58 passed）。
+- `cd backend && pixi run mypy src/packages/harness/channels/wechat_gui
+  src/app/main.py src/packages/harness/config/models.py src/tests/wechat_gui_fakes.py`
+  → 0（10 源文件）。
+- `cd backend && pixi run python ../scripts/check_sandbox_dtos_drift.py` → 0
+  （全部 41 项契约一致，含 wechat-gui 三模型）。
+- `cd backend && pixi run red-probe --all` → 0（36 条探针全部 RED，含新增
+  7 条）、`pixi run red-probe --gate` → 0（190 <= 基线 190）。
+- `cd backend && pixi run docs-truth` → 0；`check_doc_counts.py` → 0（13 项）；
+  `conftest_env_check.py` → 0（登记 239 键 / 硬覆盖 239）；
+  `check_chinese_comments.py --tree backend` → 0（violations=0）、
+  `--tree wechat-gui` → 0（violations=0）。
+- 棘轮面：`assertion-freeze --update` → 0（基线 233 文件 / asserts=9763 /
+  raises=744；新增测试文件并入基线）后 `assertion-freeze --enforce` → 0；
+  `surface-check` → 0（env 键面 827 行）；`sync-test-ratchet` → 0（+0）；
+  `noqa-freeze` → 0；`prose-pin` → 0（prose 75 <= 基线 75）。
+
+**偏离与未验证**：
+- **Live 未验证**：镜像不装微信客户端——真实截图解析准确率、`open_chat`
+  命中率、中文输入法 / 字体 / 窗口管理器行为均待统一 Live 阶段；本片只测
+  到假数据层（fake 沙盒客户端 / fake 视觉网关 / 本机回环 MockTransport）。
+- 部署机宿主 udev 规则仍待复验（开发机已验；Wayland 会话依赖规则或 VM
+  隔离）。
+- 全量门禁（tests-all / coverage-gates / 根 gates）由主 Agent 执行；本片
+  只跑改动相关测试与上述静态 / 文档门。
+- 群聊按单会话处理（`is_group_chat=False`）；出站只支持文本；GUI 侧无平台
+  消息回执 ID（`message_ids` 恒空）。
 
 ## 6. 遗留与部署台账（非阻塞）
 

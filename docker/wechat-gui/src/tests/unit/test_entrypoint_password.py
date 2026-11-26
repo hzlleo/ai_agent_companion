@@ -141,3 +141,74 @@ async def test_resolve_probe_distinguishes_run_user_from_caller(tmp_path: Path) 
     stat_result = target.stat()
     assert stat_result.st_mode & 0o777 == 0o400
     assert stat_result.st_uid == os.getuid()
+
+
+async def _resolve_agent_token(
+    *, source: Path, runtime: Path, probe_body: str | None = None
+) -> tuple[int, str, str]:
+    """在子 shell 中调用入口脚本的 agent token 解析函数。
+
+    Args:
+        source: token 文件路径。
+        runtime: 运行目录。
+        probe_body: 注入的探针函数定义（None 表示用入口的默认 setpriv 探针）。
+
+    Returns:
+        (退出码, 标准输出, 标准错误)。
+    """
+    calls = 'resolve_agent_token_file "$2" "$3" "$4"'
+    prelude = ""
+    if probe_body is not None:
+        prelude = f"{probe_body}; "
+        calls = 'resolve_agent_token_file "$2" "$3" "$4" masked_probe'
+    script = f'source "$1" || exit 99; {prelude}{calls}'
+    process = await asyncio.create_subprocess_exec(
+        "bash",
+        "-c",
+        script,
+        "entrypoint",
+        str(ENTRYPOINT),
+        str(source),
+        _RUN_USER,
+        str(runtime),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    return process.returncode, stdout.decode().strip(), stderr.decode()
+
+
+async def test_agent_token_keeps_readable_file_and_copies_root_only(tmp_path: Path) -> None:
+    """agent token：运行用户可读原样使用；仅 root 可读时复制到运行目录。"""
+    readable = tmp_path / "agent.token"
+    readable.write_text("token\n", encoding="utf-8")
+    readable.chmod(0o644)
+    code, stdout, _stderr = await _resolve_agent_token(
+        source=readable, runtime=tmp_path / "run-readable"
+    )
+    assert code == 0
+    assert stdout == str(readable)
+
+    runtime = tmp_path / "run-copy"
+    runtime.mkdir()
+    source = tmp_path / "copied.token"
+    source.write_text("token\n", encoding="utf-8")
+    source.chmod(0o600)
+    code, stdout, _stderr = await _resolve_agent_token(
+        source=source,
+        runtime=runtime,
+        probe_body="masked_probe() { return 1; }",
+    )
+    assert code == 0
+    copied = runtime / "agent.token"
+    assert stdout == str(copied)
+    assert copied.read_text(encoding="utf-8") == "token\n"
+
+
+async def test_agent_token_missing_file_fails(tmp_path: Path) -> None:
+    """agent token：两处都不可读时解析失败（入口拒绝启动）。"""
+    code, stdout, _stderr = await _resolve_agent_token(
+        source=tmp_path / "missing.token", runtime=tmp_path / "run"
+    )
+    assert code == 1
+    assert stdout == ""

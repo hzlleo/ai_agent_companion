@@ -216,6 +216,23 @@ os.environ["DOUYIN_MAX_MESSAGES_PER_POLL"] = "20"
 os.environ["DOUYIN_BACKOFF_BASE_SECONDS"] = "2.0"
 os.environ["DOUYIN_BACKOFF_MAX_SECONDS"] = "60.0"
 
+# --- GUI 微信实验轨（WECHAT_GUI_ 前缀 → WechatGuiSettings；默认关闭 → 测试
+#     零沙盒请求 / 零后台任务；S3 硬覆盖模式——开发者 shell 导出的同名真实
+#     配置不得泄入测试。token 直接配置（SecretStr）——测试专用值；联系人
+#     数组为空 = 无轮询目标；单测经 fake 客户端 / fake 视觉网关消费，永不
+#     触达真实沙盒） ---
+os.environ["WECHAT_GUI_ENABLED"] = "false"
+os.environ["WECHAT_GUI_SANDBOX_URL"] = "http://127.0.0.1:8090"
+os.environ["WECHAT_GUI_TOKEN"] = ""
+os.environ["WECHAT_GUI_POLL_INTERVAL_SECONDS"] = "5"
+os.environ["WECHAT_GUI_REQUEST_TIMEOUT_SECONDS"] = "15"
+os.environ["WECHAT_GUI_BACKOFF_BASE_SECONDS"] = "2.0"
+os.environ["WECHAT_GUI_BACKOFF_MAX_SECONDS"] = "60.0"
+os.environ["WECHAT_GUI_MAX_MESSAGES_PER_POLL"] = "20"
+os.environ["WECHAT_GUI_CONTACTS_JSON"] = "[]"
+os.environ["WECHAT_GUI_VLM_ENTRY"] = ""
+os.environ["WECHAT_GUI_TITLE_MISMATCH_ACTION"] = "skip"
+
 # --- SmsForwarder 短信 / 通知转发通道（SMS_FORWARDER_ 前缀 →
 #     SmsForwarderChannelSettings；默认关闭 → 测试零真实手机端 / 零后台任务；
 #     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试。token

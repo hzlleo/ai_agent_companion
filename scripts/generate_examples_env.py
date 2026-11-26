@@ -50,6 +50,7 @@ from packages.harness.config.models import (
     ToolsSandboxSettings,
     TtsSettings,
     WebSearchSettings,
+    WechatGuiSettings,
     WecomChannelSettings,
     WhatsAppChannelSettings,
 )
@@ -74,6 +75,7 @@ _ENV_SECTIONS: list[tuple[str, list[type[BaseSettings]]]] = [
     ("CHANNELS.QQ — QQ 通道配置（NapCat OneBot v11；令牌经 QQ_ACCESS_TOKEN / QQ_WEBHOOK_TOKEN 间接）", [QqChannelSettings]),
     ("CHANNELS.WECOM — 企业微信智能机器人长连接配置（默认关闭；订阅凭据 = BotID + Secret，密钥经 WECOM_SECRET 间接）", [WecomChannelSettings]),
     ("CHANNELS.DOUYIN — 抖音 web 通道配置（默认关闭；复用浏览器 sidecar 的已登录页面，登录态是 profile cookie，无独立密钥键）", [DouyinChannelSettings]),
+    ("CHANNELS.WECHAT_GUI — GUI 微信实验轨配置（默认关闭；沙盒截图 + 键鼠注入；Bearer token 经 WECHAT_GUI_TOKEN 直接配置，联系人经 JSON 数组配置）", [WechatGuiSettings]),
     ("CHANNELS.SMS_FORWARDER — SmsForwarder 短信 / 通知转发通道配置（默认关闭；仅入站；令牌经 SMS_FORWARDER_TOKEN 直接配置）", [SmsForwarderChannelSettings]),
     ("CHANNELS.WHATSAPP — WhatsApp Cloud API 通道配置（默认关闭；webhook 入站 + 文本出站；hub token / 应用密钥 / 访问令牌经 WHATSAPP_* 直接配置）", [WhatsAppChannelSettings]),
     ("DUTY — 值班轮配置（charter 工具循环 + 报告属主投递）", [DutySettings]),

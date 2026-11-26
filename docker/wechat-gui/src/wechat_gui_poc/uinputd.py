@@ -22,6 +22,7 @@ import logging
 import os
 import pwd
 import signal
+import socket
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -495,27 +496,7 @@ class UinputControlClient:
         finally:
             writer.close()
             await writer.wait_closed()
-        if not line:
-            raise UinputError("控制面连接提前关闭")
-        try:
-            raw = json.loads(line.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise UinputError(f"控制面响应不是合法 JSON：{exc}") from exc
-        if not isinstance(raw, dict):
-            raise UinputError("控制面响应根节点必须是对象")
-        ok = raw.get("ok")
-        command = raw.get("command")
-        error = raw.get("error")
-        if not isinstance(ok, bool) or not isinstance(command, str):
-            raise UinputError("控制面响应缺少 ok / command 字段")
-        if error is not None and not isinstance(error, str):
-            raise UinputError("控制面响应 error 字段类型非法")
-        return CommandOutcome(
-            command=command,
-            ok=ok,
-            error=error,
-            details=_decode_ping_details(raw),
-        )
+        return decode_command_outcome(line)
 
     async def ping(self) -> CommandOutcome:
         """健康探测。
@@ -567,6 +548,139 @@ class UinputControlClient:
             控制面响应。
         """
         return await self.send(ShutdownRequest())
+
+
+def decode_command_outcome(line: bytes) -> CommandOutcome:
+    """解码控制面单行响应（异步 / 同步客户端共用的唯一解析面）。
+
+    Args:
+        line: 原始响应字节行（含换行符）。
+
+    Returns:
+        控制面响应模型。
+
+    Raises:
+        UinputError: 连接提前关闭 / JSON 非法 / 根节点非对象 / 字段缺失或
+            类型不符。
+    """
+    if not line:
+        raise UinputError("控制面连接提前关闭")
+    try:
+        raw = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise UinputError(f"控制面响应不是合法 JSON：{exc}") from exc
+    if not isinstance(raw, dict):
+        raise UinputError("控制面响应根节点必须是对象")
+    ok = raw.get("ok")
+    command = raw.get("command")
+    error = raw.get("error")
+    if not isinstance(ok, bool) or not isinstance(command, str):
+        raise UinputError("控制面响应缺少 ok / command 字段")
+    if error is not None and not isinstance(error, str):
+        raise UinputError("控制面响应 error 字段类型非法")
+    return CommandOutcome(
+        command=command,
+        ok=ok,
+        error=error,
+        details=_decode_ping_details(raw),
+    )
+
+
+@dataclass(frozen=True)
+class SyncUinputControlClient:
+    """同步控制面客户端（agent 的 HTTP 处理线程内使用——不建立事件循环）。
+
+    与 :class:`UinputControlClient` 共用请求 / 响应模型与解码面，仅把
+    asyncio Unix socket 换成阻塞 socket；超时与错误语义保持一致。
+
+    Attributes:
+        socket_path: 控制面 socket 路径。
+        timeout: 单次请求超时（秒）。
+    """
+
+    socket_path: Path
+    timeout: float = 5.0
+
+    def send(self, request: ControlRequest) -> CommandOutcome:
+        """发送一条控制请求并解析响应。
+
+        Args:
+            request: 已构造的请求模型。
+
+        Returns:
+            控制面响应。
+
+        Raises:
+            UinputError: 连接 / 超时 / 响应非法。
+        """
+        payload = (json.dumps(request.to_wire(), ensure_ascii=False) + "\n").encode("utf-8")
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(self.timeout)
+                try:
+                    sock.connect(str(self.socket_path))
+                except TimeoutError as exc:
+                    raise UinputError(f"控制面连接超时 {self.socket_path}") from exc
+                except OSError as exc:
+                    raise UinputError(f"无法连接控制面 {self.socket_path}：{exc}") from exc
+                try:
+                    sock.sendall(payload)
+                    response = bytearray()
+                    while not response.endswith(b"\n"):
+                        chunk = sock.recv(4096)
+                        if not chunk:
+                            break
+                        response.extend(chunk)
+                except TimeoutError as exc:
+                    raise UinputError("控制面响应超时") from exc
+                except OSError as exc:
+                    raise UinputError(f"控制面读写失败：{exc}") from exc
+        except OSError as exc:
+            raise UinputError(f"无法连接控制面 {self.socket_path}：{exc}") from exc
+        return decode_command_outcome(bytes(response))
+
+    def ping(self) -> CommandOutcome:
+        """健康探测。
+
+        Returns:
+            控制面响应。
+        """
+        return self.send(PingRequest())
+
+    def emit_key(self, code: int, *, pressed: bool) -> CommandOutcome:
+        """注入按键按下 / 抬起。
+
+        Args:
+            code: Linux 按键码。
+            pressed: True 表示按下。
+
+        Returns:
+            控制面响应。
+        """
+        return self.send(KeyRequest(code=code, pressed=pressed))
+
+    def emit_move(self, x: int, y: int) -> CommandOutcome:
+        """注入绝对指针移动。
+
+        Args:
+            x: X 坐标。
+            y: Y 坐标。
+
+        Returns:
+            控制面响应。
+        """
+        return self.send(MoveRequest(x=x, y=y))
+
+    def emit_click(self, button: int = BTN_LEFT) -> CommandOutcome:
+        """注入鼠标点击。
+
+        Args:
+            button: Linux 鼠标按键码。
+
+        Returns:
+            控制面响应。
+        """
+        return self.send(ClickRequest(button=button))
 
 
 def _decode_ping_details(payload: Mapping[str, object]) -> PingDetails | None:

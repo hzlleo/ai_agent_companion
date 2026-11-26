@@ -1,6 +1,6 @@
 # channels — 平台通道层（Telegram 首个适配器；QQ / NapCat OneBot v11）
 
-`backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram——手写 Bot API 客户端 + 长轮询 runner；QQ——NapCat OneBot v11 客户端 + webhook 推送入站；企业微信——智能机器人长连接 WebSocket 客户端 + 回调 runner；抖音——浏览器 sidecar 页面上轮询采集 / 发送的 web 会话通道；SmsForwarder——手机端短信 / 通知转发的仅入站 webhook 通道；WhatsApp——Cloud API webhook 入站 + Graph API 文本出站的 24 小时服务窗通道）。通道抽象保持类型可扩展（`ChannelType` StrEnum——B站等后续通道在此追加成员与同级子模型）。消息协议已升级 **v2**（附件 / 静默 / 合成事件——见「协议 v2」一节；v1 纯文本形态缺省保持，additive 向后兼容）。
+`backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram——手写 Bot API 客户端 + 长轮询 runner；QQ——NapCat OneBot v11 客户端 + webhook 推送入站；企业微信——智能机器人长连接 WebSocket 客户端 + 回调 runner；抖音——浏览器 sidecar 页面上轮询采集 / 发送的 web 会话通道；GUI 微信——沙盒截图 + 键鼠注入的实验轨通道；SmsForwarder——手机端短信 / 通知转发的仅入站 webhook 通道；WhatsApp——Cloud API webhook 入站 + Graph API 文本出站的 24 小时服务窗通道）。通道抽象保持类型可扩展（`ChannelType` StrEnum——B站等后续通道在此追加成员与同级子模型）。消息协议已升级 **v2**（附件 / 静默 / 合成事件——见「协议 v2」一节；v1 纯文本形态缺省保持，additive 向后兼容）。
 
 ## 模块一览
 
@@ -25,6 +25,13 @@
 | `douyin/douyin_scripts.py` | 页面 JS 表达式（会话 DOM 采集 / 输入框写入并发送——参数 JSON 嵌入，零浏览器依赖） | `build_douyin_collect_script` / `build_douyin_send_script` / `DOUYIN_MESSAGE_NODE_SELECTORS` |
 | `douyin/douyin_client.py` | 浏览器底座客户端（经注入的 `evaluate` / `navigate` 调用面读写会话；失败归一可重试错误） | `DouyinWebClient` / `DouyinBrowserInvoker` |
 | `douyin/douyin_runner.py` | 抖音 runner（轮询采集 / 去重窗口 / 逐消息路由隔离 / 指数退避 / 出站文本发送与附件逐条不支持承载） | `DouyinChannelRunner` / `DouyinMessageDedupWindow` |
+| `wechat_gui/wechat_gui_wire_models.py` | GUI 微信 agent wire 契约（Unit 文件；与沙盒树文本镜像）：健康 / 调用请求 / 调用响应 | `HealthResponseModel` / `InvokeRequestModel` / `InvokeResponseModel` |
+| `wechat_gui/wechat_gui_models.py` | GUI 微信通道模型（Unit 文件）：解析结果 / 快照 / 联系人 / 会话键 / 去重键 / 归一映射 / 设置 | `WechatGuiSettings` / `WechatGuiSnapshotModel` / `WechatGuiSessionKey` / `build_wechat_gui_chat_id` / `map_wechat_gui_snapshot_to_inbound` |
+| `wechat_gui/wechat_gui_prompts.py` | 截图解析提示词 Unit（任务书 / 指令 + byte-lock 版本） | `render_wechat_gui_reader_charter` / `render_wechat_gui_reader_instruction` |
+| `wechat_gui/wechat_gui_client.py` | 沙盒 agent 客户端（共享 httpx + Bearer；五工具；失败归一可重试错误） | `WechatGuiSandboxClient` |
+| `wechat_gui/wechat_gui_reader.py` | 截图 → 视觉解析（look_at 回退链 + 严格 JSON + 低置信度 fail-closed） | `WechatGuiReader` / `extract_json_object` |
+| `wechat_gui/wechat_gui_runner.py` | GUI 微信 runner（轮询 / 截图变化检测 / P4 标题校验 / 去重 / 逐消息路由隔离 / 退避） | `WechatGuiChannelRunner` / `WechatGuiMessageDedupWindow` |
+| `wechat_gui/wechat_gui_adapter.py` | GUI 微信出站适配器（标题校验后输入并回车；附件不支持） | `WechatGuiChannelAdapter` |
 | `sms_forwarder/sms_models.py` | SmsForwarder 转发载荷归一（Unit 文件）：字段别名 / kind 过滤 / 正文与发送者归一 / 时间戳解析 / 属主清单 / msgid 与内容时间窗去重 / 直调路径 | `SmsForwarderPayloadModel` / `parse_sms_forwarder_payload` / `SmsForwarderDedupWindow` / `parse_owner_numbers` / `process_sms_forwarder_payload` |
 | `sms_forwarder/sms_runner.py` | SmsForwarder webhook 入站 runner（有界队列 + 固定 worker / 去重 / 过载丢弃计数 / 周期观测 / 生命周期收尾） | `SmsForwarderWebhookRunner` / `SMS_FORWARDER_INBOUND_QUEUE_SIZE` / `SMS_FORWARDER_INBOUND_WORKER_COUNT` |
 | `sms_forwarder/sms_adapter.py` | SmsForwarder 仅入站适配器（出站恒丢弃——空投递结果，不发起平台调用） | `SmsForwarderAdapter` |
@@ -1206,146 +1213,151 @@ settings = build_isolated_settings(
 零真实网络（浏览器调用面经协议注入 fake）；零真实等待（休眠注入记录式闸门）；
 全部 `async def test_*`。
 
-## GUI 微信实验轨（PoC 门阶段——尚未接后端）
+## GUI 微信实验轨（WECHAT_GUI——沙盒截图 + 键鼠注入，实验轨）
 
-### 定位与拍板
+### 定位与边界（锁定）
 
-企微智能机器人长连接是本工程**生产主轨**；个人微信没有稳定的官方个人号
-消息通道，因此以 **GUI 实验轨**作为覆盖补充：容器内运行一个可截图、
-可注入键鼠的 Xorg 图形会话，经 noVNC 供人登录，通道层（过门后）以
-截图 + 视觉校验 + 键鼠注入读写会话。
+企微智能机器人长连接是**生产主轨**；个人微信没有稳定的官方个人号消息
+通道，因此以 **GUI 实验轨**作为覆盖补充：容器内运行一个可截图、可注入
+键鼠的 Xorg 图形会话，经 noVNC 供人登录，通道层以「截图 + 视觉解析 +
+键鼠注入」读写会话。
 
-已拍板边界（锁定）：
+已锁定边界：
 
-- **主轨不变**：企微长连接仍是默认生产通道；GUI 微信默认关闭。
-- **先过门后实现**：只有 Xorg + uinput 栈的 PoC 门通过，才实现微信通道
-  本体；门不通过则整轨推迟。
-- **Live 推迟**：微信客户端安装 / 登录 / 真实消息验证随统一 Live 阶段
-  执行；门阶段不装客户端、不接后端。
-- **会话键 B（拍板 P4）**：联系人备注名 + 视觉模型校验（防同名 / 改备注串会话）；
-  门阶段只做设计预告，不产生 wire 契约。
+- **主轨不变**：企微长连接仍是默认生产通道；GUI 微信默认关闭
+  （``WECHAT_GUI_ENABLED=false``），启用是显式部署决策。
+- **实验轨标注**：能力面（截图解析准确率、会话切换、中文输入）按实验轨
+  验收；失败一律 fail-closed（宁可漏发，不串会话）。
+- **Live 推迟**：镜像**不安装微信客户端**；真实截图解析与 ``open_chat``
+  准确率、部署机 udev 复验均待统一 Live 阶段验证——本片只实现并测到
+  假数据层（fake 客户端 / fake 视觉网关 / 本地回环 HTTP）。
+- **会话键 = 联系人备注名 + 视觉校验**：备注名不是稳定主键（可改名 /
+  重名），入站与出站都以视觉模型对标题的校验为落定前提。
 
-本阶段交付物是独立沙盒树 [docker/wechat-gui](../../docker/wechat-gui/README.md)
-（与后端零代码共享、独立 pixi 工程 / 镜像 / CI job）与一份本机栈实测
-证据；**channels 域无任何代码改动**。
+### 架构（后端 ↔ 沙盒 HTTP ↔ uinputd ↔ Xorg）
 
-### 栈组成（门阶段）
+```
+backend（本仓库）
+  wechat_gui_channel_runner（轮询）/ wechat_gui_channel_adapter（出站）
+      ↓ POST /invoke（Bearer token；恒 200 携带成败终态）
+      ↓ GET /health（无鉴权存活面）
+docker/wechat-gui 沙盒容器（独立 pixi 工程 / 镜像 / CI job，零代码共享）
+  agent（仅回环 127.0.0.1:8090，stdlib HTTP）
+      ↓ Unix socket JSON 行（uinputd 控制面：key / move / click）
+      ↓ ImageMagick（import -window root png:-）/ xclip（剪贴板）
+  uinputd（root 创建并持有虚拟键盘 + 绝对指针）
+  Xorg :99（dummy 1280x800x24，wechat 用户）
+  x11vnc 5900 / noVNC 6080（仅宿主回环，供人登录 / 观察）
+```
 
-| 层 | 职责 | 位置 |
+视觉解析在**后端**侧完成：沙盒只返回截图字节，后端经 ``look_at`` 角色
+回退链调用视觉模型（``gateway.chat_for_entry(purpose="look_at")``），
+因此截图永不进入第三方业务链路之外的处理。
+
+### wire 契约（恒 200 语义）
+
+两树各持一份文本镜像（沙盒 ``wire_models.py`` ↔ 后端
+``channels/wechat_gui/wechat_gui_wire_models.py``），漂移由根门禁
+``scripts/check_sandbox_dtos_drift.py`` 看护。
+
+| 端点 | 载荷 | 鉴权 |
 |---|---|---|
-| uinput 设备层 | 虚拟键盘 + 绝对指针的创建 / 持有 / 事件注入（纯 stdlib ioctl） | `docker/wechat-gui/src/wechat_gui_poc/uinput_devices.py` |
-| 控制面 | 设备生命周期、Xorg 配置生成、Unix socket JSON 行协议（ping/key/move/click/shutdown） | `uinputd.py` + `wire_models.py` |
-| 显示层 | Xorg dummy 1280x800x24 + evdev 显式输入段（无 udev 依赖） | `xorg.py` + `entrypoint.sh` |
-| 远控层 | x11vnc（密码文件）+ websockify/noVNC（端口仅宿主回环） | `entrypoint.sh` + compose |
-| 门脚本 | 七步栈验证与单行 JSON 证据 | `poc_gate.py` |
-| 宿主运行器 | 构建镜像 + 特权容器内跑门 + 证据落 `docs/evidence/poc/` | `poc/run_stack_poc.sh` |
+| ``GET /health`` | ``{"status":"ok"}`` | 无（存活面） |
+| ``POST /invoke`` | ``{"tool":"screenshot","arguments":{}}`` → ``{"ok":true,"result":{...},"latency_ms":12}`` | Bearer token（恒时比较） |
 
-关键工程事实（与实现一致）：
+工具级失败（未知工具 / 参数非法 / 执行失败）恒 HTTP 200 携带
+``{"ok":false,"result":{},"error":"...","latency_ms":N}``；401（鉴权失败）
+与 422（请求形态非法）属传输层失败，由客户端归一为可重试业务错误。
 
-- **无 udev**：uinput 设备只在 sysfs 可见；容器内事件节点由 uinputd 按
-  sysfs `dev` 号 `mknod`，并 `chown` 给非 root 运行用户。
-- **静态输入段**：Xorg 用 `evdev` + 显式 `Option "Device"`，设备绑定为
-  CoreKeyboard/CorePointer（xinput 中非漂浮）；绝对指针被 evdev 归类为
-  touchscreen 类型 slave pointer，坐标点击语义等价。
-- **注入归属**：uinput 设备生命周期跟随持有 fd 的守护进程；门脚本与
-  后续通道都经控制面注入，不跨进程写事件节点（event 节点只读）。
+五工具：``screenshot`` / ``click{x,y}`` / ``type_text{text}`` /
+``press_key{key}`` / ``open_chat{remark_name}``。``type_text`` 经剪贴板
+粘贴（覆盖中文；虚拟键盘只注册 ASCII 子集）；``open_chat`` 为
+Ctrl+F → 输入备注名 → Enter → 有界等待标题区域变化，返回标题区域与全屏
+截图（后端据此做视觉校验）。
 
-### PoC 门（通过判据）
+### P4 会话键与视觉校验（fail-closed）
 
-门脚本在容器内按序验证：X 在线且 1280x800x24 → 两虚拟设备创建且事件节点
-可打开 → `xinput` 可见且非漂浮 → `stdbuf -oL xev -root` 行缓冲采集到单轮
-注入的 KeyPress / KeyRelease / ButtonPress / ButtonRelease / Motion（各
-≥1） → 截图 PNG 尺寸正确且非全黑 / 非全同色 → 剪贴板写入读回一致 →
-5900 可连接且 noVNC `/vnc.html` 200。任一步失败即 FAIL 并跳过后续；退出码
-0/1/2 分别对应 PASS / FAIL / 用法错误。报告时间戳为 Unix Epoch 毫秒
-（`started_at_ms`），字段表见沙盒树 README「门报告字段」。
+- 会话键：``wechat_gui:<联系人备注名>``（路由器身份键
+  ``channel:wechat_gui:<备注名>``）。
+- 入站：截图解析出的标题必须与当前 ``open_chat`` 目标备注名一致；不一致
+  按 ``WECHAT_GUI_TITLE_MISMATCH_ACTION`` 处置（默认 ``skip`` 并计数；
+  ``fail`` 触发退避）。
+- 出站：``open_chat`` 后先对标题区域截图做视觉校验；标题不一致**拒绝
+  发送**（``CHANNEL_API_ERROR``，路由器逐消息兜底隔离）。
+- 解析失败 / 非 JSON / 缺字段 / 置信度低于阈值：``LLM_CALL_FAILED``
+  （fail-closed），不产生入站消息、不发送出站文本。
 
-本机实测结果：**PASS（7/7）**，特权与非特权两种形态各一份证据（见沙盒树
-README「本机实测结果」与 `docs/evidence/poc/`；字段含
-`run_mode` / `build_attempts` / `host_session_guard`）。部署机复跑与微信
-客户端 Live 验证随统一阶段执行。
+### 轮询 / 变化检测 / 去重
 
-### 控制面协议与落盘字段（事实）
+- 轮询默认 5 秒（``WECHAT_GUI_POLL_INTERVAL_SECONDS``）；逐启用联系人
+  串行切换（单窗口 UI 的固有约束）。
+- 截图 sha256 与上次相同 → 跳过视觉解析（省调用 + 防重复）。
+- 消息去重键 = ``备注名 + 文本 + 时间窗`` 的 sha256（GUI 侧没有平台
+  消息 ID）；进程内有界 FIFO（容量 1024，重启清零，文档化边界）。
+- 归一为 ``InboundMessageModel``：``channel=wechat_gui``、
+  ``chat_id=wechat_gui:<备注名>``、``is_group_chat=False``、
+  ``has_user_text=True``、``synthetic=False``；来源默认 ``peer``，联系人
+  配置 ``is_owner=true`` 时按 ``owner`` 落档。
+- 轮询失败按指数退避重试；单联系人失败不阻断同轮其余联系人；
+  ``handle_inbound`` 自身恒不抛（逐消息隔离）。
 
-控制面是容器内 Unix socket 上的单请求单响应 JSON 行（权限 0666，不含
-机密）；模型在 `docker/wechat-gui/src/wechat_gui_poc/wire_models.py`，解码
-与注入在 `uinputd.py`：
+快照形态（后端内部模型，非 wire）：
+
+```json
+{
+  "title": "小林",
+  "messages": [
+    {"sender": "小林", "text": "今晚回家吃饭吗？", "is_self": false, "ts_ms": 1731000000000}
+  ],
+  "screenshot_sha256": "9f2c...",
+  "captured_at_ms": 1731000005000
+}
+```
+
+### 出站流程
 
 ```
-{"command":"ping"}                          → {"ok":true,"command":"ping","keyboard":"wechat-gui virtual keyboard","pointer":"wechat-gui virtual pointer","width":1280,"height":800}
-{"command":"key","code":30,"pressed":true}  → {"ok":true,"command":"key"}
-{"command":"move","x":640,"y":400}          → {"ok":true,"command":"move"}
-{"command":"click","button":272}            → {"ok":true,"command":"click"}
-{"command":"shutdown"}                      → {"ok":true,"command":"shutdown"}
+OutboundMessageModel（chat_id=wechat_gui:<备注名>）
+    ↓ chat_id grammar 解析
+    ↓ open_chat（搜索并打开会话）
+    ↓ 标题区域截图 → 视觉解析 → 标题 == 目标备注名（否则拒绝发送）
+    ↓ type_text（剪贴板粘贴）+ press_key(enter)
+    ↓ ChannelDeliveryResultModel（message_ids 恒空；附件逐条标记不支持）
 ```
 
-注入失败回 `{"ok":false,"command":"key","error":"..."}`（守护不中断）；
-字段非法 / 未知命令回 `ok=false` 且 `command` 为空字符串。
+附件边界：GUI 底座当前**只支持文本出站**；附件逐条返回
+``ok=false``（不阻断文本投递）。群聊按单会话处理（``is_group_chat=False``），
+群内发送者保留在消息发送者字段。
 
-`uinput-devices.json`（uinputd 落盘，root 持有）：
+### 配置（``WECHAT_GUI_*``）
 
-| 字段 | 类型 | 说明 |
+| 键 | 默认 | 说明 |
 |---|---|---|
-| `width` / `height` | integer | 绝对指针轴上限对应的屏幕尺寸（正数） |
-| `keyboard.name` / `pointer.name` | string | 内核设备名（Xorg 静态段的 Identifier 与此一致） |
-| `keyboard.event_path` / `pointer.event_path` | string | 容器内事件节点（按 sysfs `dev` 号 mknod 后 chown 给运行用户） |
+| ``WECHAT_GUI_ENABLED`` | ``false`` | 是否启用实验轨（默认关闭） |
+| ``WECHAT_GUI_SANDBOX_URL`` | ``http://127.0.0.1:8090`` | 沙盒 agent 基础 URL（仅回环） |
+| ``WECHAT_GUI_TOKEN`` | 空 | Bearer token（与沙盒 token 文件同值） |
+| ``WECHAT_GUI_POLL_INTERVAL_SECONDS`` | ``5.0`` | 轮询间隔秒数 |
+| ``WECHAT_GUI_REQUEST_TIMEOUT_SECONDS`` | ``15.0`` | 单次 agent 请求超时 |
+| ``WECHAT_GUI_BACKOFF_BASE_SECONDS`` | ``2.0`` | 轮询失败退避基数 |
+| ``WECHAT_GUI_BACKOFF_MAX_SECONDS`` | ``60.0`` | 退避封顶 |
+| ``WECHAT_GUI_MAX_MESSAGES_PER_POLL`` | ``20`` | 单次解析 / 归一消息上限 |
+| ``WECHAT_GUI_CONTACTS_JSON`` | ``[]`` | 联系人 JSON 数组（``remark_name`` / ``persona_id`` / ``enabled`` / ``is_owner``） |
+| ``WECHAT_GUI_VLM_ENTRY`` | 空 | 指定视觉条目名（空 = 走 look_at 回退链） |
+| ``WECHAT_GUI_TITLE_MISMATCH_ACTION`` | ``skip`` | 标题不一致处置（``skip`` / ``fail``） |
 
-门报告字段（`--out` 落盘与 stdout 单行 JSON 同源）：
+``enabled=true`` 而 ``WECHAT_GUI_TOKEN`` 为空时只跳过本通道（其余通道
+照常）；沙盒暂不可达由 runner 退避消化。
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `verdict` | string | `PASS` / `FAIL` |
-| `steps[]` | array | 七步：`name` / `status` / `duration_perf_counter_ms` / `detail` |
-| `hostname` / `kernel` | string | 容器主机名 / 内核版本 |
-| `docker` | string \| null | Docker 版本（容器内不可得为 `null`） |
-| `started_at_ms` | integer | 启动时刻，Unix Epoch 毫秒 |
-| `duration_perf_counter_ms` | integer | 总耗时毫秒 |
-| `run_mode` / `build_attempts` / `container_exit_code` | string / integer / integer | 宿主运行器追加 |
-| `host_session_guard` | object | 宿主运行器追加：`host_session_active` / `host_display` / `host_displays` / `allow_host_session` / `floated_devices` / `ignored_devices` / `ignored_basis`（`udev_positive` / `heuristic`） / `residual_devices` / `float_wait` / `float_sync_ms` |
+### 已实现 / 未验证（诚实边界）
 
-字段级说明与样例以沙盒树 README「设备制品 / 门报告字段」为准，
-`docs/evidence/poc/` 下的入库证据即完整样例。
-
-### 门后的通道设计预告（不在本阶段实现）
-
-```
-轮询 / 触发（通道节奏）
-    ↓ 截图（门脚本同源原语：import root → PNG）
-    ↓ VLM 校验当前会话身份（联系人备注名 + 头像 / 标题一致性）
-    ↓ 会话键 = 联系人备注名（B 方案，视觉校验后才落定）
-    ↓ 未读消息采集（视觉 / OCR 辅助，选择器未定）
-    ↓ ChannelRouter.handle_inbound（与其余通道同一套人格 / 心流 / 记忆语义）
-出站：
-    ↓ 会话切换（搜索备注名 / 列表定位，视觉确认）
-    ↓ 聚焦输入框 → uinput 注入文本 → 回车 / 点击发送
-    ↓ 截图确认发送态（可选）
-```
-
-未决项（留到通道实现阶段拍板）：文本输入法（ASCII 直注入 vs 剪贴板
-粘贴）、中文输入、消息去重键（GUI 侧没有稳定平台 message_id）、多会话
-并行度（单窗口 UI 的串行约束）、群聊身份。
-
-### 边界与风险
-
-- **无 udev**：事件节点需 MKNOD 能力；生产 compose 已按最小能力集声明。
-- **无窗口管理器**：当前镜像不装 WM，客户端窗口无装饰 / 不可拖动；
-  Live 阶段按需加入轻量 WM。
-- **单窗口语义**：输入框是单会话 UI；多会话并行收发需要切换串行化。
-- **视觉依赖**：会话身份与消息内容均依赖截图质量；分辨率 / 缩放策略
-  在 Live 阶段固化。
-- **安全（生产不 privileged）**：`--device /dev/uinput` + `c 13:* rwm` +
-  MKNOD/CHOWN/SETUID/SETGID/KILL + no-new-privileges；端口仅宿主回环；
-  VNC 密码文件须对运行用户（`wechat`）可读（推荐 `wechat:wechat 0400`，
-  root 持有 0400 时由入口复制后使用）。
-- **输入面是内核全局对象（事实约束）**：uinput 设备不只属于容器——宿主
-  图形会话（或同机其它 X 会话）会接入 `wechat-gui virtual*` 并接收注入。
-  PoC 复跑前须在宿主 `xinput float` 该设备（运行器在有宿主会话时默认
-  拒绝运行，`WECHAT_GUI_POC_ALLOW_HOST_SESSION=1` 放行后自动浮动，并在
-  两台设备浮动完成后才放行容器启动 Xorg，结果写进证据）；生产形态用仓库
-  内 `docker/wechat-gui/udev/90-wechat-gui-ignore.rules`（对
-  `wechat-gui virtual*` 置 `LIBINPUT_IGNORE_DEVICE="1"` 并清空
-  `ID_INPUT*`）——开发机 X11 + Xorg libinput 已实测通过，部署机待复验；
-  Wayland 会话下 `xinput float` 不可行，须依赖该规则或 VM 隔离。
+- 已实现并单测覆盖：wire 契约镜像、Bearer 鉴权矩阵、五工具参数校验与
+  uinputd 命令映射、``open_chat`` 有界等待、截图变化检测、P4 标题校验、
+  去重窗口、归一映射、退避 / 停机 / 单实例、出站标题校验与失败隔离。
+- **未验证（待 Live）**：微信客户端安装 / 登录 / 真实消息；真实截图上的
+  视觉解析准确率与 ``open_chat`` 命中率；中文输入法 / 字体 / 窗口管理器
+  的实际表现；部署机宿主 udev 规则复验。
+- 实验轨风险：视觉解析错误直接决定会话归属（fail-closed 只能保证不误
+  投，不能保证不漏投）；单窗口串行；无平台消息回执 ID。
 
 ## SmsForwarder 短信 / 通知转发通道（SMS_FORWARDER——仅入站）
 
@@ -1920,7 +1932,7 @@ settings = build_isolated_settings(
 
 | 测试文件 | 覆盖 |
 |---|---|
-| `tests/unit/test_channels_models.py` | 值域（telegram + qq）/ 校验 / 默认值 / 身份键；v2：附件恰一源矩阵 / kind 值域 / 容量指引常量 / 入站出站投递 v2 字段缺省与可设 / 逐附件结果形态 |
+| `tests/unit/test_channels_models.py` | 值域（含 wechat_gui）/ 校验 / 默认值 / 身份键；v2：附件恰一源矩阵 / kind 值域 / 容量指引常量 / 入站出站投递 v2 字段缺省与可设 / 逐附件结果形态 |
 | `tests/unit/test_channels_settings.py` | telegram env 面对齐 / 默认值 / 边界校验 / 隔离构造 / 嵌套覆写 |
 | `tests/unit/test_qq_settings.py` | QQ env 面对齐 / 默认值 / 边界校验 / 隔离构造 / `CHANNELS__QQ__*` 嵌套覆写 |
 | `tests/unit/test_tg_client.py` | MockTransport：请求形状（timeout / offset / 超时裕量）/ 4096 分段 / 错误映射表 / token fail fast；v2：silent → disable_notification / 媒体 JSON 引用与 multipart 上传形状 / 空媒体面校验 / 媒体错误映射；出站 429 retry_after 解析 / 延迟夹取 / 单次重试 / 重试失败上抛 / 缺参数不重试（伪休眠零等待） |
@@ -1946,5 +1958,14 @@ settings = build_isolated_settings(
 | `tests/unit/test_whatsapp_adapter.py` | MockTransport 出站：wire 形状 / provider message_id / 出站 to 保留国家码 / 401 与 5xx 与超时与非法 JSON 映射 / 服务窗内放行与边界与超窗拒绝 / runner 入站更新服务窗 / grammar 校验 / 附件忽略 / 缺令牌与缺号码 ID |
 | `tests/unit/test_whatsapp_settings.py` | WHATSAPP_ env 面对齐 / 默认值 / SecretStr 不回显 / 聚合面 / 生产 fail-closed（四项凭据任一缺失） |
 | `tests/unit/test_app_whatsapp_lifespan.py` | WhatsApp enabled / disabled 装配 / 适配器与 runner 共享服务窗 / 属主清单接线 / 停机复位 / 窗口外受控拒绝且零 HTTP 请求（事件钩子记录） |
+| `tests/unit/test_wechat_gui_wire_models.py` | 两树 wire 类定义块逐字一致 / 序列化出口形状 |
+| `tests/unit/test_wechat_gui_models.py` | 会话键 grammar / 设置默认与 env 覆写 / SecretStr / 联系人 JSON fail fast / 去重键时间窗 / 归一映射过滤与来源 |
+| `tests/unit/test_wechat_gui_prompts.py` | 提示词 byte-lock / 版本常量 / 渲染契约 |
+| `tests/unit/test_wechat_gui_client.py` | MockTransport：成功 wire 形状 / 五工具参数 / 恒 200 ok=false / 401 / 超时 / wire 破坏 / token 缺失短路 / 健康探测矩阵 |
+| `tests/unit/test_wechat_gui_reader.py` | fake 网关：严格 JSON（含代码围栏）/ 非 JSON / 低置信度 / 缺字段 / 回退链失败 / vlm_entry 过滤 / base64 校验 |
+| `tests/unit/test_wechat_gui_runner.py` | 轮询路由 / 截图变化跳过视觉 / P4 skip 与 fail / 逐联系人隔离 / 退避封顶 / 路由异常隔离 / 停机 / 单实例 / 去重窗口 |
+| `tests/unit/test_wechat_gui_adapter.py` | 标题校验后发送 / 标题不一致拒绝 / 视觉失败拒绝 / grammar / 空文本 / 失败上抛 / 附件不支持 |
+| `tests/unit/test_app_wechat_gui_channels_lifespan.py` | GUI 微信 enabled / disabled 装配 / token 缺失仅跳过 / 适配器注册 / 参数接线 / 停机传导 |
+| `tests/wechat_gui_fakes.py` | 共享 fake 基建：沙盒客户端（截图脚本化 + 失败注入）/ 视觉解析器 / fake 路由器 / 记录式休眠闸门 |
 
 零真实网络（MockTransport / fake）；零真实配置（隔离 Settings + conftest 硬覆盖；测试 token 为专用假值）；全部 `async def test_*`。
