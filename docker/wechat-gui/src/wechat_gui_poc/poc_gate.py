@@ -5,10 +5,11 @@
 1. ``x_up``：``xdpyinfo`` 连接 ``:99``，断言 1280x800x24；
 2. ``uinput_create``：设备信息落盘可读、两个事件节点可打开、控制面存活；
 3. ``xinput_visible``：``xinput list`` 含两个已附加（非漂浮）虚拟设备；
-4. ``event_roundtrip``：``xev -root`` 采集，经控制面注入 KEY_A 按下 / 抬起、
-   绝对指针移动与左键，解析输出断言 KeyPress / KeyRelease / ButtonPress 各 ≥1；
-5. ``screenshot``：``import -window root png:-`` 取图，Pillow 校验尺寸与非全黑 /
-   非全同色；
+4. ``event_roundtrip``：``xev -root`` 行缓冲采集，一次性注入 KEY_A 按下 /
+   抬起、绝对指针移动与左键按下 / 抬起，按截止轮询解析输出，断言
+   KeyPress / KeyRelease / ButtonPress / ButtonRelease / Motion 各 ≥1；
+5. ``screenshot``：``import -window root png:-`` 取图，Pillow 校验尺寸与非
+   全黑 / 非全同色；
 6. ``clipboard``：``xclip`` 写入后读回一致；
 7. ``vnc_up``：5900 可连接、``http://127.0.0.1:6080/vnc.html`` 返回 200。
 
@@ -28,263 +29,45 @@ import platform
 import re
 import shutil
 import socket
-import subprocess
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
-from datetime import UTC, datetime
-from enum import StrEnum
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
 from PIL import Image
 
 from .uinput_devices import KEY_A, UinputError
-from .uinputd import (
+from .uinputd import UinputControlClient, load_artifacts
+from .wire_models import (
     DEFAULT_DEVICES_JSON,
+    DEFAULT_DISPLAY,
+    DEFAULT_EVENT_TIMEOUT,
+    DEFAULT_HEIGHT,
+    DEFAULT_NOVNC_PORT,
+    DEFAULT_OPERATION_TIMEOUT,
+    DEFAULT_READY_TIMEOUT,
     DEFAULT_SOCKET_PATH,
-    UinputControlClient,
-    load_artifacts,
+    DEFAULT_VNC_PORT,
+    DEFAULT_WIDTH,
+    EXPECTED_DEPTH,
+    CommandOutput,
+    GateContext,
+    GateReport,
+    ScreenInfo,
+    ScreenshotStats,
+    StepRecord,
+    StepSpec,
+    StepStatus,
+    XevCounts,
+    XInputDevice,
 )
-
-#: 容器的固定显示号。
-DEFAULT_DISPLAY = ":99"
-#: 屏幕宽度（与 Xorg 配置一致）。
-DEFAULT_WIDTH = 1280
-#: 屏幕高度（与 Xorg 配置一致）。
-DEFAULT_HEIGHT = 800
-#: 期望色深。
-EXPECTED_DEPTH = 24
-#: x11vnc 端口。
-DEFAULT_VNC_PORT = 5900
-#: noVNC / websockify 端口。
-DEFAULT_NOVNC_PORT = 6080
-#: 单次外部命令超时（秒）。
-DEFAULT_OPERATION_TIMEOUT = 30.0
-#: 事件回环整体超时（秒）。
-DEFAULT_EVENT_TIMEOUT = 10.0
-#: 服务就绪探测超时（秒）。
-DEFAULT_READY_TIMEOUT = 10.0
 
 _READY_POLL_SECONDS = 0.05
 _EVENT_READ_SLICE_SECONDS = 0.25
 
 
-class StepStatus(StrEnum):
-    """门禁步骤状态。"""
-
-    PASSED = "passed"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-
-
 class StepFailure(RuntimeError):
     """门禁步骤失败（携带可读原因）。"""
-
-
-@dataclass(frozen=True)
-class CommandOutput:
-    """外部命令执行结果。
-
-    Attributes:
-        returncode: 退出码。
-        stdout: 标准输出原始字节。
-        stderr: 标准错误原始字节。
-    """
-
-    returncode: int
-    stdout: bytes
-    stderr: bytes
-
-    @property
-    def stdout_text(self) -> str:
-        """标准输出的文本形态（替换非法字节）。
-
-        Returns:
-            解码后的标准输出。
-        """
-        return self.stdout.decode("utf-8", errors="replace")
-
-    @property
-    def stderr_text(self) -> str:
-        """标准错误的文本形态（替换非法字节）。
-
-        Returns:
-            解码后的标准错误。
-        """
-        return self.stderr.decode("utf-8", errors="replace")
-
-
-@dataclass(frozen=True)
-class ScreenInfo:
-    """``xdpyinfo`` 解析出的屏幕属性。
-
-    Attributes:
-        width: 宽度（像素）。
-        height: 高度（像素）。
-        depth: 根窗口色深。
-    """
-
-    width: int
-    height: int
-    depth: int
-
-
-@dataclass(frozen=True)
-class XInputDevice:
-    """``xinput list`` 解析出的输入设备。
-
-    Attributes:
-        name: 设备名。
-        device_id: XInput 设备 id。
-        floating: 是否为漂浮设备。
-    """
-
-    name: str
-    device_id: int
-    floating: bool
-
-
-@dataclass(frozen=True)
-class XevCounts:
-    """``xev`` 输出中的事件计数。
-
-    Attributes:
-        key_press: 按键按下事件数。
-        key_release: 按键抬起事件数。
-        button_press: 鼠标按下事件数。
-        button_release: 鼠标抬起事件数。
-        motion: 指针移动事件数。
-    """
-
-    key_press: int
-    key_release: int
-    button_press: int
-    button_release: int
-    motion: int
-
-
-@dataclass(frozen=True)
-class ScreenshotStats:
-    """截图校验结果。
-
-    Attributes:
-        width: 图片宽度。
-        height: 图片高度。
-        channel_min: 全通道像素最小值。
-        channel_max: 全通道像素最大值。
-    """
-
-    width: int
-    height: int
-    channel_min: int
-    channel_max: int
-
-
-@dataclass(frozen=True)
-class StepRecord:
-    """单步执行记录。
-
-    Attributes:
-        name: 步骤名。
-        status: 状态。
-        duration_perf_counter_ms: ``perf_counter`` 计时的毫秒耗时。
-        detail: 结果摘要或失败原因。
-    """
-
-    name: str
-    status: StepStatus
-    duration_perf_counter_ms: int
-    detail: str
-
-
-@dataclass(frozen=True)
-class GateReport:
-    """门禁总报告。
-
-    Attributes:
-        verdict: ``PASS`` / ``FAIL``。
-        steps: 步骤记录（顺序固定）。
-        hostname: 容器主机名。
-        kernel: 内核版本。
-        docker: Docker 版本（不可得为 None）。
-        started_at_utc: 启动时刻（UTC ISO 8601）。
-        duration_perf_counter_ms: 总耗时毫秒。
-    """
-
-    verdict: str
-    steps: tuple[StepRecord, ...]
-    hostname: str
-    kernel: str
-    docker: str | None
-    started_at_utc: str
-    duration_perf_counter_ms: int
-
-    def to_wire(self) -> dict[str, object]:
-        """转换为单行 JSON 载荷。
-
-        Returns:
-            可序列化报告。
-        """
-        return {
-            "verdict": self.verdict,
-            "steps": [
-                {
-                    "name": step.name,
-                    "status": step.status.value,
-                    "duration_perf_counter_ms": step.duration_perf_counter_ms,
-                    "detail": step.detail,
-                }
-                for step in self.steps
-            ],
-            "hostname": self.hostname,
-            "kernel": self.kernel,
-            "docker": self.docker,
-            "started_at_utc": self.started_at_utc,
-            "duration_perf_counter_ms": self.duration_perf_counter_ms,
-        }
-
-
-@dataclass(frozen=True)
-class GateContext:
-    """门禁运行参数。
-
-    Attributes:
-        display: X 显示号。
-        devices_json: 设备信息路径。
-        control_socket: 控制面 socket 路径。
-        width: 期望宽度。
-        height: 期望高度。
-        vnc_port: x11vnc 端口。
-        novnc_port: noVNC 端口。
-        operation_timeout: 单命令超时（秒）。
-        event_timeout: 事件回环超时（秒）。
-        ready_timeout: 服务就绪探测超时（秒）。
-    """
-
-    display: str = DEFAULT_DISPLAY
-    devices_json: Path = DEFAULT_DEVICES_JSON
-    control_socket: Path = DEFAULT_SOCKET_PATH
-    width: int = DEFAULT_WIDTH
-    height: int = DEFAULT_HEIGHT
-    vnc_port: int = DEFAULT_VNC_PORT
-    novnc_port: int = DEFAULT_NOVNC_PORT
-    operation_timeout: float = DEFAULT_OPERATION_TIMEOUT
-    event_timeout: float = DEFAULT_EVENT_TIMEOUT
-    ready_timeout: float = DEFAULT_READY_TIMEOUT
-
-
-@dataclass(frozen=True)
-class StepSpec:
-    """门禁步骤规格。
-
-    Attributes:
-        name: 步骤名。
-        runner: 异步执行函数（成功返回摘要，失败抛 ``StepFailure``）。
-    """
-
-    name: str
-    runner: Callable[[GateContext], Awaitable[str]]
 
 
 def _display_env(display: str) -> dict[str, str]:
@@ -551,26 +334,91 @@ async def http_status(host: str, port: int, path: str, *, timeout: float) -> int
     return int(match.group(1))
 
 
+def _xev_connected(pid: int) -> bool:
+    """判断 ``xev`` 是否已连上 X 服务器（或已退出）。
+
+    注入早于 ``xev`` 完成 SelectInput 时事件会全部丢失；``xev -root`` 不
+    创建窗口，故 ``xlsclients`` 看不到它。连接 X 服务器后进程会持有一个
+    unix socket 文件描述符，据此判定客户端已就绪；进程退出（fd 表为空或
+    不可读）同样视为可继续——后续读取路径会给出真实失败原因。
+
+    Args:
+        pid: ``xev`` 进程号。
+
+    Returns:
+        True 表示可以注入。
+    """
+    fd_dir = Path(f"/proc/{pid}/fd")
+    try:
+        entries = list(fd_dir.iterdir())
+    except OSError:
+        return True
+    if not entries:
+        return True
+    for entry in entries:
+        try:
+            if os.readlink(entry).startswith("socket:"):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+async def _wait_for_xev_connected(pid: int, *, timeout: float) -> None:
+    """在截止内等待 ``xev`` 连上 X 服务器。
+
+    Args:
+        pid: ``xev`` 进程号。
+        timeout: 截止秒数。
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _xev_connected(pid):
+            return
+        await asyncio.sleep(_READY_POLL_SECONDS)
+
+
+def _roundtrip_complete(counts: XevCounts) -> bool:
+    """判断注入的回环事件是否全部采集到。
+
+    Args:
+        counts: 已解析的事件计数。
+
+    Returns:
+        True 表示五个断言面均 ≥1。
+    """
+    return (
+        counts.key_press >= 1
+        and counts.key_release >= 1
+        and counts.button_press >= 1
+        and counts.button_release >= 1
+        and counts.motion >= 1
+    )
+
+
 async def _collect_xev(
     *,
     ctx: GateContext,
     client: UinputControlClient,
-) -> tuple[XevCounts, int]:
-    """启动 ``xev`` 并注入事件，直到观察到完整回环或超时。
+) -> XevCounts:
+    """启动 ``xev``、单轮注入事件并按截止解析输出。
 
     Args:
         ctx: 门禁参数。
         client: 控制面客户端。
 
     Returns:
-        事件计数与注入轮次。
+        事件计数。
 
     Raises:
-        StepFailure: ``xev`` 无法启动 / 注入失败 / 超时未观察到事件。
+        StepFailure: ``xev`` 无法启动 / 注入失败 / 截止内事件不完整。
     """
     env = _display_env(ctx.display)
     try:
+        # stdbuf -oL：xev 默认全缓冲，事件成行后必须立即可读。
         process = await asyncio.create_subprocess_exec(
+            "stdbuf",
+            "-oL",
             "xev",
             "-root",
             "-display",
@@ -586,21 +434,18 @@ async def _collect_xev(
     reader = process.stdout
     buffer: list[str] = []
     deadline = time.monotonic() + ctx.event_timeout
-    attempts = 0
     try:
+        await _wait_for_xev_connected(process.pid, timeout=ctx.event_timeout)
+        outcomes = [
+            await client.emit_key(KEY_A, pressed=True),
+            await client.emit_key(KEY_A, pressed=False),
+            await client.emit_move(ctx.width // 2, ctx.height // 2),
+            await client.emit_click(),
+        ]
+        failed = [outcome for outcome in outcomes if not outcome.ok]
+        if failed:
+            raise StepFailure(f"控制面注入失败：{failed[0].error}")
         while time.monotonic() < deadline:
-            attempts += 1
-            target_x = ctx.width // 2 if attempts % 2 else ctx.width // 4
-            target_y = ctx.height // 2 if attempts % 2 else ctx.height // 4
-            outcomes = [
-                await client.emit_key(KEY_A, pressed=True),
-                await client.emit_key(KEY_A, pressed=False),
-                await client.emit_move(target_x, target_y),
-                await client.emit_click(),
-            ]
-            failed = [outcome for outcome in outcomes if not outcome.ok]
-            if failed:
-                raise StepFailure(f"控制面注入失败：{failed[0].error}")
             try:
                 line = await asyncio.wait_for(
                     reader.readline(),
@@ -612,17 +457,14 @@ async def _collect_xev(
                 break
             buffer.append(line.decode("utf-8", errors="replace"))
             counts = parse_xev_output("".join(buffer))
-            if (
-                counts.key_press >= 1
-                and counts.key_release >= 1
-                and counts.button_press >= 1
-            ):
-                return counts, attempts
+            if _roundtrip_complete(counts):
+                return counts
         counts = parse_xev_output("".join(buffer))
         raise StepFailure(
             "事件回环不完整："
             f"KeyPress={counts.key_press} KeyRelease={counts.key_release} "
-            f"ButtonPress={counts.button_press}"
+            f"ButtonPress={counts.button_press} ButtonRelease={counts.button_release} "
+            f"Motion={counts.motion}"
         )
     finally:
         if process.returncode is None:
@@ -746,10 +588,11 @@ async def step_event_roundtrip(ctx: GateContext) -> str:
         StepFailure: 事件回环失败。
     """
     client = UinputControlClient(ctx.control_socket, timeout=ctx.operation_timeout)
-    counts, attempts = await _collect_xev(ctx=ctx, client=client)
+    counts = await _collect_xev(ctx=ctx, client=client)
     return (
         f"KeyPress={counts.key_press} KeyRelease={counts.key_release} "
-        f"ButtonPress={counts.button_press} Motion={counts.motion}（{attempts} 轮注入）"
+        f"ButtonPress={counts.button_press} ButtonRelease={counts.button_release} "
+        f"Motion={counts.motion}（单轮注入）"
     )
 
 
@@ -930,7 +773,7 @@ def _elapsed_ms(started: float) -> int:
     return max(int((time.perf_counter() - started) * 1000), 0)
 
 
-def collect_environment() -> tuple[str, str, str | None]:
+async def collect_environment() -> tuple[str, str, str | None]:
     """收集主机名 / 内核 / Docker 版本（不可得则 None）。
 
     Returns:
@@ -939,18 +782,12 @@ def collect_environment() -> tuple[str, str, str | None]:
     docker: str | None = None
     if shutil.which("docker") is not None:
         try:
-            completed = subprocess.run(
-                ["docker", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=2.0,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
+            output = await run_command(["docker", "--version"], timeout=2.0)
+        except StepFailure:
             docker = None
         else:
-            if completed.returncode == 0:
-                docker = completed.stdout.strip() or None
+            if output.returncode == 0:
+                docker = output.stdout_text.strip() or None
     return socket.gethostname(), platform.release(), docker
 
 
@@ -960,7 +797,7 @@ def build_report(
     hostname: str,
     kernel: str,
     docker: str | None,
-    started_at_utc: str,
+    started_at_ms: int,
     duration_perf_counter_ms: int,
 ) -> GateReport:
     """汇总步骤记录为门禁报告。
@@ -970,7 +807,7 @@ def build_report(
         hostname: 主机名。
         kernel: 内核版本。
         docker: Docker 版本。
-        started_at_utc: 启动时刻。
+        started_at_ms: 启动时刻（Unix Epoch 毫秒）。
         duration_perf_counter_ms: 总耗时毫秒。
 
     Returns:
@@ -987,7 +824,7 @@ def build_report(
         hostname=hostname,
         kernel=kernel,
         docker=docker,
-        started_at_utc=started_at_utc,
+        started_at_ms=started_at_ms,
         duration_perf_counter_ms=duration_perf_counter_ms,
     )
 
@@ -1001,16 +838,16 @@ async def run_gate(ctx: GateContext) -> GateReport:
     Returns:
         门禁报告。
     """
-    started_at = datetime.now(UTC).isoformat()
+    started_at_ms = time.time_ns() // 1_000_000
     started = time.perf_counter()
     records = await run_steps(build_steps(), ctx)
-    hostname, kernel, docker = collect_environment()
+    hostname, kernel, docker = await collect_environment()
     return build_report(
         records,
         hostname=hostname,
         kernel=kernel,
         docker=docker,
-        started_at_utc=started_at,
+        started_at_ms=started_at_ms,
         duration_perf_counter_ms=_elapsed_ms(started),
     )
 

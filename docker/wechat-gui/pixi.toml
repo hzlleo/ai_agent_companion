@@ -23,7 +23,7 @@
 #   cd docker/wechat-gui && pixi run coverage-gates # 按模块覆盖率门禁（≥80 enforce）
 #   cd docker/wechat-gui && pixi run lint           # ruff 静态检查
 #   cd docker/wechat-gui && pixi run typecheck      # mypy 严格模式
-#   cd docker/wechat-gui && pixi run poc-stack      # 宿主构建镜像并跑容器内 PoC 门
+#   cd docker/wechat-gui && pixi run poc-stack      # 宿主构建镜像并跑容器内 PoC 门（宿主有图形会话时须 WECHAT_GUI_POC_ALLOW_HOST_SESSION=1）
 #
 # 任务名契约：tests-unit / lint / typecheck / coverage-gates 为跨树契约名
 # （与 backend / tool-sandbox / browser-sidecar 同名同义）——严禁更名。
@@ -87,7 +87,7 @@ format = { cmd = "ruff format src/", description = "ruff 格式化" }
 typecheck = { cmd = "mypy src/wechat_gui_poc", description = "mypy 静态类型检查（严格模式）" }
 # 宿主 PoC 门：构建镜像 + 特权容器内跑 poc_gate + 证据落 docs/evidence/poc/。
 # 非 CI 任务（需要 Docker 与 /dev/uinput——CI 不构建镜像，仅跑单测/静态检查）。
-poc-stack = { cmd = "./poc/run_stack_poc.sh", description = "构建镜像并在本机特权容器内跑 Xorg+uinput 栈 PoC 门，证据落 docs/evidence/poc/" }
+poc-stack = { cmd = "./poc/run_stack_poc.sh", description = "构建镜像并在本机容器内跑 Xorg+uinput 栈 PoC 门（WECHAT_GUI_POC_RUN_MODE=privileged/unprivileged；检测到宿主图形会话时须 WECHAT_GUI_POC_ALLOW_HOST_SESSION=1），证据落 docs/evidence/poc/" }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Feature: dev — 开发/测试工具（在 runtime 基础上叠加）

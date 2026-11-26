@@ -23,8 +23,9 @@ import stat
 import struct
 import time
 from dataclasses import dataclass, field
-from enum import StrEnum
 from pathlib import Path
+
+from .wire_models import DevicePairInfo, VirtualDeviceInfo
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ioctl 编号（Linux uinput.h；_IOW/_IO 手工计算，避免依赖第三方绑定）
@@ -51,8 +52,6 @@ def _ioc(direction: int, nr: int, size: int) -> int:
 UI_SET_EVBIT = _ioc(1, 100, 4)
 #: 注册支持的按键码（``int``）。
 UI_SET_KEYBIT = _ioc(1, 101, 4)
-#: 注册支持的相对轴（``int``）。
-UI_SET_RELBIT = _ioc(1, 102, 4)
 #: 注册支持的绝对轴（``int``）。
 UI_SET_ABSBIT = _ioc(1, 103, 4)
 #: 注册设备属性位（``int``）。
@@ -85,14 +84,10 @@ INPUT_PROP_POINTER = 0x00
 
 #: 转义键。
 KEY_ESC = 1
-#: 数字 1。
-KEY_1 = 2
 #: 退格键。
 KEY_BACKSPACE = 14
 #: 制表键。
 KEY_TAB = 15
-#: 字母 Q。
-KEY_Q = 16
 #: 字母 A。
 KEY_A = 30
 #: 回车键。
@@ -171,45 +166,6 @@ _DISCOVERY_POLL_SECONDS = 0.02
 
 class UinputError(RuntimeError):
     """uinput 创建 / 注入 / 销毁失败。"""
-
-
-class DeviceKind(StrEnum):
-    """虚拟设备类别。"""
-
-    KEYBOARD = "keyboard"
-    POINTER = "pointer"
-
-
-@dataclass(frozen=True)
-class VirtualDeviceInfo:
-    """单个虚拟设备的身份与节点信息。
-
-    Attributes:
-        kind: 设备类别。
-        name: 内核设备名（sysfs ``name`` 字段）。
-        event_path: 容器内事件设备节点路径。
-    """
-
-    kind: DeviceKind
-    name: str
-    event_path: str
-
-
-@dataclass(frozen=True)
-class DevicePairInfo:
-    """一对虚拟输入设备的完整信息。
-
-    Attributes:
-        keyboard: 虚拟键盘。
-        pointer: 虚拟指针。
-        width: 绝对指针的 X 轴最大值所对应的屏幕宽度（像素）。
-        height: 绝对指针的 Y 轴最大值所对应的屏幕高度（像素）。
-    """
-
-    keyboard: VirtualDeviceInfo
-    pointer: VirtualDeviceInfo
-    width: int
-    height: int
 
 
 @dataclass
@@ -545,12 +501,10 @@ def create(
             sysfs_root, POINTER_DEVICE_NAME, timeout_seconds=discovery_timeout_seconds
         )
         keyboard = VirtualDeviceInfo(
-            kind=DeviceKind.KEYBOARD,
             name=KEYBOARD_DEVICE_NAME,
             event_path=_ensure_event_node(sysfs_root, event_root, keyboard_entry),
         )
         pointer = VirtualDeviceInfo(
-            kind=DeviceKind.POINTER,
             name=POINTER_DEVICE_NAME,
             event_path=_ensure_event_node(sysfs_root, event_root, pointer_entry),
         )

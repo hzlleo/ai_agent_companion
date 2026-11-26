@@ -12,12 +12,21 @@ import json
 import os
 import stat
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
-from wechat_gui_poc import poc_gate, uinputd
+from wechat_gui_poc import poc_gate
+from wechat_gui_poc.wire_models import (
+    CommandOutput,
+    DeviceArtifacts,
+    GateContext,
+    StepRecord,
+    StepSpec,
+    StepStatus,
+)
 
 XDPYINFO_SAMPLE = """name of display:    :99
 version number:    11.0
@@ -41,24 +50,43 @@ XINPUT_FLOATING_SAMPLE = """⎡ Virtual core pointer                    \tid=2\t
     ↳ wechat-gui virtual keyboard              \tid=6\t[floating slave]
 """
 
-XEV_SAMPLE = """KeyPress event, serial 18, synthetic NO, window 0x547,
+KEY_PRESS_BLOCK = """KeyPress event, serial 18, synthetic NO, window 0x547,
     root 0x547, subw 0x0, time 1, (640,400), root:(640,400),
     keycode 38 (keysym 0x61, a), same_screen YES,
 
-KeyRelease event, serial 18, synthetic NO, window 0x547,
+"""
+
+KEY_RELEASE_BLOCK = """KeyRelease event, serial 18, synthetic NO, window 0x547,
     keycode 38 (keysym 0x61, a), same_screen YES,
 
-MotionNotify event, serial 18, synthetic NO, window 0x547,
+"""
+
+MOTION_BLOCK = """MotionNotify event, serial 18, synthetic NO, window 0x547,
     root 0x547, subw 0x0, time 1, (640,400), root:(640,400),
 
-ButtonPress event, serial 18, synthetic NO, window 0x547,
+"""
+
+BUTTON_PRESS_BLOCK = """ButtonPress event, serial 18, synthetic NO, window 0x547,
     root 0x547, subw 0x0, time 1, (640,400), root:(640,400),
     state 0x0, button 1, same_screen YES,
 
-ButtonRelease event, serial 18, synthetic NO, window 0x547,
+"""
+
+BUTTON_RELEASE_BLOCK = """ButtonRelease event, serial 18, synthetic NO, window 0x547,
     root 0x547, subw 0x0, time 1, (640,400), root:(640,400),
     state 0x100, button 1, same_screen YES,
+
 """
+
+XEV_SAMPLE = (
+    KEY_PRESS_BLOCK + KEY_RELEASE_BLOCK + MOTION_BLOCK + BUTTON_PRESS_BLOCK + BUTTON_RELEASE_BLOCK
+)
+XEV_WITHOUT_MOTION = (
+    KEY_PRESS_BLOCK + KEY_RELEASE_BLOCK + BUTTON_PRESS_BLOCK + BUTTON_RELEASE_BLOCK
+)
+XEV_WITHOUT_BUTTON_RELEASE = (
+    KEY_PRESS_BLOCK + KEY_RELEASE_BLOCK + MOTION_BLOCK + BUTTON_PRESS_BLOCK
+)
 
 
 def _write_script(path: Path, body: str) -> None:
@@ -139,7 +167,7 @@ def _write_artifacts(path: Path) -> None:
     Args:
         path: JSON 路径。
     """
-    pair = uinputd.DeviceArtifacts(
+    artifacts = DeviceArtifacts(
         keyboard_name="wechat-gui virtual keyboard",
         keyboard_event=str(path.parent / "event5"),
         pointer_name="wechat-gui virtual pointer",
@@ -149,7 +177,7 @@ def _write_artifacts(path: Path) -> None:
     )
     (path.parent / "event5").write_text("", encoding="utf-8")
     (path.parent / "event9").write_text("", encoding="utf-8")
-    path.write_text(json.dumps(uinputd.artifacts_to_wire(pair)), encoding="utf-8")
+    path.write_text(json.dumps(artifacts.to_wire()), encoding="utf-8")
 
 
 async def _ok_control_server(socket_path: Path) -> asyncio.AbstractServer:
@@ -171,6 +199,35 @@ async def _ok_control_server(socket_path: Path) -> asyncio.AbstractServer:
             command = ""
         writer.write(
             (json.dumps({"ok": True, "command": command}) + "\n").encode("utf-8")
+        )
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    return await asyncio.start_unix_server(handle, path=str(socket_path))
+
+
+async def _failing_control_server(socket_path: Path) -> asyncio.AbstractServer:
+    """启动恒回 ``ok=false`` 的控制面替身服务（模拟注入失败）。
+
+    Args:
+        socket_path: socket 路径。
+
+    Returns:
+        已启动的服务对象。
+    """
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        line = await reader.readline()
+        try:
+            payload = json.loads(line.decode("utf-8"))
+            command = payload.get("command", "")
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            command = ""
+        writer.write(
+            (
+                json.dumps({"ok": False, "command": command, "error": "注入失败"}) + "\n"
+            ).encode("utf-8")
         )
         await writer.drain()
         writer.close()
@@ -336,56 +393,57 @@ async def test_run_steps_fail_fast_and_skip() -> None:
     """首个失败后后续步骤标记跳过，耗时字段存在。"""
     calls: list[str] = []
 
-    async def ok(_ctx: poc_gate.GateContext) -> str:
+    async def ok(_ctx: GateContext) -> str:
         calls.append("ok")
         return "ok"
 
-    async def bad(_ctx: poc_gate.GateContext) -> str:
+    async def bad(_ctx: GateContext) -> str:
         calls.append("bad")
         raise poc_gate.StepFailure("坏步骤")
 
-    async def boom(_ctx: poc_gate.GateContext) -> str:
+    async def boom(_ctx: GateContext) -> str:
         calls.append("boom")
         raise RuntimeError("炸了")
 
     records = await poc_gate.run_steps(
         (
-            poc_gate.StepSpec("one", ok),
-            poc_gate.StepSpec("two", bad),
-            poc_gate.StepSpec("three", ok),
+            StepSpec("one", ok),
+            StepSpec("two", bad),
+            StepSpec("three", ok),
         ),
-        poc_gate.GateContext(),
+        GateContext(),
     )
     assert [record.status for record in records] == [
-        poc_gate.StepStatus.PASSED,
-        poc_gate.StepStatus.FAILED,
-        poc_gate.StepStatus.SKIPPED,
+        StepStatus.PASSED,
+        StepStatus.FAILED,
+        StepStatus.SKIPPED,
     ]
     assert calls == ["ok", "bad"]
     assert records[1].detail == "坏步骤"
     assert all(record.duration_perf_counter_ms >= 0 for record in records)
 
-    records = await poc_gate.run_steps((poc_gate.StepSpec("boom", boom),), poc_gate.GateContext())
-    assert records[0].status is poc_gate.StepStatus.FAILED
+    records = await poc_gate.run_steps((StepSpec("boom", boom),), GateContext())
+    assert records[0].status is StepStatus.FAILED
     assert "未预期异常" in records[0].detail
 
 
 async def test_build_report_verdict_and_wire() -> None:
     """报告在任一步未通过时为 FAIL，并可序列化为单行载体。"""
-    passed = poc_gate.StepRecord("x_up", poc_gate.StepStatus.PASSED, 1, "ok")
-    skipped = poc_gate.StepRecord("uinput_create", poc_gate.StepStatus.SKIPPED, 0, "跳过")
+    passed = StepRecord("x_up", StepStatus.PASSED, 1, "ok")
+    skipped = StepRecord("uinput_create", StepStatus.SKIPPED, 0, "跳过")
     report = poc_gate.build_report(
         [passed],
         hostname="h",
         kernel="k",
         docker=None,
-        started_at_utc="t",
+        started_at_ms=1700000000000,
         duration_perf_counter_ms=5,
     )
     assert report.verdict == "PASS"
     wire = report.to_wire()
     assert wire["hostname"] == "h"
     assert wire["docker"] is None
+    assert wire["started_at_ms"] == 1700000000000
     assert wire["steps"] == [
         {
             "name": "x_up",
@@ -400,7 +458,7 @@ async def test_build_report_verdict_and_wire() -> None:
         hostname="h",
         kernel="k",
         docker="Docker version",
-        started_at_utc="t",
+        started_at_ms=1700000000000,
         duration_perf_counter_ms=5,
     )
     assert failing.verdict == "FAIL"
@@ -410,7 +468,7 @@ async def test_build_report_verdict_and_wire() -> None:
         hostname="h",
         kernel="k",
         docker=None,
-        started_at_utc="t",
+        started_at_ms=0,
         duration_perf_counter_ms=0,
     )
     assert empty.verdict == "FAIL"
@@ -421,7 +479,7 @@ async def test_step_x_up_and_depth_failure(
 ) -> None:
     """x_up 通过正常样本；色深不符时失败。"""
     bin_dir = _install_fake_commands(tmp_path, monkeypatch)
-    ctx = poc_gate.GateContext(devices_json=tmp_path / "devices.json")
+    ctx = GateContext(devices_json=tmp_path / "devices.json")
     assert "1280x800x24" in await poc_gate.step_x_up(ctx)
 
     _write_script(
@@ -442,7 +500,7 @@ async def test_step_x_up_xdpyinfo_failure(
     bin_dir = _install_fake_commands(tmp_path, monkeypatch)
     _write_script(bin_dir / "xdpyinfo", "#!/bin/sh\necho boom >&2\nexit 2\n")
     with pytest.raises(poc_gate.StepFailure, match="xdpyinfo 命令失败"):
-        await poc_gate.step_x_up(poc_gate.GateContext())
+        await poc_gate.step_x_up(GateContext())
 
 
 async def test_step_uinput_create(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -453,7 +511,7 @@ async def test_step_uinput_create(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     socket_path = tmp_path / "control.sock"
     server = await _ok_control_server(socket_path)
     try:
-        ctx = poc_gate.GateContext(devices_json=devices_json, control_socket=socket_path)
+        ctx = GateContext(devices_json=devices_json, control_socket=socket_path)
         detail = await poc_gate.step_uinput_create(ctx)
     finally:
         await _close_server(server)
@@ -470,7 +528,7 @@ async def test_step_uinput_create_missing_node(tmp_path: Path) -> None:
     try:
         with pytest.raises(poc_gate.StepFailure, match="事件节点不存在"):
             await poc_gate.step_uinput_create(
-                poc_gate.GateContext(devices_json=devices_json, control_socket=socket_path)
+                GateContext(devices_json=devices_json, control_socket=socket_path)
             )
     finally:
         await _close_server(server)
@@ -482,7 +540,7 @@ async def test_step_uinput_create_control_failure(tmp_path: Path) -> None:
     _write_artifacts(devices_json)
     with pytest.raises(poc_gate.StepFailure, match="无法连接控制面"):
         await poc_gate.step_uinput_create(
-            poc_gate.GateContext(
+            GateContext(
                 devices_json=devices_json,
                 control_socket=tmp_path / "missing.sock",
                 operation_timeout=0.2,
@@ -497,7 +555,7 @@ async def test_step_xinput_visible_and_floating_failure(
     bin_dir = _install_fake_commands(tmp_path, monkeypatch)
     devices_json = tmp_path / "devices.json"
     _write_artifacts(devices_json)
-    ctx = poc_gate.GateContext(devices_json=devices_json)
+    ctx = GateContext(devices_json=devices_json)
     assert "attached" in await poc_gate.step_xinput_visible(ctx)
 
     _write_script(
@@ -508,19 +566,41 @@ async def test_step_xinput_visible_and_floating_failure(
         await poc_gate.step_xinput_visible(ctx)
 
 
-async def test_step_event_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """xev 输出含完整回环时通过。"""
-    _install_fake_commands(tmp_path, monkeypatch)
+async def test_step_event_roundtrip_uses_line_buffered_single_round(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """xev 经 stdbuf 行缓冲启动，单轮注入后完整回环通过。"""
+    bin_dir = _install_fake_commands(tmp_path, monkeypatch)
+    stdbuf_log = tmp_path / "stdbuf.log"
+    _write_script(
+        bin_dir / "stdbuf",
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_STDBUF_LOG"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o|-e) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+exec "$@"
+""",
+    )
+    monkeypatch.setenv("FAKE_STDBUF_LOG", str(stdbuf_log))
     socket_path = tmp_path / "control.sock"
     server = await _ok_control_server(socket_path)
     try:
         detail = await poc_gate.step_event_roundtrip(
-            poc_gate.GateContext(control_socket=socket_path, event_timeout=2.0)
+            GateContext(control_socket=socket_path, event_timeout=2.0)
         )
     finally:
         await _close_server(server)
     assert "KeyPress=1" in detail
     assert "ButtonPress=1" in detail
+    assert "ButtonRelease=1" in detail
+    assert "Motion=1" in detail
+    assert "单轮注入" in detail
+    assert stdbuf_log.read_text(encoding="utf-8").split()[0] == "-oL"
 
 
 async def test_step_event_roundtrip_timeout(
@@ -534,7 +614,51 @@ async def test_step_event_roundtrip_timeout(
     try:
         with pytest.raises(poc_gate.StepFailure, match="事件回环不完整"):
             await poc_gate.step_event_roundtrip(
-                poc_gate.GateContext(control_socket=socket_path, event_timeout=0.3)
+                GateContext(control_socket=socket_path, event_timeout=0.3)
+            )
+    finally:
+        await _close_server(server)
+
+
+@pytest.mark.parametrize(
+    ("sample", "missing"),
+    [
+        (XEV_WITHOUT_MOTION, "Motion=0"),
+        (XEV_WITHOUT_BUTTON_RELEASE, "ButtonRelease=0"),
+    ],
+)
+async def test_step_event_roundtrip_rejects_incomplete_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sample: str,
+    missing: str,
+) -> None:
+    """缺少指针移动或左键抬起时失败（断言面覆盖 Motion / ButtonRelease）。"""
+    bin_dir = _install_fake_commands(tmp_path, monkeypatch)
+    _write_script(bin_dir / "xev", "#!/bin/sh\ncat <<'EOF'\n" + sample + "EOF\n")
+    socket_path = tmp_path / "control.sock"
+    server = await _ok_control_server(socket_path)
+    try:
+        with pytest.raises(poc_gate.StepFailure, match="事件回环不完整") as excinfo:
+            await poc_gate.step_event_roundtrip(
+                GateContext(control_socket=socket_path, event_timeout=0.3)
+            )
+    finally:
+        await _close_server(server)
+    assert missing in str(excinfo.value)
+
+
+async def test_step_event_roundtrip_injection_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """控制面注入失败时立即失败并携带原因。"""
+    _install_fake_commands(tmp_path, monkeypatch)
+    socket_path = tmp_path / "control.sock"
+    server = await _failing_control_server(socket_path)
+    try:
+        with pytest.raises(poc_gate.StepFailure, match="控制面注入失败：注入失败"):
+            await poc_gate.step_event_roundtrip(
+                GateContext(control_socket=socket_path, event_timeout=1.0)
             )
     finally:
         await _close_server(server)
@@ -544,7 +668,7 @@ async def test_step_screenshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     """截图校验成功路径。"""
     _install_fake_commands(tmp_path, monkeypatch)
     monkeypatch.setenv("FAKE_PNG", str(_make_png(tmp_path)))
-    detail = await poc_gate.step_screenshot(poc_gate.GateContext())
+    detail = await poc_gate.step_screenshot(GateContext())
     assert "1280x800" in detail
 
 
@@ -556,15 +680,42 @@ async def test_step_screenshot_invalid(tmp_path: Path, monkeypatch: pytest.Monke
     black.save(path, format="PNG")
     monkeypatch.setenv("FAKE_PNG", str(path))
     with pytest.raises(poc_gate.StepFailure, match="全黑"):
-        await poc_gate.step_screenshot(poc_gate.GateContext())
+        await poc_gate.step_screenshot(GateContext())
 
 
 async def test_step_clipboard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """剪贴板写入后读回一致。"""
     _install_fake_commands(tmp_path, monkeypatch)
     monkeypatch.setenv("FAKE_CLIP_FILE", str(tmp_path / "clip"))
-    detail = await poc_gate.step_clipboard(poc_gate.GateContext(ready_timeout=1.0))
+    detail = await poc_gate.step_clipboard(GateContext(ready_timeout=1.0))
     assert "回读一致" in detail
+
+
+async def test_step_clipboard_mismatch_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """读回值与写入值不同即失败（Falsifiability：回读真的被比对）。"""
+    bin_dir = _install_fake_commands(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_CLIP_FILE", str(tmp_path / "clip"))
+    _write_script(
+        bin_dir / "xclip",
+        """#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = "-in" ]; then
+    cat > "$FAKE_CLIP_FILE"
+    exit 0
+  fi
+  if [ "$arg" = "-o" ]; then
+    printf 'stale-clipboard-value'
+    exit 0
+  fi
+done
+exit 1
+""",
+    )
+    with pytest.raises(poc_gate.StepFailure, match="剪贴板回读不一致") as excinfo:
+        await poc_gate.step_clipboard(GateContext(ready_timeout=0.05))
+    assert "stale-clipboard-value" in str(excinfo.value)
 
 
 async def test_step_vnc_up(tmp_path: Path) -> None:
@@ -585,7 +736,7 @@ async def test_step_vnc_up(tmp_path: Path) -> None:
     novnc_port = http_server.sockets[0].getsockname()[1]
     try:
         detail = await poc_gate.step_vnc_up(
-            poc_gate.GateContext(
+            GateContext(
                 vnc_port=vnc_port,
                 novnc_port=novnc_port,
                 ready_timeout=1.0,
@@ -598,12 +749,45 @@ async def test_step_vnc_up(tmp_path: Path) -> None:
     assert "noVNC" in detail
 
 
+async def test_step_vnc_up_rejects_non_200() -> None:
+    """noVNC 返回非 200 时失败。"""
+    tcp_server = await asyncio.start_server(lambda _r, w: w.close(), "127.0.0.1", 0)
+    assert tcp_server.sockets is not None
+    vnc_port = tcp_server.sockets[0].getsockname()[1]
+
+    async def http_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.readline()
+        writer.write(
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    http_server = await asyncio.start_server(http_handler, "127.0.0.1", 0)
+    assert http_server.sockets is not None
+    novnc_port = http_server.sockets[0].getsockname()[1]
+    try:
+        with pytest.raises(poc_gate.StepFailure, match="返回 503"):
+            await poc_gate.step_vnc_up(
+                GateContext(
+                    vnc_port=vnc_port,
+                    novnc_port=novnc_port,
+                    ready_timeout=1.0,
+                    operation_timeout=1.0,
+                )
+            )
+    finally:
+        await _close_server(tcp_server)
+        await _close_server(http_server)
+
+
 async def test_collect_environment_without_docker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Docker 不可得时返回 None。"""
     monkeypatch.setattr(poc_gate.shutil, "which", lambda _name: None)
-    hostname, kernel, docker = poc_gate.collect_environment()
+    hostname, kernel, docker = await poc_gate.collect_environment()
     assert hostname
     assert kernel
     assert docker is None
@@ -612,47 +796,72 @@ async def test_collect_environment_without_docker(
 async def test_collect_environment_with_docker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Docker 可得时收集版本字符串。"""
+    """Docker 可得时经统一命令执行面收集版本字符串。"""
+    monkeypatch.setattr(poc_gate.shutil, "which", lambda _name: "/usr/bin/docker")
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_run(argv: Sequence[str], *, timeout: float) -> CommandOutput:
+        calls.append(tuple(argv))
+        assert timeout == 2.0
+        return CommandOutput(
+            returncode=0,
+            stdout=b"Docker version 29.9.2, build deadbeef\n",
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(poc_gate, "run_command", fake_run)
+    _hostname, _kernel, docker = await poc_gate.collect_environment()
+    assert docker == "Docker version 29.9.2, build deadbeef"
+    assert calls == [("docker", "--version")]
+
+
+async def test_collect_environment_swallows_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Docker 版本探测超时按不可得处理。"""
     monkeypatch.setattr(poc_gate.shutil, "which", lambda _name: "/usr/bin/docker")
 
-    class Completed:
-        returncode = 0
-        stdout = "Docker version 29.9.2, build deadbeef\n"
+    async def fake_run(argv: Sequence[str], *, timeout: float) -> CommandOutput:
+        del argv, timeout
+        raise poc_gate.StepFailure("命令超时（2.0s）：docker")
 
-    monkeypatch.setattr(poc_gate.subprocess, "run", lambda *args, **kwargs: Completed())
-    _hostname, _kernel, docker = poc_gate.collect_environment()
-    assert docker == "Docker version 29.9.2, build deadbeef"
+    monkeypatch.setattr(poc_gate, "run_command", fake_run)
+    _hostname, _kernel, docker = await poc_gate.collect_environment()
+    assert docker is None
 
 
 async def test_run_gate_composes_steps(monkeypatch: pytest.MonkeyPatch) -> None:
-    """run_gate 按步骤表执行并汇总环境与耗时。"""
+    """run_gate 按步骤表执行并汇总环境与耗时（时间戳为 Epoch 毫秒）。"""
 
-    async def ok(_ctx: poc_gate.GateContext) -> str:
+    async def ok(_ctx: GateContext) -> str:
         return "ok"
 
-    monkeypatch.setattr(poc_gate, "build_steps", lambda: (poc_gate.StepSpec("one", ok),))
-    monkeypatch.setattr(
-        poc_gate, "collect_environment", lambda: ("host", "kernel", None)
-    )
-    report = await poc_gate.run_gate(poc_gate.GateContext())
+    async def fake_environment() -> tuple[str, str, str | None]:
+        return "host", "kernel", None
+
+    monkeypatch.setattr(poc_gate, "build_steps", lambda: (StepSpec("one", ok),))
+    monkeypatch.setattr(poc_gate, "collect_environment", fake_environment)
+    report = await poc_gate.run_gate(GateContext())
     assert report.verdict == "PASS"
     assert report.hostname == "host"
     assert report.docker is None
+    assert report.started_at_ms > 1_600_000_000_000
+    assert isinstance(report.to_wire()["steps"], list)
 
 
 async def test_main_writes_single_line_json(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """CLI 输出单行 JSON 并落盘，PASS 退出 0。"""
-    record = poc_gate.StepRecord("x_up", poc_gate.StepStatus.PASSED, 1, "ok")
+    record = StepRecord("x_up", StepStatus.PASSED, 1, "ok")
 
-    async def fake_run_gate(_ctx: poc_gate.GateContext) -> poc_gate.GateReport:
+    async def fake_run_gate(_ctx: GateContext) -> poc_gate.GateReport:
         return poc_gate.build_report(
             [record],
             hostname="host",
             kernel="kernel",
             docker=None,
-            started_at_utc="t",
+            started_at_ms=1700000000000,
             duration_perf_counter_ms=1,
         )
 
@@ -665,6 +874,7 @@ async def test_main_writes_single_line_json(
     assert "\n" not in line
     payload = json.loads(line)
     assert payload["verdict"] == "PASS"
+    assert payload["started_at_ms"] == 1700000000000
     assert json.loads(out.read_text(encoding="utf-8"))["verdict"] == "PASS"
 
 
@@ -672,15 +882,15 @@ async def test_main_fail_returns_one(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """FAIL 退出 1。"""
-    record = poc_gate.StepRecord("x_up", poc_gate.StepStatus.FAILED, 1, "bad")
+    record = StepRecord("x_up", StepStatus.FAILED, 1, "bad")
 
-    async def fake_run_gate(_ctx: poc_gate.GateContext) -> poc_gate.GateReport:
+    async def fake_run_gate(_ctx: GateContext) -> poc_gate.GateReport:
         return poc_gate.build_report(
             [record],
             hostname="host",
             kernel="kernel",
             docker=None,
-            started_at_utc="t",
+            started_at_ms=1700000000000,
             duration_perf_counter_ms=1,
         )
 

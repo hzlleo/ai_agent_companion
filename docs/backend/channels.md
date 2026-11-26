@@ -1234,7 +1234,7 @@ settings = build_isolated_settings(
 | 层 | 职责 | 位置 |
 |---|---|---|
 | uinput 设备层 | 虚拟键盘 + 绝对指针的创建 / 持有 / 事件注入（纯 stdlib ioctl） | `docker/wechat-gui/src/wechat_gui_poc/uinput_devices.py` |
-| 控制面 | 设备生命周期、Xorg 配置生成、Unix socket JSON 行协议（ping/key/move/click） | `uinputd.py` |
+| 控制面 | 设备生命周期、Xorg 配置生成、Unix socket JSON 行协议（ping/key/move/click/shutdown） | `uinputd.py` + `wire_models.py` |
 | 显示层 | Xorg dummy 1280x800x24 + evdev 显式输入段（无 udev 依赖） | `xorg.py` + `entrypoint.sh` |
 | 远控层 | x11vnc（密码文件）+ websockify/noVNC（端口仅宿主回环） | `entrypoint.sh` + compose |
 | 门脚本 | 七步栈验证与单行 JSON 证据 | `poc_gate.py` |
@@ -1253,16 +1253,42 @@ settings = build_isolated_settings(
 ### PoC 门（通过判据）
 
 门脚本在容器内按序验证：X 在线且 1280x800x24 → 两虚拟设备创建且事件节点
-可打开 → `xinput` 可见且非漂浮 → `xev` 采集到注入的 KeyPress /
-KeyRelease / ButtonPress（各 ≥1）与指针移动 → 截图 PNG 尺寸正确且非全黑
-/ 非全同色 → 剪贴板写入读回一致 → 5900 可连接且 noVNC `/vnc.html` 200。
-任一步失败即 FAIL 并跳过后续；退出码 0/1/2 分别对应 PASS / FAIL / 用法
-错误。
+可打开 → `xinput` 可见且非漂浮 → `stdbuf -oL xev -root` 行缓冲采集到单轮
+注入的 KeyPress / KeyRelease / ButtonPress / ButtonRelease / Motion（各
+≥1） → 截图 PNG 尺寸正确且非全黑 / 非全同色 → 剪贴板写入读回一致 →
+5900 可连接且 noVNC `/vnc.html` 200。任一步失败即 FAIL 并跳过后续；退出码
+0/1/2 分别对应 PASS / FAIL / 用法错误。报告时间戳为 Unix Epoch 毫秒
+（`started_at_ms`），字段表见沙盒树 README「门报告字段」。
 
-本机实测结果：**PASS（7/7）**，证据
-`docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-20261126T025721Z.json`
-（各步耗时与失败修复记录见沙盒树 README「本机实测结果」）。部署机复跑
-与微信客户端 Live 验证随统一阶段执行。
+本机实测结果：**PASS（7/7）**，特权与非特权两种形态各一份证据（见沙盒树
+README「本机实测结果」与 `docs/evidence/poc/`；字段含
+`run_mode` / `build_attempts` / `host_session_guard`）。部署机复跑与微信
+客户端 Live 验证随统一阶段执行。
+
+### 控制面协议与落盘字段（事实）
+
+控制面是容器内 Unix socket 上的单请求单响应 JSON 行（权限 0666，不含
+机密）；模型在 `docker/wechat-gui/src/wechat_gui_poc/wire_models.py`，解码
+与注入在 `uinputd.py`：
+
+```
+{"command":"ping"}                          → {"ok":true,"command":"ping","keyboard":"wechat-gui virtual keyboard","pointer":"wechat-gui virtual pointer","width":1280,"height":800}
+{"command":"key","code":30,"pressed":true}  → {"ok":true,"command":"key"}
+{"command":"move","x":640,"y":400}          → {"ok":true,"command":"move"}
+{"command":"click","button":272}            → {"ok":true,"command":"click"}
+{"command":"shutdown"}                      → {"ok":true,"command":"shutdown"}
+```
+
+注入失败回 `{"ok":false,"command":"key","error":"..."}`（守护不中断）；
+字段非法 / 未知命令回 `ok=false` 且 `command` 为空字符串。
+
+`uinput-devices.json`（uinputd 落盘）：`width` / `height`（integer，绝对
+指针轴上限对应屏幕尺寸）+ `keyboard` / `pointer` 各含 `name`（内核设备名）
+与 `event_path`（容器内事件节点）。门报告字段（`verdict` / `steps[]` /
+`hostname` / `kernel` / `docker` / `started_at_ms` / `duration_perf_counter_ms`
+及宿主运行器追加的 `run_mode` / `build_attempts` / `container_exit_code` /
+`host_session_guard`）逐项说明见沙盒树 README「门报告字段」，
+`docs/evidence/poc/` 下的入库证据即完整样例。
 
 ### 门后的通道设计预告（不在本阶段实现）
 
@@ -1291,8 +1317,18 @@ KeyRelease / ButtonPress（各 ≥1）与指针移动 → 截图 PNG 尺寸正�
 - **单窗口语义**：输入框是单会话 UI；多会话并行收发需要切换串行化。
 - **视觉依赖**：会话身份与消息内容均依赖截图质量；分辨率 / 缩放策略
   在 Live 阶段固化。
-- **安全**：生产不 privileged（`--device /dev/uinput` + MKNOD/CHOWN +
-  no-new-privileges）；VNC 密码走文件；端口仅宿主回环。
+- **安全（生产不 privileged）**：`--device /dev/uinput` + `c 13:* rwm` +
+  MKNOD/CHOWN/SETUID/SETGID/KILL + no-new-privileges；端口仅宿主回环；
+  VNC 密码文件须对运行用户（`wechat`）可读（推荐 `wechat:wechat 0400`，
+  root 持有 0400 时由入口复制后使用）。
+- **输入面是内核全局对象（事实约束）**：uinput 设备不只属于容器——宿主
+  图形会话（或同机其它 X 会话）会接入 `wechat-gui virtual*` 并接收注入。
+  PoC 复跑前须在宿主 `xinput float` 该设备（运行器在有宿主会话时默认
+  拒绝运行，`WECHAT_GUI_POC_ALLOW_HOST_SESSION=1` 放行后自动浮动并把
+  结果写进证据）；生产形态必须在部署机配置宿主 udev 规则（对
+  `wechat-gui virtual*` 置 `LIBINPUT_IGNORE_DEVICE="1"` 或清空
+  `ID_INPUT*`）并实测确认——该缓解未在本门验证，属通道实现开工前置项；
+  无法满足时按 VM 隔离评估。
 
 ## SmsForwarder 短信 / 通知转发通道（SMS_FORWARDER——仅入站）
 

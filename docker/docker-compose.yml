@@ -198,7 +198,13 @@ services:
   #     由 uinputd 按 sysfs dev 号 mknod）与 CHOWN（把节点交给运行用户）；
   #   - 端口仅回环：5900（x11vnc）/ 6080（noVNC）；VNC 密码经文件 secret；
   #   - 入口以 root 启动、Xorg / x11vnc / websockify 降权到 wechat 用户；
-  #   - no-new-privileges + 资源限额（Xorg / VNC 风暴隔离）。
+  #   - no-new-privileges + 资源限额（Xorg / VNC 风暴隔离）；
+  #   - VNC 密码文件必须对运行用户 wechat 可读（推荐 wechat:wechat 0400；
+  #     root 持有 0400 时入口会复制到 /run/wechat-gui/vnc.pass 并改属主，
+  #     复制失败即容器失败）；WECHAT_GUI_VNC_PASSWORD 明文优先于文件。
+  #   - uinput 设备是内核全局对象：宿主图形会话会接入
+  #     wechat-gui virtual* 并接收注入，部署机须配宿主 udev 规则
+  #     （LIBINPUT_IGNORE_DEVICE=1 或清空 ID_INPUT*）并实测确认。
   # PoC 宿主运行器（poc/run_stack_poc.sh）为兼容性使用 --privileged；生产
   # 以本服务形态为准（见 docker/wechat-gui/README.md「安全边界」）。
   wechat-gui:

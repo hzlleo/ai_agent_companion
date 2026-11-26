@@ -111,7 +111,6 @@ async def test_ioctl_request_numbers_are_stable() -> None:
     """ioctl 编号与 Linux uinput.h 布局一致。"""
     assert ud.UI_SET_EVBIT == 0x40045564
     assert ud.UI_SET_KEYBIT == 0x40045565
-    assert ud.UI_SET_RELBIT == 0x40045566
     assert ud.UI_SET_ABSBIT == 0x40045567
     assert ud.UI_SET_PROPBIT == 0x4004556E
     assert ud.UI_DEV_CREATE == 0x5501
