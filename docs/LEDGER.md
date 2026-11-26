@@ -2607,6 +2607,29 @@ uinputd 控制面；`type_text{text}` = `xclip -selection clipboard -in` +
 - 群聊按单会话处理（`is_group_chat=False`）；出站只支持文本；GUI 侧无平台
   消息回执 ID（`message_ids` 恒空）。
 
+**Oracle 深审结论（提交 `128821d`；不通过——无 P0，P1×5 + P2×4；仅记录未修）**
+回归面全绿（tests-all 3529 / coverage 24 组 / mypy 223 / SeekDB 15 / 前端 716+96.15；
+沙盒 141 单测；漂移门 41 项一致；红探针 36 条全 RED；三条指定变异均成立）。
+源码隔离与 P4 比对（strip 后全等、空标题拒绝、skip/fail 强校验）成立。
+
+P1（入站/出站主链可复现逻辑缺陷）：
+1. `wechat_gui_runner.py:315-317`：截图哈希在 `reader.read` 成功**之前**登记，视觉解析瞬时失败后下一轮命中「截图未变化」直接返回——同一画面永久不再解析（复现：首轮 `LLM_CALL_FAILED` 后 `reader.calls=1 / inbound=[]`）。修复：sha 登记移到解析成功之后 + 补「首轮失败次轮成功」用例。
+2. `wechat_gui_runner.py:305-341`：`_current_target` 只赋值不复位；标题不一致后单联系人配置下轮询永久空转（复现：`open_calls=['小林']` 后无解析）。触发源：noVNC 人工操作、向非轮询联系人出站、容器重启。修复：skip/fail 两分支均置 `_current_target=None`。
+3. `wechat_gui_adapter.py:82-95` × `wechat_gui_runner.py:305-317`：单窗口无互斥，出站「校验→type_text→enter」与 runner 的 `open_chat`/`screenshot` 之间可被轮询切走会话——校验通过后文本与回车落进新会话并返回成功（复现：发给小林的消息 `sent_in=['阿青']`）；agent 侧 `agent.py:738` 每连接一线程同样无串行化。修复：装配处建一把 `asyncio.Lock` 注入 runner（仅 open_chat/截图/解析/校验段持锁，`handle_inbound` 在锁外）与 adapter（全程持锁）。
+4. `wechat_gui_models.py:95-96,499-500` + `wechat_gui_prompts.py:44-59`：去重键依赖 VLM 输出的 epoch 毫秒，但提示词不给当前时间参照（微信界面仅 `HH:MM`）——`ts_ms=0` 回落采集分桶时跨 5 分钟边界旧消息再次入站，幻觉值漂移时每次画面变化重复（复现均得 `['你好','你好']`）；首帧把全部可见消息当新消息投递；`is_self` 缺省 False、`messages` 缺省空与文档「缺字段一律 LLM_CALL_FAILED」不符。**需拍板**：甲 会话水位重叠比对（首帧只建基线，改动中等）/ 乙 注入当前时间 + 校验 ts 合理性（改动小，读不出时照旧）/ 丙 仅首帧基线（最小，跨边界重复仍在）。无论选哪个：`is_self`/`text`/`sender`/`ts_ms`/`messages` 改必填。
+5. 硬约束 4.1/4.3 未记录偏差：`agent.py` 用 `ThreadingHTTPServer` + 阻塞 `subprocess.run` + 新增同步控制面客户端，而同树 `uinputd.py`/`poc_gate.py` 已是 asyncio；台账/README 只陈述事实未写为何不能 async。**需拍板**：甲 改 `asyncio.start_server` + 既有 `UinputControlClient` + `create_subprocess_exec`（符合约束，删重复客户端，约 300 行重写）/ 乙 保留同步、台账「偏离」段写明理由并经用户确认 / 丙 仅 HTTP 面换 asyncio、工具执行仍下沉线程。
+
+P2：
+6. `agent.py:694,653-657`：`hmac.compare_digest` 直接比较 str（sidecar 比较 UTF-8 bytes），Bearer 含非 ASCII 抛 `TypeError`、深层嵌套 JSON 抛 `RecursionError`，均未捕获、连接无响应断连（前者无需正确 token 即可触发）。修复：比较前 `.encode("utf-8")`；except 增补 `RecursionError`；补两条用例。
+7. `wire_models.py:834-885` × `agent.py:668-685`：沙盒 `InvokeRequestModel`/`InvokeResponseModel` 生产零引用，handler 手拼裸 dict 响应——漂移门看护的不是实际 wire 出口；工具名/路径常量在后端 `wechat_gui_client.py:50-65` 另有一份字符串镜像、五工具结果字段只在两树逻辑代码里，均未入门禁（约束 5/18）。修复：handler 改用 `InvokeResponseModel(...).to_wire()`；五工具结果补 Model Class；工具名与路径常量行入漂移门。
+8. 死代码（约束 2.2/15.1）：`uinputd.py:650-683` `SyncUinputControlClient.emit_key/emit_move/emit_click`（零引用、覆盖 0）、`wire_models.py:632` `WECHAT_GUI_AGENT_TOOLS`、`wechat_gui_runner.py:395` `WECHAT_GUI_CHANNEL`、`wechat_gui_client.py:189` `probe_health` 与 `:307` `click`（仅测试用）、`wechat_gui_runner.py:57` 把导入常量列入 `__all__`（re-export）。
+9. 文档与代码不符（约束 7/15.4）：`docker/wechat-gui/README.md:386-394` 仍写「门阶段不产生 wire 契约、不接后端」且承诺的群聊区分/重名消歧/键迁移未实现；`README.md:262-268` compose 生产启动未导出 `WECHAT_GUI_AGENT_TOKEN_FILE_SECRET`（照此操作 agent 用仓库公开占位 token），全文未说明 `WECHAT_GUI_AGENT_TOKEN` 明文 env 优先于文件；`channels.md:108-109,113` 缺省 no-op 与停机链漏 GUI 微信、`:1287`「缺字段」过誉、`:1344` 联系人 JSON 无示例无字段表、`:1255` 语义不通；`LEDGER.md:102` main 仍写 `215317c`、`:193` 漂移门写 38 项（实为 41）、`:2578` 沙盒覆盖 93.96%（实测 94.08%）、`:2605-2606` 称全量门禁「由主 Agent 执行」但同提交已含 `r4-6b-a6ca265f` 证据且未记提交号。
+
+Live 前风险（Live 阶段验证）：`open_chat` 在 Ctrl+F 后立即粘贴再回车无稳定等待（焦点未切到搜索框时备注名会被当作消息发进当前会话，后端标题校验拦不住）；标题区域取顶部 140px 首次像素变化而搜索框回显的正是备注名（VLM 可能把搜索框文字读成标题）；`is_self` 全靠 VLM 判定，误判即自回声。
+
+流程观察：任务书 A1–D17 原文未落仓库，Oracle 无法逐字出具覆盖表——后续任务书要点应写入台账或 `docs/plans/`。
+修复顺序：P1 1/2（各一处改动 + 一条用例）→ P1 3 共享锁 → P1 4 待拍板后改（提示词变更需上调 byte-lock 版本）→ P1 5 待拍板 → P2 6/7/8 一起收 → P2 9 文档对齐 + 台账补 verify-slice 记录与提交号 → 重跑 `verify-slice` 出新证据后再推送。复现用例与已验证补丁副本在 `/tmp/opencode/audit/patched_copy/`（仓库外）。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 ### 缓解台账（非根修，已排期）
