@@ -1206,6 +1206,147 @@ settings = build_isolated_settings(
 零真实网络（浏览器调用面经协议注入 fake）；零真实等待（休眠注入记录式闸门）；
 全部 `async def test_*`。
 
+## GUI 微信实验轨（PoC 门阶段——尚未接后端）
+
+### 定位与拍板
+
+企微智能机器人长连接是本工程**生产主轨**；个人微信没有稳定的官方个人号
+消息通道，因此以 **GUI 实验轨**作为覆盖补充：容器内运行一个可截图、
+可注入键鼠的 Xorg 图形会话，经 noVNC 供人登录，通道层（过门后）以
+截图 + 视觉校验 + 键鼠注入读写会话。
+
+已拍板边界（锁定）：
+
+- **主轨不变**：企微长连接仍是默认生产通道；GUI 微信默认关闭。
+- **先过门后实现**：只有 Xorg + uinput 栈的 PoC 门通过，才实现微信通道
+  本体；门不通过则整轨推迟。
+- **Live 推迟**：微信客户端安装 / 登录 / 真实消息验证随统一 Live 阶段
+  执行；门阶段不装客户端、不接后端。
+- **会话键 B（拍板 P4）**：联系人备注名 + 视觉模型校验（防同名 / 改备注串会话）；
+  门阶段只做设计预告，不产生 wire 契约。
+
+本阶段交付物是独立沙盒树 [docker/wechat-gui](../../docker/wechat-gui/README.md)
+（与后端零代码共享、独立 pixi 工程 / 镜像 / CI job）与一份本机栈实测
+证据；**channels 域无任何代码改动**。
+
+### 栈组成（门阶段）
+
+| 层 | 职责 | 位置 |
+|---|---|---|
+| uinput 设备层 | 虚拟键盘 + 绝对指针的创建 / 持有 / 事件注入（纯 stdlib ioctl） | `docker/wechat-gui/src/wechat_gui_poc/uinput_devices.py` |
+| 控制面 | 设备生命周期、Xorg 配置生成、Unix socket JSON 行协议（ping/key/move/click/shutdown） | `uinputd.py` + `wire_models.py` |
+| 显示层 | Xorg dummy 1280x800x24 + evdev 显式输入段（无 udev 依赖） | `xorg.py` + `entrypoint.sh` |
+| 远控层 | x11vnc（密码文件）+ websockify/noVNC（端口仅宿主回环） | `entrypoint.sh` + compose |
+| 门脚本 | 七步栈验证与单行 JSON 证据 | `poc_gate.py` |
+| 宿主运行器 | 构建镜像 + 特权容器内跑门 + 证据落 `docs/evidence/poc/` | `poc/run_stack_poc.sh` |
+
+关键工程事实（与实现一致）：
+
+- **无 udev**：uinput 设备只在 sysfs 可见；容器内事件节点由 uinputd 按
+  sysfs `dev` 号 `mknod`，并 `chown` 给非 root 运行用户。
+- **静态输入段**：Xorg 用 `evdev` + 显式 `Option "Device"`，设备绑定为
+  CoreKeyboard/CorePointer（xinput 中非漂浮）；绝对指针被 evdev 归类为
+  touchscreen 类型 slave pointer，坐标点击语义等价。
+- **注入归属**：uinput 设备生命周期跟随持有 fd 的守护进程；门脚本与
+  后续通道都经控制面注入，不跨进程写事件节点（event 节点只读）。
+
+### PoC 门（通过判据）
+
+门脚本在容器内按序验证：X 在线且 1280x800x24 → 两虚拟设备创建且事件节点
+可打开 → `xinput` 可见且非漂浮 → `stdbuf -oL xev -root` 行缓冲采集到单轮
+注入的 KeyPress / KeyRelease / ButtonPress / ButtonRelease / Motion（各
+≥1） → 截图 PNG 尺寸正确且非全黑 / 非全同色 → 剪贴板写入读回一致 →
+5900 可连接且 noVNC `/vnc.html` 200。任一步失败即 FAIL 并跳过后续；退出码
+0/1/2 分别对应 PASS / FAIL / 用法错误。报告时间戳为 Unix Epoch 毫秒
+（`started_at_ms`），字段表见沙盒树 README「门报告字段」。
+
+本机实测结果：**PASS（7/7）**，特权与非特权两种形态各一份证据（见沙盒树
+README「本机实测结果」与 `docs/evidence/poc/`；字段含
+`run_mode` / `build_attempts` / `host_session_guard`）。部署机复跑与微信
+客户端 Live 验证随统一阶段执行。
+
+### 控制面协议与落盘字段（事实）
+
+控制面是容器内 Unix socket 上的单请求单响应 JSON 行（权限 0666，不含
+机密）；模型在 `docker/wechat-gui/src/wechat_gui_poc/wire_models.py`，解码
+与注入在 `uinputd.py`：
+
+```
+{"command":"ping"}                          → {"ok":true,"command":"ping","keyboard":"wechat-gui virtual keyboard","pointer":"wechat-gui virtual pointer","width":1280,"height":800}
+{"command":"key","code":30,"pressed":true}  → {"ok":true,"command":"key"}
+{"command":"move","x":640,"y":400}          → {"ok":true,"command":"move"}
+{"command":"click","button":272}            → {"ok":true,"command":"click"}
+{"command":"shutdown"}                      → {"ok":true,"command":"shutdown"}
+```
+
+注入失败回 `{"ok":false,"command":"key","error":"..."}`（守护不中断）；
+字段非法 / 未知命令回 `ok=false` 且 `command` 为空字符串。
+
+`uinput-devices.json`（uinputd 落盘，root 持有）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `width` / `height` | integer | 绝对指针轴上限对应的屏幕尺寸（正数） |
+| `keyboard.name` / `pointer.name` | string | 内核设备名（Xorg 静态段的 Identifier 与此一致） |
+| `keyboard.event_path` / `pointer.event_path` | string | 容器内事件节点（按 sysfs `dev` 号 mknod 后 chown 给运行用户） |
+
+门报告字段（`--out` 落盘与 stdout 单行 JSON 同源）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `verdict` | string | `PASS` / `FAIL` |
+| `steps[]` | array | 七步：`name` / `status` / `duration_perf_counter_ms` / `detail` |
+| `hostname` / `kernel` | string | 容器主机名 / 内核版本 |
+| `docker` | string \| null | Docker 版本（容器内不可得为 `null`） |
+| `started_at_ms` | integer | 启动时刻，Unix Epoch 毫秒 |
+| `duration_perf_counter_ms` | integer | 总耗时毫秒 |
+| `run_mode` / `build_attempts` / `container_exit_code` | string / integer / integer | 宿主运行器追加 |
+| `host_session_guard` | object | 宿主运行器追加：`host_session_active` / `host_display` / `host_displays` / `allow_host_session` / `floated_devices` / `ignored_devices` / `ignored_basis`（`udev_positive` / `heuristic`） / `residual_devices` / `float_wait` / `float_sync_ms` |
+
+字段级说明与样例以沙盒树 README「设备制品 / 门报告字段」为准，
+`docs/evidence/poc/` 下的入库证据即完整样例。
+
+### 门后的通道设计预告（不在本阶段实现）
+
+```
+轮询 / 触发（通道节奏）
+    ↓ 截图（门脚本同源原语：import root → PNG）
+    ↓ VLM 校验当前会话身份（联系人备注名 + 头像 / 标题一致性）
+    ↓ 会话键 = 联系人备注名（B 方案，视觉校验后才落定）
+    ↓ 未读消息采集（视觉 / OCR 辅助，选择器未定）
+    ↓ ChannelRouter.handle_inbound（与其余通道同一套人格 / 心流 / 记忆语义）
+出站：
+    ↓ 会话切换（搜索备注名 / 列表定位，视觉确认）
+    ↓ 聚焦输入框 → uinput 注入文本 → 回车 / 点击发送
+    ↓ 截图确认发送态（可选）
+```
+
+未决项（留到通道实现阶段拍板）：文本输入法（ASCII 直注入 vs 剪贴板
+粘贴）、中文输入、消息去重键（GUI 侧没有稳定平台 message_id）、多会话
+并行度（单窗口 UI 的串行约束）、群聊身份。
+
+### 边界与风险
+
+- **无 udev**：事件节点需 MKNOD 能力；生产 compose 已按最小能力集声明。
+- **无窗口管理器**：当前镜像不装 WM，客户端窗口无装饰 / 不可拖动；
+  Live 阶段按需加入轻量 WM。
+- **单窗口语义**：输入框是单会话 UI；多会话并行收发需要切换串行化。
+- **视觉依赖**：会话身份与消息内容均依赖截图质量；分辨率 / 缩放策略
+  在 Live 阶段固化。
+- **安全（生产不 privileged）**：`--device /dev/uinput` + `c 13:* rwm` +
+  MKNOD/CHOWN/SETUID/SETGID/KILL + no-new-privileges；端口仅宿主回环；
+  VNC 密码文件须对运行用户（`wechat`）可读（推荐 `wechat:wechat 0400`，
+  root 持有 0400 时由入口复制后使用）。
+- **输入面是内核全局对象（事实约束）**：uinput 设备不只属于容器——宿主
+  图形会话（或同机其它 X 会话）会接入 `wechat-gui virtual*` 并接收注入。
+  PoC 复跑前须在宿主 `xinput float` 该设备（运行器在有宿主会话时默认
+  拒绝运行，`WECHAT_GUI_POC_ALLOW_HOST_SESSION=1` 放行后自动浮动，并在
+  两台设备浮动完成后才放行容器启动 Xorg，结果写进证据）；生产形态用仓库
+  内 `docker/wechat-gui/udev/90-wechat-gui-ignore.rules`（对
+  `wechat-gui virtual*` 置 `LIBINPUT_IGNORE_DEVICE="1"` 并清空
+  `ID_INPUT*`）——开发机 X11 + Xorg libinput 已实测通过，部署机待复验；
+  Wayland 会话下 `xinput float` 不可行，须依赖该规则或 VM 隔离。
+
 ## SmsForwarder 短信 / 通知转发通道（SMS_FORWARDER——仅入站）
 
 手机端 SmsForwarder（开源短信 / 通知转发应用）把手机收到的短信与应用通知按

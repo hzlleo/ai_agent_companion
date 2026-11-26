@@ -90,18 +90,18 @@
 | R2-defense | 丙+丁：D1 结构隔离 + 宪章五条 + nonce 定界、D2 注入检测 + 角色内反击（毒舌 / 温柔 / 傲娇）、D3 peer 记忆免疫与来源标注、D4 38 条红队回归集 | ✅ merged（PR #13 → main `7fe68a0`；`INJECTION_*` 与 compliance 示例模板生成已并入主线） |
 | R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | ✅ merged（PR #15）；四切片 + 逐批评审修复全部 PASS；示例台词已由组件库生成期折叠 mes_example 落地（证据见第 5 节） |
 | R2d 心流社交 | R2d-1 心流门控（`FLOW_` env 面——判定矩阵 / 连发合并 / 延迟批次经调度器 / 关系与节律输入）+ 群聊多人格（`GROUP_PERSONA_` env 面——轮转 / 冷却 / 重复抑制 / 人格会话归属）；R2d-2 声纹（`VOICEPRINT_` env 面——PIPL 告知 / 同意记录 / 注册 / 校验 / 撤回删除 / 保存期）+ 表情包库与 VLM 标注（`STICKER_` env 面——哈希去重 / 来源授权备注 / 标注状态机 / 通道附件 v2 收发桥 / 前端面板），迁移 0016 | ✅ merged（PR #16；复审修复 PR #29）；全门禁与证据见第 5 节 |
-| R2e 通道扩展 | R2e-1 企微智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 去重 / 回复上下文 / 文本分段 / 素材分片上传 / 配置面 / 装配 / 文档）；R2e-2 抖音 web 通道（浏览器 sidecar 底座：页面采集 / 发送脚本、去重、synthetic、图片附件、指数退避、配置面、装配、文档）+ 画布产物面（迁移 0017 / 服务 / API / 沙箱预览面板 / 导出）；余项：GUI 微信容器化（PoC 门——部署机未跑） | 🔄 R2e-1 ✅ merged（PR #16 的 WeCom 提交）；R2e-2 ✅ merged（PR #17；复审修复 PR #30）；GUI 微信容器化 ⏳（部署机 PoC 门，见第 6 节） |
+| R2e 通道扩展 | R2e-1 企微智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 去重 / 回复上下文 / 文本分段 / 素材分片上传 / 配置面 / 装配 / 文档）；R2e-2 抖音 web 通道（浏览器 sidecar 底座：页面采集 / 发送脚本、去重、synthetic、图片附件、指数退避、配置面、装配、文档）+ 画布产物面（迁移 0017 / 服务 / API / 沙箱预览面板 / 导出）；余项：GUI 微信容器化（PoC 门制品与本机栈实测已交付；通道本体与 Live 待后续阶段） | 🔄 R2e-1 ✅ merged（PR #16 的 WeCom 提交）；R2e-2 ✅ merged（PR #17；复审修复 PR #30）；GUI 微信容器化 ✅ 本机栈 PoC PASS（证据 `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-20261126T025721Z.json`；部署机复跑 + 微信客户端 Live 随统一阶段，见第 6 节） |
 | R2f 实时语音 | 实时语音全双工会话：WS 协议 + 相位状态机 + 能量/静音 VAD 切段 + 切段转写（节流中途字幕）+ 人格回复句切与逐句 TTS 分片下行 + barge-in（取消在途生成/合成 + 清空队列）+ 会话资源上限（背压/空闲/最大时长/优雅关闭）+ `REALTIME_VOICE_` env 面 + 管理台实时字幕面板 | ✅ merged（PR #18；复审修复 PR #31）；溢出项与验证数值见第 5 节 |
 | R3-1 安全纵深 | 提示注入纵深 / SSRF 对称 / 密钥与鉴权治理 / base64 载荷上限 / 日志掩码（P1×2 + P2×5） | ✅ merged（PR #35；证据 `e8232b42`） |
 | R3-2 限流与背压 | QQ 入站有界 / 实时语音 TTS 队列与会话帽 / LLM 日预算闸 / 多 worker 语义 / 最小观测面 / 前端 Node 护栏与构建体积基线（P1×1 + P2×7；复审 6×P2 闭环） | ✅ merged（PR #36；证据 `fe261c9a`；PR body 引用的 `0276c1a5` 为首提交树证据，终态以 `fe261c9a` 为准） |
 | R3-3 性能基线 | `bench_core.py` 6 项纯函数微基准 + `api_smoke.py` 4 端点进程内冒烟 + 门禁链落位（复审 4×P2 闭环；终局复核 7×P2 闭环） | ✅ merged（PR #37 → main `3f313a6`；评审 head `66b14b3`，终态含 `ecb7714`/`ee9381a`；canonical 证据 `16b07c7c`，历史 `bc71f261`） |
 
-| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（PoC 门，Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 本分支（`feat/r4-5-whatsapp`）工作区（R4-1 / R4-2 / R4-3 已合并；其余切片待开工） |
+| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（R4-6a PoC 门制品 + 本机栈实测；R4-6b 通道本体待过门；Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 已合并（PR #44 → main `215317c`）；R4-6a 本分支（`feat/r4-6-wechat-gui`）工作区（本机栈 PoC PASS；R4-6b 待过门后实现）；R4-1 / R4-2 / R4-3 已合并；R4-7 / R4-8 待开工 |
 
 **当前分支状态**：
-- main：`f8eb398`（PR#34–#43 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
+- main：`215317c`（PR#34–#44 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
 - `feat/r3-perf`：R3-3 性能基线，已合并（PR #37），可删除。
-- R4：R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 在当前分支 `feat/r4-5-whatsapp` 工作区（R4-1 / R4-2 / R4-3 已合并），后续切片待排期。
+- R4：R4-4 已合并（PR #43 → `f8eb398`）；R4-5 已合并（PR #44 → `215317c`）；R4-6a 在当前分支 `feat/r4-6-wechat-gui` 工作区（本机栈 PoC PASS）；R4-1 / R4-2 / R4-3 已合并；R4-6b（通道本体）待过门，R4-7 / R4-8 待排期。
 - 历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入 main，可删除；工作区 clean。
 
 ## 4. 全部拍板记录（原文语义）
@@ -166,7 +166,7 @@
 
 ### R4 方向拍板（用户）
 - 主题=体验多模态 + 平台化扩展 + 规模性能（B+C+D）；生产化与统一 Live 测试（A）推迟到全部开发完成后统一执行。
-- GUI 微信容器化：纳入 R4，先跑部署机 PoC 门；Live 测试随统一 Live 推迟。
+- GUI 微信：企微智能机器人长连接为生产主轨，GUI 微信为实验轨（D2-A）；会话键=B（联系人备注名 + VLM 校验，P4）；PoC 门=Xorg+uinput 栈验证，通过才实现通道本体，不通过整轨推迟；Live（客户端安装 / 登录 / 真消息）随统一 Live 阶段。
 - 部署真网验证：先做最低三项（企微 WSS 握手 / 抖音选择器 / ASR-TTS 连通），完整上线就绪包归统一 Live 阶段。
 - 实时语音：全量增强（真流式 ASR/TTS 通道 + AEC + 移动端采集优化）。
 - 预算与限额：按 purpose 分面（ASR/TTS/voiceprint 独立预算）。
@@ -1675,6 +1675,453 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
    `docs/evidence/r4-5-whatsapp-d90786ec.json`，sha8=`d90786ec`，700 文件；
    G1 根修后由 `bd3bdfd3` 取代，本行保留为历史）。
 
+### 已完成切片：R4-6a GUI 微信容器化 PoC 门制品 + 本机栈实测（本分支工作区）
+
+**已完成**：
+1. **独立沙盒树 `docker/wechat-gui/`**（与后端及其余沙盒零代码共享）：
+   独立 `pixi.toml`（Python 3.12 + 系统工具；任务名契约
+   `tests-unit` / `lint` / `typecheck` / `coverage-gates`，另加
+   `poc-stack`）、`pyproject.toml`（运行时仅 Pillow，dev extras 含
+   pytest/ruff/mypy）、`Dockerfile`（debian:bookworm-slim tag+digest
+   固定；清华 apt 镜像；Xorg dummy/evdev、x11vnc、novnc/websockify、
+   imagemagick/xclip、python3-minimal/python3-pil、tini；不装微信客户端）、
+   `entrypoint.sh`（root 建运行时目录 → uinputd → 降权 Xorg :99 →
+   x11vnc 5900 → websockify/noVNC 6080 → `serve`/`poc` 两模式；
+   HEALTHCHECK 探 X 与 noVNC）、`poc/run_stack_poc.sh`（防御式宿主运行器：
+   build 网络重试 ≤3、trap 清理、特权仅 PoC、证据落
+   `docs/evidence/poc/wechat-gui-stack-<host>-<UTC>.json`）。
+2. **uinput 注入器** `uinput_devices.py`（纯 stdlib）：`UI_SET_EVBIT` /
+   `UI_SET_KEYBIT` / `UI_SET_ABSBIT` / `UI_SET_PROPBIT` / `UI_DEV_CREATE` /
+   `UI_DEV_DESTROY` ioctl 编码，`uinput_user_dev` 结构体（1116 字节）
+   打包，`input_event`（24 字节）写入；虚拟键盘 + 绝对指针；sysfs 名称
+   发现 + 容器内按 `dev` 号 `mknod`（无 udev）；`create()` /
+   `emit_key()` / `emit_move()` / `emit_click()` / `destroy()`。
+3. **控制面守护** `uinputd.py`：设备生命周期持有、Xorg 静态配置生成、
+   设备信息落盘、事件节点 chown 给 wechat 用户、Unix socket JSON 行协议
+   （ping/key/move/click/shutdown；非法载荷归一 `ok=false`）、客户端
+   封装、SIGTERM/SIGINT 收口。
+4. **PoC 门** `poc_gate.py`：七步（x_up / uinput_create / xinput_visible /
+   event_roundtrip / screenshot / clipboard / vnc_up），每步
+   `perf_counter` 毫秒耗时与结果；首失败即 FAIL 并跳过后续；单行 JSON
+   报告（verdict/steps/hostname/kernel/docker/时间）到 stdout 与 `--out`；
+   退出码 0/1/2；事件回环用 `xev` 流式读取 + 带截止注入（无固定长睡眠）；
+   截图 Pillow 校验 PNG/尺寸/非全黑/非全同色。
+5. **单测**（全异步、hermetic）：`test_uinput_devices.py`（ioctl 编号 /
+   结构体布局 / 能力注册 / sysfs 发现 / mknod / 事件字节 / 销毁）、
+   `test_uinputd.py`（协议矩阵 / 落盘 / chown / Unix socket 服务与客户端 /
+   非法响应 / CLI）、`test_poc_gate.py`（解析器 / 截图校验 / 命令超时 /
+   步骤编排与跳过 / 报告与退出码 / 七步经临时 PATH 假命令）、
+   `test_xorg.py`（静态 evdev 段 / dummy 屏幕）。
+6. **接线**：`scripts/check_coverage_per_module.py` 增 `wechat-gui` 剖面；
+   `scripts/check_chinese_comments.py` / `noqa_freeze_check.py` /
+   `count_sync_tests.py`（基线 0）/ `verify_slice.py` 的 `_HASH_ROOTS`
+   （`docker/wechat-gui/src`）纳入本树；`docker/docker-compose.yml` 增
+   `wechat-gui` 服务（profile 默认不启动；仅回环端口；`/dev/uinput` 设备；
+   `cap_drop ALL` + MKNOD/CHOWN/SETUID/SETGID/KILL + `device_cgroup_rules`
+   `c 13:* rwm`（uinput 事件节点主设备号 13；仅映射 /dev/uinput 会被
+   device cgroup EPERM 拒绝）；`no-new-privileges`；VNC 密码文件 secret；
+   **不 privileged**）；`.github/workflows/ci.yml` 增
+   `wechat-gui (tests + lint + typecheck)` job（不构建镜像）。
+7. **文档**：本树 README（职责 / 架构 / PoC / 生产非特权 / noVNC 登录与
+   微信客户端安装 / 会话键 B 预告 / 安全边界 / 排查）；channels.md 增
+   「GUI 微信实验轨（PoC 门阶段——尚未接后端）」整节。
+
+**本机实测（命令 + 退出码）**：
+- `cd docker/wechat-gui && pixi install` → 0。
+- `pixi run tests-unit` → 0：93 passed；总覆盖率 93.31%。
+- `pixi run coverage-gates` → 0：6 组 ≥80%（`__init__.py` 100% /
+  `poc_gate.py` 88.9% / `uinput_devices.py` 96.1% / `uinputd.py` 94.9% /
+  `wire_models.py` 100% / `xorg.py` 100%）。
+- `pixi run lint` → 0（All checks passed）；`pixi run typecheck` → 0
+  （Success: no issues found in 6 source files）。
+- `WECHAT_GUI_POC_ALLOW_HOST_SESSION=1 pixi run poc-stack` → 0（特权形态
+  PASS 7/7，221 ms）与
+  `WECHAT_GUI_POC_ALLOW_HOST_SESSION=1 WECHAT_GUI_POC_RUN_MODE=unprivileged
+  pixi run poc-stack` → 0（非特权 PASS 7/7，240 ms）：单轮注入（五类事件
+  各 1、54 ms）；证据见本节末「复审修复」条（`docker` 字段为 null——门
+  脚本在容器内，镜像不含 docker CLI）。
+- `cd docker && docker compose -f docker-compose.wechat-gui.yml config` → 0
+  （独立项目 `ai_agent_companion-wechat-gui` + 独立网络 `wechat-gui`、
+  ports host_ip=127.0.0.1、`/dev/uinput` 设备映射、`c 13:* rwm` 规则、
+  secret 文件、无 privileged；不需要 `SANDBOX_TOKEN` /
+  `BROWSER_SIDECAR_TOKEN`）；默认栈
+  `SANDBOX_TOKEN=x BROWSER_SIDECAR_TOKEN=x docker compose -f
+  docker-compose.yml config` → 0（项目名 `ai_agent_companion`）。
+- **生产形态非特权**：`WECHAT_GUI_POC_RUN_MODE=unprivileged` 即生产同款
+  能力面（`--device /dev/uinput` + `c 13:* rwm` + `cap_drop ALL` +
+  MKNOD/CHOWN/SETUID/SETGID/KILL + no-new-privileges，不 privileged），
+  门 PASS 7/7（证据
+  `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-unprivileged-20261126T034711Z.json`）。
+
+**实测中定位并根修的真实缺陷**（前两轮 FAIL，不伪装通过）：
+1. **xinput 设备名不匹配**：Xorg 的 InputDevice `Identifier` 才是
+   `xinput list` 显示名；首轮门失败后把配置 Identifier 对齐内核设备名
+   （`wechat-gui virtual keyboard` / `pointer`），`xinput_visible` 才通过。
+2. **xclip 写路径挂起**：`xclip -in` fork 出常驻 selection owner 并继承
+   stdout/stderr 管道，`communicate` 等待到 30s 超时；写路径改为
+   stdout/stderr 接 `/dev/null`（不采集输出），读回路径保持采集。
+3. **设备节点缺失**：容器无 udev，uinput 设备只现于 sysfs；补
+   `_ensure_event_node` 按 sysfs `dev`（major:minor）`mknod`。
+4. **非 root Xorg 本地套接字目录**：`/tmp/.X11-unix` 由入口 root 预建
+   （`chmod 1777`），消除 `_XSERVTransmkdir` 告警。
+
+**设计取舍 / 偏离**：
+- **设备创建归属**：uinput 设备由 `uinputd` 在 Xorg 之前创建并长期持有
+  （Xorg 静态 InputDevice 在 PreInit 打开节点，晚创建不会被绑定）；门脚本
+  `uinput_create` 采用「校验看守进程创建的设备 + 节点可打开 + 控制面
+  ping」，而非在门内再建一对（再建会得到 4 个设备，与「两虚拟设备」判据
+  冲突，且门内 fd 生命周期无法覆盖 Xorg 启动）。注入仍经同一控制面完成。
+- **绝对指针**：evdev 将仅 ABS 的设备归类为 touchscreen 类型 slave
+  pointer；坐标点击 / 拖拽语义等价，`xinput` 中非漂浮。需要鼠标相对
+  语义时可补 REL 轴，门断言不变。
+- **特权只在 PoC**：宿主运行器用 `--privileged` 仅为同时打通 uinput 与
+  事件节点命名空间；生产 compose 用 `--device /dev/uinput` +
+  `device_cgroup_rules: c 13:* rwm` + MKNOD/CHOWN/SETUID/SETGID/KILL +
+  no-new-privileges，已写进 compose 与 README 双重约束。非特权实测中
+  仅映射 /dev/uinput 会因 device cgroup 对 13:* 的默认拒绝出现 EPERM，
+  该规则是必需项（已在 compose / README 固化）。
+- **VNC 密码缺省文件**：compose 允许 `WECHAT_GUI_VNC_PASSWORD_FILE`
+  指向真实密码文件；未设置时用仓库内 `vnc.pass.default`（`changeme`）
+  保证既有 compose 命令不因新增 secret 报错，生产必须覆盖。
+- **散列根**：`_HASH_ROOTS` 只纳 `docker/wechat-gui/src`（与
+  tool-sandbox / browser-sidecar 的「src + server.py」口径一致；本树无
+  server.py）；Dockerfile / pixi 等部署面与其余沙盒树一样不入哈希。
+- **无 wire 契约**：本阶段不接后端，故不纳入 sandbox-drift 门；过门后
+  的通道实现再评估契约镜像。
+- 无后端 / 前端 / 迁移改动；未跑 SeekDB 真引擎套件（不涉数据库）。
+
+**最终树复跑（命令 + 退出码）**：`cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-6a` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 / lint / typecheck=216 / gates / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build=3.04）；canonical 证据 `docs/evidence/r4-6a-5446cb25.json`（sha8=`5446cb25`，756 文件级证据；`--hash-only` 复算一致；`874e54e1` 为首轮树，`5446cb25` 为二轮复审修复前的树，二者现均为历史；二轮复审后的 canonical `9971f110` 亦由 `98cfdadd` 取代，见「三轮复审修复」小节）。后端零逻辑改动；SeekDB 真引擎套件经本机 seekdb-smoke 容器通过；新树的注释门 / noqa 冻结 / 同步测试棘轮经根 gates 链通过（无 wire 契约，sandbox-drift 不涉）。
+
+**复审修复（Oracle R4-6a 深审 3×P1 + 6×P2 逐条根修；canonical 证据
+`docs/evidence/r4-6a-5446cb25.json`）**：
+
+1. **P1-1 隔离性声明不实 + 宿主注入面**：(a) 沙盒树 README「安全边界」与
+   channels.md「边界与风险」改为事实陈述——uinput 设备是内核全局对象，宿主
+   图形会话（或同机其它 X 会话）会接入 `wechat-gui virtual*` 并接收注入；
+   复跑前须在宿主 float；生产形态必须配部署机宿主 udev 规则（对
+   `wechat-gui virtual*` 置 `LIBINPUT_IGNORE_DEVICE="1"` 或清空
+   `ID_INPUT*`）并实测确认；该缓解已在开发机验证（见下一小节「二轮复审
+   修复」），部署机待复验；无法满足时按 VM 隔离评估。(b) `poc/run_stack_poc.sh` 增宿主活动图形会话
+   探测（`DISPLAY` 可连 / `/tmp/.X11-unix/X*` 且 `xdpyinfo` 可连）：默认
+   拒绝运行并打印说明，仅 `WECHAT_GUI_POC_ALLOW_HOST_SESSION=1` 放行；放行
+   后在设备出现时用镜像内 `xinput` 于宿主逐一 `float`（只处理确实出现的
+   设备），证据 JSON 增 `host_session_guard`
+   （`host_session_active` / `host_display` / `allow_host_session` /
+   `floated_devices` / `residual_devices`）。(c) `poc_gate._collect_xev` 改
+   单轮注入：`stdbuf -oL xev -root` + 客户端就绪探测（`/proc/<pid>/fd`
+   出现 X socket），一次性注入 a 键按下/抬起 + 移动 + 左键按下/抬起，按
+   截止轮询解析；门断言面扩为 KeyPress / KeyRelease / ButtonPress /
+   ButtonRelease / Motion 各 ≥1。实测：宿主 `:0`（KDE）两次运行都在设备
+   出现后浮动两台、`residual_devices=[]`、无残留容器；未设置放行变量时
+   `bash poc/run_stack_poc.sh` → 1（拒绝运行）。
+2. **P1-2 生产形态密码注入不可用**：(a) entrypoint 去 `readonly PASSFILE`；
+   可读性按运行用户判定（`setpriv --reuid/--regid --keep-groups test -r`，
+   消除 root 的 `test -r` 恒真口径），root 可读而 `wechat` 不可读时
+   `install -o wechat -g wechat -m 0400` 到 `/run/wechat-gui/vnc.pass`，复制
+   失败即整体失败；(b) 运行器临时密码文件改 0644（目录 0700），`openssl`
+   列为必需命令（缺失即失败、删除 `RANDOM` 弱回退），证据改「容器内路径
+   写出 + `docker cp` 取回」（不再把仓库目录 bind mount 进容器：非特权形态
+   `cap_drop ALL` 时容器内 root 无 DAC_OVERRIDE，绑定挂载写仓库目录报
+   `PermissionError`；取回文件天然属调用者，无需事后 chown）；(c)
+   README / compose 写明密码文件须对运行用户可读（`wechat:wechat 0400`，
+   或 root 持有 0400 由入口复制）；`WECHAT_GUI_VNC_PASSWORD` 回退路径修复
+   （原 `readonly` 变量在 `set -u` 下二次赋值即退出，回退分支不可达）并补
+   `test_entrypoint_password.py`（运行用户可读直接使用 / 明文回退 0400 /
+   明文优先 / 两者不可读即失败）与 README 冒烟命令。
+3. **P1-3 硬约束 9**：门报告 ISO 时间戳改 `started_at_ms`（Unix Epoch
+   毫秒整数），删除 `started_at_utc`；单测、README 字段表与入库证据同步。
+4. **P2-1 硬约束 5/18**：新增 `src/wechat_gui_poc/wire_models.py`（数据模型与
+   wire 契约 Unit 文件）；控制面请求改五个具体模型（`PingRequest` /
+   `KeyRequest` / `MoveRequest` / `ClickRequest` / `ShutdownRequest`）、
+   `CommandOutcome.details` 改 `PingDetails` 模型、`dispatch_command` 按模型
+   分发；仅 `to_wire()` 保留 dict。
+5. **P2-2 可证伪性**：新增用例钉住「剪贴板回读不一致 → FAIL」「Motion /
+   ButtonRelease 缺失 → FAIL」「控制面注入失败 → FAIL」「noVNC 非 200 →
+   FAIL」「`stdbuf -oL` 调用」；变异矩阵见下。
+6. **P2-3**：`collect_environment` 的 `subprocess.run` 改同文件
+   `run_command`（async）；`uinputd` 的 `print` 改 logging（模块 logger +
+   `main` 的 basicConfig）；`InputEmitter.emit_key/emit_move` 补 Args/Raises。
+7. **P2-4 死代码**：删 `UI_SET_RELBIT` / `KEY_1` / `KEY_Q`；`DeviceKind` 与
+   `VirtualDeviceInfo.kind` 删除（无判定消费面，保留只会与内核名重复）；
+   `XevCounts.button_release` 接入断言（不再只解析不使用）。
+8. **P2-5**：镜像构建实际尝试次数写入证据 `build_attempts`；uid=1000 隐藏
+   依赖消除（临时密码文件 0644 + 入口按运行用户判定 + 证据经 `docker cp`
+   取回）。
+9. **P2-6 硬约束 7**：README 增控制面 JSON 行示例（ping/key/move/click/
+   shutdown）、`uinput-devices.json` 字段表与门报告字段表（含宿主运行器
+   追加字段）；channels.md 同步协议示例与字段指引。
+
+**命令 + 退出码（最终树）**：
+- `cd docker/wechat-gui && pixi run tests-unit` → 0（93 passed；总覆盖率
+  93.31%）；`pixi run coverage-gates` → 0（6 组 ≥80：`__init__` 100 /
+  `poc_gate` 88.9 / `uinput_devices` 96.1 / `uinputd` 94.9 /
+  `wire_models` 100 / `xorg` 100）；`pixi run lint` → 0；
+  `pixi run typecheck` → 0（6 源文件）。
+- `WECHAT_GUI_POC_ALLOW_HOST_SESSION=1 pixi run poc-stack` → 0（privileged
+  PASS 7/7；221 ms；证据
+  `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-privileged-20261126T034706Z.json`，
+  `build_attempts=1`、`container_exit_code=0`、
+  `host_session_guard.floated_devices` 两台、`residual_devices=[]`）。
+- `WECHAT_GUI_POC_ALLOW_HOST_SESSION=1 WECHAT_GUI_POC_RUN_MODE=unprivileged
+  pixi run poc-stack` → 0（PASS 7/7；240 ms；证据
+  `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-unprivileged-20261126T034711Z.json`）。
+  各步 perf_counter ms：x_up 3 / uinput_create 83 / xinput_visible 3 /
+  event_roundtrip 54（单轮注入，五类事件各 1）/ screenshot 77 /
+  clipboard 8 / vnc_up 8。
+- `bash docker/wechat-gui/poc/run_stack_poc.sh`（不设放行变量）→ 1（宿主
+  `:0` 被探测到，拒绝运行并打印注入面说明）。
+- 旧证据 `wechat-gui-stack-LeoWorkLaptop-20261126T025721Z.json`（ISO 时间戳 /
+  20 轮注入口径）已由上述两份取代并删除；运行后宿主 `/sys/class/input`
+  无 `wechat-gui virtual*`、`docker ps -a` 无 `wechat-gui-poc` 容器。
+- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend
+  --slice r4-6a` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 /
+  lint / typecheck=216 / gates / tests-seekdb=15 / frontend-test=716 /
+  frontend-coverage=96.15 / frontend-lint / frontend-build=3.04）；canonical
+  证据 `docs/evidence/r4-6a-5446cb25.json`（sha8=`5446cb25`，756 文件；
+  `--hash-only` 复算一致）。该步 gates 日志
+  `docs/evidence/logs/r4-6a-5446cb25-gates.log`：comment-gates files=386
+  violations=0 hints=23 / sync-test-ratchet 无回升 / noqa-freeze 基线 0 /
+  sandbox-drift / red-probe-gate / docs-truth / doc-counts /
+  assertion-freeze asserts=9570 raises=708 / surface-check / bench-core PASS /
+  api-smoke PASS / prose-pin 75≤75。
+
+**变异矩阵（逐条变异 → 对应用例转红 → 复原全绿；M1 即上一轮存活的
+剪贴板分支）**：
+
+| # | 变异 | 预期红用例 | 实测 |
+|---|---|---|---|
+| M1 | `step_clipboard` 回读比较改恒真 | `test_step_clipboard_mismatch_fails` | FAILED（1 failed） |
+| M2 | `_roundtrip_complete` 去 `motion >= 1` | `test_step_event_roundtrip_rejects_incomplete_events[Motion=0]` | FAILED |
+| M3 | 去 `button_release >= 1` | `...[ButtonRelease=0]` | FAILED |
+| M4 | 注入失败分支短路（`if False`） | `test_step_event_roundtrip_injection_failure` | FAILED |
+| M5 | `step_vnc_up` 去 200 判定 | `test_step_vnc_up_rejects_non_200` | FAILED |
+| M6 | `entrypoint.run_user_can_read` 恒真（root 口径） | `test_resolve_fails_when_nobody_can_read` | FAILED |
+| M7 | 去 `stdbuf -oL` | `test_step_event_roundtrip_uses_line_buffered_single_round` | FAILED |
+
+**缓解登记（udev 规则）**：仓库参考件
+`docker/wechat-gui/udev/90-wechat-gui-ignore.rules` 已在本机验证——X11 +
+Xorg libinput 宿主上 `event24` / `event25` 均 `LIBINPUT_IGNORE_DEVICE=1`、
+无 `ID_INPUT*`、宿主 `xinput` 无该设备；部署机待复验。Wayland 会话下
+`xinput float` 不可行，只能依赖该规则或 VM 隔离。PoC 期间以「有宿主图形
+会话即默认拒绝 + 显式放行 + 设备安全态同步 + 证据留痕 + 运行后残留校验」
+兜底；二轮复审已把 float 从「事后尽力」改为容器启动前同步门，详见下一小节。
+
+### 已完成切片：R4-6a 二轮复审修复 + compose 隔离 + udev 入库（本分支工作区）
+
+**背景**：Oracle 对 R4-6a 的复审不通过（2×P1 + 4×P2），另有用户要求
+（compose 项目隔离、udev 参考件入库）。逐条根修，不写「复审通过」——
+结论由命令与证据支撑。
+
+1. **P1-2 密码路径在生产能力集下失败**（`entrypoint.sh`）：
+   `resolve_vnc_passfile` 的明文路径改为 `rm -f` → 写入 → `chmod 0400`
+   → `chown`；复制路径改为 `rm -f` → `install -m 0400` → `chown`。
+   根因是 chown 之后无 `CAP_FOWNER` 的 root 不能再 chmod。生产同款能力集
+   （`--cap-drop ALL` + MKNOD/CHOWN/SETUID/SETGID/KILL +
+   `no-new-privileges`）实测三条路径均 exit 0：
+   `copy=wechat:wechat 400`、`env=wechat:wechat 400`、同容器再次解析
+   `rerun=wechat:wechat 400`。可读性探针抽成可注入函数参数
+   （`probe_readable_as_user` / `run_user_can_read ... <probe>`），新增
+   `test_resolve_probe_distinguishes_run_user_from_caller`：调用方可读而
+   「运行用户不可读」时走复制；把判定退化成 `[[ -r ]]` 该用例转红。
+   README 冒烟命令加生产 flag，能力清单与 compose 五项对齐。
+2. **P1-1 float 不是注入前置条件**（`poc/run_stack_poc.sh` +
+   `entrypoint.sh`）：运行器以 `WECHAT_GUI_HOST_FLOAT_WAIT=1` 启动容器，
+   入口在启动 Xorg 前有界等待 `/run/wechat-gui/host-float.done`（超时
+   exit 1）。运行器判定两台设备「安全态」：`xinput` 可见的必须浮动成功，
+   sysfs 存在而 `xinput` 不可见的视为被宿主 udev 规则忽略（连续两轮确认）；
+   安全后 `docker exec` 落 done，截止不满足则 `docker rm -f` + exit 1。
+   ALLOW 分支在启动容器前先以镜像内 `xinput list` 验证可连宿主
+   （`Authorization required` 即拒绝）。`residual_devices` 非空现在 exit 1。
+   证据 `host_session_guard` 增 `float_wait` / `float_sync_ms` /
+   `ignored_devices`。实测：特权与生产同款非特权均为 PASS 7/7（193 /
+   174 ms），`float_wait=true`、`float_sync_ms` 1198 / 1180 ms、
+   `ignored_devices` 两台（宿主已装 udev 规则，`xinput` 不可见）、
+   `residual_devices=[]`；udev 规则安装前的历史证据
+   `...-privileged-20261126T034706Z.json` / `...-unprivileged-20261126T034711Z.json`
+   仍记录真实 `float` 两台。失败路径：`XAUTHORITY=` 复跑 → 退出码 1
+   （启动容器前拒绝，无 `wechat-gui-poc-*` 残留、无注入）；浮动不满足的
+   移除路径由 `test_float_until_settled_fails_when_neither_safe_nor_absent`
+   守卫。
+3. **守卫 fail-open**（`run_stack_poc.sh`）：`detect_host_session` 改为
+   任何 `X11_SOCKET_DIR/X*` 或 `WAYLAND_SOCKET_DIR/wayland-*` 存在即活动
+   （不再要求 `xdpyinfo` 可连）；Wayland 会话直接拒绝并说明需 udev 或 VM
+   隔离。socket 根可经 `WECHAT_GUI_POC_X11_SOCKET_DIR` /
+   `WECHAT_GUI_POC_WAYLAND_SOCKET_DIR` 参数化；新增
+   `test_run_stack_poc.py`（临时 socket 根）三态自证。
+4. **生产形态重启不可用**（`entrypoint.sh`）：`chown -R` 前删除运行用户
+   写出的 `xorg.log` / `x11vnc.log` / `novnc.log`，并在启动 Xorg 前删除
+   `/tmp/.X<n>-lock` 与残留套接字。实测同一容器连续 `docker restart` 两次
+   均约 9s 内 healthy。
+5. **P2-4 死代码**：删 `uinputd._require_bool` 与
+   `uinput_devices._USER_DEV_SIZE`（仅定义无消费）。
+6. **P2-2 守卫缺口**：`poc_gate._xev_connected` 的 proc 根参数化并新增
+   「有 socket fd / 仅普通 fd / 进程已退出」三态用例；`uinputd` 新增
+   `pressed=False` 释放用例（硬编码 `pressed=True` 即红）；第 1 项的可读
+   探针用例。
+7. **P2-6**：`channels.md` 的 `uinput-devices.json` 与门报告字段改为字段表
+   （并链接 README 字段表）。
+8. **用户要求 A — compose 隔离**：默认 `docker/docker-compose.yml` 顶层
+   `name: ai_agent_companion`；wechat-gui 服务 / secret 整体迁出到
+   `docker/docker-compose.wechat-gui.yml`（`name:
+   ai_agent_companion-wechat-gui`、独立网络 `wechat-gui`、仍仅回环端口、
+   能力集逐项保留、不加入 `tool-sandbox`、不需要砂盒 token）。旧 Exited
+   容器 `wechat-gui`（compose 项目 `docker`）已 `docker rm -f` 并记录。
+   实测：新文件 `config` → 0；`up -d` 起容器（项目名 / 网络隔离）、约 6s
+   healthy、宿主 `xinput` 无该设备、`down` → 0 且容器 / 网络删除、无残留
+   设备；默认栈 `config`（内联占位 token）→ 0。README 增迁移说明。
+9. **用户要求 B — udev 参考件入库**：新增
+   `docker/wechat-gui/udev/90-wechat-gui-ignore.rules`（与宿主已验证文件
+   逐字一致，`diff` 无差异）；README 增部署三步（复制 → `udevadm reload`
+   → 首次启动前就位）与验证三步。本机实证：serve 运行期间
+   `event24` / `event25` 的 `udevadm info` 均 `LIBINPUT_IGNORE_DEVICE=1`、
+   无 `ID_INPUT*`，宿主 `xinput` 无输出。`.dockerignore` 增 `udev`
+   （宿主侧制品，保持镜像精简）。`_HASH_ROOTS` 取舍：按其余 `docker/`
+   条目「运行时源码 + 运行时入口（server.py）」口径，本轮补入
+   `docker/wechat-gui/entrypoint.sh`（生产入口，P1/P4 修复所在）；compose
+   文件与 `udev/` 属部署编排 / 宿主契约，与 Dockerfile 同类不入哈希；
+   设备名契约本身在已入哈希的 `uinput_devices.py` 中。
+10. **台账**：本小节与 §6 同步：udev 缓解从「未验证」改为「本机已验证
+    （2026-11-26，X11 + Xorg libinput；event24/event25 均
+    `LIBINPUT_IGNORE_DEVICE=1`、无 `ID_INPUT*`、宿主 xinput 无输出）；
+    部署机待复验；Wayland 会话 float 不可行」。
+
+**命令 + 退出码（本轮最终树）**：
+- `cd docker/wechat-gui && pixi run tests-unit` → 0（102 passed；总覆盖率
+  93.80%）；`pixi run coverage-gates` → 0（6 组 ≥80：`poc_gate` 89.2 /
+  `uinput_devices` 96.1 / `uinputd` 96.4 / 其余 100）；`pixi run lint` → 0；
+  `pixi run typecheck` → 0（6 源文件）。
+- `WECHAT_GUI_POC_ALLOW_HOST_SESSION=1 bash
+  docker/wechat-gui/poc/run_stack_poc.sh` → 0（privileged PASS 7/7，193 ms；
+  证据 `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-privileged-20261126T045413Z.json`）。
+- `WECHAT_GUI_POC_RUN_MODE=unprivileged WECHAT_GUI_POC_ALLOW_HOST_SESSION=1
+  bash docker/wechat-gui/poc/run_stack_poc.sh` → 0（PASS 7/7，174 ms；
+  证据 `...-unprivileged-20261126T045418Z.json`）。
+- `XAUTHORITY= WECHAT_GUI_POC_ALLOW_HOST_SESSION=1 bash
+  docker/wechat-gui/poc/run_stack_poc.sh` → 1（启动容器前拒绝，无残留）。
+- 生产同款能力集密码冒烟（copy / env / rerun）→ 0，
+  `wechat:wechat 400` ×3。
+- `docker compose -f docker/docker-compose.wechat-gui.yml config` → 0；
+  `up -d` → 0（healthy，6s；`restart` ×2 各约 9s healthy）；`down` → 0；
+  默认栈 `SANDBOX_TOKEN=x BROWSER_SIDECAR_TOKEN=x docker compose -f
+  docker/docker-compose.yml config` → 0。
+
+**变异自证（新增守卫，变异后转红，复原全绿）**：
+
+| # | 变异 | 预期红用例 | 实测 |
+|---|---|---|---|
+| N1 | 源文件可读判定改 `[[ -r ]]` | `test_resolve_probe_distinguishes_run_user_from_caller` | FAILED |
+| N2 | `_xev_connected` 直接 `return True` | `test_xev_connected_requires_socket_fd` | FAILED |
+| N3 | `dispatch_command` 键事件硬编码 `pressed=True` | `test_dispatch_key_release_forwarded` | FAILED |
+| N4 | `detect_host_session` 直接 `return 1` | `test_run_stack_poc.py` 三态 | FAILED |
+
+**最终树复跑（命令 + 退出码）**：`cd backend && pixi run verify-slice --
+--with-seekdb --with-frontend --slice r4-6a` → 0（10 步全 PASS：
+tests-all=3472 / coverage-gates=24 / lint / typecheck=216 / gates /
+tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 /
+frontend-lint / frontend-build=2.07）；canonical 证据
+`docs/evidence/r4-6a-9971f110.json`（sha8=`9971f110`；`5446cb25` 标历史，
+`874e54e1` 更早为历史；**三轮复审修复后由 `98cfdadd` 取代，本行与证据为
+历史**）。后端零逻辑改动；SeekDB 真引擎套件经本机
+seekdb-smoke 容器通过；根 gates 链（注释 / 同步测试棘轮 / noqa 冻结 /
+沙盒漂移 / 红探针 / 文档真相 / 文档数字 / 断言棘轮 / 导出面 / bench /
+api-smoke / prose-pin）全绿。
+
+**偏离与未验证**：
+- 宿主已装 udev 规则，本轮 PoC 的真实 `float` 不可达（设备在 `xinput`
+  不可见）；运行器按「udev 已忽略」安全态通过，真实 float 路径以历史证据
+  （03:47，规则安装前）与 hermetic 用例覆盖。
+- 本机无 Wayland 会话，Wayland 拒绝逻辑只经临时 socket 根单测，未在真实
+  Wayland 桌面复跑。
+- 部署机 udev 复验与微信客户端 Live 仍随统一阶段。
+
+### 已完成切片：R4-6a 三轮复审修复（4×P2 + 3 P3 逐条根修——本分支工作区）
+
+**背景**：Oracle 对 `5a79144` 的三轮复审无 P0/P1，给 4×P2 + 3 条 P3。
+本批逐条根修并留可红守卫；旧 canonical `9971f110` 自本条起为历史。
+不写「复审通过」——结论由命令 / 退出码 / 变异支撑。
+
+1. **F1 SAFE 按名字「任一行 floating」即放行**（`poc/run_stack_poc.sh`）：
+   a) 新增 `reject_residual_host_devices`，起容器前 `host_devices_present`
+   为真即 exit 1，删除「先浮动残留」分支；
+   b) `host_float_probe_script` 改为先取 `xinput list --name-only`，要求
+   同名**全部行**均含 `floating`；SAFE 与 ABSENT 同口径连续两轮
+   （`safe_streak` / `absent_streak`），float 成功后强制重新列举复核，
+   复核不通过即 RETRY，删除「float 返回 0 即结算」路径；
+   c) 用例：`test_float_probe_requires_all_rows_floating`（残留 floating +
+   新设备 attached → 不 SAFE、rc=1、不 touch）、
+   `..._accepts_all_rows_floating_two_rounds`（同名两行均 floating 两轮 →
+   SAFE）、`test_reject_residual_devices_exits_before_create`。
+2. **F2 「已忽略」为负证据推断**（同文件）：
+   a) 列举失败不再记 ABSENT：`listing="$(xinput list --name-only)"` 退出码
+   非零即 exit 3；用例 `test_float_probe_listing_failure_is_not_absence`
+   （首列举成功、后续 `list` 失败 → rc=3、无 ABSENT、ignored=0）；
+   b) 新增 `host_device_ignored_evidence`：按 name→eventN 取宿主节点，
+   `udevadm info -q property` 须含 `LIBINPUT_IGNORE_DEVICE=1` 且无
+   `^ID_INPUT` 行；无 `udevadm` 返回 2 回落启发式并在证据
+   `ignored_basis` 记 `heuristic`（正证据记 `udev_positive`），两轮口径
+   保留。用例：`test_udev_positive_evidence_marks_ignored` /
+   `..._rejects_residual_id_input` /
+   `test_float_until_settled_falls_back_without_udevadm`。首轮复跑暴露真实
+   回归：宿主 `/dev/input/eventN` 是 `root:input 0660`、运行用户不在
+   `input` 组，原先 `[[ -r ]]` 前置把有效 udev 证据判失败（rc=1，安全态
+   未达成）；改为只依据 `udevadm` 退出码，测试节点置 `chmod 000` 留守卫。
+   c) `detect_host_session` 收集全部 X* 会话（`HOST_DISPLAYS`），探测 /
+   浮动逐会话执行；Wayland 先取 `XDG_RUNTIME_DIR`，缺省扫描
+   `/run/user/*/wayland-*`。用例：`test_detect_enumerates_every_x11_socket`
+   / `..._falls_back_to_run_user_scan` / `..._probes_every_display`。
+3. **F3 两条子性质无守卫**：新增
+   `test_float_until_settled_fails_with_partial_safe_and_retry`（SAFE
+   keyboard + 恒 RETRY pointer → rc=1、floated=0、ignored=0）与
+   `test_float_until_settled_requires_two_absent_rounds`（首轮 ABSENT、次轮
+   起 RETRY → rc=1；计数器用文件）。变异：ABSENT `-ge 2`→`-ge 1` 仅红
+   后者；结算计数 `-eq 数量`→`-ge 1` 仅红前者（实测各 1 failed /
+   17 passed）。
+4. **F4 README udev 验证第三步**：镜像内 xinput 命令补
+   `-v "${XAUTHORITY}":/xauth:ro -e XAUTHORITY=/xauth`，并注明连接报错
+   不等于已验证；本机实测无参数 rc=1、补参数 rc=0。
+5. **P3**：README 安全边界能力清单补 SETUID/SETGID/KILL；测试表补 3 条
+   float 用例及多会话 / udev 正证据 / 回落；`.dockerignore` 改
+   `**/__pycache__` / `**/*.egg-info`，重建镜像内
+   `find /app -name '*.pyc' -o -name '*.egg-info' -o -name '__pycache__'`
+   无输出。
+
+**命令 + 退出码（最终树）**：
+- `cd docker/wechat-gui && pixi run tests-unit` → 0（114 passed；总覆盖率
+  93.80%）；`pixi run coverage-gates` → 0（6 组 ≥80：poc_gate 89.2 /
+  uinput_devices 96.1 / uinputd 96.4 / 其余 100）；`pixi run lint` → 0；
+  `pixi run typecheck` → 0（6 源文件）。
+- `WECHAT_GUI_POC_ALLOW_HOST_SESSION=1 bash
+  docker/wechat-gui/poc/run_stack_poc.sh` → 0（privileged PASS 7/7；
+  `ignored_devices` 两台、`ignored_basis=udev_positive`、
+  `floated_devices=[]`、`residual_devices=[]`、`host_displays=[":0"]`、
+  `float_sync_ms=1321`；证据
+  `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-privileged-20261126T054924Z.json`）。
+- `WECHAT_GUI_POC_RUN_MODE=unprivileged WECHAT_GUI_POC_ALLOW_HOST_SESSION=1
+  bash docker/wechat-gui/poc/run_stack_poc.sh` → 0（PASS 7/7；同
+  `ignored_basis` / 空 floated / 空 residual、`float_sync_ms=1316`；证据
+  `...-unprivileged-20261126T054931Z.json`）。
+- 首轮（`[[ -r ]]` 回归未修时）同命令 → 1：安全态未达成，容器移除、未
+  启动 Xorg、无注入、无证据文件；修复后重跑 PASS。
+- `cd backend && VITEST_MAX_WORKERS=6 pixi run verify-slice --
+  --with-seekdb --with-frontend --slice r4-6a` → 0（10 步全 PASS：
+  tests-all=3472 / coverage-gates=24 / lint / typecheck=216 / gates /
+  tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 /
+  frontend-lint / frontend-build=2.81；canonical
+  `docs/evidence/r4-6a-98cfdadd.json`，sha8=`98cfdadd`，758 文件级证据；
+  `7c673863` 为补 Pyright `returncode` 断言前的中间树，与 `9971f110`
+  及更早证据同为历史）。首次未限 worker 的同一命令 → 1：
+  frontend-test 5 条加载态等待超时（当时负载 54），单跑 3 条关注用例与
+  全量 716 均 PASS；`VITEST_MAX_WORKERS=6` 复跑全链 PASS。
+
+**偏离与未验证**：
+- 前端 5 条加载态超时是宿主机负载下的 Testing Library 等待抖动（改动面不涉
+  前端）；最终取证用 `VITEST_MAX_WORKERS=6` 限流，未改测试代码 / 断言。
+- 多 X 会话遍历只经临时 socket 根单测（本机仅 `:0`）；真实多会话桌面未复跑。
+- Wayland `/run/user/*` 回落只经临时扫描根单测；本机无 Wayland 会话。
+- 宿主已装 udev 规则，本轮 PoC `floated_devices=[]`（设备在 xinput 不可见），
+  真实 float 路径仍以历史证据（规则安装前）与 hermetic 用例覆盖。
+- 部署机 udev 复验与微信客户端 Live 仍随统一阶段。
+
 ### 已完成切片：G1 审计非根修项根修（§20 修正必须根修——本分支工作区）
 
 **背景**：G1 审计判定 7 项此前的修复止于症状面（补白名单 / 补测试 / 补分支推断 / 补文档），未消除再发机制。按新硬约束 §20 逐条根修——范围由元数据派生、裁决收敛为单一入口、状态显式化、语义字段化、判据由默认可忽略码点集定义、并发路径共用同一插入函数。
@@ -1995,6 +2442,93 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 - `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 / typecheck=216 / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build=3.08s；证据 `docs/evidence/r4-5-whatsapp-01f95d4e.json`，canonical sha8=`01f95d4e`（745 文件级证据）；`5eb8fd3b` 与更早证据均为历史）。
 - 无后端改动 / 无新增依赖 / 无新增 env 键 / 无迁移；前端改动文件：`src/lib/realtimeVoiceClient.test.ts`、`src/test/actWarningGate.ts`、`src/test/actWarningGate.test.ts`、`docs/LEDGER.md`、`docs/evidence/r4-5-whatsapp-01f95d4e.json`、`docs/evidence/logs/r4-5-whatsapp-01f95d4e-*.log`（10 份）。
 
+### 已完成切片：R4-6a 四轮复审修复（1×P2 + 4×P3 逐条根修——本分支工作区）
+
+**背景**：Oracle 对 `2d53687` 的四轮复审无 P0/P1，给 1×P2（F2 负路径三条
+变异存活）+ 4×P3。本批逐条根修并补可红守卫；旧 canonical `98cfdadd` 自本条
+起为历史。不写「复审通过」——结论由命令 / 退出码 / 变异支撑。
+
+1. **P2-1 F2 负路径无守卫**（`docker/wechat-gui/poc/run_stack_poc.sh` +
+   `src/tests/unit/test_run_stack_poc.py`）：
+   a) udevadm 属性查询非零退出：`_ignored_evidence_rc` 扩 `udev_exit` 参数，
+   新增用例 `test_udev_property_query_failure_is_not_positive_evidence`
+   （假 udevadm exit 1 → 断言 `rc=1`）；
+   b) 证据不足（`host_device_ignored_evidence` 返回 1）配 ABSENT 打印器：新增
+   `test_float_until_settled_rejects_insufficient_udev_evidence`（断言
+   `rc=1 floated=0 ignored=0 basis=`）；
+   c) 首个 `--name-only` 列举失败：新增
+   `test_float_probe_first_listing_failure_is_not_absence`
+   （`_write_fake_xinput(name_only=None, list_lines=[...])`，断言探针 `rc=3`、
+   `stdout==""`）。
+2. **P3-1 部分残留不拒绝**（`run_stack_poc.sh:145-160`）：
+   `reject_residual_host_devices` 改为逐 `DEVICE_NAMES` 调
+   `host_device_present`，任一存在即 exit 1（原 `host_devices_present` 要求两台
+   都在，单台残留会放行）。守卫
+   `test_reject_residual_devices_exits_before_create` 改用
+   `_make_sysfs(tmp_path, [KEYBOARD])` 走真实函数（原先整体打桩，ALL / ANY
+   差异不可见）。
+3. **P3-2 SAFE 两轮无守卫**（`run_stack_poc.sh:325`）：新增
+   `test_float_until_settled_requires_two_safe_rounds`（首轮 SAFE、次轮起
+   RETRY → `rc=1 floated=0 ignored=0 basis=`；计数器用文件，零真实等待）。
+4. **P3-3 正证据只查首个同名节点**（`run_stack_poc.sh:196`）：新增
+   `test_udev_evidence_checks_every_same_name_node`
+   （`_make_sysfs(tmp_path, [KEYBOARD, KEYBOARD])`，第二个节点带 `ID_INPUT`
+   → 断言 `rc=1`）。
+5. **P3-4 文档漂移**：README 门报告字段补 `host_displays` / `ignored_basis`
+   （与 `write_run_metadata` 的 10 字段一致）；Wayland 口径改为「先
+   `XDG_RUNTIME_DIR`，再扫 `/run/user/*/wayland-*`（非 root 调用者看不到其他
+   用户的 0700 目录）」；放行前置改为「逐会话连接」；忽略判定改为正证据表述
+   （`udevadm info` 的 `LIBINPUT_IGNORE_DEVICE=1` 且无 `ID_INPUT*`，无 udevadm
+   才回落启发式）；`docs/backend/channels.md` 字段表同步。
+
+**变异矩阵（副本备份注入后恢复，`cmp` 字节一致；每条只红对应用例）**：
+
+| # | 变异 | 结果 |
+|---|---|---|
+| M1 | `run_stack_poc.sh:189` `\|\| return 1`→`\|\| return 0` | 1 failed / 22 passed；仅 `test_udev_property_query_failure_is_not_positive_evidence` 红 |
+| M2 | `:336` case `0)`→`0\|1)` | 1 failed / 22 passed；仅 `test_float_until_settled_rejects_insufficient_udev_evidence` 红 |
+| M3 | `:211` 删除 `\|\| exit 3` | 1 failed / 22 passed；仅 `test_float_probe_first_listing_failure_is_not_absence` 红 |
+| M4 | 残留判定改回 `host_devices_present`（ALL） | 1 failed / 22 passed；仅 `test_reject_residual_devices_exits_before_create` 红 |
+| M5 | `:325` SAFE `-ge 2`→`-ge 1` | 1 failed / 22 passed；仅 `test_float_until_settled_requires_two_safe_rounds` 红 |
+| M6 | `:196` 加 `\| head -n 1` | 1 failed / 22 passed；仅 `test_udev_evidence_checks_every_same_name_node` 红 |
+| M7 | `:326` ABSENT `-ge 2`→`-ge 1`（既有两轮守卫复验） | 1 failed / 22 passed；仅 `test_float_until_settled_requires_two_absent_rounds` 红 |
+
+每条恢复后 23 passed（本文件全量）；全树 119 passed。
+
+**命令 + 退出码（最终树）**：
+- `cd docker/wechat-gui && pixi run tests-unit` → 0（119 passed；总覆盖率
+  93.80%）；`pixi run coverage-gates` → 0（6 组 ≥80：poc_gate 89.2 /
+  uinput_devices 96.1 / uinputd 96.4 / 其余 100）；`pixi run lint` → 0；
+  `pixi run typecheck` → 0（6 源文件）。
+- `WECHAT_GUI_POC_ALLOW_HOST_SESSION=1 bash docker/wechat-gui/poc/run_stack_poc.sh`
+  → 0（privileged PASS 7/7；`ignored_devices` 两台、
+  `ignored_basis=udev_positive`、`floated_devices=[]`、
+  `residual_devices=[]`、`host_displays=[":0"]`、`float_sync_ms=1342`；证据
+  `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-privileged-20261126T070135Z.json`）。
+- `WECHAT_GUI_POC_RUN_MODE=unprivileged WECHAT_GUI_POC_ALLOW_HOST_SESSION=1
+  bash docker/wechat-gui/poc/run_stack_poc.sh` → 0（PASS 7/7；同
+  `ignored_basis` / 空 floated / 空 residual、`float_sync_ms=1313`；证据
+  `...-unprivileged-20261126T070141Z.json`）。
+- `cd backend && VITEST_MAX_WORKERS=6 pixi run verify-slice --
+  --with-seekdb --with-frontend --slice r4-6a` → 0（10 步全 PASS：
+  tests-all=3472 / coverage-gates=24 / lint / typecheck=216 / gates /
+  tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 /
+  frontend-lint / frontend-build=2.55；canonical
+  `docs/evidence/r4-6a-6488ca04.json`，sha8=`6488ca04`，758 文件级证据；
+  `--hash-only` 复算 `sha8=6488ca04 files=758` 一致；`98cfdadd` 及更早证据
+  为历史）。
+
+**偏离与未验证**：
+- README「本轮证据」在 PoC 复跑后指向本次 `070135Z` / `070141Z`；任务给定的
+  `054924Z` / `054931Z` 作为「三轮最终树」一行保留在表内——复跑生成新时间戳，
+  若只写旧戳会再次漂移。
+- 多 X 会话遍历 / Wayland `/run/user/*` 回落仍只经临时 socket 根单测（本机仅
+  `:0`、无 Wayland 会话）；真实多会话桌面未复跑。
+- 宿主已装 udev 规则，本轮两次 PoC 均 `floated_devices=[]`
+  （`ignored_basis=udev_positive`），真实 float 路径以历史证据（规则安装前）
+  与 hermetic 用例覆盖。
+- 部署机 udev 复验与微信客户端 Live 仍随统一阶段。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 ### 缓解台账（非根修，已排期）
@@ -2010,7 +2544,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 | 流式 ASR 起始边界 | 流式通道从 SPEECH_START 帧起喂，VAD 防抖候选帧（默认 3 帧）仅入批量缓冲，流式最终稿可能缺句首约 200ms；`test_realtime_session_streaming.py` 的 `frames[1:]` 已固化该行为 | 候选帧在起说确认前不进流式缓冲，避免误触发占用连接；改起点需重排候选帧与握手时序 | 把 VAD 候选帧纳入流式起点（起说确认后回放候选帧）并更新固化用例；目标 R5-1 |
 | 梦境 `stats` / `decisions` JSON 动态键 | `ff_dream_runs.stats` / `decisions` 为 JSON 列，写入 `DreamRunStatsModel` / `DreamDecisionModel` 的 dump 形态，列类型仍是 `dict` / `list` | 无当前缺陷；转 Pydantic 列需 TypeDecorator + 迁移，成本高于本批收益 | **已记录例外**（不排期）；随 memory 域 schema 批次转模型时一并迁移 |
 
-- Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
+- Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门：本机栈 PoC PASS（证据 `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-unprivileged-20261126T070141Z.json`，7/7 步、204ms；特权形态同目录 `...-privileged-20261126T070135Z.json`）；宿主 udev 规则（仓库参考件 `docker/wechat-gui/udev/90-wechat-gui-ignore.rules`）已在本机验证——X11 + Xorg libinput，event24/event25 均 `LIBINPUT_IGNORE_DEVICE=1`、无 `ID_INPUT*`、宿主 xinput 无输出；**部署机仍须复验**；Wayland 会话 float 不可行，只能依赖该规则或 VM 隔离；部署机复跑 + 微信客户端 Live 随统一阶段（Xorg+uinput 栈验证已过）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
 - SmsForwarder 短信 / 通知转发通道已交付（默认关闭、仅入站；部署侧配置 `SMS_FORWARDER_*` 并在手机端配置 Webhook 与 token）；WhatsApp Cloud API 通道已交付（`WHATSAPP_ENABLED` 默认关闭；Meta 应用侧配置 webhook / 订阅 messages + 四项凭据；出站仅自由格式文本并受 24h 客户服务窗约束——窗外主动消息需模板发送（未实现）或属主先发消息；窗口状态与 wamid 去重均为进程内单实例语义）。
 - 声纹（PIPL 合规）与表情包素材法律边界提示义务已随 R2d-2 交付（默认关闭，部署侧按需配置 `VOICEPRINT_*` / `STICKER_*` 并起说话人向量服务）。
 - 预算边界（R3-2 → R4-2 已分面）：LLM 日预算只计 LLM 用途行；ASR / TTS / voiceprint 各自独立预算（按 purpose 计数，见 [usage.md](backend/usage.md#分面日预算asr--tts--voiceprint)）。

@@ -1,0 +1,105 @@
+# ai_agent_companion — GUI 微信实验轨独立 Pixi 项目
+#
+# 职责：管理本沙盒树的 Python 3.12 运行时 + dev 工具 + 本树全部 tasks。
+# 本文件与 pyproject.toml 同目录（docker/wechat-gui/），
+# editable = { path = "." } 解析到本目录。
+# 依赖声明（运行时 + dev extras）在 pyproject.toml，pixi 通过 editable install 读取；
+# pixi 仅管理 Python 解释器 + 系统工具（约束：Python 包依赖单一数据源 = pyproject）。
+#
+# 本树是独立部署单元：容器镜像经 debian:bookworm-slim + apt + 树内源码
+# 构建（不经 pixi——见本目录 Dockerfile）；pixi 面向本树开发 / 测试 /
+# 静态检查 / 宿主 PoC 运行器。
+#
+# 运行时依赖面刻意压到最小：纯 stdlib + Pillow（仅截图字节校验需要）。
+# 本树不依赖后端任何 Python 模块——与其余沙盒树同为源码完全隔离的
+# 独立部署面。
+#
+# 环境：
+#   default = [dev]   本地开发（runtime + dev 工具：pytest/ruff/mypy）
+#
+# 用法：
+#   cd docker/wechat-gui && pixi install            # 安装 default 环境
+#   cd docker/wechat-gui && pixi run tests-unit     # 单元测试（覆盖率 ≥80 enforce；hermetic）
+#   cd docker/wechat-gui && pixi run coverage-gates # 按模块覆盖率门禁（≥80 enforce）
+#   cd docker/wechat-gui && pixi run lint           # ruff 静态检查
+#   cd docker/wechat-gui && pixi run typecheck      # mypy 严格模式
+#   cd docker/wechat-gui && pixi run poc-stack      # 宿主构建镜像并跑容器内 PoC 门（宿主有图形会话时须 WECHAT_GUI_POC_ALLOW_HOST_SESSION=1）
+#
+# 任务名契约：tests-unit / lint / typecheck / coverage-gates 为跨树契约名
+# （与 backend / tool-sandbox / browser-sidecar 同名同义）——严禁更名。
+#
+# 安全边界与生产非特权运行方式见本目录 README.md。
+
+[workspace]
+name = "wechat-gui"
+version = "0.1.0"
+description = "GUI 微信实验轨沙盒——Xorg + uinput 容器化 PoC 门（独立 pixi 项目，与后端零代码共享）"
+channels = [
+    "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/",
+    "conda-forge",
+]
+platforms = ["linux-64"]
+
+# ─── 运行时依赖（仅解释器 + pip 系统工具；Python 包依赖在 pyproject）───
+[dependencies]
+python = { version = ">=3.12,<3.13", channel = "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/" }
+pip = { version = ">=26.0,<27", channel = "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/" }
+
+# ─── PyPI 镜像配置（与其余沙盒树同镜像面）───
+[pypi-options]
+index-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+extra-index-urls = [
+    "https://mirrors.aliyun.com/pypi/simple",
+    "https://mirrors.ustc.edu.cn/pypi/simple",
+    "https://pypi.org/simple",
+]
+
+# ─── 本地 editable 包（运行时依赖由 pyproject.toml [project.dependencies] 声明）───
+[pypi-dependencies]
+wechat-gui = { path = ".", editable = true }
+
+# ─── 激活环境变量（pixi 项目根 = 本目录；PYTHONPATH = $PIXI_PROJECT_ROOT/src）───
+[activation.env]
+PYTHONIOENCODING = "utf-8"
+PYTHONNOUSERSITE = "1"
+UV_DEFAULT_INDEX = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+UV_EXTRA_INDEX = "https://mirrors.aliyun.com/pypi/simple https://mirrors.ustc.edu.cn/pypi/simple https://pypi.org/simple"
+PYTHONPATH = "$PIXI_PROJECT_ROOT/src"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tasks — 本树全部 tasks（runtime + dev 共享）
+# ═══════════════════════════════════════════════════════════════════════════════
+[tasks]
+# 单元测试：src/tests/unit/ 下的纯单元测试（hermetic——零真实 X / 零真实
+# uinput：ioctl 经 fake os.open/fcntl.ioctl 录制；sysfs 经临时目录树；
+# 门脚本步骤经临时 PATH 假命令驱动）。覆盖率阈值 80（--cov-fail-under，
+# 镜像其余沙盒树的 80% 门禁数值）；逐模块 ≥80 由 coverage-gates 机器门禁。
+tests-unit = { cmd = "pytest src/tests/unit/ -v --asyncio-mode=auto --cov=wechat_gui_poc --cov-report=term-missing --cov-fail-under=80", description = "运行单元测试（src/tests/unit/；asyncio auto + 覆盖率 ≥80 enforce；hermetic）" }
+# 按模块覆盖率门禁：单 session 测试 + 覆盖率采集 → coverage.json → 根
+# scripts/check_coverage_per_module.py wechat-gui 剖面逐模块强制 ≥80%。
+# 路径用 $PIXI_PROJECT_ROOT 锚定（cd-safe）；根脚本经本树 pixi python 执行。
+coverage-gates = { cmd = "pytest $PIXI_PROJECT_ROOT/src/tests/unit/ --asyncio-mode=auto --cov=wechat_gui_poc --cov-report=json:$PIXI_PROJECT_ROOT/coverage.json -q && python $PIXI_PROJECT_ROOT/../../scripts/check_coverage_per_module.py $PIXI_PROJECT_ROOT/coverage.json --enforce --profile wechat-gui", description = "全量单元测试 + 按模块覆盖率门禁（enforce 模式，阈值 80，显式 wechat-gui 剖面）" }
+# 静态检查：ruff（src/ 全量——含测试）。
+lint = { cmd = "ruff check src/", description = "ruff 静态检查（src/）" }
+# 格式化。
+format = { cmd = "ruff format src/", description = "ruff 格式化" }
+# 类型检查：mypy（生产面：src/wechat_gui_poc；测试不入严格门——镜像其余树约定）。
+typecheck = { cmd = "mypy src/wechat_gui_poc", description = "mypy 静态类型检查（严格模式）" }
+# 宿主 PoC 门：构建镜像 + 特权容器内跑 poc_gate + 证据落 docs/evidence/poc/。
+# 非 CI 任务（需要 Docker 与 /dev/uinput——CI 不构建镜像，仅跑单测/静态检查）。
+poc-stack = { cmd = "./poc/run_stack_poc.sh", description = "构建镜像并在本机容器内跑 Xorg+uinput 栈 PoC 门（WECHAT_GUI_POC_RUN_MODE=privileged/unprivileged；检测到宿主图形会话时须 WECHAT_GUI_POC_ALLOW_HOST_SESSION=1），证据落 docs/evidence/poc/" }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Feature: dev — 开发/测试工具（在 runtime 基础上叠加）
+# ═══════════════════════════════════════════════════════════════════════════════
+[feature.dev.pypi-dependencies]
+# dev 工具由 pyproject.toml [project.optional-dependencies.dev] 声明，
+# 通过 editable install extras=["dev"] 自动读取。
+wechat-gui = { path = ".", editable = true, extras = ["dev"] }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Environments — 组合 features 用于不同场景
+# ═══════════════════════════════════════════════════════════════════════════════
+[environments]
+# 本地开发：runtime + dev 工具（pytest/ruff/mypy）。
+default = ["dev"]

@@ -1,0 +1,94 @@
+# GUI 微信实验轨编排 —— 独立 compose 项目（与默认工具栈隔离）
+#
+# 为什么单独成文件：wechat-gui 的容器名 / 网络 / secret 与默认工具栈无关，
+# 但放在同一 compose 文件时 compose 为整个目录派生同一个项目名（目录名
+# `docker`），会与同机其它工程（如 ec-skill-eval）的栈撞成同一项目，产生
+# orphan 警告并共享 `docker_tool-sandbox` 网络。本文件用顶层 `name:` 固定
+# 独立项目名 `ai_agent_companion-wechat-gui`，网络 `wechat-gui` 只属于本
+# 服务，不加入默认栈的 `tool-sandbox`。
+#
+# 用法（不再需要 SANDBOX_TOKEN / BROWSER_SIDECAR_TOKEN——本栈不消费它们）：
+#   cd docker
+#   export WECHAT_GUI_VNC_PASSWORD_FILE=/secure/wechat-gui-vnc.pass  # 真实密码
+#   docker compose -f docker-compose.wechat-gui.yml up -d
+#   docker compose -f docker-compose.wechat-gui.yml logs -f wechat-gui
+#   docker compose -f docker-compose.wechat-gui.yml down
+#
+# 迁移：旧布局在默认栈文件里以 `--profile wechat-gui` 启动，容器归属
+# 到 compose 项目 `docker`。升级前先 `docker rm -f wechat-gui`（或
+# `docker compose -f docker-compose.yml rm -sf wechat-gui`），再用本文件。
+#
+# 安全边界（生产运行——非 privileged 的设备 / 能力最小集）：
+#   - **不使用 privileged**：只映射 /dev/uinput（可选 /dev/dri）；
+#   - cap_drop ALL + 仅补 MKNOD（容器内 /dev/input 事件节点无 udev，
+#     由 uinputd 按 sysfs dev 号 mknod）、CHOWN（把节点交给运行用户）
+#     与 SETUID/SETGID/KILL（runuser 降权 / 清理降权子进程）；
+#   - 端口仅回环：5900（x11vnc）/ 6080（noVNC）；VNC 密码经文件 secret；
+#   - 入口以 root 启动、Xorg / x11vnc / websockify 降权到 wechat 用户；
+#   - no-new-privileges + 资源限额（Xorg / VNC 风暴隔离）；
+#   - VNC 密码文件必须对运行用户 wechat 可读（推荐 wechat:wechat 0400；
+#     root 持有 0400 时入口会复制到 /run/wechat-gui/vnc.pass 并改属主，
+#     复制失败即容器失败）；WECHAT_GUI_VNC_PASSWORD 明文优先于文件。
+#   - uinput 设备是内核全局对象：宿主图形会话会接入
+#     wechat-gui virtual* 并接收注入，部署机须配宿主 udev 规则
+#     （仓库提供 docker/wechat-gui/udev/90-wechat-gui-ignore.rules）并实测。
+# PoC 宿主运行器（wechat-gui/poc/run_stack_poc.sh）为兼容性使用
+# --privileged；生产以本服务形态为准（见 docker/wechat-gui/README.md）。
+
+name: ai_agent_companion-wechat-gui
+
+services:
+  wechat-gui:
+    build:
+      context: ./wechat-gui
+      dockerfile: Dockerfile
+    image: wechat-gui:0.1.0
+    container_name: wechat-gui
+    environment:
+      # x11vnc 密码文件（compose secret 挂载点；文件内容为单行密码）。
+      WECHAT_GUI_VNC_PASSWDFILE: /run/secrets/wechat_gui_vnc_password
+      WECHAT_GUI_DISPLAY: ":99"
+    secrets:
+      - wechat_gui_vnc_password
+    devices:
+      # uinput 主设备（生产不 privileged 时的唯一必需设备映射）。
+      - /dev/uinput:/dev/uinput
+      # 可选：宿主 GPU 渲染（dummy 驱动不需要；接入微信客户端后可按需启用）。
+      # - /dev/dri:/dev/dri
+    device_cgroup_rules:
+      # uinput 动态创建的 input 事件节点属主设备号 13；不 privileged 时
+      # 必须显式放行该字符设备类别（映射 /dev/uinput 只放行 10:223）。
+      - "c 13:* rwm"
+    ports:
+      # 仅回环暴露：宿主浏览器访问 noVNC；VNC 直连亦仅本机。
+      - "127.0.0.1:5900:5900"
+      - "127.0.0.1:6080:6080"
+    # 容器内 /dev/uinput 由 root 打开；事件节点 mknod/chown 需要最小能力集。
+    cap_drop:
+      - ALL
+    cap_add:
+      - MKNOD
+      - CHOWN
+      - SETUID
+      - SETGID
+      - KILL
+    security_opt:
+      - no-new-privileges:true
+    # Xorg + VNC 的资源上限（按部署机实测收紧）。
+    shm_size: 256m
+    mem_limit: 1g
+    cpus: 1.0
+    restart: unless-stopped
+    networks:
+      - wechat-gui
+
+networks:
+  # 本服务独占的桥接网络（不加入默认栈 tool-sandbox）。
+  wechat-gui:
+    driver: bridge
+
+secrets:
+  # x11vnc 密码文件（内容为单行密码）。缺省指向仓库内开发占位文件；
+  # 生产必须经 WECHAT_GUI_VNC_PASSWORD_FILE 指向真实密码文件（不入库）。
+  wechat_gui_vnc_password:
+    file: ${WECHAT_GUI_VNC_PASSWORD_FILE:-./wechat-gui/vnc.pass.default}

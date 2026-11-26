@@ -4,6 +4,7 @@
   "trees": {
     "backend": 0,
     "docker/tool-sandbox-agent": 0,
-    "docker/browser-sidecar": 0
+    "docker/browser-sidecar": 0,
+    "docker/wechat-gui": 0
   }
 }

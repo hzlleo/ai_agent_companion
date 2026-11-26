@@ -220,3 +220,33 @@ jobs:
 
       - name: Typecheck (mypy)
         run: cd docker/browser-sidecar && pixi run typecheck
+
+  # ─── GUI 微信实验轨沙盒: docker 隔离树（独立 pixi 工程） ────────────────────
+  # 与其余沙盒 job 同形（pixi 安装 + 测试 + lint + typecheck），**不构建镜像**：
+  # 镜像的 Xorg / dummy / evdev / uinput 行为需要真实内核设备（/dev/uinput）
+  # 与特权运行，CI runner 面不具备；镜像与栈的实测在宿主 PoC 运行器执行
+  # （docker/wechat-gui/poc/run_stack_poc.sh，证据落 docs/evidence/poc/）。
+  # 树内逻辑面（ioctl 编码 / sysfs 发现 / 控制面协议 / 门脚本编排 / 图像
+  # 校验）由本 job 的 hermetic 测试全覆盖。
+  wechat-gui:
+    name: WeChat GUI sandbox (tests + lint + typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pixi (single install of the env, lock-keyed cache)
+        uses: prefix-dev/setup-pixi@v0.11.3
+        with:
+          pixi-version: v0.82.0
+          manifest-path: docker/wechat-gui/pixi.toml
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+
+      - name: Tests (pytest, coverage >= 80% enforced, hermetic)
+        run: cd docker/wechat-gui && pixi run tests-unit
+
+      - name: Lint (ruff)
+        run: cd docker/wechat-gui && pixi run lint
+
+      - name: Typecheck (mypy)
+        run: cd docker/wechat-gui && pixi run typecheck

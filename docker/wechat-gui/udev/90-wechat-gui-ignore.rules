@@ -1,0 +1,9 @@
+# 容器内创建的虚拟键鼠是内核全局设备，宿主图形会话必须忽略它们，
+# 否则注入的按键和点击会落到宿主桌面上。
+# 设备名是契约：改名须同步此规则（见 docker/wechat-gui/src/wechat_gui_poc/uinput_devices.py）。
+SUBSYSTEM=="input", KERNEL=="event[0-9]*", ATTRS{name}=="wechat-gui virtual *", \
+    ENV{LIBINPUT_IGNORE_DEVICE}="1", \
+    ENV{ID_INPUT}="", ENV{ID_INPUT_KEYBOARD}="", ENV{ID_INPUT_KEY}="", \
+    ENV{ID_INPUT_MOUSE}="", ENV{ID_INPUT_POINTER}="", ENV{ID_INPUT_TOUCHPAD}="", \
+    ENV{ID_INPUT_TOUCHSCREEN}="", ENV{ID_INPUT_TABLET}="", ENV{ID_INPUT_JOYSTICK}="", \
+    ENV{ID_INPUT_TRACKBALL}="", ENV{ID_INPUT_ACCELEROMETER}=""

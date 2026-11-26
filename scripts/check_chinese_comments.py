@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """中文注释门禁（Chinese comment gate）——扫描非测试源码的 docstring 合规性。
 
-扫描范围（当前仓库树：backend + 沙盒树 + 根级 scripts/ + 前端源码——新树
-落地时在本脚本 ``_TREE_ROOTS`` 登记）：
+扫描范围（当前仓库树：backend + 沙盒树（含 GUI 微信沙盒）+ 根级
+scripts/ + 前端源码——新树落地时在本脚本 ``_TREE_ROOTS`` 登记）：
 
     - backend/src（排除 src/tests/）
     - backend/alembic（迁移环境与版本文件——Python 面，与 backend/src 同规则）
@@ -68,6 +68,7 @@ _TREE_ROOTS: dict[str, list[str]] = {
         "docker/browser-sidecar/src",
         "docker/browser-sidecar/server.py",
     ],
+    "wechat-gui": ["docker/wechat-gui/src"],
     "scripts": ["scripts"],
     "frontend": [
         "frontend/src",

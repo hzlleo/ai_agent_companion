@@ -12,6 +12,14 @@
 #   # 可选辅助模型服务（look_at 视觉 + embed 嵌入；需 NVIDIA Container Toolkit）：
 #   docker compose up -d llama-server-vision llama-server-embed
 #
+# 项目名固定为 `ai_agent_companion`（顶层 `name:`）。否则 compose 按所在
+# 目录名派生项目名（`docker`），会与同机其它工程（如 ec-skill-eval）的栈
+# 撞成同一项目，产生 orphan 警告并共享网络 / 卷命名空间。
+#
+# GUI 微信实验轨**不在本文件**：它有自己的 compose 项目与网络，见
+# docker-compose.wechat-gui.yml（`docker compose -f
+# docker-compose.wechat-gui.yml up -d`，不需要砂盒 token）。
+#
 # 辅助模型服务：
 #   - llama-server-vision：Qwen3-VL-4B（Q4_K_M + F16 mmproj）——look_at 角色
 #     端点（backend llm 注册表条目 base_url=http://127.0.0.1:8080/v1，
@@ -77,6 +85,8 @@
 #   - **不设 read_only**（profiles 卷需要写——持久登录态是职能面；
 #     写面收敛到命名卷，不挂宿主路径）；
 #   - restart: unless-stopped（宿主机重启后自动恢复）。
+
+name: ai_agent_companion
 
 services:
   tool-sandbox-agent:
@@ -185,6 +195,9 @@ services:
     restart: unless-stopped
     networks:
       - tool-sandbox
+
+  # GUI 微信实验轨已在 docker-compose.wechat-gui.yml（独立项目 / 网络 /
+  # secret）；本文件不再声明该服务，也不再有 wechat-gui profile。
 
   # ─── 待接入（部署面占位，未启用） ────────────────────────────────────────────
   # TTS（CosyVoice3）：models/Fun-CosyVoice3-0.5B-2512 权重 + 官方运行时薄包装，

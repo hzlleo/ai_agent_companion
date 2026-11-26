@@ -1,0 +1,83 @@
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/frontend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (coverage): npm run test:coverage: (运行前端测试 + 覆盖率（≥80% 门禁）)
+
+> ai-agent-companion-frontend@0.1.0 test:coverage
+> vitest run --coverage
+
+
+ RUN  v4.1.12 /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/frontend
+      Coverage enabled with v8
+
+
+ Test Files  89 passed (89)
+      Tests  716 passed (716)
+   Start at  10:54:54
+   Duration  45.98s (transform 17.74s, setup 147.41s, import 62.30s, tests 258.19s, environment 266.13s)
+
+ % Coverage report from v8
+-------------------|---------|----------|---------|---------|-------------------
+File               | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+-------------------|---------|----------|---------|---------|-------------------
+All files          |   96.15 |    92.18 |   95.76 |   96.35 |                   
+ src/api           |   98.68 |    94.63 |     100 |   98.67 |                   
+  canvas.ts        |     100 |    88.88 |     100 |     100 | 90,100            
+  client.ts        |   95.65 |    89.18 |     100 |   95.65 | 77,85             
+  errorDetails.ts  |   96.66 |    94.28 |     100 |   96.55 | 31                
+ src/components    |   97.67 |    97.43 |   96.15 |   97.61 |                   
+  ...irmDialog.tsx |   83.33 |    91.66 |      80 |      80 | 50                
+ src/components/ui |     100 |    96.77 |     100 |     100 |                   
+  Dialog.tsx       |     100 |    85.71 |     100 |     100 | 50                
+ src/hooks         |   99.21 |      100 |   98.88 |   99.21 |                   
+  ...ersonasApi.ts |   96.29 |      100 |      95 |   96.22 | 153-155           
+ src/lib           |   97.12 |    90.13 |    94.8 |   97.03 |                   
+  realtimeAudio.ts |   99.27 |    88.23 |   95.23 |   99.22 | 295               
+  ...oiceClient.ts |   95.47 |    88.29 |   93.33 |   95.41 | ...44,556-557,640 
+ src/pages/canvas  |   94.44 |    85.29 |    87.5 |   94.44 |                   
+  CanvasPage.tsx   |   94.44 |    85.29 |    87.5 |   94.44 | ...79,350,415-416 
+ ...pages/memories |    93.7 |    91.15 |   91.73 |   94.24 |                   
+  CuratedTab.tsx   |   84.78 |    91.66 |   80.76 |   88.63 | ...51,282,344,384 
+  ...ertDialog.tsx |   93.33 |      100 |   89.47 |    92.5 | 108-109,119       
+  ...RunReport.tsx |     100 |    94.11 |     100 |     100 | 92                
+  DreamTab.tsx     |   96.29 |    87.17 |     100 |   95.83 | 66,72,116         
+  ...ectDialog.tsx |    87.8 |    92.85 |   80.95 |   88.88 | 80,101,166,202    
+  EpisodesTab.tsx  |   86.56 |    88.09 |   88.46 |    87.5 | ...37,211-212,345 
+  MemoriesPage.tsx |     100 |    92.85 |     100 |     100 | 74                
+  ...ateDialog.tsx |   96.87 |      100 |   88.88 |   96.87 | 81                
+  RemindersTab.tsx |   95.16 |    90.62 |   96.15 |   96.49 | 116,295           
+  SearchTab.tsx    |   90.19 |    83.72 |      85 |   90.19 | 64,92,193,213-221 
+  ...ailDialog.tsx |   97.05 |    85.71 |     100 |   97.05 | 73                
+  SessionsTab.tsx  |     100 |       90 |     100 |     100 | 156-189           
+  ...eFormModel.ts |   98.11 |    94.73 |     100 |   98.11 | 115               
+  memoryDisplay.ts |     100 |    90.62 |     100 |     100 | 146-147,151       
+ src/pages/models  |    96.5 |    91.05 |   96.55 |   96.18 |                   
+  ...tryDialog.tsx |   94.44 |    91.66 |   93.54 |   93.33 | 98-99,111         
+  ModelsPage.tsx   |   98.03 |    89.13 |     100 |   97.91 | 73                
+  ...sFormModel.ts |   97.36 |    92.68 |     100 |   97.36 | 119               
+ ...pages/personas |   96.29 |    93.58 |   95.37 |   96.69 |                   
+  ...onaDialog.tsx |   93.33 |      100 |      80 |   93.33 | 84,127            
+  ...moryPanel.tsx |     100 |    95.83 |     100 |     100 | 226               
+  ...ivesPanel.tsx |      90 |       90 |      80 |   91.83 | 78,147,193,212    
+  FactsPanel.tsx   |   97.75 |    90.24 |   96.77 |   98.83 | 302               
+  ...aFormPage.tsx |   93.18 |    92.75 |   96.96 |   92.85 | ...59,162,176-177 
+  ...ultDialog.tsx |    87.5 |      100 |      80 |    87.5 | 56                
+  ...ortButton.tsx |   97.36 |    89.47 |   92.85 |   97.36 | 107               
+  ...ictDialog.tsx |     100 |     87.5 |     100 |     100 | 67                
+  ...aListPage.tsx |   94.25 |    91.52 |   96.66 |   94.04 | 97,111,166-171    
+  ...etGallery.tsx |   95.45 |     87.8 |   95.65 |   95.45 | 124-125,405       
+  ...atesPanel.tsx |     100 |    94.73 |     100 |     100 | 58                
+  SkillsPanel.tsx  |   96.61 |     91.8 |   93.75 |   98.26 | 321,413           
+  ...aFormModel.ts |   99.08 |    97.67 |     100 |   99.08 | 430               
+ ...pages/realtime |   94.44 |       90 |   96.87 |    94.9 |                   
+  ...VoicePage.tsx |   94.44 |       90 |   96.87 |    94.9 | ...00,206,282,291 
+ ...pages/stickers |   89.24 |    84.61 |      95 |   89.24 |                   
+  StickersPage.tsx |   89.24 |    84.61 |      95 |   89.24 | ...76,286,415-416 
+ src/pages/usage   |   95.55 |    96.29 |   91.66 |   95.55 |                   
+  UsagePage.tsx    |   94.28 |       96 |   90.47 |   94.28 | 169,369           
+-------------------|---------|----------|---------|---------|-------------------
+
+=============================== Coverage summary ===============================
+Statements   : 96.15% ( 2923/3040 )
+Branches     : 92.18% ( 1675/1817 )
+Functions    : 95.76% ( 1086/1134 )
+Lines        : 96.35% ( 2826/2933 )
+================================================================================
