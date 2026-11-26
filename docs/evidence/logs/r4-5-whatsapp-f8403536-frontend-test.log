@@ -1,0 +1,15 @@
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/frontend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (test): npm run test:run: (运行前端测试)
+
+> ai-agent-companion-frontend@0.1.0 test:run
+> vitest run
+
+
+ RUN  v4.1.12 /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/frontend
+
+
+ Test Files  88 passed (88)
+      Tests  705 passed (705)
+   Start at  16:34:21
+   Duration  37.98s (transform 16.58s, setup 119.35s, import 56.96s, tests 207.29s, environment 243.14s)
+

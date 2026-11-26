@@ -1,0 +1,6 @@
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/frontend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (lint): npm run lint: (tsc --noEmit + eslint src/)
+
+> ai-agent-companion-frontend@0.1.0 lint
+> tsc --noEmit && eslint src/
+

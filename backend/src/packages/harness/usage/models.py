@@ -22,6 +22,8 @@ __all__ = [
     "UsageGroupBy",
     "UsageTimeBucket",
     "TIME_BUCKET_MS",
+    "BudgetPurposeGroup",
+    "BUDGET_PURPOSE_GROUPS",
     "LLM_BUDGET_PURPOSES",
 ]
 
@@ -54,18 +56,50 @@ class UsagePurpose(StrEnum):
     SEARCH = "search"
 
 
+class BudgetPurposeGroup(StrEnum):
+    """预算分区标识——每种调用用途必须归入唯一分区。
+
+    - ``llm``：模型调用总量闸（LLM 网关日预算）；
+    - ``voice``：ASR / TTS / 声纹各自独立的分面预算；
+    - ``search``：联网搜索的独立预算；
+    - ``exempt``：不参与任何日预算的用途（当前无成员，保留为显式分类）。
+    """
+
+    LLM = "llm"
+    VOICE = "voice"
+    SEARCH = "search"
+    EXEMPT = "exempt"
+
+
+#: 用途 → 预算分区的唯一分类表。新增 :class:`UsagePurpose` 成员必须在此
+#: 归入恰好一个分区（结构测试断言分区并集等于枚举全集且互不重叠）。
+BUDGET_PURPOSE_GROUPS: dict[BudgetPurposeGroup, frozenset[UsagePurpose]] = {
+    BudgetPurposeGroup.LLM: frozenset(
+        {
+            UsagePurpose.CHAT,
+            UsagePurpose.DUTY,
+            UsagePurpose.DREAM,
+            UsagePurpose.LOOK_AT,
+            UsagePurpose.EMBED,
+            UsagePurpose.TOOL,
+        }
+    ),
+    BudgetPurposeGroup.VOICE: frozenset(
+        {
+            UsagePurpose.TTS,
+            UsagePurpose.ASR,
+            UsagePurpose.VOICEPRINT,
+        }
+    ),
+    BudgetPurposeGroup.SEARCH: frozenset({UsagePurpose.SEARCH}),
+    BudgetPurposeGroup.EXEMPT: frozenset(),
+}
+
 #: LLM 日预算计入的 purpose 集合（模型调用总量闸；语音 / 声纹 / 搜索
-#: 各自独立预算，互不占用）。
-LLM_BUDGET_PURPOSES: frozenset[UsagePurpose] = frozenset(
-    {
-        UsagePurpose.CHAT,
-        UsagePurpose.DUTY,
-        UsagePurpose.DREAM,
-        UsagePurpose.LOOK_AT,
-        UsagePurpose.EMBED,
-        UsagePurpose.TOOL,
-    }
-)
+#: 各自独立预算，互不占用——由上面的分区表派生）。
+LLM_BUDGET_PURPOSES: frozenset[UsagePurpose] = BUDGET_PURPOSE_GROUPS[
+    BudgetPurposeGroup.LLM
+]
 
 
 class UsageStatus(StrEnum):

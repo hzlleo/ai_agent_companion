@@ -62,10 +62,10 @@ os.environ["SERVER_ADMIN_TOKEN_ENV"] = "ADMIN_AUTH_TOKEN"
 # monkeypatch 本变量）
 os.environ["ADMIN_AUTH_TOKEN"] = ""
 
-# --- 数据库（DATABASE_ 前缀 → DatabaseConfig；MySQL 8 权威 / 测试 sqlite） ---
+# --- 数据库（DATABASE_ 前缀 → DatabaseConfig；SeekDB 权威 / 测试 sqlite） ---
 os.environ["DATABASE_TYPE"] = "sqlite"
 os.environ["DATABASE_HOST"] = "localhost"
-os.environ["DATABASE_PORT"] = "3306"
+os.environ["DATABASE_PORT"] = "2881"
 os.environ["DATABASE_NAME"] = "test_db"
 os.environ["DATABASE_USER"] = "test_user"
 os.environ["DATABASE_PASSWORD"] = "test_pass"
@@ -128,7 +128,7 @@ os.environ["LLM_INTIMATE_MIN_INTIMACY_LEVEL"] = "2"
 #     SQLite 回退存储，零真实连接；S3 硬覆盖模式——开发者 shell 导出的
 #     同名真实配置不得泄入测试） ---
 os.environ["SEEKDB_ENABLED"] = "false"
-os.environ["SEEKDB_HOST"] = "127.0.0.1"
+os.environ["SEEKDB_HOST"] = "localhost"
 os.environ["SEEKDB_PORT"] = "2881"
 os.environ["SEEKDB_USER"] = "test_user"
 os.environ["SEEKDB_PASSWORD_ENV"] = "SEEKDB_TEST_PASSWORD"
@@ -225,6 +225,20 @@ os.environ["SMS_FORWARDER_ENABLED"] = "false"
 os.environ["SMS_FORWARDER_TOKEN"] = "test-only-sms-forwarder-token"
 os.environ["SMS_FORWARDER_NOTIFICATIONS_ENABLED"] = "false"
 os.environ["SMS_FORWARDER_OWNER_NUMBERS"] = ""
+
+# --- WhatsApp Cloud API 通道（WHATSAPP_ 前缀 → WhatsAppChannelSettings；
+#     默认关闭 → 测试零真实 Meta 连接 / 零后台任务；S3 硬覆盖模式——开发者
+#     shell 导出的同名真实配置不得泄入测试。三份 SecretStr 凭据 + 企业号码
+#     ID 全部给测试专用值（生产 fail-closed 矩阵按需覆写）；单测经
+#     MockTransport / fake 消费，永不真实连接） ---
+os.environ["WHATSAPP_ENABLED"] = "false"
+os.environ["WHATSAPP_VERIFY_TOKEN"] = "test-only-whatsapp-verify-token"
+os.environ["WHATSAPP_APP_SECRET"] = "test-only-whatsapp-app-secret"
+os.environ["WHATSAPP_ACCESS_TOKEN"] = "test-only-whatsapp-access-token"
+os.environ["WHATSAPP_PHONE_NUMBER_ID"] = "test-only-whatsapp-phone-number-id"
+os.environ["WHATSAPP_API_VERSION"] = "v21.0"
+os.environ["WHATSAPP_API_BASE"] = "https://graph.facebook.com"
+os.environ["WHATSAPP_OWNER_NUMBERS"] = ""
 
 # --- 值班轮（DUTY_ 前缀 → DutySettings；默认关闭 → 测试零调度副作用；
 #     S3 硬覆盖模式——开发者 shell 导出的同名真实配置不得泄入测试） ---

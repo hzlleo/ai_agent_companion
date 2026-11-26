@@ -30,7 +30,7 @@ class EngineHolder:
 
     槽位：
 
-        - ``async_engine``：主库异步引擎（MySQL 权威 / SQLite 测试）；
+        - ``async_engine``：主库异步引擎（SeekDB 权威存储（MySQL 协议）/ SQLite 测试）；
         - ``session_factory``：主库会话工厂（``async_sessionmaker``）。
 
     所有权令牌 ``owner_token``：

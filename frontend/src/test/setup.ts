@@ -1,13 +1,52 @@
 import '@testing-library/jest-dom/vitest'
-import { afterEach, afterAll, beforeAll } from 'vitest'
+import { afterEach, afterAll, beforeAll, beforeEach, vi } from 'vitest'
 import { cleanup } from '@testing-library/react'
 import { server } from './server'
+import { ActWarningGate } from './actWarningGate'
 
-// msw 服务器生命周期：全部测试文件共享同一 setupServer 实例，
-// 请求拦截在 beforeAll 启用、afterAll 还原（onUnhandledRequest 报错，
-// 保证测试永不触达真实网络）。
+/** React 未包裹 act 的固定告警文案。 */
+const ACT_WARNING_PATTERN = /not wrapped in act\(\.\.\.\)/
+
+/** 包装前保存的原始输出通道（非 act 日志原样透传）。 */
+const originalConsoleError = console.error.bind(console)
+
+/** act 告警门禁（归属 / 排空 / 兜底语义见 ActWarningGate）。 */
+const actGate = new ActWarningGate()
+
+/** 排空一个宏任务：act 告警常在微任务之后的下一个宏任务落盘。 */
+async function drainMacrotask(): Promise<void> {
+  if (vi.isFakeTimers()) {
+    vi.advanceTimersByTime(0)
+    await Promise.resolve()
+    return
+  }
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0)
+  })
+}
+
+// act 门禁：console.error 中的 act 告警在用例结束时转为失败（onTestFinished
+// 在 afterEach（含 RTL cleanup）之后执行，见 vitest 4 生命周期；先排空宏任务
+// 再判定，afterAll 兜底无归属残留）。
 beforeAll(() => {
+  console.error = (...args: unknown[]) => {
+    const text = args.map((arg) => (typeof arg === 'string' ? arg : String(arg))).join(' ')
+    if (ACT_WARNING_PATTERN.test(text)) {
+      actGate.record(text)
+      return
+    }
+    originalConsoleError(...args)
+  }
   server.listen({ onUnhandledRequest: 'error' })
+})
+
+beforeEach((context) => {
+  actGate.beginAttempt()
+  const testName = context.task.name
+  context.onTestFinished(async () => {
+    await drainMacrotask()
+    actGate.finishAttempt(testName)
+  })
 })
 
 afterEach(() => {
@@ -17,5 +56,7 @@ afterEach(() => {
 })
 
 afterAll(() => {
+  console.error = originalConsoleError
   server.close()
+  actGate.finishRun()
 })

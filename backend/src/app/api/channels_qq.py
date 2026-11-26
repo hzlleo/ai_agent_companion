@@ -17,15 +17,20 @@
       经共享异常处理器）。变量为空 = 鉴权关闭（仅限 NapCat 与后端同机 /
       可信内网部署形态——公网暴露必须配置，见 QqChannelSettings 类
       docstring 取舍）。token 经 env 间接（永不落配置树）。
-    - **请求体校验**：仅要求 JSON **对象**形态（OneBot 事件面）；非对象
-      （数组 / 字面量 / 非法 JSON）→ 400（``BAD_REQUEST``）；极深嵌套
-      JSON 的 ``RecursionError`` 同归 400（解析器递归上限面——恒 200/4xx
-      契约不破）。对象内字段的合法性由 webhook 处理器容错解析承担
+    - **请求体校验**：经共享有界读取器
+      （:mod:`app.api.inbound_body`）读取——声明 Content-Length 超限即
+      400（零读取），无 Content-Length 的 chunked 请求按
+      :data:`app.api.inbound_body.QQ_MAX_BODY_BYTES`（8 MiB——容纳合法
+      ``base64://`` 媒体段）逐块累计、超限即停；空体 / 非法 JSON /
+      非对象（数组 / 字面量）→ 400（``BAD_REQUEST``）；极深嵌套 JSON 的
+      ``RecursionError`` 同归 400（解析器递归上限面——恒 200/4xx 契约
+      不破）。对象内字段的合法性由 webhook 处理器容错解析承担
       （隔离确认——不进 HTTP 错误面）。
     - **入站消纳（有界队列）**：QQ 启用时 lifespan 装配
       ``app.state.channels_qq_runner``（``QqWebhookRunner``）——端点只做
       鉴权 / 体校验 / 去重登记 / 入队后**立即确认**，LLM 回合耗时由后台
-      固定 worker 承担；队列满丢弃并计数（平台重投可重新消费）。runner
+      固定 worker 承担；队列满丢弃并计数（端点恒 200，满队丢弃即最终丢失；
+      不登记去重仅吸收偶发重复）。runner
       未装配的嵌入形态回落单事件直调（``process_webhook_event``）。
     - **路由器未装配**（QQ / 全通道关闭形态）：确认并丢弃（warning 日志
       ——通道层是可选装配面，webhook 端点不因配置缺失而 5xx）。
@@ -45,13 +50,17 @@ from fastapi import APIRouter, Request
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from app.api.inbound_body import (
+    QQ_MAX_BODY_BYTES,
+    read_bounded_json_object,
+)
 from packages.harness.channels.qq.qq_runner import QqWebhookRunner
 from packages.harness.channels.qq.qq_webhook import process_webhook_event
 from packages.harness.config.models import Settings
 from packages.harness.config.models import settings as global_settings
 from packages.harness.core.errors import BusinessException, ErrorCode
 
-__all__ = ["QqWebhookAckDTO", "router"]
+__all__ = ["QQ_MAX_BODY_BYTES", "QqWebhookAckDTO", "router"]
 
 router = APIRouter(prefix="/api/v1/channels/qq", tags=["channels-qq"])
 
@@ -129,18 +138,12 @@ async def receive_qq_webhook(request: Request) -> QqWebhookAckDTO:
     )
     qq = settings.channels.qq
     _require_webhook_auth(request, qq.webhook_token_env)
-    try:
-        payload = await request.json()
-    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
-        raise BusinessException(
-            code=ErrorCode.BAD_REQUEST,
-            message="QQ webhook 请求体不是合法 JSON",
-        ) from exc
-    if not isinstance(payload, dict):
-        raise BusinessException(
-            code=ErrorCode.BAD_REQUEST,
-            message="QQ webhook 请求体须为 JSON 对象（OneBot 事件形态）",
-        )
+    payload = await read_bounded_json_object(
+        request,
+        limit=QQ_MAX_BODY_BYTES,
+        channel_label="QQ",
+        object_label="OneBot 事件形态",
+    )
     runner: QqWebhookRunner | None = getattr(request.app.state, "channels_qq_runner", None)
     if runner is not None:
         runner.submit(payload)

@@ -21,13 +21,14 @@ Python 标准库，经 backend pixi 环境的 python 执行；基线与允许清
 
 | 入口 | 作用 | 命令 |
 |---|---|---|
-| `scripts/red_probe.py` + `backend/red_manifest.toml` | 红探针：临时副本 AST 源码体替换后跑登记的 node id，要求至少一红；门禁模式要求新源文件被 probe 覆盖或在冻结基线；清单外符号可用 `--tests` 走一次性探针（不写清单，`errors>0 且 failed==0` 会标注「疑似导入期假红」） | `cd backend && pixi run red-probe --symbol <module:attr>`（追加 `--tests <nodeid>`）/ `pixi run red-probe-gate` |
+| `scripts/red_probe.py` + `backend/red_manifest.toml` | 红探针：临时副本 AST 源码体替换后跑登记的 node id，要求至少一红；门禁模式要求新源文件被 probe 覆盖或在冻结基线，且冻结条目数不高于 manifest `[metadata].grandfathered_baseline`（只降不升）；清单外符号可用 `--tests` 走一次性探针（不写清单，`errors>0 且 failed==0` 会标注「疑似导入期假红」） | `cd backend && pixi run red-probe --symbol <module:attr>`（追加 `--tests <nodeid>`）/ `pixi run red-probe-gate` |
 | `scripts/verify_slice.py` | 切片验收证据包：tests-all / coverage-gates / lint / typecheck / gates 逐步校验退出码与尾部摘要，日志与 JSON 落 `docs/evidence/`；哈希剔除 `.egg-info` / 缓存 / 依赖目录，干净副本可复算同一 sha8 | `cd backend && pixi run verify-slice -- --slice <slice>` |
 | `scripts/generate_examples_env.py` | `.env.example` 生成 + `docs/backend/config.md` env 分节表同步 / 漂移校验 | `--sync-docs` / `--check-docs`（经 `pixi run docs-truth`） |
 | `scripts/todo_freeze_check.py` | docs 未完成标记（TODO / 待办 / 待定 / 暂未）只降不升棘轮 | `cd backend && pixi run docs-truth` |
+| `scripts/check_doc_counts.py` | 文档数字真相：从注入规则表 / 红队模板表 / 生成器登记表派生计数，校验 `defense.md` / `chat.md` / `config.md` 内数字字面；解析失败或数字不一致即红 | `cd backend && pixi run doc-counts` |
 | `scripts/assertion_freeze.py` | 既有单测 assert / pytest.raises 计数只降不升（AST 摘要变化报告） | `cd backend && pixi run assertion-freeze` |
 | `scripts/surface_check.py` + `scripts/.surface_allowlist.json` | app/api wire 模型导出面完整性（未登记须允许清单留 reason）+ `.env.example` 键面复核；允许清单受 `max_entries` 规模棘轮约束（超限即红，新增豁免须 `--update` 同步抬高） | `cd backend && pixi run surface-check` / `pixi run python ../scripts/surface_check.py --update` |
-| `scripts/prose_pin_check.py` | prose-pin 启发式报告：命中文案分 field_or_code / prose 两桶，「疑似 prose pin」只计 prose 桶、Top-N prose 优先，另报纯结构断言占比，不阻断 | `cd backend && pixi run prose-pin` |
+| `scripts/prose_pin_check.py` | prose-pin 启发式报告 + 棘轮：命中文案分 field_or_code / prose 两桶，「疑似 prose pin」只计 prose 桶、Top-N prose 优先，另报纯结构断言占比；`--gate` 要求 prose 计数不高于基线（只降不升），`--update` 重建基线 | `cd backend && pixi run prose-pin`（`--gate` / `--update`） |
 | `scripts/count_sync_tests.py` | 同步测试只降不升棘轮 | `cd backend && pixi run sync-test-ratchet` |
 | `scripts/noqa_freeze_check.py` | noqa / type:ignore 增量冻结 | `cd backend && pixi run noqa-freeze` |
 | `scripts/conftest_env_check.py` + `scripts/.conftest_allowlist.json` | conftest env 硬覆盖完整性：生成器登记表全量键逐键核对 conftest 硬赋值，缺口即红并列出缺失键；允许清单每项须带 reason | `cd backend && pixi run conftest-env` |

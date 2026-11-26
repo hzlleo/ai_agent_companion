@@ -6,12 +6,14 @@
 
 调用链（顺序锁定，文档化于 docs/backend/memory.md 夜间梦境一节）::
 
-    DreamService.run_dream(db, gateway=..., persona_name=..., store=?, now_ms=?, cfg=?)
+    DreamService.run_dream(db, gateway=..., persona_name=..., store=?, clock_ms=?, cfg=?)
         ↓ ⓪ 孤儿 running 行收敛（stale_running_threshold_ms 阈值内的
           崩溃遗留行批量置 failed——进程崩溃遗留的唯一出口）
-        ↓ ⓪.5 重入闸（DREAM_REENTRY_WINDOW_MS 窗内本人格 running 行存在
-          → 直接返回该运行记录，不新建行、不再跑阶段——单飞语义）
-        ↓ ① DreamRunRow 落库（status=running——运行日志面，先落库可追溯）
+        ↓ ⓪.5 窗内 running 复用（DREAM_REENTRY_WINDOW_MS 窗内本人格
+          running 行存在 → 直接返回该运行记录——辅助快路径）
+        ↓ ① 单飞 running 行落库（status=running + running_marker='1'；
+          (persona_id, running_marker) 唯一键拒绝并发的第二行 → 回滚后
+          返回既有在途运行——DB 级单飞闸门，权威防线）
         ↓ ② 取窗口事件 fetch_day_episodes（[now-window, now) 左闭右开；
           超出 max_episodes 按时间序截断并告警）
         ↓ ③ 取回溯窗内既往成功运行的已晋升事件集（promoted_lookback_ms
@@ -43,7 +45,9 @@
           复核 status=active，快照后已被取代的行跳过；status=archived +
           索引移除）→ stats.archived / decisions(action=archived) 只按
           实际归档集合生成
-        ↓ ⑫ DreamRunRow 终态落库（status/error/stats/decisions）→ 返回记录 DTO
+        ↓ ⑫ DreamRunRow 终态落库（status/error/stats/decisions；清
+           running_marker → 返回记录 DTO；finished_ms 取第二次读取的
+           注入时钟值——结束时刻语义）
 
 冻结 / 置顶语义（生命周期保护面——文档化决策）：
 
@@ -86,14 +90,18 @@ fail-closed 语义（锁定决策，逐条）：
     - **合并中断决策补齐**：事实提取 / 技能挖矿 / 合并 / 晋升阶段异常
       中断时，过门但未决策的候选事件补 skipped 决策（reason 标注中断
       阶段）——失败运行的决策面对全部可信候选同样全覆盖；
-    - **重入单飞**：run_dream 入口在孤儿收敛后检查本人格重入窗
-      （``DREAM_REENTRY_WINDOW_MS``）内的 running 行——存在即返回该行
-      （日志一条），不新建运行、不再调用模型；上游重复触发收敛为同一次
-      在途运行；
+    - **单飞（DB 级权威闸门）**：run_dream 入口先做窗内 running 复用
+      （``DREAM_REENTRY_WINDOW_MS`` 内的在途行——辅助快路径，避免无谓
+      插入），再以「插入带 ``running_marker='1'`` 的 running 行」为
+      单飞动作；``(persona_id, running_marker)`` 唯一键使并发的第二个
+      插入被数据库拒绝，捕获唯一键冲突后回滚并返回既有在途运行（日志
+      一条），不新建运行、不再调用模型。窗内复用只覆盖「短时间重复
+      触发」，DB 标记覆盖「任意时长的并发触发」——后者是唯一防线；
     - **孤儿 running 行收敛**：run_dream 入口把本人格
       ``started_ms < now - stale_running_threshold_ms`` 且无终态的
-      running 行批量置 failed（error=进程崩溃遗留）——进程崩溃是
-      running 行终态缺失的唯一来源，调度 / 手工触发入口共享本收敛；
+      running 行批量置 failed 并清 ``running_marker``（error=进程崩溃
+      遗留）——进程崩溃是 running 行终态缺失的唯一来源，调度 / 手工
+      触发入口共享本收敛；
     - **运行失败不抛异常**：run_dream 返回终态记录 DTO（status=failed +
       error 原因）——手工触发面（admin API）以运行日志为产物，失败是
       业务结果而非请求失败；仅人格上下文缺失 / 运行行落库失败在入口
@@ -110,18 +118,25 @@ fail-closed 语义（锁定决策，逐条）：
 单事件正文 500 字符 / 日记 200 条与 60000 字符 / 合并主题 50 条 /
 重入窗 3600000 毫秒）——超限只截断本次 prompt 输入并记 debug 计数，
 不打印原文、不修改已落库事件。
+
+时钟语义（锁定）：``clock_ms`` 是可调用的 epoch 毫秒时钟，运行开始与
+结束各读取一次——``started_ms`` 取开始读数，``finished_ms`` 取结束
+读数（两者差值为本次运行的真实耗时；均来自同一注入轴，不读系统
+时钟）。窗内复用与唯一键冲突的提前返回不产生终态写入，只读取开始
+读数一次。
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 from loguru import logger
 from pydantic import ValidationError
 from sqlalchemy import desc, select, update
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.harness.config.model_entry import ModelRole
@@ -219,6 +234,9 @@ DIARY_SOURCE: str = "dream:diary"
 #: 孤儿 running 行收敛的落库失败原因（run_dream 入口批量置 failed 时写入
 #: DreamRunRow.error——进程崩溃遗留的终态补齐）。
 _STALE_RUNNING_ERROR: str = "进程崩溃遗留，由调度收敛"
+#: 单飞守卫标记（运行中行的固定值；终态 / 失败 / 崩溃收敛后清 NULL——
+#: 唯一键 (persona_id, running_marker) 使同人格至多一条运行中行）。
+_RUNNING_MARKER: str = "1"
 #: 归档决策理由（生命周期阶段的 decisions.reason——强度低于归档阈值）。
 ARCHIVE_REASON_STRENGTH: str = "strength_below_threshold"
 #: 冻结目标导致的提案丢弃理由（decisions.reason 片段——文档化 deltas）。
@@ -714,17 +732,19 @@ class DreamService:
         gateway: LlmGateway,
         persona_name: str,
         store: MemoryStore | None = None,
-        now_ms: int | None = None,
+        clock_ms: Callable[[], int] | None = None,
         cfg: DreamJobConfig | None = None,
     ) -> DreamRunRecordDTO:
         """执行一次夜间梦境整理（fail-closed——返回终态记录，失败不抛）。
 
         链路与 fail-closed 语义见模块 docstring。入口先收敛孤儿
         running 行（``stale_running_threshold_ms`` 阈值内的崩溃遗留
-        行批量置 failed），再执行重入闸——窗内已有本人格 running 行时
-        直接返回该运行记录（不新建行、不再跑阶段）。关键排序决策：
-        **晋升全部提交后才生成日记**——日记失败标记运行 failed 但保留
-        已提交晋升（decisions 如实记录）。
+        行批量置 failed），再做窗内 running 复用（辅助快路径），最后
+        以插入带运行标记的 running 行为单飞动作——并发第二行被
+        ``(persona_id, running_marker)`` 唯一键拒绝，回滚后返回既有
+        在途运行（不新建行、不再跑阶段）。关键排序决策：**晋升全部
+        提交后才生成日记**——日记失败标记运行 failed 但保留已提交
+        晋升（decisions 如实记录）。
 
         Args:
             session: 注入的异步 Session（调用方已绑定人格上下文）。
@@ -732,13 +752,14 @@ class DreamService:
             persona_name: 人格展示名（日记 prompt 的声线变量——调用方
                 解析目标人格后传入；合并 prompt 人格中立，不消费）。
             store: 记忆检索存储（None = 主题相关度降级 boost=0）。
-            now_ms: 注入时钟（epoch 毫秒；None = 当前真实时间——窗口
-                与打分的参考轴）。
+            clock_ms: 注入时钟（可调用，返回 epoch 毫秒；None = 当前
+                真实时间）。开始与结束各读取一次：窗口与打分的参考轴
+                取开始读数，``finished_ms`` 取结束读数。
             cfg: 任务参数（None = DreamJobConfig 全默认）。
 
         Returns:
-            运行记录 DTO（重入闸命中时返回在途 running 行；否则
-            status=success / failed——失败原因在 error）。
+            运行记录 DTO（窗内复用 / 唯一键冲突命中时返回在途 running
+            行；否则 status=success / failed——失败原因在 error）。
 
         Raises:
             BusinessException: 人格上下文未绑定（``PERSONA_CONTEXT_REQUIRED``
@@ -746,7 +767,8 @@ class DreamService:
                 失败（透传——无法记录运行）。
         """
         resolved_cfg = cfg if cfg is not None else DreamJobConfig()
-        run_now = now_ms if now_ms is not None else time_utils.now_ms()
+        clock = clock_ms if clock_ms is not None else time_utils.now_ms
+        run_now = clock()
         persona_scope = persona_id_var.get()
         if persona_scope is None:
             raise BusinessException(
@@ -771,9 +793,25 @@ class DreamService:
             decisions=[],
             diary_episode_id=None,
             error=None,
+            running_marker=_RUNNING_MARKER,
         )
         session.add(row)
-        await _commit(session)  # running 行先落库——运行日志面可追溯
+        try:
+            await _commit(session)  # running 行先落库——单飞闸门 + 运行日志面
+        except IntegrityError:
+            # 唯一键冲突：并发的另一方已持有本人格运行中行——回滚本次
+            # 插入并返回既有行（DB 级单飞语义，不新建运行）。
+            await _rollback_quietly(session)
+            existing = await self._find_running_by_marker(session)
+            if existing is None:
+                existing = await self._find_fresh_running(session, run_now=run_now)
+            if existing is None:
+                raise
+            logger.info(
+                "梦境单飞拦截: 本人格已有运行中行（唯一键冲突），直接返回: run_id={}",
+                existing.id,
+            )
+            return DreamRunRecordDTO.model_validate(existing)
         logger.info("梦境运行开始: run_id={}, persona={}", row.id, persona_scope)
 
         stats = DreamRunStatsModel()
@@ -810,10 +848,11 @@ class DreamService:
             if error_message is not None
             else DreamRunStatus.SUCCESS.value
         )
-        row.finished_ms = run_now
+        row.finished_ms = clock()
         row.stats = stats.model_dump()
         row.decisions = [decision.model_dump() for decision in decisions]
         row.error = error_message
+        row.running_marker = None
         await _commit(session)
         logger.info(
             "梦境运行结束: run_id={}, status={}, candidates={}, promoted={}, superseded={}",
@@ -828,19 +867,20 @@ class DreamService:
     async def _find_fresh_running(
         self, session: AsyncSession, *, run_now: int
     ) -> DreamRunRow | None:
-        """取本人格重入窗内的 running 行（单飞闸门——最新一行）。
+        """取本人格重入窗内的 running 行（单飞辅助快路径——最新一行）。
 
         判定：``status=running AND finished_ms IS NULL AND started_ms >=
         run_now - DREAM_REENTRY_WINDOW_MS``（人格作用域经 PersonaMixin
         自动过滤——仅本人格行）。排序 ``(started_ms, id)`` 降序——并发
-        多行时取最近创建的一行；正常单飞语义下至多一行。
+        多行时取最近创建的一行。本方法只覆盖「短时间重复触发」；任意
+        时长的并发触发由 ``(persona_id, running_marker)`` 唯一键兜底。
 
         Args:
             session: 注入的异步 Session（人格作用域自动过滤）。
             run_now: 注入时钟（epoch 毫秒——重入窗参考轴）。
 
         Returns:
-            新鲜 running 行（None = 无在途运行，可新建）。
+            新鲜 running 行（None = 无在途运行，可尝试新建）。
         """
         fresh_since = run_now - DREAM_REENTRY_WINDOW_MS
         return (
@@ -860,6 +900,32 @@ class DreamService:
             .first()
         )
 
+    async def _find_running_by_marker(self, session: AsyncSession) -> DreamRunRow | None:
+        """取本人格持有运行标记的行（唯一键冲突后的既有运行读取面）。
+
+        判定：``running_marker = '1'``（人格作用域经 PersonaMixin 自动
+        过滤）。唯一键保证同人格至多一行；调用方在冲突回滚后读取，作为
+        「另一方已在运行」的权威依据。
+
+        Args:
+            session: 注入的异步 Session（人格作用域自动过滤）。
+
+        Returns:
+            持有运行标记的行（None = 冲突行已被对方收尾，属极窄竞态）。
+        """
+        return (
+            (
+                await session.execute(
+                    select(DreamRunRow)
+                    .where(DreamRunRow.running_marker == _RUNNING_MARKER)
+                    .order_by(DreamRunRow.started_ms.desc(), DreamRunRow.id.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
+
     async def _converge_stale_running(
         self, session: AsyncSession, *, run_now: int, cfg: DreamJobConfig
     ) -> int:
@@ -867,7 +933,8 @@ class DreamService:
 
         判定：``status=running AND finished_ms IS NULL AND started_ms <
         run_now - cfg.stale_running_threshold_ms``（人格作用域经
-        PersonaMixin 批量 UPDATE 自动过滤——仅本人格行）。当前运行行
+        PersonaMixin 批量 UPDATE 自动过滤——仅本人格行）。收敛同时清
+        ``running_marker``（释放单飞标记，允许下一次运行）。当前运行行
         尚未创建，天然不在收敛面。返回收敛行数（零即无遗留）。
 
         Args:
@@ -897,6 +964,7 @@ class DreamService:
                     status=DreamRunStatus.FAILED.value,
                     finished_ms=run_now,
                     error=_STALE_RUNNING_ERROR,
+                    running_marker=None,
                 )
             ),
         )

@@ -1,15 +1,16 @@
 """声纹服务测试——同意闸 / 注册 / 校验 / 删除 / 撤回 / 保存期 / 人格隔离。
 
 覆盖面：默认关闭配置；同意授予（版本校验 / 幂等）与撤回（清样本留凭证）；
-注册（最小样本数 / 时长 / 采样率 / 类型 / 字节 / 重复哈希 / 向量维度）；
-校验（命中 / 阈值下 / 短音频拒识 / 无样本）；档案删除幂等；保存期清理；
-人格 × 发送者隔离；失败路径文件回滚。
+注册（最小样本数 / 实测时长 / 实测采样率 / 类型 / 字节 / 重复哈希 / 向量
+维度）；校验（命中 / 阈值下 / 实测短音频拒识 / 无样本）；声明撒谎被实测
+拒绝；档案删除幂等；保存期清理；人格 × 发送者隔离；失败路径文件回滚。
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import struct
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,45 @@ from packages.harness.voice.voiceprint_service import VoiceprintService
 PERSONA_A = "vp-alpha"
 PERSONA_B = "vp-beta"
 SENDER = "user-1"
+
+
+def _wav_bytes(
+    seed: bytes,
+    *,
+    duration_ms: int = 2000,
+    sample_rate_hz: int = 16000,
+    channels: int = 1,
+) -> bytes:
+    """构造真实 WAV 载荷（RIFF/fmt/data 头 + 确定性 PCM 数据段）。
+
+    Args:
+        seed: 数据段填充种子（同种子同载荷——哈希去重 / 向量映射用）。
+        duration_ms: 数据段时长（毫秒——头内真实值）。
+        sample_rate_hz: 采样率（赫兹——头内真实值）。
+        channels: 声道数。
+
+    Returns:
+        完整 WAV 字节。
+    """
+    frames = max(1, sample_rate_hz * duration_ms // 1000)
+    data_length = frames * channels * 2
+    payload = (seed * (data_length // len(seed) + 1))[:data_length]
+    block_align = channels * 2
+    byte_rate = sample_rate_hz * block_align
+    fmt_block = struct.pack(
+        "<HHIIHH", 1, channels, sample_rate_hz, byte_rate, block_align, 16
+    )
+    data_block = b"data" + struct.pack("<I", len(payload)) + payload
+    riff_size = 4 + 8 + len(fmt_block) + len(data_block)
+    return (
+        b"RIFF"
+        + struct.pack("<I", riff_size)
+        + b"WAVE"
+        + b"fmt "
+        + struct.pack("<I", len(fmt_block))
+        + fmt_block
+        + data_block
+    )
 
 
 class FakeEmbedding:
@@ -97,7 +137,7 @@ def _settings(**overrides: object) -> VoiceprintSettings:
         "min_sample_duration_ms": 1000,
         "min_verify_duration_ms": 800,
         "min_sample_rate_hz": 8000,
-        "max_upload_bytes": 4096,
+        "max_upload_bytes": 1_000_000,
         "retention_days": 30,
     }
     values.update(overrides)
@@ -105,18 +145,39 @@ def _settings(**overrides: object) -> VoiceprintSettings:
 
 
 def _sample(
-    audio: bytes,
+    seed: bytes,
     *,
     duration_ms: int = 2000,
     sample_rate_hz: int = 16000,
+    declared_duration_ms: int | None = None,
+    declared_sample_rate_hz: int | None = None,
     content_type: str = "audio/wav",
 ) -> VoiceprintSampleUploadModel:
-    """构造一条注册样本（base64 编码）。"""
+    """构造一条真实 WAV 注册样本（头内时长 / 采样率可声明撒谎对照）。
+
+    Args:
+        seed: PCM 数据段填充种子。
+        duration_ms: 头内真实时长（毫秒）。
+        sample_rate_hz: 头内真实采样率（赫兹）。
+        declared_duration_ms: 上传方声明时长（None = 与头内一致）。
+        declared_sample_rate_hz: 上传方声明采样率（None = 与头内一致）。
+        content_type: 声明 MIME 类型。
+
+    Returns:
+        注册样本上传模型。
+    """
+    audio = _wav_bytes(
+        seed, duration_ms=duration_ms, sample_rate_hz=sample_rate_hz
+    )
     return VoiceprintSampleUploadModel(
         audio_base64=base64.b64encode(audio).decode("ascii"),
         content_type=content_type,
-        duration_ms=duration_ms,
-        sample_rate_hz=sample_rate_hz,
+        duration_ms=duration_ms if declared_duration_ms is None else declared_duration_ms,
+        sample_rate_hz=(
+            sample_rate_hz
+            if declared_sample_rate_hz is None
+            else declared_sample_rate_hz
+        ),
     )
 
 
@@ -240,7 +301,10 @@ async def test_enroll_writes_samples_files_and_profile(
     assert profile.consent is not None and profile.consent.active is True
     files = list(tmp_path.rglob("*.wav"))
     assert len(files) == 2
-    assert all(path.read_bytes() in {b"sample-one", b"sample-two"} for path in files)
+    assert all(
+        path.read_bytes() in {_wav_bytes(b"sample-one"), _wav_bytes(b"sample-two")}
+        for path in files
+    )
     assert len(embedding.calls) == 2
 
 
@@ -283,7 +347,7 @@ async def test_enroll_rejects_invalid_samples_partially(
 ) -> None:
     """类型 / base64 / 字节 / 时长 / 采样率非法样本逐条拒收，合法样本照常入库。"""
     service = VoiceprintService(
-        settings=_settings(max_upload_bytes=1024), embedding=FakeEmbedding(), storage_root=tmp_path
+        settings=_settings(max_upload_bytes=100_000), embedding=FakeEmbedding(), storage_root=tmp_path
     )
     async with bind_persona_context(PERSONA_A):
         await _grant(service, db_session)
@@ -292,9 +356,9 @@ async def test_enroll_rejects_invalid_samples_partially(
             SENDER,
             VoiceprintEnrollRequestDTO(
                 samples=[
-                    _sample(b"ok-1"),  # 合法（4 字节）
+                    _sample(b"ok-1"),  # 合法（2000ms 真实 WAV）
                     _sample(b"ok-2"),
-                    _sample(b"x" * 1025),  # 超字节
+                    _sample(b"big", duration_ms=4000),  # 实测 4s → 字节超上限
                     _sample(b"short", duration_ms=500),
                     _sample(b"rate", sample_rate_hz=4000),
                     _sample(b"gif", content_type="image/gif"),
@@ -343,8 +407,8 @@ async def test_enroll_embedding_dim_mismatch(
 ) -> None:
     """同档案内向量维度不一致 → 该样本拒收。"""
     embedding = FakeEmbedding()
-    embedding.vectors[b"first"] = [1.0, 0.0]
-    embedding.vectors[b"second"] = [1.0, 0.0, 0.0]
+    embedding.vectors[_wav_bytes(b"first")] = [1.0, 0.0]
+    embedding.vectors[_wav_bytes(b"second")] = [1.0, 0.0, 0.0]
     service = VoiceprintService(
         settings=_settings(), embedding=embedding, storage_root=tmp_path
     )
@@ -392,10 +456,10 @@ async def test_verify_matched_and_below_threshold(
 ) -> None:
     """校验：同向向量命中；正交向量低于阈值。"""
     embedding = FakeEmbedding()
-    embedding.vectors[b"enroll-1"] = [1.0, 0.0]
-    embedding.vectors[b"enroll-2"] = [1.0, 0.0]
-    embedding.vectors[b"query-match"] = [0.9, 0.1]
-    embedding.vectors[b"query-other"] = [0.0, 1.0]
+    embedding.vectors[_wav_bytes(b"enroll-1")] = [1.0, 0.0]
+    embedding.vectors[_wav_bytes(b"enroll-2")] = [1.0, 0.0]
+    embedding.vectors[_wav_bytes(b"query-match")] = [0.9, 0.1]
+    embedding.vectors[_wav_bytes(b"query-other")] = [0.0, 1.0]
     service = VoiceprintService(
         settings=_settings(similarity_threshold=0.8),
         embedding=embedding,
@@ -443,12 +507,87 @@ async def test_verify_short_audio_rejected_without_embedding(
     assert len(embedding.calls) == calls_before
 
 
+
+async def test_verify_declared_duration_lie_rejected_by_measured_header(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """声明长于实测：100ms 音频声明 5000ms → 仍按实测短音频拒识且不调用向量。"""
+    embedding = FakeEmbedding()
+    service = VoiceprintService(settings=_settings(), embedding=embedding, storage_root=tmp_path)
+    async with bind_persona_context(PERSONA_A):
+        await _grant(service, db_session)
+        await service.enroll(
+            db_session, SENDER, VoiceprintEnrollRequestDTO(samples=[_sample(b"a"), _sample(b"b")])
+        )
+        calls_before = len(embedding.calls)
+        result = await service.verify(
+            db_session,
+            SENDER,
+            VoiceprintVerifyRequestDTO(
+                sample=_sample(b"lie", duration_ms=100, declared_duration_ms=5000)
+            ),
+        )
+    assert result.reason is VoiceprintVerifyReason.AUDIO_TOO_SHORT
+    assert len(embedding.calls) == calls_before
+
+
+async def test_enroll_declared_duration_lie_rejected_by_measured_header(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """注册同样以实测为准：短音频声明长时长 → 逐条 AUDIO_TOO_SHORT 拒收。"""
+    service = VoiceprintService(settings=_settings(), embedding=FakeEmbedding(), storage_root=tmp_path)
+    async with bind_persona_context(PERSONA_A):
+        await _grant(service, db_session)
+        result = await service.enroll(
+            db_session,
+            SENDER,
+            VoiceprintEnrollRequestDTO(
+                samples=[
+                    _sample(b"lie-1", duration_ms=100, declared_duration_ms=5000),
+                    _sample(b"lie-2", duration_ms=200, declared_duration_ms=9000),
+                ]
+            ),
+        )
+    assert result.accepted == 0
+    assert [item.reason for item in result.rejected] == [
+        VoiceprintRejectReason.AUDIO_TOO_SHORT,
+        VoiceprintRejectReason.AUDIO_TOO_SHORT,
+    ]
+
+
+async def test_enroll_declared_sample_rate_lie_rejected_by_measured_header(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """采样率同样实测：头内 4000Hz 声明 16000Hz → SAMPLE_RATE_TOO_LOW。"""
+    service = VoiceprintService(settings=_settings(), embedding=FakeEmbedding(), storage_root=tmp_path)
+    async with bind_persona_context(PERSONA_A):
+        await _grant(service, db_session)
+        result = await service.enroll(
+            db_session,
+            SENDER,
+            VoiceprintEnrollRequestDTO(
+                samples=[
+                    _sample(
+                        b"rate-lie",
+                        sample_rate_hz=4000,
+                        declared_sample_rate_hz=16000,
+                    ),
+                    _sample(b"rate-ok"),
+                ]
+            ),
+        )
+    assert result.accepted == 1
+    assert [item.reason for item in result.rejected] == [
+        VoiceprintRejectReason.SAMPLE_RATE_TOO_LOW
+    ]
+
+
 async def test_verify_uses_verify_duration_band_not_enroll_threshold(
     db_session: AsyncSession, tmp_path: Path
 ) -> None:
     """校验时长落在 [校验门槛, 注册门槛) 区间：正常比对，不套注册门槛报 422。"""
     embedding = FakeEmbedding()
-    embedding.vectors[b"enroll"] = [1.0, 0.0]
+    embedding.vectors[_wav_bytes(b"enroll")] = [1.0, 0.0]
     service = VoiceprintService(
         settings=_settings(min_sample_duration_ms=1000, min_verify_duration_ms=800),
         embedding=embedding,

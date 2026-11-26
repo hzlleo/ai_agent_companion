@@ -199,6 +199,11 @@ grandfathered = [
     "packages/harness/voice/voiceprint_service.py",
 ]
 
+# grandfathered 数量棘轮上界（只允许下降；--gate 校验当前条目数不得高于
+# 本基线。精简基线后同步下调本值——由评审确认，不静默上调）。
+[metadata]
+grandfathered_baseline = 190
+
 [[probes]]
 name = "flow-gate-removal"
 symbol = "packages.harness.chat.flow_gate:evaluate_flow_gate"
@@ -312,4 +317,96 @@ name = "sms-forwarder-webhook-route-removal"
 symbol = "app.api.channels_sms_forwarder:receive_sms_forwarder_webhook"
 tests = [
     "tests/unit/test_channels_sms_forwarder_api.py::TestHappyPath::test_accepted_payload_returns_ok_shape",
+]
+
+[[probes]]
+name = "phone-number-normalize-removal"
+symbol = "packages.harness.channels.phone_numbers:normalize_phone_identifier"
+tests = [
+    "tests/unit/test_phone_numbers.py::test_normalize_phone_identifier_matrix",
+]
+
+[[probes]]
+name = "whatsapp-wa-id-normalize-removal"
+symbol = "packages.harness.channels.phone_numbers:normalize_whatsapp_wa_id"
+tests = [
+    "tests/unit/test_whatsapp_models.py::test_whatsapp_wa_id_preserves_country_code_for_chat_key_and_owner",
+]
+
+[[probes]]
+name = "whatsapp-payload-parse-removal"
+symbol = "packages.harness.channels.whatsapp.whatsapp_models:parse_whatsapp_webhook_payload"
+tests = [
+    "tests/unit/test_whatsapp_models.py::test_text_payload_routes_with_normalized_chat_key",
+]
+
+[[probes]]
+name = "whatsapp-runner-removal"
+symbol = "packages.harness.channels.whatsapp.whatsapp_runner:WhatsAppWebhookRunner"
+tests = [
+    "tests/unit/test_whatsapp_runner.py::TestQueueBackpressure::test_queue_overflow_drops_counts_and_logs",
+]
+
+[[probes]]
+name = "whatsapp-adapter-removal"
+symbol = "packages.harness.channels.whatsapp.whatsapp_adapter:WhatsAppAdapter"
+tests = [
+    "tests/unit/test_whatsapp_adapter.py::test_send_outside_window_rejected_without_http_call",
+]
+
+[[probes]]
+name = "whatsapp-client-removal"
+symbol = "packages.harness.channels.whatsapp.whatsapp_client:WhatsAppCloudClient"
+tests = [
+    "tests/unit/test_whatsapp_adapter.py::test_send_success_returns_provider_message_id_and_wire_shape",
+]
+
+[[probes]]
+name = "whatsapp-webhook-route-removal"
+symbol = "app.api.channels_whatsapp:receive_whatsapp_webhook"
+tests = [
+    "tests/unit/test_channels_whatsapp_api.py::TestSignatureVerification::test_valid_signature_routes_message",
+]
+
+[[probes]]
+name = "orm-registry-anchor-removal"
+symbol = "packages.harness.database.models:load_all_models"
+tests = [
+    "tests/unit/test_persona_service.py::test_persona_cascade_derives_every_persona_id_table",
+]
+
+[[probes]]
+name = "voiceprint-audio-probe-removal"
+symbol = "packages.harness.voice.voiceprint_audio:probe_audio"
+tests = [
+    "tests/unit/test_voiceprint_audio.py::test_probe_wav_reads_header_duration_and_rate",
+]
+
+[[probes]]
+name = "transaction-conflict-retry-removal"
+symbol = "packages.harness.database.conflict_retry:run_with_conflict_retry"
+tests = [
+    "tests/unit/test_sticker_service.py::test_transaction_conflict_retries_upload_as_duplicate",
+    "tests/unit/test_sticker_service.py::test_transaction_conflict_retries_ingest_to_existing_record",
+]
+
+[[probes]]
+name = "inbound-body-bounded-reader-removal"
+symbol = "app.api.inbound_body:read_bounded_body"
+tests = [
+    "tests/unit/test_channels_qq_api.py::TestBoundedBodyRead::test_chunked_oversize_stops_reading_after_limit",
+]
+
+[[probes]]
+name = "inbound-timestamp-shared-resolve-removal"
+symbol = "packages.harness.channels.inbound_timestamp:resolve_epoch_ms_timestamp"
+tests = [
+    "tests/unit/test_channel_timestamp.py::test_channel_timestamp_matrix",
+]
+
+[[probes]]
+name = "daily-budget-limit-single-source-removal"
+symbol = "packages.harness.usage.budget_limits:budget_count_capacity"
+tests = [
+    "tests/unit/test_config_settings.py::test_daily_budget_limit_is_single_source_across_config_and_counters",
 ]

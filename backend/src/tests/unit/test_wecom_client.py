@@ -21,6 +21,7 @@ import json
 from typing import Any
 
 import pytest
+from loguru import logger
 
 from packages.harness.channels.wecom.wecom_client import (
     WeComConnectionState,
@@ -39,6 +40,7 @@ from packages.harness.channels.wecom.wecom_models import (
     WeComMediaKind,
 )
 from packages.harness.core.errors import BusinessException, ErrorCode
+from tests.async_wait import wait_until
 from tests.wecom_fakes import (
     FakeWeComConnection,
     FakeWeComConnector,
@@ -91,25 +93,6 @@ def _client(
     )
 
 
-async def _wait_until(predicate: Any, *, timeout_seconds: float = 2.0) -> None:
-    """让出控制点直到条件成立（有界等待——超时即失败）。
-
-    等待面覆盖两类信号：fake 驱动的即时状态迁移（几次让出即成立）与真实
-    超时驱动的迁移（心跳应超时——等待上限远小于平台间隔，不构成轮询式等待）。
-
-    Args:
-        predicate: 零参判定函数。
-        timeout_seconds: 等待上限秒数（超出即断言失败）。
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_seconds
-    while loop.time() < deadline:
-        if predicate():
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError("条件在等待上限内未成立")
-
-
 class TestConstruction:
     async def test_secret_missing_fails_loud(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """密钥环境变量缺失 → CHANNEL_TOKEN_MISSING（与 telegram token 缺失同语义）。"""
@@ -141,7 +124,7 @@ class TestSubscribeAndLifecycle:
         client = _client(connector=connector)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             connection = connector.connections[0]
             subscribe = connection.commands_for(WECOM_CMD_SUBSCRIBE)
             assert len(subscribe) == 1
@@ -160,7 +143,7 @@ class TestSubscribeAndLifecycle:
         client = _client(connector=connector)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             await client.run()  # 第二次调用应立即返回
             assert connector.attempts == 1
         finally:
@@ -197,7 +180,7 @@ class TestSubscribeAndLifecycle:
         connector = FakeWeComConnector()
         client = _client(connector=connector)
         task = asyncio.create_task(client.run())
-        await _wait_until(lambda: client.state is WeComConnectionState.READY)
+        await wait_until(lambda: client.state is WeComConnectionState.READY)
         client.request_stop()
         await asyncio.wait_for(task, timeout=2.0)
         connection = connector.connections[0]
@@ -230,10 +213,10 @@ class TestHeartbeat:
         client = _client(connector=connector, sleep=sleep, heartbeat_interval_seconds=30.0)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
-            await _wait_until(lambda: 30.0 in sleep.delays)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: 30.0 in sleep.delays)
             sleep.release_once()
-            await _wait_until(lambda: len(connector.connections[0].commands_for(WECOM_CMD_PING)) == 1)
+            await wait_until(lambda: len(connector.connections[0].commands_for(WECOM_CMD_PING)) == 1)
             assert sleep.delays[0] == 30.0
         finally:
             client.request_stop()
@@ -246,11 +229,11 @@ class TestHeartbeat:
         client = _client(connector=connector, sleep=sleep, heartbeat_timeout_seconds=0.05)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             first_connection = connector.connections[0]
             first_connection.silent_commands = {WECOM_CMD_PING}
             sleep.release_once()
-            await _wait_until(lambda: first_connection.closed)
+            await asyncio.wait_for(first_connection.closed_event.wait(), timeout=5.0)
             assert first_connection.commands_for(WECOM_CMD_PING)
         finally:
             client.request_stop()
@@ -265,14 +248,14 @@ class TestReconnectBackoff:
         client = _client(connector=connector, sleep=sleep)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: len(sleep.delays) == 1)
+            await wait_until(lambda: len(sleep.delays) == 1)
             assert sleep.delays[0] == pytest.approx(1.0)
             assert client.state is WeComConnectionState.BACKOFF
             sleep.release_once()
-            await _wait_until(lambda: len(sleep.delays) == 2)
+            await wait_until(lambda: len(sleep.delays) == 2)
             assert sleep.delays[1] == pytest.approx(2.0)
             sleep.release_once()
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             assert client.reconnect_attempt == 0
         finally:
             client.request_stop()
@@ -285,10 +268,10 @@ class TestReconnectBackoff:
         client = _client(connector=connector, sleep=sleep, backoff_jitter_ratio=0.3)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: len(sleep.delays) == 1)
+            await wait_until(lambda: len(sleep.delays) == 1)
             assert 0.7 <= sleep.delays[0] <= 1.3
             sleep.release_once()
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
         finally:
             client.request_stop()
             await asyncio.wait_for(task, timeout=2.0)
@@ -309,7 +292,7 @@ class TestCommandFace:
         client = _client(connector=connector)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             await client.send_markdown_reply(callback_req_id="cb-9", content="回复")
             target = WeComChatTargetModel(chat_type=1, target_id="u1", is_group=False)
             await client.send_markdown_push(target=target, content="推送")
@@ -330,13 +313,13 @@ class TestCommandFace:
         client = _client(connector=connector, request_timeout_seconds=1.0)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             connection = connector.connections[0]
             connection.silent_commands = {WECOM_CMD_RESPOND_MSG}
             first = asyncio.create_task(
                 client.send_markdown_reply(callback_req_id="cb-dup", content="第一条")
             )
-            await _wait_until(
+            await wait_until(
                 lambda: len(connection.commands_for(WECOM_CMD_RESPOND_MSG)) == 1
             )
             with pytest.raises(BusinessException) as exc_info:
@@ -359,7 +342,7 @@ class TestCommandFace:
         client = _client(connector=connector, request_timeout_seconds=0.02)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             connection = connector.connections[0]
             connection.silent_commands = {WECOM_CMD_SEND_MSG}
             target = WeComChatTargetModel(chat_type=1, target_id="u1", is_group=False)
@@ -377,7 +360,7 @@ class TestCommandFace:
         client = _client(connector=connector)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             target = WeComChatTargetModel(chat_type=1, target_id="u1", is_group=False)
             with pytest.raises(BusinessException) as exc_info:
                 await client.send_media_push(
@@ -394,7 +377,7 @@ class TestCommandFace:
         client = _client(connector=connector)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             connector.connections[0].command_errcodes = {WECOM_CMD_SEND_MSG: 93000}
             target = WeComChatTargetModel(chat_type=1, target_id="u1", is_group=False)
             with pytest.raises(BusinessException) as exc_info:
@@ -411,7 +394,7 @@ class TestCommandFace:
         client = _client(connector=connector, request_timeout_seconds=5.0)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             connection = connector.connections[0]
             connection.silent_commands = {WECOM_CMD_SEND_MSG}
             target = WeComChatTargetModel(chat_type=1, target_id="u1", is_group=False)
@@ -435,7 +418,7 @@ class TestUploadMedia:
         client = _client(connector=connector)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             media_id = await client.upload_media(
                 b"hello-image", media_kind=WeComMediaKind.IMAGE, filename="a.png"
             )
@@ -460,7 +443,7 @@ class TestUploadMedia:
         content = b"x" * (WECOM_UPLOAD_CHUNK_SIZE_BYTES + 10)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             await client.upload_media(content, media_kind=WeComMediaKind.FILE, filename="b.bin")
             chunks = connector.connections[0].commands_for(WECOM_CMD_UPLOAD_MEDIA_CHUNK)
             assert [chunk["body"]["chunk_index"] for chunk in chunks] == [0, 1]
@@ -497,7 +480,7 @@ class TestUploadMedia:
         client = _client(connector=connector)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             connector.connections[0].upload_finish_without_body = True
             with pytest.raises(BusinessException) as exc_info:
                 await client.upload_media(
@@ -514,7 +497,7 @@ class TestUploadMedia:
         client = _client(connector=connector)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             connector.connections[0].upload_init_without_body = True
             with pytest.raises(BusinessException) as exc_info:
                 await client.upload_media(
@@ -533,7 +516,7 @@ class TestFrameHandling:
         client = _client(connector=connector)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             connection = connector.connections[0]
             connection.push("not-json")
             connection.push("[1, 2, 3]")
@@ -561,7 +544,7 @@ class TestFrameHandling:
         client.set_callback_handler(_handler)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
             connection = connector.connections[0]
             connection.push(
                 make_callback_frame(
@@ -586,7 +569,7 @@ class TestFrameHandling:
                     req_id="cb-req-2",
                 )
             )
-            await _wait_until(lambda: len(frames) == 2)
+            await wait_until(lambda: len(frames) == 2)
             assert frames == ["aibot_msg_callback", "aibot_msg_callback"]
         finally:
             client.request_stop()
@@ -598,19 +581,27 @@ class TestFrameHandling:
         client = _client(connector=connector)
         task = asyncio.create_task(client.run())
         try:
-            await _wait_until(lambda: client.state is WeComConnectionState.READY)
-            connector.connections[0].push(
-                make_callback_frame(
-                    {
-                        "msgid": "m9",
-                        "chattype": "single",
-                        "from": {"userid": "u1"},
-                        "msgtype": "text",
-                        "text": {"content": "hi"},
-                    }
-                )
+            await wait_until(lambda: client.state is WeComConnectionState.READY)
+            dropped = asyncio.Event()
+            handler_id = logger.add(
+                lambda message: dropped.set() if "企微回调无处理器" in str(message) else None,
+                level="DEBUG",
             )
-            await asyncio.sleep(0)
+            try:
+                connector.connections[0].push(
+                    make_callback_frame(
+                        {
+                            "msgid": "m9",
+                            "chattype": "single",
+                            "from": {"userid": "u1"},
+                            "msgtype": "text",
+                            "text": {"content": "hi"},
+                        }
+                    )
+                )
+                await asyncio.wait_for(dropped.wait(), timeout=1.0)
+            finally:
+                logger.remove(handler_id)
             assert client.state is WeComConnectionState.READY
         finally:
             client.request_stop()

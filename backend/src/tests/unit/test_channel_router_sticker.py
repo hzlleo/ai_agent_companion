@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -21,8 +23,22 @@ from packages.harness.channels.channel_models import (
 )
 from packages.harness.channels.channel_service import ChannelRouter
 from packages.harness.chat.chat_models import ChatSessionStateModel
+from packages.harness.chat.persona_rotation_models import GroupPersonaSettings
+from packages.harness.core import time_utils
 from packages.harness.core.context import persona_id_var
 from packages.harness.persona.chara_card import CharaCardModel
+from packages.harness.persona.dtos import PersonaRecordDTO, PersonaStatus
+from tests.router_fakes import (
+    BASE_MS,
+    empty_session_factory,
+    reply_index_message_ids,
+)
+from tests.router_fakes import (
+    FakeAdapter as GroupFakeAdapter,
+)
+from tests.router_fakes import (
+    FakeChatService as GroupFakeChatService,
+)
 
 _PERSONA_ID = 7
 
@@ -199,7 +215,7 @@ async def test_empty_text_sticker_ingested_without_generation_or_fallback() -> N
     assert chat.reply_calls == []
     assert adapter.sent == []
     assert result.message_ids == []
-    assert router.empty_text_skip_count == 1
+    assert router.no_user_text_skip_count == 1
 
 
 async def test_ingest_and_reply_failures_do_not_block_reply() -> None:
@@ -217,3 +233,200 @@ async def test_ingest_and_reply_failures_do_not_block_reply() -> None:
     assert result.message_ids == ["out:1"]
     assert adapter.sent[0].attachments == []
     assert adapter.sent[0].text == "echo:看看这个"
+
+
+def _record(persona_id: int, *, is_primary: bool = False) -> PersonaRecordDTO:
+    """构造启用人格记录（群聊表情归属用例直供）。"""
+    return PersonaRecordDTO(
+        id=persona_id,
+        name=f"persona-{persona_id}",
+        display_name=f"人格{persona_id}",
+        status=PersonaStatus.ACTIVE,
+        is_primary=is_primary,
+        card=CharaCardModel(name=f"人格{persona_id}"),
+        created_at=BASE_MS,
+        updated_at=BASE_MS,
+    )
+
+
+class _StickerPersonaService:
+    """fake 人格注册表（固定启用人格集合——群聊表情用例）。"""
+
+    def __init__(self, records: list[PersonaRecordDTO]) -> None:
+        """初始化。"""
+        self.records = records
+
+    async def list_addressable(self, session: object) -> list[PersonaRecordDTO]:
+        """返回固定启用人格集合。"""
+        return list(self.records)
+
+
+def _group_inbound(*, message_id: str = "42") -> InboundMessageModel:
+    """构造群聊带 sticker 附件的入站消息。"""
+    message = _sticker()
+    message.chat_id = "group:10086"
+    message.message_id = message_id
+    message.is_group_chat = True
+    return message
+
+
+class _SteppingClock:
+    """每次读数推进固定步长的时钟（暴露同入站多次读数导致的选择漂移）。"""
+
+    def __init__(self, start_ms: int = BASE_MS, step_ms: int = 1) -> None:
+        """初始化。
+
+        Args:
+            start_ms: 起始时刻（epoch 毫秒）。
+            step_ms: 每次读数推进的毫秒数。
+        """
+        self.current = start_ms
+        self.step_ms = step_ms
+        self.calls = 0
+
+    def __call__(self) -> int:
+        """返回当前时刻并推进（记录读数次数）。"""
+        self.calls += 1
+        value = self.current
+        self.current += self.step_ms
+        return value
+
+    def reset(self, start_ms: int = BASE_MS) -> None:
+        """回到指定时刻并清零读数计数（逐入站独立观测）。
+
+        Args:
+            start_ms: 起始时刻（epoch 毫秒）。
+        """
+        self.current = start_ms
+        self.calls = 0
+
+
+def _group_router(
+    *,
+    adapter: GroupFakeAdapter,
+    service: GroupFakeChatService,
+    ingest: Any,
+    max_responders: int = 2,
+    cooldown_ms: int = 0,
+    clock: Callable[[], int] | None = None,
+) -> ChannelRouter:
+    """装配群聊多人格路由器（注入 fake 依赖与表情收录钩子）。
+
+    Args:
+        adapter: fake 通道适配器。
+        service: fake ChatService。
+        ingest: 表情收录钩子。
+        max_responders: 单轮应答人格上限。
+        cooldown_ms: 人格应答冷却毫秒（0 = 不设冷却）。
+        clock: 注入时钟（None = 真实时钟）。
+
+    Returns:
+        装配好的群聊路由器。
+    """
+    router = ChannelRouter(
+        chat_service_factory=lambda: service,
+        session_factory=empty_session_factory,
+        group_settings=GroupPersonaSettings(
+            enabled=True, max_responders=max_responders, cooldown_ms=cooldown_ms
+        ),
+        persona_service=_StickerPersonaService(
+            [_record(1, is_primary=True), _record(2), _record(3)]
+        ),
+        sticker_ingest_hook=ingest,
+        clock=clock if clock is not None else time_utils.now_ms,
+    )
+    router.register_adapter(ChannelType.TELEGRAM, adapter)
+    return router
+
+
+async def test_group_sticker_ingested_into_every_responder_library() -> None:
+    """群聊多人格：本轮两位应答人格各收录一份，第三人称不受影响。"""
+    adapter = GroupFakeAdapter(message_ids=reply_index_message_ids)
+    service = GroupFakeChatService(echo_style="persona")
+    calls: list[tuple[str, str]] = []
+
+    async def ingest(attachments: list[ChannelMessageAttachment]) -> None:
+        calls.append((persona_id_var.get(), attachments[0].base64))
+
+    router = _group_router(adapter=adapter, service=service, ingest=ingest)
+    result = await router.handle_inbound(_group_inbound())
+    assert result.message_ids == ["out:1", "out:2"]
+    assert [persona for persona, _ in calls] == ["1", "2"]
+    assert {payload for _, payload in calls} == {_sticker().attachments[0].base64}
+    assert all(call["persona_id"] in {1, 2} for call in service.reply_calls)
+
+
+async def test_group_sticker_same_hash_deduped_independently_per_library() -> None:
+    """同哈希重复入站：收录调用逐次到达各人格库（非自去重），各库独立去重。"""
+    adapter = GroupFakeAdapter(message_ids=reply_index_message_ids)
+    service = GroupFakeChatService(echo_style="persona")
+    calls: list[tuple[str, str]] = []
+    libraries: dict[str, list[str]] = {}
+
+    async def ingest(attachments: list[ChannelMessageAttachment]) -> None:
+        persona = persona_id_var.get()
+        digest = hashlib.sha256(attachments[0].base64.encode("ascii")).hexdigest()
+        calls.append((persona, digest))
+        libraries.setdefault(persona, []).append(digest)
+
+    router = _group_router(adapter=adapter, service=service, ingest=ingest)
+    await router.handle_inbound(_group_inbound(message_id="1"))
+    await router.handle_inbound(_group_inbound(message_id="2"))
+    assert len(calls) == 4
+    assert {"1", "2", "3"} <= set(libraries)
+    assert any(digests.count(digests[0]) == 2 for digests in libraries.values())
+    assert all(len(set(digests)) == 1 for digests in libraries.values())
+
+
+async def test_group_sticker_cooling_boundary_single_clock_read_keeps_sets_aligned() -> None:
+    """冷却边界：单次时钟读数下收录集与应答集一致（不因二次读数漂移）。"""
+    adapter = GroupFakeAdapter(message_ids=reply_index_message_ids)
+    service = GroupFakeChatService(echo_style="persona")
+    clock = _SteppingClock()
+    ingested: list[str] = []
+
+    async def ingest(attachments: list[ChannelMessageAttachment]) -> None:
+        ingested.append(persona_id_var.get())
+
+    router = _group_router(
+        adapter=adapter,
+        service=service,
+        ingest=ingest,
+        cooldown_ms=1,
+        clock=clock,
+    )
+    await router.handle_inbound(_group_inbound(message_id="1"))
+    assert ingested == ["1", "2"]
+    ingested.clear()
+    replied_before = len(service.reply_calls)
+    clock.reset()
+    result = await router.handle_inbound(_group_inbound(message_id="2"))
+    replied = [
+        str(call["persona_id"]) for call in service.reply_calls[replied_before:]
+    ]
+    assert clock.calls == 1
+    assert result.message_ids != []
+    assert replied == ["3"]
+    assert ingested == replied
+
+
+async def test_group_sticker_ingest_failure_isolated_from_reply() -> None:
+    """单人格收录失败：其余人格照常收录，两位应答人格文本回复照常投递。"""
+    adapter = GroupFakeAdapter(message_ids=reply_index_message_ids)
+    service = GroupFakeChatService(echo_style="persona")
+    ingested: list[str] = []
+
+    async def ingest(attachments: list[ChannelMessageAttachment]) -> None:
+        persona = persona_id_var.get()
+        ingested.append(persona)
+        if persona == "1":
+            raise RuntimeError("persona-1 library down")
+
+    router = _group_router(adapter=adapter, service=service, ingest=ingest)
+    result = await router.handle_inbound(_group_inbound())
+    assert result.message_ids == ["out:1", "out:2"]
+    assert ingested == ["1", "2"]
+    assert [message.text for message in adapter.sent] == [
+        "persona1:看看这个",
+        "persona2:看看这个",
+    ]

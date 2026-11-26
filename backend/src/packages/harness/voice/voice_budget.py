@@ -16,8 +16,9 @@
       并同时放行（最多超出并发数条）；不引入 Redis 式原子计数；
     - **有效上限 10,000**：计数走 usage 游标分页，页帽 50 × 每页 200
       = 10,000 行封顶（配置层 ``le=10_000`` 同约束）；
-    - **不硬依赖 usage 域**：计数 / 记录器均为注入式回调；默认接线
-      函数在函数体内惰性 import usage 域（与 llm 网关同模式）。
+    - **不硬依赖 usage 领域服务**：预算常量从 usage.budget_limits（仅标准
+      库依赖）引用；计数 / 记录器均为注入式回调，默认接线函数在函数体内
+      惰性 import usage 服务（与 llm 网关同模式）。
 """
 
 from __future__ import annotations
@@ -28,6 +29,10 @@ from dataclasses import dataclass
 from loguru import logger
 
 from packages.harness.core.errors import BusinessException, ErrorCode
+from packages.harness.usage.budget_limits import (
+    BUDGET_COUNT_PAGE_CAP,
+    BUDGET_COUNT_PAGE_LIMIT,
+)
 from packages.harness.voice.voice_models import VoiceUsageEvent
 
 __all__ = [
@@ -47,10 +52,6 @@ VoiceBudgetCounter = Callable[[str, str | None, int], Awaitable[int]]
 
 #: UTC 日桶宽（毫秒）——预算「今日」边界（与 usage 域 time_bucket=day 同口径）。
 DAY_BUCKET_MS: int = 86_400_000
-#: 预算计数分页大小（usage 域上限 200）。
-_BUDGET_COUNT_PAGE_LIMIT: int = 200
-#: 预算计数页数安全上限（50 × 200 = 10,000 行有效上限）。
-_BUDGET_COUNT_PAGE_CAP: int = 50
 
 
 @dataclass(frozen=True)
@@ -274,7 +275,7 @@ def wire_default_voice_usage_counter() -> VoiceBudgetCounter:
         resolved_purpose = UsagePurpose(purpose)
         total = 0
         cursor: str | None = None
-        for _ in range(_BUDGET_COUNT_PAGE_CAP):
+        for _ in range(BUDGET_COUNT_PAGE_CAP):
             page = await service.query(
                 UsageQueryDTO(
                     persona_id=persona_id,
@@ -282,7 +283,7 @@ def wire_default_voice_usage_counter() -> VoiceBudgetCounter:
                     status=UsageStatus.SUCCESS,
                     start_ms=day_start_ms,
                     cursor=cursor,
-                    limit=_BUDGET_COUNT_PAGE_LIMIT,
+                    limit=BUDGET_COUNT_PAGE_LIMIT,
                 )
             )
             total += len(page.items)

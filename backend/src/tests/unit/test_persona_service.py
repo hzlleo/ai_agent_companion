@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from typing import cast
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import func, select
@@ -25,6 +26,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
+from packages.harness.canvas.canvas_orm import CanvasDocumentRow
 from packages.harness.core.context import current_context, persona_id_var
 from packages.harness.core.dtos import PageResponse
 from packages.harness.core.errors import BusinessException, ErrorCode
@@ -41,6 +43,7 @@ from packages.harness.memory.orm import (
 from packages.harness.memory.retrieval import MemoryIndexer
 from packages.harness.memory.retrieval_models import MemoryRefType
 from packages.harness.memory.sqlite_store import MemoryIndexLiteRow
+from packages.harness.multimodal.sticker_orm import StickerRow
 from packages.harness.persona.chara_card import CharaCardModel
 from packages.harness.persona.core_memory_orm import (
     CoreMemoryBlockRow,
@@ -58,8 +61,18 @@ from packages.harness.persona.dtos import (
 from packages.harness.persona.facts_orm import PersonaFactRow
 from packages.harness.persona.models import PersonaStateLayer, PersonaStatus
 from packages.harness.persona.orm import PERSONA_PRIMARY_MARKER, PersonaRow, PersonaStateRow
-from packages.harness.persona.service import PersonaService, bind_persona_context
+from packages.harness.persona.service import (
+    PERSONA_DELETE_RETAINED_TABLES,
+    REFERENCE_SCOPED_PERSONA_TABLES,
+    PersonaService,
+    _persona_cascade_models,
+    _persona_value_for,
+    bind_persona_context,
+)
 from packages.harness.persona.skills_orm import PersonaSkillRow
+from packages.harness.reminders.orm import ReminderRow
+from packages.harness.voice.voiceprint_orm import VoiceprintConsentRow, VoiceprintSampleRow
+from tests.db_models import PersonaNoteRow
 
 
 @pytest.fixture
@@ -1014,6 +1027,200 @@ async def test_delete_cascades_entire_memory_domain(
     with pytest.raises(BusinessException) as exc_info:
         await persona_service.delete(db_session, persona_a.id)
     assert exc_info.value.code == ErrorCode.NOT_FOUND
+
+
+async def _seed_all_persona_scoped_rows(
+    db_session: AsyncSession,
+    persona_id: int,
+    *,
+    sticker_path: Path,
+    sample_path: Path,
+) -> None:
+    """为指定人格造齐全部 persona_id 作用域表行 + 磁盘文件（全量级联种子）。
+
+    Args:
+        db_session: 注入的异步 Session。
+        persona_id: 目标人格主键。
+        sticker_path: 表情包文件路径（测试临时目录——删除后应由级联清理）。
+        sample_path: 声纹样本文件路径（同上）。
+    """
+    await _seed_persona_domain(db_session, persona_id)
+    sticker_path.write_bytes(f"sticker-{persona_id}".encode())
+    sample_path.write_bytes(f"sample-{persona_id}".encode())
+    db_session.add_all(
+        [
+            PersonaStateRow(persona_id=persona_id, layer="M", state={"mood": "平静"}),
+            PersonaNoteRow(persona_id=str(persona_id), content="级联测试备注"),
+            StickerRow(
+                persona_id=str(persona_id),
+                sha256=f"sha-{persona_id}",
+                content_type="image/png",
+                storage_path=str(sticker_path),
+                size_bytes=sticker_path.stat().st_size,
+                tags="[]",
+                description="级联测试表情",
+                source_note="级联测试来源",
+                annotation_status="pending",
+                annotation_error=None,
+                annotation_model_entry=None,
+                annotated_at_ms=None,
+            ),
+            VoiceprintSampleRow(
+                persona_id=str(persona_id),
+                sender_id=f"sender-{persona_id}",
+                sample_path=str(sample_path),
+                sample_sha256=f"sample-{persona_id}",
+                duration_ms=1000,
+                sample_rate_hz=16000,
+                embedding="[0.1, 0.2]",
+                embedding_dim=2,
+            ),
+            VoiceprintConsentRow(
+                persona_id=str(persona_id),
+                sender_id=f"sender-{persona_id}",
+                consent_text_version="v1",
+                granted_at_ms=1,
+                revoked_at_ms=None,
+            ),
+            ReminderRow(
+                persona_id=str(persona_id),
+                title="级联测试提醒",
+                due_at_ms=1,
+                status="pending",
+                source="manual",
+            ),
+            CanvasDocumentRow(
+                persona_id=str(persona_id),
+                title="级联测试画布",
+                kind="markdown",
+                content="# 级联测试",
+                revision=1,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+
+async def _count_scoped_rows(db_session: AsyncSession, persona_id: int) -> dict[str, int]:
+    """统计单人格在全部派生级联表内的行数（表名 → 行数）。
+
+    Args:
+        db_session: 注入的异步 Session。
+        persona_id: 目标人格主键。
+
+    Returns:
+        派生级联表的行数映射（用于逐表断言）。
+    """
+    skip_filter = {PERSONA_FILTER_SKIP_OPTION: True}
+    counts: dict[str, int] = {}
+    for model in _persona_cascade_models():
+        value = _persona_value_for(model, persona_id)
+        counts[model.__tablename__] = int(
+            (
+                await db_session.execute(
+                    select(func.count())
+                    .select_from(model)
+                    .where(model.persona_id == value),
+                    execution_options=skip_filter,
+                )
+            ).scalar_one()
+        )
+    return counts
+
+
+async def test_persona_cascade_derives_every_persona_id_table() -> None:
+    """结构守卫：级联集合 == 元数据库 persona_id 表全集（扣除有意保留表）。
+
+    未来新增 persona_id 表（含未挂 PersonaMixin 的整数列依赖表）若未被
+    派生覆盖即红；新增表有意保留时须显式加入保留集合。
+    """
+    persona_tables = {
+        table.name for table in Base.metadata.tables.values() if "persona_id" in table.c
+    }
+    cascade_tables = {model.__tablename__ for model in _persona_cascade_models()}
+    assert cascade_tables | PERSONA_DELETE_RETAINED_TABLES == persona_tables
+    assert cascade_tables.isdisjoint(PERSONA_DELETE_RETAINED_TABLES)
+    for table_name in REFERENCE_SCOPED_PERSONA_TABLES:
+        assert "persona_id" not in Base.metadata.tables[table_name].c
+
+
+async def test_delete_clears_every_persona_scoped_table_and_files(
+    persona_service: PersonaService, db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """行级全量级联：13 张 persona_id 表 + 归属依赖表全清、他人格不受影响、
+    磁盘文件不存在、重复删除幂等（NOT_FOUND）。"""
+    persona_a = await persona_service.create(db_session, _create_dto(name="cascade-all-a"))
+    persona_b = await persona_service.create(db_session, _create_dto(name="cascade-all-b"))
+    sticker_a = tmp_path / "sticker-a.png"
+    sample_a = tmp_path / "sample-a.wav"
+    sticker_b = tmp_path / "sticker-b.png"
+    sample_b = tmp_path / "sample-b.wav"
+    await _seed_all_persona_scoped_rows(
+        db_session, persona_a.id, sticker_path=sticker_a, sample_path=sample_a
+    )
+    await _seed_all_persona_scoped_rows(
+        db_session, persona_b.id, sticker_path=sticker_b, sample_path=sample_b
+    )
+    assert {sticker_a, sample_a, sticker_b, sample_b} <= set(tmp_path.iterdir())
+
+    await persona_service.delete(db_session, persona_a.id)
+
+    counts_a = await _count_scoped_rows(db_session, persona_a.id)
+    counts_b = await _count_scoped_rows(db_session, persona_b.id)
+    assert counts_a and set(counts_a.values()) == {0}
+    assert counts_b and set(counts_b.values()) == {1}
+    assert await _count_persona_domain(db_session, persona_a.id) == (0,) * 9
+    assert await _count_persona_domain(db_session, persona_b.id) == (1,) * 9
+    assert not sticker_a.exists()
+    assert not sample_a.exists()
+    assert sticker_b.exists()
+    assert sample_b.exists()
+
+    with pytest.raises(BusinessException) as exc_info:
+        await persona_service.delete(db_session, persona_a.id)
+    assert exc_info.value.code == ErrorCode.NOT_FOUND
+
+
+class _StickerQueryFailingSession:
+    """包装真实 Session：表情包路径查询抛错（验证收集失败不阻断删除）。"""
+
+    def __init__(self, inner: AsyncSession) -> None:
+        """保存被包装的真实会话。
+
+        Args:
+            inner: 真实异步 Session。
+        """
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        """其余会话方法原样委托真实会话。"""
+        return getattr(self._inner, name)
+
+    async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        """表情包路径查询抛错，其余语句委托真实会话。"""
+        rendered = str(statement)
+        if "ff_stickers" in rendered and "storage_path" in rendered:
+            raise RuntimeError("sticker path query down")
+        return await self._inner.execute(statement, *args, **kwargs)
+
+
+async def test_delete_survives_file_path_collection_failure(
+    persona_service: PersonaService, db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """表情路径收集失败不阻断删除：人格行照常删、声纹文件仍清理、表情残留无害。"""
+    persona = await persona_service.create(db_session, _create_dto(name="collect-fail"))
+    sticker = tmp_path / "sticker-collect.png"
+    sample = tmp_path / "sample-collect.wav"
+    await _seed_all_persona_scoped_rows(
+        db_session, persona.id, sticker_path=sticker, sample_path=sample
+    )
+    wrapped = cast(AsyncSession, _StickerQueryFailingSession(db_session))
+
+    await persona_service.delete(wrapped, persona.id)
+
+    assert set((await _count_scoped_rows(db_session, persona.id)).values()) == {0}
+    assert not sample.exists()
+    assert sticker.exists()
 
 
 async def test_delete_dispatches_remote_index_purge(

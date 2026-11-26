@@ -404,7 +404,7 @@ scene_scripts:
 
 预设生成卡是**覆写形态**：`system_prompt` 非空时 `render_persona_system_prompt` 直接采用该文本，因此生成结果必须自包含人格主体（正典含名字头 / `【角色设定】` / `【性格特点】` / 语气指令 / 四态场景脚本），不能只靠 `personality` 字段——覆写路径不会回读后者的叙事段模板。`personality` 字段仍按上表规则保留（UI 编辑、导入读面与既有存储语义不变）；`mes_example` 的 few-shot 注入仍为台账遗留项，本批不改变生成内容。
 
-**装载面**（`load_official_components` / `load_official_presets`）：路径相对资源加载（`presets/` 数据文件）+ 模型校验 + 模块级缓存——**模块导入期零副作用**，首次调用（端点）即校验，非法数据文件 fail loud（`ValueError` → 端点映射 500）。官方库不变式（装载期校验拒绝违约数据）：预设引用组件恒存在、id 唯一、组合集内无重复、**官方预设自身零冲突**（命中冲突声明 = 发行数据作者错误）、冲突引用指向已知组件、每个组件示例台词 3-5 条、**预设组件成熟度不越过该预设自身亲密等级上限**。显式传入数据目录（测试合成数据）绕过缓存。
+**装载面**（`load_official_components` / `load_official_presets` 及其 `_async` 变体）：路径相对资源加载（`presets/` 数据文件）+ 模型校验 + 模块级缓存——**模块导入期零副作用**，首次调用（端点）即校验，非法数据文件 fail loud（`ValueError` → 端点映射 500）。app 启动期经 `preload_official_trait_library` 把读盘 / 校验下沉共享线程池完成预热，运行期端点命中缓存；未预加载的懒加载路径同样经 `run_blocking_ops` 下沉，不阻塞事件循环。官方库不变式（装载期校验拒绝违约数据）：预设引用组件恒存在、id 唯一、组合集内无重复、**官方预设自身零冲突**（命中冲突声明 = 发行数据作者错误）、冲突引用指向已知组件、每个组件示例台词 3-5 条、**预设组件成熟度不越过该预设自身亲密等级上限**。显式传入数据目录（测试合成数据）绕过缓存。
 
 ### 导入端点（内容哈希幂等 + 名称冲突三策略）
 
@@ -468,19 +468,17 @@ async with bind_persona_context(persona.id):                      # 运行期任
 
 ### 删除级联范围（PersonaService.delete）
 
-删除非主人格时，服务层在**同一事务**内按 `persona_id` 批删该人格的记忆域与画像域全部行——本工程不使用跨域外键作唯一依赖（SQLite 测试方言默认不启用 FK 强制），级联由服务层显式完成以保证方言一致：
+删除非主人格时，服务层在**同一事务**内按 `persona_id` 批删该人格的全部作用域行。**级联范围由 `Base.metadata` 派生**（`_persona_cascade_models` 收集所有含 `persona_id` 列的表——含未挂 `PersonaMixin` 的整数列依赖表），不再维护手写清单；新增 persona_id 表自动纳入删除集合，结构测试断言「派生级联集合 == 元数据 persona_id 表全集（扣除保留表）」：
 
 | 表 | 处理 |
 |---|---|
-| `ff_persona_states` | 按 `persona_id` 删除（M/S 状态层） |
-| `ff_memory_episodes` / `ff_curated_memory` / `ff_dream_runs` | 按 `persona_id` 删除；事实 / 策展的自引用 `superseded_by_id` 先置 NULL（避免 MySQL 自引用外键的删除序歧义） |
-| `ff_persona_facts` / `ff_persona_skills` | 按 `persona_id` 删除 |
-| `ff_core_memory_blocks` / `ff_core_memory_revisions` | 先按块集合删修订行，再删块行 |
-| `ff_chat_sessions` / `ff_chat_messages` | 先按会话集合删消息行，再删会话行（消息经 session_id 归属人格） |
-| `ff_memory_index_lite` | 按 `persona_id` + 收集到的 episode / curated ref 集合同事务删除（回退检索索引） |
-| `ff_memory_index`（SeekDB 生产索引） | 提交后经注入的 `app.state.memory_indexer` 按 ref 分散发删除（best-effort，失败不翻转删除结果） |
+| 全部含 `persona_id` 列的表（当前：`ff_persona_states` / `ff_memory_episodes` / `ff_curated_memory` / `ff_dream_runs` / `ff_persona_facts` / `ff_persona_skills` / `ff_core_memory_blocks` / `ff_chat_sessions` / `ff_stickers` / `ff_voiceprint_samples` / `ff_voiceprint_consents` / `ff_reminders` / `ff_canvas_documents`） | 按 `persona_id` 删除（比较值按列类型派生：字符串列 / 整数列）；事实 / 策展的自引用 `superseded_by_id` 先置 NULL（避免 MySQL 自引用外键的删除序歧义） |
+| `ff_core_memory_revisions` | 无 persona_id：先按块集合删修订行，再删块行 |
+| `ff_chat_messages` | 无 persona_id：先按会话集合删消息行，再删会话行 |
+| `ff_usage_records` | **有意保留**（跨人格聚合真源——见 `PERSONA_DELETE_RETAINED_TABLES`） |
+| `ff_memory_index`（SeekDB 生产索引） | 提交后经注入的 `app.state.memory_indexer` 按 episode / curated ref 分发删除（best-effort，失败不翻转删除结果） |
 
-索引清理覆盖 episode 与 curated 两类 ref（策展行同样随人格删除）。重复删除走既有 `NOT_FOUND` 语义（幂等失败面）。
+磁盘文件同生命周期：删除前收集表情包 `storage_path` 与声纹样本 `sample_path`，**事务提交后**逐路径 best-effort 删除（失败仅告警，不翻转删除结果）。索引清理覆盖 episode 与 curated 两类 ref。重复删除走既有 `NOT_FOUND` 语义（幂等失败面）。
 
 卡片补丁合并语义（`PersonaUpdateDTO.card`）：仅出现字段覆写既有卡片（`exclude_unset` 合并后整体重校验——合并结果违约 `VALIDATION_ERROR` fail loud）；`character_book` 提供时整体替换（不做条目级合并），显式 `null` 清除世界书。
 

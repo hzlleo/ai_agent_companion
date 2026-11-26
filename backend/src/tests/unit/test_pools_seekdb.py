@@ -14,6 +14,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
 
 import pytest
+from pydantic import SecretStr
 
 import packages.harness.pools.manager as manager_module
 from packages.harness.config.models import DatabaseConfig, PoolsConfig, SeekDBSettings
@@ -52,11 +53,23 @@ class FakePool:
         self.wait_closed_called = True
 
 
-def _settings(**seekdb_overrides: Any):
-    """构造隔离 Settings（seekdb 分节显式值；sqlite 库——零主库依赖）。"""
-    seekdb = SeekDBSettings.model_validate(seekdb_overrides or {})
+def _settings(authority_database: DatabaseConfig | None = None, **seekdb_overrides: Any):
+    """构造隔离 Settings（seekdb 分节显式值；缺省 sqlite 库——零主库依赖）。"""
+    values: dict[str, Any] = {
+        "host": None,
+        "port": None,
+        "user": None,
+        "password_env": None,
+        "database": "ai_agent_companion_search",
+    }
+    values.update(seekdb_overrides)
+    seekdb = SeekDBSettings.model_validate(values)
     return build_isolated_settings(
-        database=DatabaseConfig(type="sqlite", name=":memory:"),
+        database=(
+            authority_database
+            if authority_database is not None
+            else DatabaseConfig(type="sqlite", name=":memory:")
+        ),
         pools=PoolsConfig(),
         seekdb=seekdb,
     )
@@ -160,6 +173,9 @@ async def test_pool_manager_seekdb_enabled_lifecycle(
 
     manager = PoolManager(
         _settings(
+            DatabaseConfig(
+                type="mysql", host="seek.local", port=2901, user="seeker", name="ai_agent_companion"
+            ),
             enabled=True,
             host="seek.local",
             port=2901,
@@ -291,3 +307,179 @@ async def test_build_memory_store_seekdb_own_pool_without_manager() -> None:
     # 未触发任何访问——池未创建（惰性）
     assert store._pool is None
     await store.close()  # 无自持池——幂等 no-op
+
+
+async def test_seekdb_single_stack_invariant_rejects_split_instance() -> None:
+    """单栈不变式：检索池显式 host / port 与权威库不一致 → 启动 fail loud。"""
+    database = DatabaseConfig(
+        type="mysql", host="db.local", port=2881, user="root", name="ai_agent_companion"
+    )
+    settings = _settings(database, enabled=True, host="other.local", port=2881)
+    with pytest.raises(BusinessException) as exc_info:
+        seekdb_compat.resolve_seekdb_config(settings)
+    assert exc_info.value.code == ErrorCode.CONFIG_INVALID
+    assert exc_info.value.details["authority_host"] == "db.local"
+
+    port_settings = _settings(database, enabled=True, host="db.local", port=2901)
+    with pytest.raises(BusinessException) as port_error:
+        seekdb_compat.resolve_seekdb_config(port_settings)
+    assert port_error.value.code == ErrorCode.CONFIG_INVALID
+
+
+async def test_seekdb_single_stack_invariant_inherits_authority() -> None:
+    """单栈解析：留空字段继承权威库；显式一致覆盖通过并读取权威密码变量。"""
+    database = DatabaseConfig(
+        type="mysql",
+        host="db.local",
+        port=2881,
+        user="authority-user",
+        password=SecretStr("authority-pass"),
+        name="ai_agent_companion",
+    )
+    inherited = seekdb_compat.resolve_seekdb_config(_settings(database, enabled=True))
+    assert inherited.host == "db.local"
+    assert inherited.port == 2881
+    assert inherited.user == "authority-user"
+    assert inherited.password_env == "DATABASE_PASSWORD"
+
+    explicit = seekdb_compat.resolve_seekdb_config(
+        _settings(database, enabled=True, host="db.local", port=2881, user="search-user")
+    )
+    assert explicit.host == "db.local"
+    assert explicit.port == 2881
+    assert explicit.user == "search-user"
+
+
+async def test_pool_manager_start_rejects_split_instance_before_allocating() -> None:
+    """单栈不变式在资源装配前 fail loud：不建 HTTP client / 不置 started。"""
+    database = DatabaseConfig(
+        type="mysql", host="db.local", port=2881, user="root", name="ai_agent_companion"
+    )
+    manager = PoolManager(_settings(database, enabled=True, host="other.local", port=2881))
+    with pytest.raises(BusinessException) as exc_info:
+        await manager.start()
+    assert exc_info.value.code == ErrorCode.CONFIG_INVALID
+    assert manager.started is False
+    assert manager.http_client is None
+    assert manager.seekdb_pool is None
+
+
+# ---------------------------------------------------------------------------
+# 单栈 SeekDB 形态矩阵（enabled 9 形态解析 / 校验；disabled 9 形态不装配）
+# ---------------------------------------------------------------------------
+
+_AUTHORITY_FOR_MATRIX = DatabaseConfig(
+    type="mysql",
+    host="db.local",
+    port=2881,
+    user="authority-user",
+    password=SecretStr("authority-pass"),
+    name="ai_agent_companion",
+)
+
+#: (标识, seekdb 覆盖字段, 期望结局, 期望 host, 期望 port, 期望 user, 期望密码变量)
+_SINGLE_STACK_SHAPES: tuple[
+    tuple[str, dict[str, Any], str, str, int, str, str], ...
+] = (
+    ("inherit_all", {}, "pass", "db.local", 2881, "authority-user", "DATABASE_PASSWORD"),
+    ("host_same", {"host": "db.local"}, "pass", "db.local", 2881, "authority-user", "DATABASE_PASSWORD"),
+    ("port_same", {"port": 2881}, "pass", "db.local", 2881, "authority-user", "DATABASE_PASSWORD"),
+    (
+        "host_port_same",
+        {"host": "db.local", "port": 2881},
+        "pass",
+        "db.local",
+        2881,
+        "authority-user",
+        "DATABASE_PASSWORD",
+    ),
+    ("user_override", {"user": "search-user"}, "pass", "db.local", 2881, "search-user", "DATABASE_PASSWORD"),
+    (
+        "password_env_override",
+        {"password_env": "SEARCH_DB_PASSWORD"},
+        "pass",
+        "db.local",
+        2881,
+        "authority-user",
+        "SEARCH_DB_PASSWORD",
+    ),
+    ("host_mismatch", {"host": "other.local"}, "fail", "other.local", 2881, "authority-user", "DATABASE_PASSWORD"),
+    ("port_mismatch", {"port": 2901}, "fail", "db.local", 2901, "authority-user", "DATABASE_PASSWORD"),
+    (
+        "host_port_mismatch",
+        {"host": "other.local", "port": 2901},
+        "fail",
+        "other.local",
+        2901,
+        "authority-user",
+        "DATABASE_PASSWORD",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("case_id", "overrides", "outcome", "host", "port", "user", "password_env"),
+    _SINGLE_STACK_SHAPES,
+    ids=[shape[0] for shape in _SINGLE_STACK_SHAPES],
+)
+async def test_seekdb_single_stack_enabled_shape_matrix(
+    case_id: str,
+    overrides: dict[str, Any],
+    outcome: str,
+    host: str,
+    port: int,
+    user: str,
+    password_env: str,
+) -> None:
+    """enabled 九形态：继承 / 显式一致 / 用户覆盖通过，host / port 不一致 fail loud。"""
+    settings = _settings(_AUTHORITY_FOR_MATRIX, enabled=True, **overrides)
+    if outcome == "fail":
+        with pytest.raises(BusinessException) as exc_info:
+            seekdb_compat.resolve_seekdb_config(settings)
+        assert exc_info.value.code == ErrorCode.CONFIG_INVALID
+        assert exc_info.value.details["authority_host"] == "db.local"
+        assert exc_info.value.details["authority_port"] == 2881
+        return
+    resolved = seekdb_compat.resolve_seekdb_config(settings)
+    assert (resolved.host, resolved.port) == (host, port), case_id
+    assert resolved.user == user
+    assert resolved.password_env == password_env
+
+
+@pytest.mark.parametrize(
+    ("case_id", "overrides", "outcome", "host", "port", "user", "password_env"),
+    _SINGLE_STACK_SHAPES,
+    ids=[shape[0] for shape in _SINGLE_STACK_SHAPES],
+)
+async def test_seekdb_single_stack_disabled_shape_matrix_not_assembled(
+    monkeypatch: pytest.MonkeyPatch,
+    case_id: str,
+    overrides: dict[str, Any],
+    outcome: str,
+    host: str,
+    port: int,
+    user: str,
+    password_env: str,
+) -> None:
+    """disabled 九形态：不变式不校验、显式覆盖原样解析，PoolManager 零 SeekDB 装配。"""
+
+    async def _unexpected_pool(**kwargs: Any) -> FakePool:
+        """disabled 形态不应创建检索池。"""
+        raise AssertionError("disabled 形态不应创建 SeekDB 池")
+
+    monkeypatch.setattr(manager_module, "create_seekdb_pool", _unexpected_pool)
+    settings = _settings(_AUTHORITY_FOR_MATRIX, enabled=False, **overrides)
+    resolved = seekdb_compat.resolve_seekdb_config(settings)
+    assert (resolved.host, resolved.port) == (host, port), case_id
+    assert resolved.user == user
+    assert resolved.password_env == password_env
+
+    manager = PoolManager(settings)
+    await manager.start()
+    try:
+        assert manager.seekdb_pool is None
+        with pytest.raises(BusinessException) as exc_info:
+            manager.get_seekdb_pool()
+        assert exc_info.value.code == ErrorCode.INTERNAL_ERROR
+    finally:
+        await manager.stop()

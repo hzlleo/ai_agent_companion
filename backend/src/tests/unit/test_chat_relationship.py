@@ -387,7 +387,7 @@ async def test_compose_inserts_relationship_between_core_memory_and_skills() -> 
         _state(),
         core_memory=[_core_block()],
         relationship=summary,
-        skills=[_skill()],
+        skills=[_skill()], wrap_current_message=False
     )
     prompt = result.system_prompt
     core_index = prompt.index("【自我认知】")
@@ -399,7 +399,7 @@ async def test_compose_inserts_relationship_between_core_memory_and_skills() -> 
 
 async def test_compose_without_relationship_unchanged() -> None:
     """未提供摘要：system 提示不含关系进展块（既有形态零变更）。"""
-    result = compose_messages(_state())
+    result = compose_messages(_state(), wrap_current_message=False)
     assert "【关系进展】" not in result.system_prompt
 
 

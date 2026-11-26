@@ -1,4 +1,4 @@
-"""会话消息变体迁移（R2b swipes——variant_of_id / variant_index + 变体唯一键）。
+"""会话消息变体迁移（swipes 候选重生成——variant_of_id / variant_index + 变体唯一键）。
 
 ``ff_chat_messages`` 增两列 + 重写会话内唯一键（消息变体面——单回合多
 候选重生成 / 选定提升，见 harness/chat/swipe）：

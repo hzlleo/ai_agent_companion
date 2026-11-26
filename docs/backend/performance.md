@@ -175,67 +175,27 @@ chunk 分开计量。构建产物由 `cd frontend && pixi run build` 生成
 `[bundle-budget] PASS total=<初始 JS 字节> lazy=<动态 chunk 数>`；失败输出
 `[bundle-budget] FAIL reason=<原因码>` 并以非 0 退出。
 
-### 拆分前后基线（同机实测）
+### 当前构建聚合基线（同机实测）
 
 R4-1 将全部路由页改为 `React.lazy` 独立分包，共享壳（`AppShell` /
-`ToastProvider` / 令牌门）保持 eager。实测对比：
+`ToastProvider` / 令牌门）保持 eager。下列基线为**聚合口径**：初始加载 JS
+（`index.html` 入口静态闭包）与动态 chunk 总量分开计量，gzip 用 Node 内置
+`zlib.gzipSync`（默认参数）计算，与 `frontend/scripts/check_bundle_budget.mjs`
+的 `measure()` 同工具同参数。逐 chunk 的文件名与字节会随内容哈希变化，
+不在文档固化——**明细以 `pixi run bundle-check` 输出为准**。
 
-| 指标 | R4-1 前（单 chunk） | R4-1 后（路由级拆分） |
+| 指标 | R4-1 前（单 chunk） | 当前（路由级拆分） |
 |---|---:|---:|
-| 初始加载 JS | 717,443 B（gzip 213,912 B） | 389,799 B（gzip 123,614 B） |
-| 动态 chunk JS | 0 | 337,058 B / 25 个（gzip 109,646 B） |
-| JS 产物合计 | 717,443 B | 726,857 B（拆分共享模块开销 +9,414 B） |
-| CSS | 23,257 B（gzip 5,276 B） | 23,313 B（gzip 5,295 B） |
-| 构建耗时（Vite 自报 `✓ built in`，暖缓存复跑） | 5.96s | 2.41s |
-
-表中字节为产物文件实际大小，gzip 列为 Node 内置 `zlib.gzipSync`（默认参数）对
-同一文件的计算结果，与 `frontend/scripts/check_bundle_budget.mjs` 的 `measure()`
-同工具同参数；前后两列同口径。「R4-1 前」列由 `git archive 01ac640 frontend`
-导出到临时树、软链同一 `node_modules` 后构建，以同一函数复算。CSS 拆分前后
-真实差值为原始 +56 B（23,257 → 23,313）、gzip +19 B（5,276 → 5,295）：增量来自
-`PageBoundary` 加载/错误态所用样式类，构建仍为单一样式产物、无独立样式 chunk。
+| 初始加载 JS | 717,443 B（gzip 213,912 B） | 389,799 B（gzip 123,627 B） |
+| 动态 chunk | 0 | 25 个 / 340,756 B（gzip 110,888 B） |
+| JS 产物合计 | 717,443 B | 730,555 B（gzip 234,515 B） |
+| 构建耗时（Vite 自报 `✓ built in`，暖缓存复跑） | 5.96s | 3.08s |
 
 构建耗时口径统一为 Vite 自报 `✓ built in` 的暖缓存复跑（同一棵树上第二次
 `pixi run build`），随机器负载与缓存状态波动，只做同机观察、不作门禁；首跑
-冷启动数字不与热跑并列。R3 审计环境记录的单 chunk 构建耗时为 6.16s（口径不同，
-仅作参考）。初始加载口径是 `index.html` 入口的静态闭包；
-路由页面 chunk 及其静态依赖在访问该路由时加载——以默认落地路由
-`/personas` 为例，其页面 chunk 与依赖合计使该次访问的 JS 总量约 533,138 B
-（gzip 176,104 B），仍低于 1 MB 预算。
-
-### 拆分后 chunk 明细（本机构建）
-
-| chunk | 字节 | gzip |
-|---|---:|---:|
-| `assets/index-DZsPJWg8.js`（入口，初始加载） | 389,799 | 123,614 |
-| `assets/MemoriesPage-D0NvqOe6.js` | 68,097 | 16,411 |
-| `assets/client-DwfNYENn.js`（页面共享依赖） | 62,804 | 23,885 |
-| `assets/PersonaFormPage-DWA5aepK.js` | 53,812 | 13,684 |
-| `assets/useToast-Dp62eppS.js`（页面共享依赖） | 41,598 | 14,192 |
-| `assets/ModelsPage-PFsEb5sw.js` | 14,981 | 4,904 |
-| `assets/RealtimeVoicePage-Bv6iIc2x.js` | 14,366 | 5,703 |
-| `assets/PersonaListPage-Co9BmVjX.js` | 13,984 | 4,801 |
-| `assets/useMutation-Cw6P5nWa.js`（页面共享依赖） | 12,240 | 4,091 |
-| `assets/StickersPage-C9YbEhNU.js` | 10,721 | 4,117 |
-| `assets/UsagePage-D57DtO3K.js` | 10,596 | 3,075 |
-| `assets/CanvasPage-CEt_f0ex.js` | 10,075 | 3,782 |
-| `assets/PersonaPresetGallery-DCeGXsdT.js` | 7,919 | 3,501 |
-| `assets/usePersonasApi-hdQ4FCnp.js` | 5,754 | 1,939 |
-| `assets/PersonaImportConflictDialog-DtYnUgKx.js` | 1,775 | 966 |
-| `assets/BatchDeleteResultDialog-BL9eLG_Y.js` | 1,698 | 705 |
-| `assets/PersonaPicker-DE7tV5jC.js` | 1,147 | 673 |
-| `assets/Table-BToeDHa9.js` | 1,111 | 439 |
-| `assets/ConfirmDialog-B5fbw8GT.js` | 923 | 515 |
-| `assets/Checkbox-DL9MqXdz.js` | 801 | 470 |
-| `assets/errorDetails-D1_rld8S.js` | 627 | 362 |
-| `assets/trash-2-n_-Exike.js` | 526 | 344 |
-| `assets/Textarea-0vX1sIBp.js` | 519 | 332 |
-| `assets/arrow-left-DR4JS0v5.js` | 333 | 268 |
-| `assets/datetime-BkCRdq40.js` | 329 | 230 |
-| `assets/plus-BcPs1wie.js` | 322 | 257 |
-
-文件名带内容哈希，本表是本次构建的快照；复跑时哈希与字节可能小幅变化，以
-`bundle-check` 的 `total` / `lazy` 尾标记为准。
+冷启动数字与热跑不并列（本机冷缓存首跑约 14.8s，仅供对照）。根门禁判定仍
+以 `bundle-check` 的初始 JS 上限与动态 chunk 下限为准；样式产物仍为单一文件，
+路由拆分未产生独立样式 chunk。
 
 ### 运行
 

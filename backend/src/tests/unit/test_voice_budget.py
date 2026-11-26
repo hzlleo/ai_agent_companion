@@ -34,6 +34,7 @@ from packages.harness.persona.chara_card import CharaCardModel
 from packages.harness.persona.dtos import PersonaRecordDTO
 from packages.harness.persona.models import PersonaStatus
 from packages.harness.persona.service import bind_persona_context
+from packages.harness.usage.budget_limits import DAILY_BUDGET_MAX
 from packages.harness.usage.dtos import UsageCreateDTO
 from packages.harness.usage.models import UsagePurpose, UsageStatus
 from packages.harness.usage.orm import UsageRecordRow
@@ -54,6 +55,7 @@ from packages.harness.voice.voiceprint_models import (
 )
 from packages.harness.voice.voiceprint_orm import VoiceprintSampleRow
 from packages.harness.voice.voiceprint_service import VoiceprintService
+from tests.unit.test_voiceprint_service import _wav_bytes
 
 #: 测试日桶起点（UTC 零点——计数口径与预算闸同轴）。
 _DAY_START_MS: int = 1_731_000_000_000 // 86_400_000 * 86_400_000
@@ -206,7 +208,7 @@ def _voiceprint_settings(**overrides: object) -> VoiceprintSettings:
         "min_sample_duration_ms": 1000,
         "min_verify_duration_ms": 800,
         "min_sample_rate_hz": 8000,
-        "max_upload_bytes": 4096,
+        "max_upload_bytes": 1_000_000,
         "retention_days": 30,
     }
     values.update(overrides)
@@ -216,7 +218,7 @@ def _voiceprint_settings(**overrides: object) -> VoiceprintSettings:
 def _sample(audio: bytes) -> VoiceprintSampleUploadModel:
     """构造一条注册样本（base64 编码）。"""
     return VoiceprintSampleUploadModel(
-        audio_base64=base64.b64encode(audio).decode("ascii"),
+        audio_base64=base64.b64encode(_wav_bytes(audio)).decode("ascii"),
         content_type="audio/wav",
         duration_ms=2000,
         sample_rate_hz=16000,
@@ -280,11 +282,13 @@ class TestBudgetConfig:
         assert TtsSettings(daily_budget_persona=2).daily_budget_persona == 2
 
     async def test_upper_bound_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """有效上限 10,000：10,001 在配置层拒绝。"""
-        monkeypatch.setenv("TTS_DAILY_BUDGET_GLOBAL", "10001")
-        monkeypatch.setenv("VOICEPRINT_DAILY_BUDGET_PERSONA", "10001")
+        """配置硬上限：单源常量值通过，常量 + 1 在配置层拒绝。"""
+        monkeypatch.setenv("TTS_DAILY_BUDGET_GLOBAL", str(DAILY_BUDGET_MAX))
+        assert TtsSettings().daily_budget_global == DAILY_BUDGET_MAX
+        monkeypatch.setenv("TTS_DAILY_BUDGET_GLOBAL", str(DAILY_BUDGET_MAX + 1))
         with pytest.raises(ValidationError):
             TtsSettings()
+        monkeypatch.setenv("VOICEPRINT_DAILY_BUDGET_PERSONA", str(DAILY_BUDGET_MAX + 1))
         with pytest.raises(ValidationError):
             VoiceprintSettings()
 

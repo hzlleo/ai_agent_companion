@@ -3,7 +3,7 @@
 覆盖矩阵（warn-and-continue 语义——sidecar 是可选运行时）：
 
     - disabled（缺省）：零 sidecar 装配（build_browser_sidecar_client 零调用）；
-    - enabled + 探测成功 + token 就绪（搜索关闭）：八工具注册进 duty
+    - enabled + 探测成功 + token 就绪（搜索关闭）：七工具注册进 duty
       注册表（内置 + 沙盒之后）+ 独立 chat 槽位（browser_tool_registry /
       browser_tool_specs）+ 代理执行器回路（fake 客户端——read_text 不可信
       包裹锚点）；
@@ -11,7 +11,7 @@
     - enabled + token 未配置：跳过注册（探测零调用——本地检查先行）；
     - duty 关闭 + sidecar 开启：duty 零注册表，但 chat 槽位仍装配
       （浏览器工具的 chat 消费面不依赖 duty——与沙盒的差异点）；
-    - 搜索 chat 注册表已建（tool_enabled）：八工具并入搜索注册表
+    - 搜索 chat 注册表已建（tool_enabled）：七工具并入搜索注册表
       （search_tool_specs 追加——单一 chat 注册表面），browser 槽位保持
       None。
 
@@ -38,7 +38,10 @@ from packages.harness.config.models import (
 )
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.multimodal.look_at import LOOK_AT_TOOL_NAME
-from packages.harness.tools.browser_models import BROWSER_TOOL_NAMES
+from packages.harness.tools.browser_models import (
+    BROWSER_LLM_TOOL_NAMES,
+    EVALUATE_TOOL_NAME,
+)
 from packages.harness.tools.tool_models import ToolResultModel
 
 #: 内置工具面（装配矩阵断言基准——duty 启用 + 检索服务注入形态）。
@@ -238,13 +241,13 @@ class TestWiringMatrix:
             registry = app.state.duty_registry
             assert registry is not None
             assert registry.tool_names == _BUILTIN_TOOLS + [
-                *BROWSER_TOOL_NAMES,
+                *BROWSER_LLM_TOOL_NAMES,
                 *_LOOK_AT_TOOLS,
             ]
             # chat 槽位（搜索关闭——独立 browser 槽位形态）
             assert app.state.browser_tool_registry is not None
             assert [spec.name for spec in app.state.browser_tool_specs] == list(
-                BROWSER_TOOL_NAMES
+                BROWSER_LLM_TOOL_NAMES
             )
             # 工厂接线：共享池 http client + settings.tools_browser_sidecar 配置面
             assert captured["settings_face"] is settings.tools_browser_sidecar
@@ -331,7 +334,7 @@ class TestWiringMatrix:
             assert app.state.duty_registry is None
             assert app.state.browser_tool_registry is not None
             assert [spec.name for spec in app.state.browser_tool_specs] == list(
-                BROWSER_TOOL_NAMES
+                BROWSER_LLM_TOOL_NAMES
             )
         finally:
             await shutdown_app_state(app)
@@ -352,23 +355,25 @@ class TestWiringMatrix:
         )
         await startup_app_state(app, settings, config_dir=config_dir)
         try:
-            # 并入形态：搜索槽位承载 web_search + 八浏览器工具
+            # 并入形态：搜索槽位承载 web_search + 七浏览器工具
             assert app.state.browser_tool_registry is None
             assert app.state.browser_tool_specs is None
             chat_registry = app.state.search_tool_registry
             assert chat_registry is not None
-            assert chat_registry.tool_names == ["web_search", *BROWSER_TOOL_NAMES]
+            assert chat_registry.tool_names == ["web_search", *BROWSER_LLM_TOOL_NAMES]
+            assert EVALUATE_TOOL_NAME not in chat_registry.tool_names
             assert [spec.name for spec in app.state.search_tool_specs] == [
                 "web_search",
-                *BROWSER_TOOL_NAMES,
+                *BROWSER_LLM_TOOL_NAMES,
             ]
             # duty 注册表（搜索关闭沙盒 + look_at + web_search 追加形态）
             duty_registry = app.state.duty_registry
             assert duty_registry is not None
             assert duty_registry.tool_names == _BUILTIN_TOOLS + [
-                *BROWSER_TOOL_NAMES,
+                *BROWSER_LLM_TOOL_NAMES,
                 *_LOOK_AT_TOOLS,
                 "web_search",
             ]
+            assert EVALUATE_TOOL_NAME not in duty_registry.tool_names
         finally:
             await shutdown_app_state(app)

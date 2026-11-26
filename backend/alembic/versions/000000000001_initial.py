@@ -1,8 +1,7 @@
-"""初始基线迁移——P0-3 交付（本 chunk 无域表）。
+"""初始基线迁移（版本链锚点，无域表）。
 
 harness 骨架（config / database / pools）先行落地，域表（persona /
-chat / memory / usage 等）由后续 chunk 交付并在各自迁移中创建。本迁移
-仅承载 Alembic 版本链锚点（``alembic_version`` 表由框架自建），确保：
+chat / memory / usage 等）由后续迁移创建。本迁移仅承载 Alembic 版本链锚点（``alembic_version`` 表由框架自建），确保：
 
     - 全新库 ``pixi run alembic upgrade head`` 可直接到达基线；
     - 后续迁移挂在稳定 revision 之下，链起点可追溯。

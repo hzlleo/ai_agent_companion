@@ -127,7 +127,7 @@ async def test_compose_inserts_facts_between_directives_and_protocol() -> None:
     result = compose_messages(
         _state(),
         directives=["以后都用简体中文"],
-        facts=["【偏好】主人喜欢无糖乌龙茶"],
+        facts=["【偏好】主人喜欢无糖乌龙茶"], wrap_current_message=False
     )
     prompt = result.system_prompt
     directives_index = prompt.index("【长期指令】")
@@ -139,7 +139,7 @@ async def test_compose_inserts_facts_between_directives_and_protocol() -> None:
 
 async def test_compose_without_facts_unchanged() -> None:
     """未提供事实：system 提示不含人物事实块（既有形态零变更）。"""
-    result = compose_messages(_state())
+    result = compose_messages(_state(), wrap_current_message=False)
     assert "【关于对方】" not in result.system_prompt
 
 

@@ -23,7 +23,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from collections import deque
 from collections.abc import Callable
 from enum import StrEnum
@@ -36,6 +35,11 @@ from packages.harness.channels.channel_models import (
     ChannelDeliveryResultModel,
     ChannelType,
     InboundMessageModel,
+)
+from packages.harness.channels.inbound_timestamp import resolve_epoch_ms_timestamp
+from packages.harness.channels.phone_numbers import (
+    normalize_phone_identifier,
+    parse_phone_owner_numbers,
 )
 from packages.harness.core import time_utils
 
@@ -62,15 +66,6 @@ SMS_FORWARDER_CONTENT_DEDUP_WINDOW_MS: Final[int] = 120_000
 
 #: 去重窗口容量（已见键上限——超出按 FIFO 淘汰；进程重启清零）。
 SMS_FORWARDER_DEDUP_WINDOW_SIZE: Final[int] = 1024
-
-#: 手机号分隔符（空格 / 连字符 / 括号 / 点——展示形态归一为纯号码）。
-_SENDER_SEPARATORS_RE: Final[re.Pattern[str]] = re.compile(r"[\s\-().]")
-
-#: 秒级时间戳下界（低于该值视为非法——回落到服务端时钟）。
-_EPOCH_SECONDS_MIN: Final[int] = 1_000_000_000
-
-#: 毫秒级时间戳下界（达到该值按毫秒解释，避免二次放大）。
-_EPOCH_MILLIS_MIN: Final[int] = 1_000_000_000_000
 
 
 class SmsForwarderKind(StrEnum):
@@ -297,13 +292,10 @@ def normalize_sms_forwarder_kind(raw: str) -> SmsForwarderKind | None:
 def normalize_sms_sender(raw: str) -> str:
     """归一发送者标识（手机号去分隔符 / 国家码，联系名小写）。
 
-    规则（文档化决策）：
-
-        - 去除空格 / 连字符 / 括号 / 点等展示分隔符；
-        - 纯数字号码去掉 ``+86`` / ``0086`` / ``86`` 前缀（中国手机号
-          11 位归一）——手机端模板可能带国际码，属主清单与发送者两侧
-          使用同一归一键；
-        - 其余（联系名）小写化，便于属主清单大小写不敏感比较。
+    委托 :func:`packages.harness.channels.phone_numbers.normalize_phone_identifier`
+    （短信口径：中国码前缀归一；WhatsApp 使用保留国家码的独立归一
+    ——两侧口径不同，不共享归一函数）；本函数保留原导出名以维持既有
+    消费面。
 
     Args:
         raw: 原始发送者（手机号 / 联系名）。
@@ -311,40 +303,23 @@ def normalize_sms_sender(raw: str) -> str:
     Returns:
         归一后的发送者键；空串表示无发送者。
     """
-    cleaned = _SENDER_SEPARATORS_RE.sub("", raw.strip())
-    if not cleaned:
-        return ""
-    if cleaned.startswith("+"):
-        digits = cleaned[1:]
-        if digits.isdigit():
-            if len(digits) == 13 and digits.startswith("86"):
-                return digits[2:]
-            return digits
-        return cleaned.lower()
-    if cleaned.isdigit():
-        if len(cleaned) == 15 and cleaned.startswith("0086"):
-            return cleaned[4:]
-        if len(cleaned) == 13 and cleaned.startswith("86"):
-            return cleaned[2:]
-        return cleaned
-    return cleaned.lower()
+    return normalize_phone_identifier(raw)
 
 
 def parse_owner_numbers(raw: str) -> frozenset[str]:
     """解析属主号码 / 联系名清单（逗号分隔；空串 = 空集）。
 
+    委托
+    :func:`packages.harness.channels.phone_numbers.parse_phone_owner_numbers`
+    （短信口径：中国码前缀归一）；本函数保留原导出名。
+
     Args:
         raw: 配置原值（``SMS_FORWARDER_OWNER_NUMBERS``）。
 
     Returns:
-        归一后的属主键集合（沿用 :func:`normalize_sms_sender` 的归一口径）。
+        归一后的属主键集合。
     """
-    owners: set[str] = set()
-    for item in raw.split(","):
-        normalized = normalize_sms_sender(item)
-        if normalized:
-            owners.add(normalized)
-    return frozenset(owners)
+    return parse_phone_owner_numbers(raw)
 
 
 def resolve_sms_forwarder_timestamp_ms(
@@ -352,10 +327,11 @@ def resolve_sms_forwarder_timestamp_ms(
 ) -> int:
     """解析手机端时间戳为 epoch 毫秒（非法 / 缺失回落服务端时钟）。
 
-    支持形态：毫秒数值、秒级数值（自动 ×1000）、数值字符串。ISO 文本 /
-    负值 / 零值 / 过小数值视为非法（SmsForwarder 模板默认输出数值）。
-    秒级下界用于区分秒与毫秒（``1e9`` 秒约 2001 年，``1e12`` 毫秒约
-    2001 年）；低于秒级下界的数值不作为时间使用。
+    委托共享实现 :func:`packages.harness.channels.inbound_timestamp.
+    resolve_epoch_ms_timestamp`（与 WhatsApp 同源）：秒级数值自动 ×1000、
+    毫秒数值原样；ISO 文本 / 负值 / 零值 / 过小数值 / 非法字符串 /
+    非有限值（``NaN`` / ``Infinity`` / ``"inf"`` / ``"1e999"``）/ 溢出
+    一律回落服务端时钟（SmsForwarder 模板默认输出数值）。
 
     Args:
         value: 原始时间戳（数值 / 数值字符串 / None）。
@@ -364,30 +340,9 @@ def resolve_sms_forwarder_timestamp_ms(
     Returns:
         epoch 毫秒时间戳（恒正）。
     """
-    if isinstance(value, bool):
-        return fallback_ms
-    if isinstance(value, (int, float)):
-        candidate = int(value)
-    elif isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return fallback_ms
-        try:
-            candidate = int(text)
-        except ValueError:
-            try:
-                candidate = int(float(text))
-            except ValueError:
-                return fallback_ms
-    else:
-        return fallback_ms
-    if candidate <= 0:
-        return fallback_ms
-    if candidate >= _EPOCH_MILLIS_MIN:
-        return candidate
-    if candidate >= _EPOCH_SECONDS_MIN:
-        return candidate * 1000
-    return fallback_ms
+    return resolve_epoch_ms_timestamp(
+        value, fallback_ms=fallback_ms, channel_label="SmsForwarder"
+    )
 
 
 def _resolve_body(payload: SmsForwarderPayloadModel) -> str:

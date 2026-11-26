@@ -190,12 +190,21 @@ export default function RealtimeVoicePage(props: RealtimeVoicePageProps = {}) {
           const capture = captureRef.current
           void (async () => {
             await capture?.start()
-            const capabilities = capture?.getCapabilities?.() ?? null
+            if (capture === null || captureRef.current !== capture) {
+              return
+            }
+            const capabilities = capture.getCapabilities?.() ?? null
             setCaptureCapabilities(capabilities)
             if (capabilities !== null && !capabilities.echoCancellation) {
+              if (captureRef.current !== capture) {
+                return
+              }
               setNotice('浏览器未生效回声消除（AEC），外放场景建议佩戴耳机')
             }
-            if (capture?.isPaused?.() === true) {
+            if (capture.isPaused?.() === true) {
+              if (captureRef.current !== capture) {
+                return
+              }
               setCapturePaused(true)
             }
           })()
@@ -282,6 +291,9 @@ export default function RealtimeVoicePage(props: RealtimeVoicePageProps = {}) {
       return
     }
     await capture.resume?.()
+    if (captureRef.current !== capture) {
+      return
+    }
     setCapturePaused(capture.isPaused?.() ?? false)
     const capabilities = capture.getCapabilities?.() ?? null
     setCaptureCapabilities(capabilities)

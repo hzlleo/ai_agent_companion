@@ -77,8 +77,8 @@ from packages.harness.persona.models import (
 from packages.harness.persona.service import PersonaService
 from packages.harness.persona.trait_library import (
     generate_card_from_preset,
-    load_official_components,
-    load_official_presets,
+    load_official_components_async,
+    load_official_presets_async,
 )
 
 router = APIRouter(prefix="/api/v1/personas", tags=["personas"])
@@ -461,9 +461,10 @@ async def get_primary_persona(
 async def list_trait_presets() -> ResultDTO[TraitLibraryDTO]:
     """读取官方特质预设库（画廊载荷——预设 + 组件注册表）。
 
-    数据经 ``load_official_presets`` / ``load_official_components``
-    路径相对装载（首次调用校验 + 缓存；非法数据文件 fail loud——
-    模块导入期零副作用）。
+    数据经 ``load_official_presets_async`` /
+    ``load_official_components_async`` 路径相对装载（读盘经共享线程池；
+    启动期已预加载时命中缓存，未预加载的懒加载路径同样下沉线程池；
+    非法数据文件 fail loud——模块导入期零副作用）。
 
     Returns:
         特质库载荷（presets + components——前端按 id 映射解析芯片）。
@@ -473,8 +474,8 @@ async def list_trait_presets() -> ResultDTO[TraitLibraryDTO]:
             500——details 携带装载失败原因）。
     """
     try:
-        presets = load_official_presets()
-        components = load_official_components()
+        presets = await load_official_presets_async()
+        components = await load_official_components_async()
     except ValueError as exc:
         raise BusinessException(
             code=ErrorCode.INTERNAL_ERROR,
@@ -529,8 +530,8 @@ async def import_persona(
     desired_name: str | None
     if dto.preset_id is not None:
         try:
-            presets = load_official_presets()
-            registry = load_official_components()
+            presets = await load_official_presets_async()
+            registry = await load_official_components_async()
         except ValueError as exc:
             raise BusinessException(
                 code=ErrorCode.INTERNAL_ERROR,

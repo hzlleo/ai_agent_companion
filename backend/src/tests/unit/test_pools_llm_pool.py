@@ -220,7 +220,7 @@ async def test_entry_semaphore_enforces_concurrency() -> None:
         async with pool.entry_gate(entry):
             in_flight.append(1)
             peak.append(len(in_flight))
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0)
             in_flight.pop()
 
     await asyncio.gather(*[_task() for _ in range(6)])

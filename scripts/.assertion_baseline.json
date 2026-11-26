@@ -2,25 +2,25 @@
   "version": 1,
   "note": "单元测试断言基线——计数只降不升；再生成: python scripts/assertion_freeze.py --update",
   "totals": {
-    "asserts": 8451,
-    "raises": 622,
-    "files": 198
+    "asserts": 9570,
+    "raises": 708,
+    "files": 225
   },
   "files": {
     "backend/src/tests/unit/test_admin_auth.py": {
-      "asserts": 46,
+      "asserts": 50,
       "raises": 0,
-      "digest": "ddf3781cd92b204fcab5cf49a8fac2522f33e43ab51a121bf92396c5c6d5fb8e"
+      "digest": "127005cf56f848288ac38c7cbbd34e9095d3a56702d8c8a2cc4ee0f9e5cb974f"
     },
     "backend/src/tests/unit/test_app_browser_sidecar_lifespan.py": {
-      "asserts": 36,
+      "asserts": 38,
       "raises": 0,
-      "digest": "df3d8b890c901da37d79465314b89f45993b9d752d567e041cb8085d0476a3ae"
+      "digest": "7c5d1828cc65e878d34524b55a732ec1bfa7ff95686db1d23d942b9f7f13a811"
     },
     "backend/src/tests/unit/test_app_channels_lifespan.py": {
       "asserts": 44,
       "raises": 2,
-      "digest": "8ecd06233cf5c85dd175be56d511f6ff9622c99380263edc2188f8b8b80a4a2a"
+      "digest": "1510810e69b1577289591295321443c06d639efeff27a528b125f86f1737aea7"
     },
     "backend/src/tests/unit/test_app_cors.py": {
       "asserts": 14,
@@ -35,7 +35,7 @@
     "backend/src/tests/unit/test_app_duty_lifespan.py": {
       "asserts": 37,
       "raises": 0,
-      "digest": "60c0b18b9b60307e823f6e069d434af869f760c89076fe94ba044bbfb84e4ee1"
+      "digest": "d448703d55b4ef47a4f4382c2185a77d6e22dcb94aac53826797718e3181fd11"
     },
     "backend/src/tests/unit/test_app_error_handler.py": {
       "asserts": 24,
@@ -43,9 +43,9 @@
       "digest": "5f421bad97927ee884fe7eb485f722e3cb51520d717648e848d003c7fcda2f5f"
     },
     "backend/src/tests/unit/test_app_main.py": {
-      "asserts": 45,
+      "asserts": 47,
       "raises": 0,
-      "digest": "5b551e604033864721afc3a2128c851a6e05680cbbeb07e66696c7964d2c4308"
+      "digest": "912c4a864b2108fcfe0037c7b253a2a34ff21cda17d1d844a0133478abefc160"
     },
     "backend/src/tests/unit/test_app_qq_channels_lifespan.py": {
       "asserts": 35,
@@ -60,7 +60,7 @@
     "backend/src/tests/unit/test_app_reminders_lifespan.py": {
       "asserts": 12,
       "raises": 0,
-      "digest": "8fb4f96fe7550325c38422d166952d2738ccc61e4b011ebc18046bbac4b456b6"
+      "digest": "f30c43a62f4b85f5858ef7db562430641c224446ad47d14e7104d17dad0904b4"
     },
     "backend/src/tests/unit/test_app_sandbox_lifespan.py": {
       "asserts": 20,
@@ -72,15 +72,35 @@
       "raises": 1,
       "digest": "1fec7398b4107812f5810322c12a3519c110c525cb6dc39224e1d52138d2bb55"
     },
+    "backend/src/tests/unit/test_app_sms_forwarder_lifespan.py": {
+      "asserts": 19,
+      "raises": 0,
+      "digest": "fb496f13f93205bb775e4d7d88264b8cc164f2ffe93896ec706be69d78307b20"
+    },
     "backend/src/tests/unit/test_app_wecom_channels_lifespan.py": {
       "asserts": 33,
       "raises": 0,
       "digest": "336abcda2bc3fb00ed44907977eb6432348f43e6b7ea89331a9d238944771321"
     },
+    "backend/src/tests/unit/test_app_whatsapp_lifespan.py": {
+      "asserts": 20,
+      "raises": 1,
+      "digest": "8b33ef6def47450814740bd3020ac04455b56ec745bc0b447ee907d7104ecc7c"
+    },
+    "backend/src/tests/unit/test_assertion_freeze_gate.py": {
+      "asserts": 3,
+      "raises": 0,
+      "digest": "ce096a45f3dbe84ce2f20a752e71e61e7734ada0670516f9020ab97ceec33d30"
+    },
+    "backend/src/tests/unit/test_async_wait.py": {
+      "asserts": 3,
+      "raises": 1,
+      "digest": "e811450ca3cbe6fa3cb399a8ce4fb8c1574929bbc5d1b73b6fc51e0eb2eba664"
+    },
     "backend/src/tests/unit/test_auth_policy.py": {
-      "asserts": 5,
+      "asserts": 9,
       "raises": 2,
-      "digest": "7de6d31d90e06f4258e28c3bbda087f1e8da42a806a4d31469b5bd37c930f8f2"
+      "digest": "7f6b8cbbbbb82807b5ddab5994cfccf950ce5df500772ae3885b1647b8ebca48"
     },
     "backend/src/tests/unit/test_auth_surface_docs.py": {
       "asserts": 3,
@@ -108,34 +128,54 @@
       "digest": "e9c81857fc044f7b30eb6e130e55759b312e0c7b01d7bf5946c354fda267a868"
     },
     "backend/src/tests/unit/test_channel_router_flow.py": {
-      "asserts": 62,
+      "asserts": 77,
       "raises": 0,
-      "digest": "430df6eaae4e729332b4bb9bca1b8e81e27ec35e663ebd3f3b18316abb4f293e"
+      "digest": "ec7d10461e0c4ab865278a52ada48081298fd8b6bbf6447f093d70b4558095d4"
     },
     "backend/src/tests/unit/test_channel_router_group.py": {
       "asserts": 25,
       "raises": 0,
       "digest": "2d86cd82611b5a3c1f1af83aa5c30c8431a3073c74ac7b284478cd3b2a47ee1a"
     },
-    "backend/src/tests/unit/test_channel_router_sticker.py": {
-      "asserts": 18,
+    "backend/src/tests/unit/test_channel_router_owner_flag.py": {
+      "asserts": 6,
       "raises": 0,
-      "digest": "4551d9bf4986973f7c65ef2dba7e9b2da7bf61eb46ac2837e69accd383bdb4fa"
+      "digest": "0b6c5359913c0712d9b25f7350baca07aa55b95c17ff60fb30dbc51aa4682a9d"
+    },
+    "backend/src/tests/unit/test_channel_router_sticker.py": {
+      "asserts": 34,
+      "raises": 0,
+      "digest": "f7e39e7ae198588c197a91d0468925dd35d63a14054548b3ba7bff0f60fa66a6"
+    },
+    "backend/src/tests/unit/test_channel_timestamp.py": {
+      "asserts": 4,
+      "raises": 0,
+      "digest": "d0b191c5888498fa2d0e78825394b026c2802ae01b854666a720eb17bc7df2c5"
     },
     "backend/src/tests/unit/test_channels_models.py": {
-      "asserts": 53,
+      "asserts": 57,
       "raises": 9,
-      "digest": "f76d4f5d80b2b921defef194c48f12353a43d09f410c715c2ccaa87987c49b46"
+      "digest": "208022eb133e84a2eeece764ba2d7c2a815f1d524ec094aef657651d2e0453db"
     },
     "backend/src/tests/unit/test_channels_qq_api.py": {
-      "asserts": 35,
-      "raises": 0,
-      "digest": "8d33de1aed0dc06a86920d106961cbab7a205e1cd9c2fef4de0a627f440c7686"
+      "asserts": 51,
+      "raises": 2,
+      "digest": "5994e4dffda6eeb403484d6ccf8c774f37feaa424915bccaf2a5f3a54cab9f44"
     },
     "backend/src/tests/unit/test_channels_settings.py": {
       "asserts": 28,
       "raises": 3,
       "digest": "7ded1af7cec237c7f8a08a73aebe798b5d56d819f33df2da6f3b984aa81e1cb0"
+    },
+    "backend/src/tests/unit/test_channels_sms_forwarder_api.py": {
+      "asserts": 64,
+      "raises": 2,
+      "digest": "5c0cca41815aa60d1a609966d625286264a92e26fcf37bf5f71e0550cbef4e08"
+    },
+    "backend/src/tests/unit/test_channels_whatsapp_api.py": {
+      "asserts": 62,
+      "raises": 3,
+      "digest": "be3f1eccc93c5891e6190009cafdd9515f22bdc461050143323f1418991db9e5"
     },
     "backend/src/tests/unit/test_chat_cli.py": {
       "asserts": 41,
@@ -193,9 +233,9 @@
       "digest": "606b32685f2bd7578a20f08493e9018bfd97dde796d167e36381d7b2f61ae19f"
     },
     "backend/src/tests/unit/test_chat_service.py": {
-      "asserts": 98,
-      "raises": 6,
-      "digest": "7c149c947230161b3ed943ca70fb425f3855395ee413e80dfb4de0c54f9ef996"
+      "asserts": 108,
+      "raises": 7,
+      "digest": "a02a51666a5638f945bc2652278a8a2344447fcecef10583c4dc0725ec9bdaf5"
     },
     "backend/src/tests/unit/test_chat_skills.py": {
       "asserts": 20,
@@ -211,6 +251,11 @@
       "asserts": 29,
       "raises": 0,
       "digest": "e6a657cdc298d09ec18037f8d6bef0ad77d3e606ad69fb937aa3edb3a9f72087"
+    },
+    "backend/src/tests/unit/test_chat_text_normalization.py": {
+      "asserts": 13,
+      "raises": 0,
+      "digest": "e344fa30ae0f86d66a3c1f1a9c7e93d4d55d130a41bb6c0d850acb9a720b98e1"
     },
     "backend/src/tests/unit/test_chat_tool_loop.py": {
       "asserts": 43,
@@ -263,9 +308,9 @@
       "digest": "96c51f30e3a15373bb64aefcc7089d4b788b58d00e0f3929feb959f161449f21"
     },
     "backend/src/tests/unit/test_config_settings.py": {
-      "asserts": 76,
+      "asserts": 86,
       "raises": 6,
-      "digest": "2b7a8ac4d83fd04db0fd741fd0dc677b087046a036a93132dfce02c37fd22251"
+      "digest": "4e93061979b5a02272b0f923405f24190f6c559bf86a2bd5c716d50b6fbca551"
     },
     "backend/src/tests/unit/test_config_wizard.py": {
       "asserts": 134,
@@ -373,9 +418,9 @@
       "digest": "45af0bc445a9b063b3eb529970da9dfefe048601c73edaad77f650721a05b364"
     },
     "backend/src/tests/unit/test_douyin_models.py": {
-      "asserts": 27,
+      "asserts": 28,
       "raises": 3,
-      "digest": "c3651adb7706cb45a89ace2e7107391d8b127430b0ae7ceb82435bf53b56f311"
+      "digest": "19af7ecb3d9deb9f45cbc537b6793499c0848308bcef3e2c491fb375899d49ba"
     },
     "backend/src/tests/unit/test_douyin_runner.py": {
       "asserts": 25,
@@ -393,9 +438,9 @@
       "digest": "5ba1b681242336fb74d34e86eb99a43f338a901bb0deee831d3f73ec1a8da845"
     },
     "backend/src/tests/unit/test_dreaming.py": {
-      "asserts": 251,
+      "asserts": 264,
       "raises": 7,
-      "digest": "e8e1fb7f8327bdacec84b15e5baddcbccadb81ce02fb36bae7e5de5c86c2f42d"
+      "digest": "340e62ef4b6f973d251fb754093796d053464c608fbc0b5871e286ea73308d94"
     },
     "backend/src/tests/unit/test_dreaming_prompts.py": {
       "asserts": 63,
@@ -443,14 +488,19 @@
       "digest": "78d1688972a000feba2a87f7897473fa20d740805f960ee2d2270ac2bdb47296"
     },
     "backend/src/tests/unit/test_flow_gate.py": {
-      "asserts": 67,
+      "asserts": 75,
       "raises": 0,
-      "digest": "d37f210070533bed920a044f2c0532f274d40d94d0ab58ca14e4dc62dc539b98"
+      "digest": "7023b4c3c694f44bd7d49c287db7272d2742e12af3bd3c7efc49b635bbe5fa4a"
+    },
+    "backend/src/tests/unit/test_inbound_body_structure.py": {
+      "asserts": 4,
+      "raises": 0,
+      "digest": "177bf2b27f9e15662866375ff924dad01bd117bf6eb560b96682b5e8cca99b84"
     },
     "backend/src/tests/unit/test_injection_guard.py": {
-      "asserts": 28,
+      "asserts": 36,
       "raises": 3,
-      "digest": "5692c5c225490a67c0c9903e7c801670b590b17ad8f949369cfc29f9a5a890ee"
+      "digest": "d68f0692485911a430cafd44b1aaca2008eda404b1ec66c374827b2a7a5a7009"
     },
     "backend/src/tests/unit/test_intent_directive.py": {
       "asserts": 30,
@@ -490,7 +540,7 @@
     "backend/src/tests/unit/test_llm_gateway.py": {
       "asserts": 122,
       "raises": 15,
-      "digest": "dffcd07d577388ca472702a7cf91f1fda96bbfb55b3ed07670d9ac6f1d940530"
+      "digest": "6df6ae2212cf6b785f63948a8e8109cbba0fdd33e4752f25e29c8ec8126c62c6"
     },
     "backend/src/tests/unit/test_llm_intimate_channel.py": {
       "asserts": 75,
@@ -612,6 +662,11 @@
       "raises": 0,
       "digest": "1a4f6d9958d0b21f8e32c6c55384f993a1d6086c083c466a19c7b79c94ac1a74"
     },
+    "backend/src/tests/unit/test_migration_dream_single_flight.py": {
+      "asserts": 3,
+      "raises": 2,
+      "digest": "b8760031d629883f8357b150338333f6a6ea56ef0c8897c6068a27d8a5e5ad66"
+    },
     "backend/src/tests/unit/test_migration_persona_facts.py": {
       "asserts": 7,
       "raises": 0,
@@ -648,9 +703,9 @@
       "digest": "bf0d62cde557daf91ddf3523eea3d58f11b34365c42c8efd07ff8da8a97252eb"
     },
     "backend/src/tests/unit/test_outbound_guard.py": {
-      "asserts": 10,
-      "raises": 4,
-      "digest": "9a62f43fa7d5fa695e990918d13fc04648ff94aa12187eef0e6615008a89c86a"
+      "asserts": 25,
+      "raises": 9,
+      "digest": "b3db8d5fc5fee9b8ccfeec3f4c522d8e8efd4f7d97bc49710c41ad6e19d4dabe"
     },
     "backend/src/tests/unit/test_output_protocol.py": {
       "asserts": 52,
@@ -688,19 +743,24 @@
       "digest": "5c80cf3be4505cf86d1ded3d2d6dc2949848b066792c2224994cabc78ffe6550"
     },
     "backend/src/tests/unit/test_persona_service.py": {
-      "asserts": 147,
-      "raises": 25,
-      "digest": "fc82e14a595f7e99a19a2b59148f9b26b1eebb59f75d7d93cf08a30ef0b1dc9d"
+      "asserts": 163,
+      "raises": 26,
+      "digest": "03ba68bae9a4210c50bc0bd778257375ec91e012d3c3cb45bb307f70bf3ebf20"
     },
     "backend/src/tests/unit/test_persona_trait_library.py": {
-      "asserts": 100,
+      "asserts": 108,
       "raises": 32,
-      "digest": "fabefdf4e1644a8cee351651634f5a489c81e9929d8d6d3608fc4ba7cbd4148e"
+      "digest": "1c50c7446e85570ea1806b276396762b339adab2dc04c70c2b9b1e753774fca4"
     },
     "backend/src/tests/unit/test_persona_voice_profile.py": {
       "asserts": 29,
       "raises": 2,
       "digest": "173be0b47ee48a001af1fba816b579c9e90985c5078d4bfbde5a5325885d1c08"
+    },
+    "backend/src/tests/unit/test_phone_numbers.py": {
+      "asserts": 5,
+      "raises": 0,
+      "digest": "99ee258007ba1e4937c6ba5ae3f1f564dcdf711a85d0a21aa58c3329b6b6563f"
     },
     "backend/src/tests/unit/test_pools_llm_pool.py": {
       "asserts": 54,
@@ -713,14 +773,19 @@
       "digest": "a1bc001a37ed41ef66a7d85b578d5993389875b3dcd92788f7a88d591bf77bad"
     },
     "backend/src/tests/unit/test_pools_seekdb.py": {
-      "asserts": 28,
-      "raises": 3,
-      "digest": "53c74146cc651849f94030668f01db3331f8e8038cc46993ed029d815f07e6e3"
+      "asserts": 53,
+      "raises": 8,
+      "digest": "27d92cbe9ca1432f1073f442a53f6a406a1e35134240bb27a2661c998d1e4b3a"
+    },
+    "backend/src/tests/unit/test_probe_voice_streaming.py": {
+      "asserts": 17,
+      "raises": 0,
+      "digest": "efba2a4649aff4efab724f0ef4a7db4650e583c52d288b0f589f4230ab9d6821"
     },
     "backend/src/tests/unit/test_prompt_injection_red_team.py": {
       "asserts": 77,
       "raises": 0,
-      "digest": "1a2e875adfab982c9b1197cf8098f5a2c02c9c88cfe4bc32e162f3981318ce21"
+      "digest": "de685ab2246f027ff4e7a0f1f293c2b14f0e7461dc5855540f5be398c02b5f2e"
     },
     "backend/src/tests/unit/test_qq_adapter.py": {
       "asserts": 44,
@@ -743,9 +808,9 @@
       "digest": "43dc02b68c2946ba215ae49f7834b53a8af2ad00260e52b7673ee15c0f339e44"
     },
     "backend/src/tests/unit/test_qq_webhook.py": {
-      "asserts": 75,
+      "asserts": 76,
       "raises": 1,
-      "digest": "42d40f3f8c83933543ba0deca4cf192927121ec8ea927d54524cc2e071e29431"
+      "digest": "72e286f62c24ca72b030677d66551583c75083402e5c61284a1c8e3da9c44866"
     },
     "backend/src/tests/unit/test_realtime_audio.py": {
       "asserts": 16,
@@ -763,9 +828,14 @@
       "digest": "cb1717d6c5289982f992015ddceb03037d455db0c0aa8505b07d0b91e62a643c"
     },
     "backend/src/tests/unit/test_realtime_session.py": {
-      "asserts": 165,
+      "asserts": 174,
       "raises": 2,
-      "digest": "75379b807449a88940e71e51bbef5b18007a0d5cc0db75873a865568d131e51d"
+      "digest": "7926042098346f4c242a250b55a0eb1c4081e9af2cf768b8444b25949d61314f"
+    },
+    "backend/src/tests/unit/test_realtime_session_streaming.py": {
+      "asserts": 93,
+      "raises": 1,
+      "digest": "d66d93875f2944329ccfd33de5e871a42afe7f1d78f4cb491ae07572d6047d17"
     },
     "backend/src/tests/unit/test_realtime_state.py": {
       "asserts": 25,
@@ -813,9 +883,9 @@
       "digest": "8014b10c30e5be122c4f0a04146f1ed505858ca5d0ab251af2082ece13e7448e"
     },
     "backend/src/tests/unit/test_scheduler.py": {
-      "asserts": 41,
+      "asserts": 42,
       "raises": 7,
-      "digest": "10286adf276fc022e0a618a4187c700c6090494a98de09859dee68a7516829e3"
+      "digest": "0c75def5dbb9be1d0e059189ac8bb78cbdc8b65e778e16a043af84642d025322"
     },
     "backend/src/tests/unit/test_scheduler_once.py": {
       "asserts": 11,
@@ -862,6 +932,26 @@
       "raises": 8,
       "digest": "5abcc424a2dd286d4401592b31a7d5f1a618ddceb83d4b970f990f1d0f1b6346"
     },
+    "backend/src/tests/unit/test_sms_forwarder_adapter.py": {
+      "asserts": 6,
+      "raises": 0,
+      "digest": "9f64e031aea062675142999d24eb2598be62d092978d6b808e31c7be5c2a3943"
+    },
+    "backend/src/tests/unit/test_sms_forwarder_models.py": {
+      "asserts": 72,
+      "raises": 1,
+      "digest": "35b1628d8f2c0443f9f013a2034ced5a0187315579133877ebe1e10b48c80538"
+    },
+    "backend/src/tests/unit/test_sms_forwarder_runner.py": {
+      "asserts": 52,
+      "raises": 0,
+      "digest": "040b970ba439c52c643822330e8388a31dcec1c23d43b28f95254dddfacc81ee"
+    },
+    "backend/src/tests/unit/test_sms_forwarder_settings.py": {
+      "asserts": 16,
+      "raises": 1,
+      "digest": "ad8adb92d2e2c97a673dac80a44cd786b8aadacf773a5154352606294b36e56d"
+    },
     "backend/src/tests/unit/test_sticker_api.py": {
       "asserts": 30,
       "raises": 0,
@@ -878,9 +968,9 @@
       "digest": "d5c9e094f3a0080e4b3d716bd86fa6b3b5bf2b306c14b2a45a4179c2b791fd33"
     },
     "backend/src/tests/unit/test_sticker_service.py": {
-      "asserts": 80,
-      "raises": 8,
-      "digest": "cbf6ac5f4e1ae4823c53563ab47f4b214eb1124ab60b9cfc0ba7d2803fbea482"
+      "asserts": 125,
+      "raises": 13,
+      "digest": "93a3e5558a175be3826929424f276a8778aaa872c44e122bbb147d926647e2c4"
     },
     "backend/src/tests/unit/test_tg_client.py": {
       "asserts": 100,
@@ -888,9 +978,9 @@
       "digest": "c66306f6b84ce128fb0a32ee40efa957cc573fb89d9d1c72414b136dd6773e55"
     },
     "backend/src/tests/unit/test_tg_runner.py": {
-      "asserts": 100,
+      "asserts": 103,
       "raises": 2,
-      "digest": "ffa61798402a031bb11ff1a339a37eafa77626096fa6718951e15e0ff5c63702"
+      "digest": "71fadf4a851d819fecf833c567841707b573f28b46687da28c76fd3e32e57458"
     },
     "backend/src/tests/unit/test_tools_browser_sidecar_client.py": {
       "asserts": 41,
@@ -898,9 +988,9 @@
       "digest": "885a4d7badbdd3120f65611848306c06eed03d65e603fb3ba6cf7baf26dfb2cd"
     },
     "backend/src/tests/unit/test_tools_browser_sidecar_registry.py": {
-      "asserts": 30,
+      "asserts": 38,
       "raises": 0,
-      "digest": "dfc4c942416b77837640bba58efe25ede6da110c636b935fc42fbf19421902c8"
+      "digest": "b85b72f406e105ed83928dbc9a0baa36c84f7fabf9eb5431337c0d992470cbc0"
     },
     "backend/src/tests/unit/test_tools_browser_sidecar_settings.py": {
       "asserts": 17,
@@ -938,14 +1028,19 @@
       "digest": "98ce62cc6227a7ff0fcbff3f76bebde6c4d647b57990195316d43a30ccfc5915"
     },
     "backend/src/tests/unit/test_usage_service.py": {
-      "asserts": 71,
+      "asserts": 75,
       "raises": 1,
-      "digest": "fae426d8a765672998b631ca4110ccf8e9cb5824630615010c63ad74b4e60ccd"
+      "digest": "f74b04858d14b3ff962eb7b81fa49891d93abcb6aa9f82748808e4dfa956d837"
     },
     "backend/src/tests/unit/test_voice_api.py": {
       "asserts": 64,
       "raises": 1,
       "digest": "c7c5dc617970fecb00c7222ef6f14a2f1abb2ef17aca68773e4173dfb074d59c"
+    },
+    "backend/src/tests/unit/test_voice_budget.py": {
+      "asserts": 55,
+      "raises": 13,
+      "digest": "479f7dff7a2a3a169b0406655bf012c32c63e81500e34ab3a946e13bebe414fc"
     },
     "backend/src/tests/unit/test_voice_clients.py": {
       "asserts": 41,
@@ -955,17 +1050,37 @@
     "backend/src/tests/unit/test_voice_service.py": {
       "asserts": 52,
       "raises": 4,
-      "digest": "568fd4f697a13e8bd1cfe42453bf17c037447a696da790cf3ca3885a6b69794b"
+      "digest": "6ca208c80a0789785999b7d67639eb75e5305f0e18ada2f9bae1f61c7e05b84d"
+    },
+    "backend/src/tests/unit/test_voice_service_streaming.py": {
+      "asserts": 46,
+      "raises": 7,
+      "digest": "a54907bccfb661587d2c510062e24d923ccf470d8dcfbb429d37491ba0fb6812"
     },
     "backend/src/tests/unit/test_voice_settings.py": {
       "asserts": 28,
       "raises": 3,
       "digest": "b58487c81673c8375ce09a4a1e433ba25319f5197ddc9389df32ec8192dc8dcf"
     },
+    "backend/src/tests/unit/test_voice_stream_clients.py": {
+      "asserts": 96,
+      "raises": 19,
+      "digest": "aa1aded2dcf7b1775a7979c9bef1afad88eec5135480fc4e68d8cb98b79e9c98"
+    },
+    "backend/src/tests/unit/test_voice_stream_transport.py": {
+      "asserts": 17,
+      "raises": 1,
+      "digest": "12b1d8b7c26319ec374e69a1e99b07279869d806a76106d6a1f291b223d2fc13"
+    },
     "backend/src/tests/unit/test_voiceprint_api.py": {
       "asserts": 21,
       "raises": 0,
       "digest": "120f47ecb9a00605f29073b2cdd45744aac4f75f5e1b6cc692d1db1d9e55bb9f"
+    },
+    "backend/src/tests/unit/test_voiceprint_audio.py": {
+      "asserts": 15,
+      "raises": 3,
+      "digest": "2dedf1b8918fcbe9507dd4cf54318e12fd19f629cee501f280b6c67839c46e05"
     },
     "backend/src/tests/unit/test_voiceprint_embedding.py": {
       "asserts": 18,
@@ -973,9 +1088,9 @@
       "digest": "abdf8542eb3d6471fdae9d8d3e501b7cd9eb3505cf6d095da268898ad5507f1b"
     },
     "backend/src/tests/unit/test_voiceprint_service.py": {
-      "asserts": 72,
+      "asserts": 78,
       "raises": 11,
-      "digest": "8d77de35b86e6e933d0afd28425b683975260f96568e35a816b0be7bd1635924"
+      "digest": "f1ffe4b5671ba3699f1a9cd3ae7b68a1c86c1a7cafee9794a4fbebdb0e2b2d9e"
     },
     "backend/src/tests/unit/test_wecom_client.py": {
       "asserts": 57,
@@ -983,19 +1098,39 @@
       "digest": "ec66d78a0e1ed10f92c83eb196e8e74f0890d191c7348031e2604d23765df9bc"
     },
     "backend/src/tests/unit/test_wecom_models.py": {
-      "asserts": 85,
+      "asserts": 87,
       "raises": 2,
-      "digest": "40bffa77f8f062860b81ff01fc327d9cf7fff93ba3a04601b57a9ec9a2ac817e"
+      "digest": "8b1c1c9f1053d6c4b62afd899faf8a517c0efb1509c66c70da062628b8b1d798"
     },
     "backend/src/tests/unit/test_wecom_runner.py": {
-      "asserts": 83,
+      "asserts": 97,
       "raises": 1,
-      "digest": "b5c77bd3010b47ff339d7a07e081fd183f6091d6447f8224c2f4c1e258b61aa9"
+      "digest": "03987b2d9f4dc2ac61ad767b0fec48154392db70b6b7378eb293155101b9b8c7"
     },
     "backend/src/tests/unit/test_wecom_settings.py": {
       "asserts": 31,
       "raises": 4,
       "digest": "f59e7c235caf027aaecbc1c3cdec270cb70883d5a6959b508228d3908f192e38"
+    },
+    "backend/src/tests/unit/test_whatsapp_adapter.py": {
+      "asserts": 36,
+      "raises": 10,
+      "digest": "d72ab4dffe9c6b76dff901a96b5bb2246a48483b3eb153be0e052a4543fd5a98"
+    },
+    "backend/src/tests/unit/test_whatsapp_models.py": {
+      "asserts": 47,
+      "raises": 1,
+      "digest": "a31e2382f4db2cd8cc574485f457b3239b217e1577095901aab1d0c4da2b95c5"
+    },
+    "backend/src/tests/unit/test_whatsapp_runner.py": {
+      "asserts": 53,
+      "raises": 0,
+      "digest": "a17354d6fb256d7e2a32b1de09171cbcea7ae75a33de692a051b76635c864ded"
+    },
+    "backend/src/tests/unit/test_whatsapp_settings.py": {
+      "asserts": 22,
+      "raises": 1,
+      "digest": "799a515182130c7c8eb395c20bed62a1ab72cd5dc8058cdc73319f96342d1ad4"
     }
   }
 }

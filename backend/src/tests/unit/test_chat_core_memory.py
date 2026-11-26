@@ -243,7 +243,7 @@ async def test_compose_inserts_core_memory_between_facts_and_skills() -> None:
         _state(),
         facts=["【偏好】主人喜欢无糖乌龙茶"],
         core_memory=[_block(CoreBlockKey.SELF_IDENTITY, "我是会写字的鱼")],
-        skills=[skill],
+        skills=[skill], wrap_current_message=False
     )
     prompt = result.system_prompt
     facts_index = prompt.index("【关于对方】")
@@ -256,7 +256,7 @@ async def test_compose_inserts_core_memory_between_facts_and_skills() -> None:
 
 async def test_compose_without_core_memory_unchanged() -> None:
     """未提供核心记忆：system 提示不含该块（既有形态零变更）。"""
-    result = compose_messages(_state())
+    result = compose_messages(_state(), wrap_current_message=False)
     assert "【自我认知】" not in result.system_prompt
 
 

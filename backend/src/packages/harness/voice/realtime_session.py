@@ -13,7 +13,7 @@
         CosyVoice 逐句合成）
         ↓ WAV 字节按块 base64 下行（audio_chunk）
 
-双轨取材（R4-3 增强；开关默认关闭）：``VOICE_ASR_STREAMING_ENABLED`` /
+双轨取材（可选流式增强；开关默认关闭）：``VOICE_ASR_STREAMING_ENABLED`` /
 ``VOICE_TTS_STREAMING_ENABLED`` 为真且客户端已装配时，转写走真流式通道
 （语段起点后台握手、握手窗口音频进有界缓冲回放、进行中事件即下行
 ``partial_transcript``、切段后收尾取最终稿），合成走逐句流式通道（分片在
@@ -21,7 +21,7 @@
 失败（握手失败 / 中途断流 / 收尾失败 / 空音频）→ 本会话降级回既有批量
 路径：一次告警 + 指标计数（``stream_asr_fallbacks`` /
 ``stream_tts_fallbacks``），会话与后续轮次不中断。开关关闭时零握手、
-零额外连接——批量主链行为与 R2f 完全一致。
+零额外连接——批量主链行为与未启用流式通道的既有形态完全一致。
 
 转写与 VAD 并发：切段后转写以独立任务执行（登记进统一任务集合），音频
 工人只做切段投递——转写窗口内 VAD 照常收帧、起说与打断判定不受影响。
@@ -194,6 +194,9 @@ class ChatSessionStreamAdapter:
         Args:
             user_text: 用户转写文本。
 
+        Returns:
+            ChatService 流式回复迭代器（逐段产出文本增量）。
+
         Yields:
             回复文本增量。
         """
@@ -335,6 +338,10 @@ class RealtimeVoiceSession:
         本方法不抛业务异常：全部失败归一为下行 error + closed 并关闭传输；
         外部取消（服务停机）会取消派生任务后原样上抛。超时看门狗在 start
         处理时启动（会话时长从 start 起算——未 start 的连接不受时长规则约束）。
+
+        Raises:
+            asyncio.CancelledError: 外部取消（服务停机）——派生任务收尾后
+                原样上抛，交由上层停机流程处理。
         """
         try:
             while not self._closed:
@@ -896,7 +903,8 @@ class RealtimeVoiceSession:
         except BusinessException as exc:
             if exc.code == ErrorCode.RATE_LIMITED:
                 # 预算拒绝不是通道故障：不清可用性、不计数、不告警；该语段
-                # 按 R4-2 语义走批量并由批量闸拒绝收尾（realtime-voice.md）。
+                # 按分面预算语义降级到批量路径，并由批量闸拒绝收尾
+                # （realtime-voice.md）。
                 self._stream_asr_pending = None
                 return
             await self._degrade_stream_asr(f"握手失败({exc.code})")
@@ -1005,6 +1013,7 @@ class RealtimeVoiceSession:
         try:
             result = await handle.finish()
         except asyncio.CancelledError:
+            await self._cancel_handle_cancellation_safe(handle)
             raise
         except BusinessException as exc:
             await self._degrade_stream_asr(f"收尾失败({exc.code})")
@@ -1074,6 +1083,33 @@ class RealtimeVoiceSession:
             return
         try:
             await handle.cancel()
+        except Exception:
+            logger.opt(exception=True).debug("流式识别连接取消失败（忽略）")
+
+    @staticmethod
+    async def _cancel_handle_cancellation_safe(handle: AsrStreamHandleFace | None) -> None:
+        """取消连接句柄并屏蔽二次取消（取消路径必须先收口再上抛）。
+
+        收尾任务被外部取消时，``finish()`` 可能在挂起等待中直接抛
+        ``CancelledError``；若此处不再收口，连接会泄漏。以独立任务 +
+        ``asyncio.shield`` 驱动 ``cancel()`` 至完成——幂等取消且屏蔽再次
+        到达的取消信号，随后原取消照常上抛。
+
+        Args:
+            handle: 待取消句柄（None 跳过）。
+        """
+        if handle is None:
+            return
+        cleanup = asyncio.ensure_future(handle.cancel())
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                continue
+        try:
+            cleanup.result()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.opt(exception=True).debug("流式识别连接取消失败（忽略）")
 

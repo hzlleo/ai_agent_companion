@@ -515,6 +515,7 @@ class FakeAsrStreamHandle:
         self.feed_error: BusinessException | None = None
         self.finish_error: BusinessException | None = None
         self.finish_gate: asyncio.Event | None = None
+        self.finish_started = asyncio.Event()
         self.result = AsrResultModel(text="流式转写", language="zh")
         self.cancel_count = 0
 
@@ -526,6 +527,7 @@ class FakeAsrStreamHandle:
 
     async def finish(self) -> AsrResultModel:
         """收尾（返回脚本结果 / 注入故障 / 门闩阻塞）。"""
+        self.finish_started.set()
         if self.finish_gate is not None:
             await self.finish_gate.wait()
         self.finished = True
@@ -549,7 +551,8 @@ class FakeStreamTransport:
 
     用例经 :meth:`push_event` 投递服务端 JSON 事件，经 :meth:`push_close`
     模拟对端关闭；出站文本帧按 JSON 解析记录（断言事件形状），空心跳只
-    计数。
+    计数。``close_gate`` 可门闩关闭动作（把收尾停在「传输关闭在途」，
+    取消收口用例据此证明关闭不会被取消打断）。
     """
 
     def __init__(self) -> None:
@@ -558,6 +561,8 @@ class FakeStreamTransport:
         self.pings = 0
         self.closed: tuple[int, str] | None = None
         self.close_calls = 0
+        self.close_gate: asyncio.Event | None = None
+        self.close_started = asyncio.Event()
         self.fail_receive: Exception | None = None
         self._last_close_code: int | None = None
 
@@ -582,7 +587,10 @@ class FakeStreamTransport:
         self.pings += 1
 
     async def close(self, code: int, reason: str) -> None:
-        """记录关闭（幂等——保留首个记录）。"""
+        """记录关闭（幂等——保留首个记录；``close_gate`` 存在时先阻塞）。"""
+        self.close_started.set()
+        if self.close_gate is not None:
+            await self.close_gate.wait()
         self.close_calls += 1
         if self.closed is None:
             self.closed = (code, reason)

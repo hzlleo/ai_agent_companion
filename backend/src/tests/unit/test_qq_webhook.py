@@ -393,6 +393,7 @@ class TestAttachmentExtractionV2:
         assert len(router.handled) == 1
         message = router.handled[0]
         assert message.text == ""
+        assert message.has_user_text is False
         assert len(message.attachments) == 1
         assert message.attachments[0].kind is ChannelAttachmentKind.IMAGE
 

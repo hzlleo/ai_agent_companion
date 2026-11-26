@@ -271,20 +271,20 @@ def build_manifest() -> list[SchemaExportEntry]:
         SchemaExportEntry("PersonaImportResultModel", PersonaImportResultModel, "PersonaImportResult", _FRONTEND_PERSONA),
         SchemaExportEntry("PersonaImportBatchItemDTO", PersonaImportBatchItemDTO, "PersonaImportBatchItem", _FRONTEND_PERSONA),
         SchemaExportEntry("PersonaImportBatchResultDTO", PersonaImportBatchResultDTO, "PersonaImportBatchResult", _FRONTEND_PERSONA),
-        # persona 域——长期指令（R2b D7-14；策展记忆 user_note 收窄面）。
+        # persona 域——长期指令（策展记忆 user_note 收窄面）。
         SchemaExportEntry("DirectiveCreateDTO", DirectiveCreateDTO, "DirectiveCreateRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("DirectiveUpdateDTO", DirectiveUpdateDTO, "DirectiveUpdateRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("DirectiveRecordDTO", DirectiveRecordDTO, "DirectiveRecord", _FRONTEND_PERSONA),
-        # persona 域——人物事实（R2c；结构化事实 / 证据链 / 更正循环）。
+        # persona 域——人物事实（结构化事实 / 证据链 / 更正循环）。
         SchemaExportEntry("FactEvidenceRefModel", FactEvidenceRefModel, "FactEvidenceRef", _FRONTEND_PERSONA),
         SchemaExportEntry("FactCreateDTO", FactCreateDTO, "FactCreateRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("FactCorrectDTO", FactCorrectDTO, "FactCorrectRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("FactRecordDTO", FactRecordDTO, "FactRecord", _FRONTEND_PERSONA),
-        # persona 域——程序性技能（R2c；触发短语 / 原地版本 / 启用状态）。
+        # persona 域——程序性技能（触发短语 / 原地版本 / 启用状态）。
         SchemaExportEntry("SkillCreateModel", SkillCreateModel, "SkillCreateRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("SkillUpdateModel", SkillUpdateModel, "SkillUpdateRequest", _FRONTEND_PERSONA),
         SchemaExportEntry("SkillRecordDTO", SkillRecordDTO, "SkillRecord", _FRONTEND_PERSONA),
-        # persona 域——核心记忆（R2c；四块自编辑自我模型 / 修订链 / 主人编辑）。
+        # persona 域——核心记忆（四块自编辑自我模型 / 修订链 / 主人编辑）。
         SchemaExportEntry("CoreMemoryBlockDTO", CoreMemoryBlockDTO, "CoreMemoryBlock", _FRONTEND_PERSONA),
         SchemaExportEntry("CoreMemoryRevDTO", CoreMemoryRevDTO, "CoreMemoryRevision", _FRONTEND_PERSONA),
         SchemaExportEntry(

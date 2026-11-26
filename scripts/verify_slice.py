@@ -59,6 +59,7 @@ _TAIL_WINDOW = 4000
 
 #: 参与源码树哈希的文件 / 目录根（相对仓库根；目录递归，跳过构建产物）。
 _HASH_ROOTS: tuple[str, ...] = (
+    "backend/alembic",
     "backend/src",
     "backend/pixi.toml",
     "backend/pyproject.toml",
@@ -68,9 +69,13 @@ _HASH_ROOTS: tuple[str, ...] = (
     "docker/tool-sandbox-agent/server.py",
     "docker/browser-sidecar/src",
     "docker/browser-sidecar/server.py",
+    "frontend/scripts",
     "frontend/src",
     "frontend/package.json",
     "frontend/pixi.toml",
+    "frontend/eslint.config.js",
+    "frontend/vite.config.ts",
+    "frontend/vitest.config.ts",
     "pixi.toml",
 )
 

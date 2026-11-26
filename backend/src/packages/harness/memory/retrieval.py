@@ -99,6 +99,7 @@ from packages.harness.memory.seekdb_store import SeekDBStore
 from packages.harness.memory.sqlite_store import SQLiteFallbackStore
 from packages.harness.memory.store import MemoryStore
 from packages.harness.pools.manager import get_pool_manager
+from packages.harness.pools.seekdb_compat import resolve_seekdb_config
 
 __all__ = [
     "MemoryEmbedder",
@@ -671,20 +672,25 @@ def build_memory_store(settings: Settings) -> MemoryStore:
     Returns:
         就绪的 :class:`MemoryStore` 实现（尚未建表——schema 在首次写入
         时惰性确保）。
+
+    Raises:
+        BusinessException: 单栈 SeekDB 不变式违反（检索池显式 host / port
+            与权威库不一致——``CONFIG_INVALID``）。
     """
     seekdb_settings = settings.seekdb
     if not seekdb_settings.enabled:
         logger.info("记忆检索存储：SQLite 回退（keyword 模式——零向量依赖）")
         return SQLiteFallbackStore()
+    resolved = resolve_seekdb_config(settings)
     config = SeekDBStoreConfig(
-        host=seekdb_settings.host,
-        port=seekdb_settings.port,
-        user=seekdb_settings.user,
-        password_env=seekdb_settings.password_env,
-        database=seekdb_settings.database,
-        vector_dim=seekdb_settings.vector_dim,
-        pool_min=seekdb_settings.pool_min,
-        pool_max=seekdb_settings.pool_max,
+        host=resolved.host,
+        port=resolved.port,
+        user=resolved.user,
+        password_env=resolved.password_env,
+        database=resolved.database,
+        vector_dim=resolved.vector_dim,
+        pool_min=resolved.pool_min,
+        pool_max=resolved.pool_max,
     )
     manager = get_pool_manager()
     if manager is not None and manager.started and manager.seekdb_pool is not None:

@@ -4,7 +4,7 @@
 
 覆盖矩阵（v1 + 协议 v2）：
 
-    - ChannelType 值域（telegram + qq + wecom + douyin + sms_forwarder）；
+    - ChannelType 值域（telegram + qq + wecom + douyin + sms_forwarder + whatsapp）；
     - 入站 / 出站 / 投递结果 v1 字段与校验；
     - v2 附件模型：kind 值域 / 恰一源校验矩阵（零源 / 双源 / 空串
       等同缺省）/ 默认值 / base64 容量指引常量；
@@ -35,7 +35,7 @@ from packages.harness.channels.channel_service import ChannelRouter
 
 async def test_channel_type_value_domain() -> None:
     """ChannelType：值域 = telegram + qq + wecom + douyin + sms_forwarder
-    （StrEnum 字符串兼容——枚举为多通道扩展点）。"""
+    + whatsapp（StrEnum 字符串兼容——枚举为多通道扩展点）。"""
     assert ChannelType.TELEGRAM.value == "telegram"
     assert ChannelType.TELEGRAM == "telegram"
     assert ChannelType.QQ.value == "qq"
@@ -46,12 +46,15 @@ async def test_channel_type_value_domain() -> None:
     assert ChannelType.DOUYIN == "douyin"
     assert ChannelType.SMS_FORWARDER.value == "sms_forwarder"
     assert ChannelType.SMS_FORWARDER == "sms_forwarder"
+    assert ChannelType.WHATSAPP.value == "whatsapp"
+    assert ChannelType.WHATSAPP == "whatsapp"
     assert [member.value for member in ChannelType] == [
         "telegram",
         "qq",
         "wecom",
         "douyin",
         "sms_forwarder",
+        "whatsapp",
     ]
 
 

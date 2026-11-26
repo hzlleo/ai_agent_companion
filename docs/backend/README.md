@@ -28,7 +28,7 @@
 | rhythm（拟人节律层：睡眠窗口判定（跨午夜 / naive 本地墙钟）+ 拟人回复延迟采样（bounded log-uniform + 快答尾）+ 打字模拟（base + 每字符速度封顶）+ 生效值解析（人格覆写 + 温度缩放）+ RhythmService 门面（心流门控 / GUI 消费面）） | [rhythm.md](rhythm.md) | 已交付（纯函数核心 + RHYTHM_ env 面；与意图快径共享单一随机源；`FLOW_ENABLED=true` 时门结果进入心流判定） |
 | intent（意图快径：TIME_QUERY / GREETING / IDENTITY / HELP / DIRECTIVE 五类高频问法本地模式表匹配 → 罐头回复完全绕过主 LLM + ChatService.reply 前钩（通道专属注入——duty / CLI 零变化）+ 拟真延迟 800-1500ms + 快径回合照常落库（记忆 / 梦境可见）） | [intent.md](intent.md) | 已交付（INTENT_ env 面**默认开启**（纯本地零成本）；未命中无损兜底走 LLM） |
 | 工具层与辅助模型客户端（工具注册表 / docker 沙盒 / docker 浏览器 sidecar / 语音 / 多模态） | 聚合说明（无独立文档）：工具注册表见 [duty.md](duty.md)，docker 沙盒见 [tools-sandbox.md](tools-sandbox.md)，docker 浏览器 sidecar 见 [tools-browser.md](tools-browser.md)，语音见 [voice.md](voice.md)，多模态见 [multimodal.md](multimodal.md) | 已交付（分域建档） |
-| channels（平台通道：通道中立路由器 + Telegram 适配器 / 长轮询 runner / offset 持久化 / 4096 分段 + QQ 适配器 / NapCat OneBot v11 webhook 推送入站 / 有界入站 runner / 消息展平 / message_id 去重 + 企业微信智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 素材分片上传 / markdown 分段）+ 抖音 web 通道（浏览器 sidecar 底座上的会话页轮询采集 / 发送、去重、系统消息 synthetic、图片附件、指数退避）+ SmsForwarder 短信 / 通知转发（手机端 webhook 仅入站、token 鉴权、有界队列、msgid / 内容去重、属主分级）+ 心流门控接线（延迟 / 合并批次经中央调度器）+ 群聊多人格应答（逐人格会话归属）） | [channels.md](channels.md) | 已交付（Telegram；QQ / NapCat——推送式入站 + 有界 runner，warn-and-continue 启动校验；企微长连接——`WECOM_ENABLED` 默认关闭，装配期凭据失败仅跳过该通道；抖音 web——`DOUYIN_ENABLED` 默认关闭，依赖浏览器 sidecar 底座（底座未就绪只跳过该通道），出站仅文本；SmsForwarder——`SMS_FORWARDER_ENABLED` 默认关闭，仅入站（出站恒丢弃），通知默认忽略，生产强制非空 token；duty 报告出站经既有路由器消费；心流门控 / 群聊多人格默认关闭，单聊语义零变化；B站通道 / safety 审批红线规划中） |
+| channels（平台通道：通道中立路由器 + Telegram 适配器 / 长轮询 runner / offset 持久化 / 4096 分段 + QQ 适配器 / NapCat OneBot v11 webhook 推送入站 / 有界入站 runner / 消息展平 / message_id 去重 + 企业微信智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 素材分片上传 / markdown 分段）+ 抖音 web 通道（浏览器 sidecar 底座上的会话页轮询采集 / 发送、去重、系统消息 synthetic、图片附件、指数退避）+ SmsForwarder 短信 / 通知转发（手机端 webhook 仅入站、token 鉴权、有界队列、msgid / 内容去重、属主分级）+ WhatsApp Cloud API（webhook hub 校验 / HMAC 签名、wamid 去重、有界入站队列、Graph API 文本出站、24 小时客户服务窗）+ 心流门控接线（延迟 / 合并批次经中央调度器）+ 群聊多人格应答（逐人格会话归属）） | [channels.md](channels.md) | 已交付（Telegram；QQ / NapCat——推送式入站 + 有界 runner，warn-and-continue 启动校验；企微长连接——`WECOM_ENABLED` 默认关闭，装配期凭据失败仅跳过该通道；抖音 web——`DOUYIN_ENABLED` 默认关闭，依赖浏览器 sidecar 底座（底座未就绪只跳过该通道），出站仅文本；SmsForwarder——`SMS_FORWARDER_ENABLED` 默认关闭，仅入站（出站恒丢弃），通知默认忽略，生产强制非空 token；WhatsApp——`WHATSAPP_ENABLED` 默认关闭，webhook 签名 / hub 校验 + 文本出站，生产强制四项凭据非空，24 小时窗外的自由格式出站以受控业务错误拒绝（模板消息未实现）；duty 报告出站经既有路由器消费；心流门控 / 群聊多人格默认关闭，单聊语义零变化；B站通道 / safety 审批红线规划中） |
 | canvas（渲染产物：人格作用域的 HTML / SVG / Markdown 自包含产物持久化（迁移 0017）+ 管理 API（列表 / 创建 / 修订 / 删除 / 导出）+ 沙箱预览面板 + 单文件导出） | [canvas.md](canvas.md) | 已交付（类型创建后固定、修订号递增、预览不带 allow-scripts；导出 MIME / 扩展名按类型固定，CORS 暴露 Content-Disposition；未接 chat 工具——对话内产出属后续交付面） |
 | performance（性能基线：纯本地微基准 `bench_core.py`（门控 / 关系摘要 / 句切 / VAD / 关系块渲染）+ ASGI 进程内只读端点冒烟 `api_smoke.py`；基线文件与 10× 环境容忍策略） | [performance.md](performance.md) | 已交付（无新依赖 / 新 env 键 / 迁移；`bench-core --self-check/--gate` 与 `api-smoke --self-check` 入门禁链，`api-smoke --gate` 部署机手动执行） |
 
@@ -75,6 +75,7 @@
 | `GET /api/v1/realtime/voice/ws` | **豁免**（自鉴权） | 浏览器 WebSocket 无法设置自定义头：token 经查询参数 `token` 传递，端点内以 `verify_admin_token` 恒时比较（见 [realtime-voice.md](realtime-voice.md)） |
 | `POST /api/v1/channels/qq/webhook` | **豁免** | 自鉴权面：NapCat 事件上报经自身 `webhook_token_env` Bearer 校验（见 [channels.md](channels.md)）；再叠 admin token 会要求部署机持有管理凭据——双重鉴权破坏上报链路 |
 | `POST /api/v1/channels/sms-forwarder` | **豁免** | 自鉴权面：手机端 SmsForwarder 经 `SMS_FORWARDER_TOKEN` 请求头 / 查询参数校验（见 [channels.md](channels.md)）；再叠 admin token 会要求手机端持有管理凭据——双重鉴权破坏转发链路 |
+| `GET/POST /api/v1/channels/whatsapp` | **豁免** | 自鉴权面：GET hub 握手经 `WHATSAPP_VERIFY_TOKEN` 恒时比较，POST 经 `X-Hub-Signature-256` HMAC 校验（见 [channels.md](channels.md)）；再叠 admin token 会要求 Meta 侧配置管理凭据——双重鉴权破坏回调链路 |
 
 ### 关闭形态与生产强制（`ENV=prod` fail-closed）
 
@@ -89,6 +90,8 @@
   app 拒绝启动；
 - QQ 通道启用（`QQ_ENABLED=true`）且 `QQ_WEBHOOK_TOKEN` 解析为空 → 同样拒绝
   启动（文案「生产环境启用 QQ 通道时必须设置 QQ_WEBHOOK_TOKEN」）；
+- WhatsApp 通道启用（`WHATSAPP_ENABLED=true`）且 verify token / app secret /
+  access token / phone number id 任一项为空 → 同样拒绝启动（文案列出缺失键）；
 - 策略实现为
   `packages/harness/config/auth_policy.py::ensure_auth_policy`（纯函数，
   启动链在组件装配前调用；仅在 `ENV=prod` 生效）。

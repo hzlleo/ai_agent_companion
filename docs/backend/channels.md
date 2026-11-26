@@ -1,6 +1,6 @@
 # channels — 平台通道层（Telegram 首个适配器；QQ / NapCat OneBot v11）
 
-`backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram——手写 Bot API 客户端 + 长轮询 runner；QQ——NapCat OneBot v11 客户端 + webhook 推送入站；企业微信——智能机器人长连接 WebSocket 客户端 + 回调 runner；抖音——浏览器 sidecar 页面上轮询采集 / 发送的 web 会话通道；SmsForwarder——手机端短信 / 通知转发的仅入站 webhook 通道）。通道抽象保持类型可扩展（`ChannelType` StrEnum——B站等后续通道在此追加成员与同级子模型）。消息协议已升级 **v2**（附件 / 静默 / 合成事件——见「协议 v2」一节；v1 纯文本形态缺省保持，additive 向后兼容）。
+`backend/src/packages/harness/channels/` 承载平台通道抽象：**通道中立路由器**（入站消息 → 人格会话循环 → 出站投递）+ **平台适配器**（Telegram——手写 Bot API 客户端 + 长轮询 runner；QQ——NapCat OneBot v11 客户端 + webhook 推送入站；企业微信——智能机器人长连接 WebSocket 客户端 + 回调 runner；抖音——浏览器 sidecar 页面上轮询采集 / 发送的 web 会话通道；SmsForwarder——手机端短信 / 通知转发的仅入站 webhook 通道；WhatsApp——Cloud API webhook 入站 + Graph API 文本出站的 24 小时服务窗通道）。通道抽象保持类型可扩展（`ChannelType` StrEnum——B站等后续通道在此追加成员与同级子模型）。消息协议已升级 **v2**（附件 / 静默 / 合成事件——见「协议 v2」一节；v1 纯文本形态缺省保持，additive 向后兼容）。
 
 ## 模块一览
 
@@ -8,6 +8,8 @@
 |---|---|---|
 | `channel_models.py` | 通道中立 Model Classes（Unit 文件）：通道类型值域 / 附件（v2）/ 入站 / 出站 / 上下文 / 投递结果（含逐附件结果 v2） | `ChannelType` / `ChannelAttachmentKind` / `ChannelMessageAttachment` / `InboundMessageModel` / `OutboundMessageModel` / `ChannelContextModel` / `AttachmentDeliveryResult` / `ChannelDeliveryResultModel` / `ATTACHMENT_BASE64_SIZE_GUIDE_BYTES` |
 | `channel_service.py` | 通道路由器（每聊天会话 + 人格绑定 + 单消息错误隔离）+ 适配器发送面协议 | `ChannelRouter` / `ChannelAdapterProtocol` / `CHANNEL_FALLBACK_REPLY_TEXT` |
+| `phone_numbers.py` | 通道层发送者归一纯函数（SmsForwarder 中国码前缀归一；WhatsApp `wa_id` 保留国家码归一；两侧属主清单各用同口径解析） | `normalize_phone_identifier` / `normalize_whatsapp_wa_id` / `parse_phone_owner_numbers` / `parse_whatsapp_owner_numbers` |
+| `inbound_timestamp.py` | 通道入站时间戳共享解析（SmsForwarder / WhatsApp 同源：秒 / 毫秒 / 非有限 / 溢出 / 非法回落） | `resolve_epoch_ms_timestamp` / `EPOCH_SECONDS_MIN` / `EPOCH_MILLIS_MIN` |
 | `telegram/tg_models.py` | Bot API wire 模型子集（Unit 文件）：update / message（含 v2 媒体字段 + caption）/ 媒体对象 / 响应包裹（泛型） | `TgUpdateModel` / `TgMessageModel` / `TgPhotoSizeModel` / `TgVoiceModel` / `TgAudioModel` / `TgDocumentModel` / `TgStickerModel` / `TgResponseModel[T]` / `TgSendMessageResult` / `TgBotInfoModel` |
 | `telegram/tg_client.py` | 手写 Bot API 客户端（共享 httpx client 注入；4096 分段；v2 免通知 + 媒体发送双形态） | `TelegramClient` / `split_tg_message_text` |
 | `telegram/tg_runner.py` | 长轮询 runner（offset 持久化 + 去重 + 退避 + 优雅停机 + 发送面适配 + v2 入站映射 / 出站附件投递） | `TelegramChannelRunner` / `TG_FILE_PSEUDO_SCHEME` / `extract_tg_attachments` / `map_tg_message_to_inbound` |
@@ -26,6 +28,10 @@
 | `sms_forwarder/sms_models.py` | SmsForwarder 转发载荷归一（Unit 文件）：字段别名 / kind 过滤 / 正文与发送者归一 / 时间戳解析 / 属主清单 / msgid 与内容时间窗去重 / 直调路径 | `SmsForwarderPayloadModel` / `parse_sms_forwarder_payload` / `SmsForwarderDedupWindow` / `parse_owner_numbers` / `process_sms_forwarder_payload` |
 | `sms_forwarder/sms_runner.py` | SmsForwarder webhook 入站 runner（有界队列 + 固定 worker / 去重 / 过载丢弃计数 / 周期观测 / 生命周期收尾） | `SmsForwarderWebhookRunner` / `SMS_FORWARDER_INBOUND_QUEUE_SIZE` / `SMS_FORWARDER_INBOUND_WORKER_COUNT` |
 | `sms_forwarder/sms_adapter.py` | SmsForwarder 仅入站适配器（出站恒丢弃——空投递结果，不发起平台调用） | `SmsForwarderAdapter` |
+| `whatsapp/whatsapp_models.py` | WhatsApp Cloud API webhook 载荷归一（Unit 文件）：entry/changes/value 模型化 / 文本与媒体 caption 回退 / 位置与按钮与交互回复回退 / 状态回执计数 / wamid 去重窗 / 24 小时服务窗状态 / 直调路径 | `WhatsAppWebhookPayloadModel` / `parse_whatsapp_webhook_payload` / `WhatsAppDedupWindow` / `WhatsAppServiceWindow` / `process_whatsapp_webhook_payload` |
+| `whatsapp/whatsapp_client.py` | Graph API 文本发送客户端（共享 httpx 注入；`/messages` wire 形状；错误映射） | `WhatsAppCloudClient` / `WHATSAPP_API_TIMEOUT_SECONDS` |
+| `whatsapp/whatsapp_adapter.py` | WhatsApp 文本出站适配器（`wa:<wa_id>` grammar / 24 小时客户服务窗闸 / 附件忽略） | `WhatsAppAdapter` / `WHATSAPP_CHAT_ID_PREFIX` |
+| `whatsapp/whatsapp_runner.py` | WhatsApp webhook 入站 runner（有界队列 + 固定 worker / wamid 去重 / 服务窗入站登记 / 过载丢弃计数 / 周期观测 / 生命周期收尾） | `WhatsAppWebhookRunner` / `WHATSAPP_INBOUND_QUEUE_SIZE` / `WHATSAPP_INBOUND_WORKER_COUNT` |
 
 依赖方向：channels → chat（ChatService）+ persona（bind_persona_context）+ config（Settings.channels）+ core（errors / time_utils）；HTTP 出站一律经 pools 共享 `httpx.AsyncClient`（硬规则：无私建连接）。锁定设计决策：**不引入 aiogram / python-telegram-bot / 任何 OneBot SDK**——按平台协议手写（与 llm 域「不引入 openai SDK」同约定）。
 
@@ -73,6 +79,13 @@ QQ_ENABLED=true 时（同一 ChannelRouter——任一通道启用即构造）�
     → QqWebhookRunner（有界入站队列 + worker；不轮询、不持久化游标）
     → asyncio.create_task(runner.run()) + background_task_manager.register
     （app.state.channels_qq_runner / channels_qq_task 槽位）
+WHATSAPP_ENABLED=true 时（同一 ChannelRouter——先构造共享服务窗状态）：
+    WhatsAppServiceWindow（进程内 24 小时服务窗状态——runner 与适配器共享）
+    → WhatsAppCloudClient（Graph API 凭据来自 Settings SecretStr）
+    → WhatsAppWebhookRunner（有界入站队列 + worker；入站登记服务窗）
+    → WhatsAppAdapter → router.register_adapter(WHATSAPP, adapter)
+    → asyncio.create_task(runner.run()) + background_task_manager.register
+    （app.state.channels_whatsapp_runner / channels_whatsapp_task 槽位）
 WECOM_ENABLED=true 时（同一 ChannelRouter）：
     WeComLongConnectionClient（BotID + 密钥环境变量间接——缺失即跳过该通道）
     → WeComChannelRunner → router.register_adapter(WECOM, runner)
@@ -85,11 +98,12 @@ DOUYIN_ENABLED=true 时（同一 ChannelRouter）：
     → asyncio.create_task(runner.run()) + background_task_manager.register
     （底座未就绪 → 记 ERROR 并只跳过该通道）
     （app.state.channels_douyin_runner / channels_douyin_task 槽位）
-TELEGRAM_ENABLED / QQ_ENABLED / WECOM_ENABLED / DOUYIN_ENABLED 全为 false（缺省）：
+TELEGRAM_ENABLED / QQ_ENABLED / WECOM_ENABLED / DOUYIN_ENABLED /
+SMS_FORWARDER_ENABLED / WHATSAPP_ENABLED 全为 false（缺省）：
     no-op——零通道对象构造
 ```
 
-停机 LIFO（`shutdown_app_state` 六步）：`_shutdown_channels`（先于公共池——runner 消费共享 HTTP client）→ 后台任务 drain（`background_task_manager.shutdown`——fire-and-forget 在途任务先于池关闭排空）→ `pool_manager.stop()` → `close_database()` → `shutdown_shared_thread_pool()`。通道停机链（telegram / 企微 / 抖音逐通道一致）：`request_stop()`（优雅——轮询态在途长轮询最多再等一个窗口；退避态的退避睡眠最长 `backoff_max_seconds`（默认 60s）不可被 request_stop 中断；抖音的长轮询休眠可被停机即时打断）→ bounded 等待（5s）→ 超时 `cancel` 兜底（cancel 语义覆盖两种形态——优雅等待不保证收口，5s 上限后强制终止；offset 已逐批持久化，重启安全）。
+停机 LIFO（`shutdown_app_state` 六步）：`_shutdown_channels`（先于公共池——runner 消费共享 HTTP client）→ 后台任务 drain（`background_task_manager.shutdown`——fire-and-forget 在途任务先于池关闭排空）→ `pool_manager.stop()` → `close_database()` → `shutdown_shared_thread_pool()`。通道停机链（telegram / QQ / 企微 / 抖音 / SmsForwarder / WhatsApp 逐通道一致）：`request_stop()`（优雅——轮询态在途长轮询最多再等一个窗口；退避态的退避睡眠最长 `backoff_max_seconds`（默认 60s）不可被 request_stop 中断；抖音的长轮询休眠可被停机即时打断）→ bounded 等待（5s）→ 超时 `cancel` 兜底（cancel 语义覆盖两种形态——优雅等待不保证收口，5s 上限后强制终止；offset 已逐批持久化，重启安全）。
 
 ## 人格语义（锁定决策）
 
@@ -99,14 +113,17 @@ TELEGRAM_ENABLED / QQ_ENABLED / WECOM_ENABLED / DOUYIN_ENABLED 全为 false（�
 
 门控是聊天生成前的判定层：入站先经 `evaluate_flow_gate` 得到
 `reply | defer | merge | skip` 与延迟毫秒 / 理由枚举（矩阵与配置见
-[chat.md](chat.md#心流门控heartflow-gate)）。本层只负责把裁决映射到运行面：
+[chat.md](chat.md#心流门控heartflow-gate)）。本层只负责把裁决映射到运行面；
+判定输入显式区分「当前消息之前的到达历史」与当前消息（先取历史 → 门控 →
+再记录当前，无末条推断）：
 
 ```
 FLOW_ENABLED=true
-    ↓ 入站记录（FlowChatStateModel：到达时刻 / 积压 / 待回复缓冲）
+    ↓ 读取既有节拍状态（当前消息之前的到达历史 / 积压——不写入）
     ↓ 节律门快照（RhythmService.gate_reply——睡眠 / 拟人延迟）
     ↓ 关系摘要（关系类现行事实派生——仅门控启用时读取）
-    ↓ evaluate_flow_gate → verdict / delay_ms / reason
+    ↓ evaluate_flow_gate(prior_arrivals_ms, backlog_count, ...) → verdict / delay_ms / reason
+    ↓ 记录当前入站（FlowChatStateModel：到达时刻 / 积压 / 待回复缓冲）
     ├─ reply  → 继续会话路由与即时投递
     ├─ skip   → 返回空投递结果（判定层纯函数契约保留；路由器已在
     │            门控前恒跳过合成事件——见「协议 v2」合成语义）
@@ -125,9 +142,12 @@ FLOW_ENABLED=true
 （fail-safe，记 warning）；排程标记超过 `FLOW_PENDING_GRACE_MS` 未执行
 视为任务丢失，后续入站重新排程。单条消息的所有失败仍走既有兜底隔离。
 
-仅附件入站（`text=""`）照常记录到达时刻与积压（连发 / 节律判定原料），
-但不追加进待回复缓冲——合并结果不会出现空条目产生的孤立换行；纯媒体
+仅用户文本入站计入未读积压并进入待回复缓冲；仅附件入站（`has_user_text=false`）
+只记录到达时刻（连发 / 节律判定原料），不计未读、不追加缓冲——合并结果
+不会出现空条目产生的孤立换行，纯媒体也不把后续文本回复推入积压延迟；纯媒体
 批次到期后无净文本即清除排程标记直接结束，不调用生成、不发兜底文案。
+同一入站只读一次时钟：表情收录选择与群聊应答选择共用该时刻（冷却边界
+不因二次读数分叉）。
 
 门控裁决 JSON 示例：
 
@@ -287,7 +307,7 @@ v2 是通道消息协议的**一次性扩展**（解锁 heartflow-silent、语�
 
 `synthetic=True` = 机器生成事件上浮（heartflow / mood / 平台系统消息），非人类消息：**路由器恒跳过，与 `FLOW_ENABLED` 无关**——不建会话、不回调心流判定、不回复，跳过计数只进 debug 日志（`synthetic_skip_count` 为观测面）。入站 `silent` 为平台上报的无通知上下文标记位（预留）。
 
-入站 `text` 允许空串：**仅附件入站**（纯图片 / 纯表情，无用户字面文本）归一为 `text=""` 投递——路由器照常收录表情、推进心流游标，但**不调用生成**（不写空回合、不发兜底文案），跳过计数 `empty_text_skip_count` 只进 debug 日志。**占位文本不算用户文本，所有 wire 形态一致**（Telegram 媒体 / QQ 段数组 / QQ CQ 码字符串）：无用户字面文本但消息含非文本内容（CQ 码或非 text 段）即归一空文本投递；既无用户文本也无任何非文本内容的消息才由产生方丢弃（不进路由器）。
+入站消息携带 `has_user_text`（适配器按平台 wire 语义声明是否含用户字面文本）：纯媒体 / 纯表情 / 纯文件（含 WeCom / 抖音以 `[图片]` 等占位文本承载的形态、QQ 段数组与 CQ 码字符串、Telegram 无 caption 媒体）一律 `has_user_text=False`——路由器照常收录附件、推进心流游标，但**不调用生成**（不写空回合、不发兜底文案），跳过计数 `no_user_text_skip_count` 只进 debug 日志。**占位文本不算用户文本，所有 wire 形态一致**（文本为空时模型校验强制 `has_user_text=False`）；既无用户文本也无任何非文本内容的消息才由产生方丢弃（不进路由器）。**语义区分（锁定）**：纯媒体占位（`[图片]` / `[视频]` / `[文件]` / `[表情]`）不算用户文本；位置 / 按钮 / 交互回执属用户动作——其空字段回退占位（`[位置]` / `[按钮]` / `[交互回复]`）按含内容处理（`has_user_text=True`，照常触发生成）。
 
 **OutboundMessageModel v2 字段**（`attachments: list = []` / `silent: bool = False`）：
 
@@ -345,7 +365,7 @@ Telegram 入站路由门槛（v2）：文本与媒体互斥（Bot API 语义）�
 
 NapCat 段数组消息的 image / record 段提取为附件（引用形态优先序）：`data.url`（可下载 URL）→ `url` 源；`data.file` 为 `base64://` 前缀 → `base64` 源（载荷剥前缀）；其余 `data.file`（`file://` URL / 平台引用）→ `path` 源原样承载。**边界**：仅段数组形态提取（NapCat HTTP POST 上报缺省 `message_format=array`）；CQ 码字符串形态维持占位符降级（参数解析转义复杂度不抵增益——文档化决策）；无可用引用（url / file 皆缺）的媒体段跳过。
 
-**仅附件入站（锁定语义）**：纯图片 / 纯表情消息（无用户字面文本）不做前置丢弃——只要消息含非文本内容（段数组的非 text 段或 CQ 码字符串的 `[CQ:...]` 码，两种 wire 形态一致），就归一为 `text=""` 的入站消息投递（段数组形态照常搭载可提取附件），路由器跳过生成但照常执行表情收录与心流游标推进（见「协议 v2」空文本语义）；既无用户文本也无任何非文本内容才丢弃（无可投递内容）。
+**仅附件入站（锁定语义）**：纯图片 / 纯表情消息（无用户字面文本）不做前置丢弃——只要消息含非文本内容（段数组的非 text 段或 CQ 码字符串的 `[CQ:...]` 码，两种 wire 形态一致），就归一为 `text=""` + `has_user_text=False` 的入站消息投递（段数组形态照常搭载可提取附件），路由器跳过生成但照常执行表情收录与心流游标推进（见「协议 v2」空文本语义）；既无用户文本也无任何非文本内容才丢弃（无可投递内容）。
 
 ### 流式降级（锁定契约）
 
@@ -361,11 +381,12 @@ v2 只交付 **wire**（模型 + 适配器 + 测试）。**表情包收发桥**�
 
 ```
 入站（handle_inbound）
-    ↓ 门控判定前：入站 attachments 含 kind=sticker？→ 以应答人格上下文
-      调用收录桥（闭包开短事务 → StickerService.ingest_bytes）
+    ↓ 门控判定前：入站 attachments 含 kind=sticker？→ 按本轮应答集合逐位
+      绑定人格上下文并调用收录桥（单聊 = 主人格；群聊 = 本轮全部应答人格；
+      闭包开短事务 → StickerService.ingest_bytes）
     ↓ 仅 base64 已持有字节可收录；tg-file:// / url 引用跳过（二次下载
       属后续交付面）
-    ↓ 收录失败仅告警——回复链路不受影响
+    ↓ 逐人格独立哈希去重；单人格收录失败仅告警——其余人格与回复链路不受影响
 
 出站（_send_single_reply）
     ↓ 本轮入站带 sticker 且 STICKER_CHANNEL_REPLY_ENABLED=true？
@@ -375,9 +396,9 @@ v2 只交付 **wire**（模型 + 适配器 + 测试）。**表情包收发桥**�
     ↓ 取表情 / 平台附件投递失败：文本照常投递（逐附件结果由适配器聚合）
 ```
 
-延迟 / 合并批次只承接文本，不携带入站附件；收录已在门控前完成（合成事件除外——路由器在收录前已恒跳过），回表情仅即时回复路径生效（文档化边界）。空文本入站（纯表情 / 纯图片）同样收录，但跳过生成与兜底回发（`empty_text_skip_count`）。
+延迟 / 合并批次只承接文本，不携带入站附件；收录已在门控前完成（合成事件除外——路由器在收录前已恒跳过），回表情仅即时回复路径生效（文档化边界）。无用户文本入站（纯表情 / 纯图片）同样收录，但跳过生成与兜底回发（`no_user_text_skip_count`）。
 
-群聊多人格模式的素材归属（锁定）：**应答侧**各人格仍使用各自素材库（人格隔离轴与文本会话一致）；**入站收录**只进主人格（第一位候选）的素材库——多人格应答下表情归属本身歧义，取首位候选是确定性选择（不按发言者 / 应答者猜归属）。
+群聊多人格模式的素材归属（锁定）：**应答侧**各人格仍使用各自素材库（人格隔离轴与文本会话一致）；**入站收录**写入**本轮全部应答人格**各自的素材库——收录集合与同一轮应答选择同源，逐人格按 `(persona_id, sha256)` 独立去重，非应答人格不受影响，单人格收录失败不阻断其余人格与回复。单聊仍只收录主人格。
 
 
 ## offset 持久化（重启不重消费）
@@ -495,18 +516,25 @@ OneBot v11 `message` 字段双形态：段数组（`[{"type": "text", "data": {.
 | `forward` | `[合并转发]` | `json` / `xml` | `[卡片消息]` |
 | 未知类型 | `[其它消息]` | （CQ 字符串内 `text` 罕见形态） | 空串 |
 
-- 展平后空文本（无段 / 空串）跳过路由；纯图片 / 纯表情消息（CQ 字符串与段数组形态一致）展平为占位文本后**无用户字面文本**归一 `text=""` 进路由（路由器跳过生成、照常推进心流游标；占位符只在混合消息中作为人格可感知的非文本降级形态保留）。
+- 展平后空文本（无段 / 空串）跳过路由；纯图片 / 纯表情消息（CQ 字符串与段数组形态一致）展平为占位文本后**无用户字面文本**归一 `text=""` + `has_user_text=False` 进路由（路由器跳过生成、照常推进心流游标；占位符只在混合消息中作为人格可感知的非文本降级形态保留）。
 
 ### 去重与顺序（文档化边界）
 
 - **去重**：`message_id` 进程内有界 FIFO 窗口（1024——tg_runner 同语义同容量）；兜底「NapCat 重启 / 网络重试」窗口内的重投。进程重启清零（重启窗口内的重投可能重消费——QQ 无 offset 持久化等价物，OneBot v11 HTTP POST 上报无确认游标；NapCat 侧重试窗口短，影响面小）；
 - **顺序**：HTTP POST 上报不保证事件顺序（群消息并发上报可能乱序到达）——路由器以 per-chat `asyncio.Lock` 串行消费**到达序**（同聊天全链路串行：会话懒建 + 回复 + 兜底回发；不同聊天互不阻塞；并发首消息不重复建会话行）；到达序非平台发送序；
 - **message_id 负值**：NapCat 实现下常见——合法形态（去重键与入站 `message_id` 字符串化承载）。
-- **过载**：入站队列容量 64 / worker 2（**代码常量非 env**——与企微 runner 同风格）；队列满即丢弃并计 `dropped_inbound`，ERROR 含 `message_id` / 队列深度 / 累计丢弃。丢弃不登记去重——平台重投可在队列恢复后重新消费；已入队消息的重投由去重窗吸收。周期观测 INFO 每 60s gate 一次（注入时钟），仅在 `pending>0` 或丢弃有增量时输出深度 / 增量（常量 `QQ_STATS_INTERVAL_MS`，不可配置）。
+- **过载**：入站队列容量 64 / worker 2（**代码常量非 env**——与企微 runner 同风格）；队列满即丢弃并计 `dropped_inbound`，ERROR 含 `message_id` / 队列深度 / 累计丢弃。端点恒 200（上报方仅非 200 重试）→ 满队丢弃即最终丢失；不登记去重仅吸收偶发重复，已入队消息的重投由去重窗吸收。周期观测 INFO 每 60s gate 一次（注入时钟），仅在 `pending>0` 或丢弃有增量时输出深度 / 增量（常量 `QQ_STATS_INTERVAL_MS`，不可配置）。
 
 ### webhook 确认语义（铁律）
 
 **webhook 端点只做鉴权 / 体校验 / 入队，随后恒 200 确认**——LLM 回合耗时由后台 worker 承担，NapCat 的上报等待不再被一次长回复阻塞（有界队列过载时求即 200 + 丢弃）。解析 / 去重 / 路由面**恒不抛异常**（逐事件隔离：载荷非法 / 字段缺失 / 路由器内部异常只进日志）；端点对接受 / 忽略 / 隔离失败**恒 200 `{"status": "ok"}`**——OneBot 上报方对非 200 会**重试**，确认即防重投风暴（与 tg runner「非消息更新 offset 照常推进」同哲学）。仅两类请求形态错误走 4xx：鉴权失败（401）/ 请求体非 JSON 对象（400）。
+
+- **请求体边界（共享读取器）**：QQ / SmsForwarder / WhatsApp 三个公开入站端点统一经
+  `app/api/inbound_body.py` 的有界读取器读取请求体——声明 Content-Length 超限即
+  400（零读取）；无 Content-Length 的 chunked 请求逐块累计、超限即停（后续块不再
+  读取）。QQ 上限为 **8 MiB**（OneBot 段数组可内联 `base64://` 媒体载荷；按出站
+  附件 8 MiB 帽与表情单文件 5 MiB 的 base64 膨胀留出余量），SmsForwarder /
+  WhatsApp 为 64 KiB。
 
 ### 启动校验：warn-and-continue（与 telegram 的差异）
 
@@ -639,9 +667,9 @@ WeComChannelRunner._handle_callback
     ③ 回复上下文登记（req_id + 到达时刻——出站 aibot_respond_msg 的寻址原料）
     ④ map_wecom_callback_to_inbound（会话键 / 文本归一 / 附件 / 群聊标记 /
        compat_info → synthetic）
-    ⑤ 有界入站队列（容量 64；满则丢弃并记 ERROR——过载丢弃为终态策略：
-       不入队即不登记去重，平台重投可在队列恢复后重新消费；已入队消息的
-       重投由 msgid 去重保证不二次消费）
+    ⑤ 有界入站队列（容量 64；满则丢弃并记 ERROR——回调即时确认（平台仅
+       对失败回调重试），故满队丢弃即最终丢失；不登记去重仅吸收平台偶发
+       重复，已入队消息的重投由 msgid 去重保证不二次消费）
     ⑥ 固定 worker（默认 2）→ ChannelRouter.handle_inbound
        （per-chat 锁 / 心流门控 / 群聊多人格 / 人格绑定 / ChatService.reply /
         兜底回发——与 telegram、QQ 完全同一套路由语义）
@@ -675,7 +703,7 @@ WeComChannelRunner._handle_callback
 |---|---|---|
 | 文本 | `text.content` 原文 | 无 |
 | 语音 | `voice.content`（平台转写） | 无 |
-| 图文混排 | 文本项原文 + 图片项占位符 `[图片]` 逐项拼接 | 各图片项 → `image`（`url` 源） |
+| 图文混排 | 文本项原文 + 图片项占位符 `[图片]` 逐项拼接（有非空文本项 → `has_user_text=True`） | 各图片项 → `image`（`url` 源） |
 | 图片 | `[图片]` | `image`（`url` 源） |
 | 文件 | `[文件]` | `file`（`url` 源） |
 | 视频 | `[视频]` | `file` + `media_type=video/mp4` |
@@ -809,6 +837,12 @@ OutboundMessageModel
 失败按 v1 语义上抛由路由器兜底。平台频率限制（单会话 30 条/分钟、1000 条/小时）
 由平台侧强制；超限表现为命令应答非零 errcode，走同一错误映射。
 
+出站 URL 源（`url`）过通道出站守卫：主机去空白 / 尾点 / 方括号 / 大小写归一后
+经 `socket.getaddrinfo` 解析，**全部地址**须为公网（loopback / link-local /
+private / reserved / multicast / unspecified 与 v4-mapped IPv6 均拒绝；解析
+失败 fail-closed）；重定向由 runner 手动跟随 ≤3 跳，每跳重新校验目标，3xx
+缺少 `Location` / 超跳数受控失败；响应流式限读保持 8 MiB 帽。
+
 ### 连接生命周期（订阅 / 心跳 / 重连 / 停机）
 
 ```
@@ -920,13 +954,16 @@ settings = build_isolated_settings(
 已登录的抖音页面（持久化 profile 承载 cookie），通道层经 sidecar 的
 `evaluate` 工具在页面上下文读取会话 DOM、写入输入框并发送。这是与 GUI 微信
 实验轨**同一套浏览器底座**——不引入第二套浏览器进程、不新增依赖。
+`evaluate` 有任意页面副作用，**不进 chat / duty 的 LLM 工具面**（LLM 只经
+无副作用七工具）；抖音内部经 `DouyinWebClient` 的 `client.invoke("evaluate")`
+直调，工具注册面裁剪不影响本通道（见 tools-browser.md「暴露面区分」）。
 
 底座职责划分（锁定）：
 
 | 层 | 职责 | 位置 |
 |---|---|---|
 | 浏览器运行时 | 启动 chromium / 持久化 profile / 允许清单与路由拦截 | `docker/browser-sidecar` 树 |
-| 页面协议（JS） | 会话 DOM 采集 / 输入框写入并发送 | `harness/channels/douyin/douyin_scripts.py` |
+| 页面协议（JS） | 会话 DOM 采集 / 输入框写入并发送（经 `evaluate` 工具——**内部直用，不进 LLM 工具面**） | `harness/channels/douyin/douyin_scripts.py` |
 | 通道客户端 | 工具调用编排 / wire 解析 / 失败归一 | `harness/channels/douyin/douyin_client.py` |
 | 通道路由 | 轮询节拍 / 去重 / 归一 / 人格会话 / 兜底 | `harness/channels/douyin/douyin_runner.py` + `channel_service.py` |
 
@@ -967,7 +1004,7 @@ DOUYIN_ENABLED=false（缺省）：no-op——零轮询任务 / 零页面操作
       ② 无标识 / 已处理标识 / 批内重复剔除
       ③ 系统消息归一 synthetic=True（路由器恒跳过回复，与 FLOW_ENABLED 无关）
       ④ 图片 URL → 通道附件（kind=image；data: 内联图剔除）
-      ⑤ 纯图片消息归一占位文本 [图片]
+      ⑤ 纯图片消息归一占位文本 [图片] + has_user_text=False（路由器跳过生成）
       ⑥ 上限截断（保留时间序末尾——最新优先）
     ↓ 去重窗口登记（message_id 有界 FIFO 1024——与 QQ / 企微同语义）
 ChannelRouter.handle_inbound（per-chat 锁 / 心流门控 / 群聊多人格 /
@@ -981,7 +1018,7 @@ ChannelRouter.handle_inbound（per-chat 锁 / 心流门控 / 群聊多人格 /
 |---|---|---|---|
 | `message_id` | string | `data-message-id` / `data-id`；缺失时「发送者 + 时间 + 文本」哈希兜底 | 去重键 + 入站 `message_id` |
 | `sender_id` | string | `data-sender-id` / `data-uid`；缺失为 `unknown` | 入站 `sender_id` |
-| `text` | string | 消息节点正文（脚本裁剪空白） | 入站文本（为空且有图时用占位文本） |
+| `text` | string | 消息节点正文（脚本裁剪空白） | 入站文本（为空且有图时用占位文本）；`has_user_text` 只按原始正文是否非空声明（占位文本为 False） |
 | `ts_ms` | number | `data-timestamp` / `data-ts` / `data-createTime`（秒级自动 ×1000）；缺失为 0 | 入站时间（0 按采集时刻兜底） |
 | `is_self` | bool | 自身气泡标记（`data-is-self` / self、right 类名） | True 不进路由（自己的回复回声） |
 | `is_system` | bool | `data-is-system` / system 类名 | 归一 `synthetic=True` |
@@ -1182,14 +1219,16 @@ settings = build_isolated_settings(
     ↓ HTTP POST /api/v1/channels/sms-forwarder（Content-Type: application/json）
 app/api/channels_sms_forwarder（鉴权 → 体校验 → 入队 → 立即 200）
     ↓ token 校验（SMS_FORWARDER_TOKEN 常量时间比较；缺失 401 / 不符 403）
-    ↓ 请求体：仅 application/json；64 KiB 上限；非法 JSON / 非对象 → 400
+    ↓ 请求体：仅 application/json；共享有界读取器（声明 / chunked 超 64 KiB → 400）；
+    ↓         非法 JSON / 非对象 → 400
 SmsForwarderWebhookRunner.submit（sms_forwarder/sms_runner.py——同步、恒不抛）
     ① parse_sms_forwarder_payload（不可路由事件不登记去重）
     ② kind 过滤（短信默认接收；notification 由 SMS_FORWARDER_NOTIFICATIONS_ENABLED 决定）
     ③ 去重登记（msgid 常驻 FIFO；无 msgid 按发送者 + 正文内容 + 时间窗）
     ④ 有界入站队列 put_nowait
         └─ 队列满 → 丢弃 + 计数 + ERROR（含去重键 / chat_id / message_id /
-           队列深度 / 累计丢弃）；不登记去重——手机端重投可重新消费
+           队列深度 / 累计丢弃）；端点恒 200（上报方仅非 200 重试）→ 满队丢弃即最终丢失；
+           不登记去重仅吸收偶发重复
     200 {"status": "ok"}
         ↓ 固定 worker（2；跨会话并行、同会话由路由器 per-chat 锁串行）
 ChannelRouter.handle_inbound（会话懒建 / 人格绑定 / ChatService）
@@ -1241,7 +1280,7 @@ SmsForwarderAdapter.send_message（仅入站边界——空投递结果，不发
 | `content` | — | string | 空 | 正文候选 |
 | `message` | — | string | 空 | 正文候选 |
 | `text` | — | string | 空 | 正文候选（模板使用 text 键时） |
-| `timestamp` | — | 数值 / 数值字符串 | 服务端时钟 | 秒级自动 ×1000；毫秒原样；非法 / 缺失 / 非正值回落服务端时钟 |
+| `timestamp` | — | 数值 / 数值字符串 | 服务端时钟 | 共享解析（与 WhatsApp 同源）：秒级自动 ×1000；毫秒原样；非法 / 缺失 / 非正 / 非有限（`NaN` / `Infinity` / `"inf"` / `"Infinity"` / `"1e999"`）/ 溢出回落服务端时钟 |
 | `device` | — | string | 空 | 设备标识（仅日志观测，不参与路由） |
 | `kind` | — | string | 短信 | `SMS` / `短信` / `short_message` 归一短信；`notification` / `通知` / `notify` 归一通知；未知值确认丢弃 |
 | `sim` | — | string | 空 | SIM 卡标识（仅日志观测） |
@@ -1264,8 +1303,10 @@ SmsForwarderAdapter.send_message（仅入站边界——空投递结果，不发
   不自动晋升主人），仅当归一发送者命中 `SMS_FORWARDER_OWNER_NUMBERS`
   （逗号分隔的号码 / 联系名，同一归一口径）时该消息 `is_owner=True`，路由器
   按主人来源落档；
-- **时间**：`ts_ms` 恒为服务端可用的 epoch 毫秒；时间戳缺失 / 非法 / 微秒级
-  以下数值统一回落服务端时钟；
+- **时间**：`ts_ms` 恒为服务端可用的 epoch 毫秒；时间戳解析与 WhatsApp 共享
+  同一实现（`channels/inbound_timestamp.py`）——秒级 ×1000、毫秒原样；缺失 /
+  非法 / 微秒级以下 / 非有限值（`NaN` / `Infinity` / `"inf"` / `"Infinity"` /
+  `"1e999"`）/ 溢出统一回落服务端时钟；
 - **附件**：SmsForwarder 转发为纯文本（无附件提取）。
 
 ### 去重 / 队列 / 丢弃（文档化边界）
@@ -1277,8 +1318,9 @@ SmsForwarderAdapter.send_message（仅入站边界——空投递结果，不发
 - **队列**：入站队列容量 64 / worker 2（**代码常量非 env**——与 QQ / 企微
   runner 同风格）。队列满即丢弃并计 `dropped_inbound`，ERROR 含去重键 /
   chat_id / message_id / 队列深度 / 累计丢弃；
-- **丢弃不登记去重**：队列满丢弃后手机端重投可在队列恢复后重新消费；已入队
-  载荷的重投由去重窗吸收。周期观测 INFO 每 60 秒 gate 一次（注入时钟），仅
+- **丢弃不登记去重**：端点恒 200（上报方仅非 200 重试）→ 队列满丢弃即最终
+  丢失；不登记去重仅吸收偶发重复，已入队载荷的重投由去重窗吸收。周期观测
+  INFO 每 60 秒 gate 一次（注入时钟），仅
   在 `pending>0` 或丢弃有增量时输出深度 / 增量；
 - **停机**：`request_stop` → 取消 worker → 清空待处理队列（会话级资源零残留）；
 - **进程边界**：去重窗是进程内状态（多 worker 部署各自独立——负载均衡把
@@ -1371,6 +1413,319 @@ settings = build_isolated_settings(
 > 注：`backend/.env.example` 键面以 `.env.example`（`pixi run gen-examples`
 > 生成）为真源，本表为语义说明。
 
+## WhatsApp Cloud API 通道（WHATSAPP——webhook 入站 + 文本出站 + 24 小时服务窗）
+
+WhatsApp Cloud API 是 Meta 托管的商业消息通道：入站只能经 Meta webhook
+推送，出站经 Graph API `/{version}/{phone_number_id}/messages` 发送。本通道
+交付**文本出站**与自由格式回复所需的 24 小时客户服务窗判定；模板消息发送
+未实现（超窗自由格式消息以受控业务错误拒绝，见下文）。
+
+### 架构：Meta 推送入站 + Graph API 文本出站
+
+```
+Meta（WhatsApp 用户 → 企业号码）
+    ↓ GET /api/v1/channels/whatsapp?hub.mode=subscribe&hub.verify_token=…&hub.challenge=…
+app/api/channels_whatsapp（hub 校验——恒时比较；200 纯文本回显 challenge / 403）
+    ↓ POST /api/v1/channels/whatsapp（Content-Type: application/json）
+app/api/channels_whatsapp（签名 → 体校验 → 入队 → 立即 200）
+    ↓ X-Hub-Signature-256 校验（sha256= + HMAC-SHA256(raw body, WHATSAPP_APP_SECRET)；
+      缺失 / 不符 403——先于 JSON 解析与去重登记）
+    ↓ 请求体：仅 application/json；64 KiB 上限（Content-Length 先检；
+      无 Content-Length 的 chunked 请求按 64 KiB 逐块累计中止——超限即停，
+      不整包读入）；反代建议再设 client_max_body_size；
+      非法 JSON / 非对象 / 深嵌套 → 400
+WhatsAppWebhookRunner.submit（whatsapp/whatsapp_runner.py——同步、恒不抛）
+    ① parse_whatsapp_webhook_payload（entry[].changes[].value 展平；
+       statuses[] 只计 status_events_ignored；不可路由消息不登记）
+    ② wamid 去重查询（窗口内重复 → 跳过，视为已确认）
+    ③ 有界入站队列 put_nowait
+        └─ 队列满 → 丢弃 + 计数 + ERROR（含 wamid / chat_id / 队列深度 /
+           累计丢弃）；端点恒 200，该条即最终丢失（Meta 不为 200 的推送
+           再次投递）；不登记去重仅为吸收 Meta 偶发重复推送
+    ④ 去重登记 + 服务窗登记（每会话最近入站毫秒——出站 24h 判定原料）
+    200 {"status": "ok"}
+        ↓ 固定 worker（2；跨会话并行、同会话由路由器 per-chat 锁串行）
+ChannelRouter.handle_inbound（会话懒建 / 人格绑定 / ChatService）
+    ↓ 入站 provenance：默认 peer；命中 WHATSAPP_OWNER_NUMBERS 时 owner
+WhatsAppAdapter.send_message（wa:<wa_id> grammar → 24h 服务窗判定）
+    ↓ Graph API POST /{api_version}/{phone_number_id}/messages（Bearer 令牌；
+      type=text；to=<wa_id>——归一后的国际号码，国家码保留，如
+      to=8613800138000）
+Meta（消息投递给 WhatsApp 用户）
+```
+
+装配：`WHATSAPP_ENABLED=true` 时 lifespan 先构造共享
+`WhatsAppServiceWindow`（进程内 24 小时服务窗状态），再构造
+`WhatsAppCloudClient`（凭据来自 Settings 的 SecretStr）、
+`WhatsAppWebhookRunner`（入站有界队列）与 `WhatsAppAdapter`（文本出站）——
+runner 与适配器共享同一服务窗实例；`app.state.channels_whatsapp_runner` /
+`channels_whatsapp_task` 槽位托管后台任务。关闭时零对象构造；停机
+`request_stop` → 取消 worker → 清空队列（零残留）。
+
+### Meta 应用配置步骤（部署侧）
+
+1. 在 Meta for Developers 创建 Business 类型应用，添加 WhatsApp 产品并绑定
+   企业号码（取得 `phone_number_id` 与展示号码）；
+2. 生成永久访问令牌（System User）填入 `WHATSAPP_ACCESS_TOKEN`；应用密钥
+   填入 `WHATSAPP_APP_SECRET`；自选随机串填入 `WHATSAPP_VERIFY_TOKEN`；
+3. 后端设置 `WHATSAPP_ENABLED=true`（公网部署必须同时设置四项凭据；
+   `ENV=prod` 时空值拒绝启动）；
+4. 公网经反代暴露 HTTPS `https://<域名>/api/v1/channels/whatsapp`，在
+   WhatsApp 产品「Configuration → Webhook」填同一 URL 与 verify token，
+   订阅 `messages` 字段（Meta 会先发 GET 握手，再开始 POST 推送）；
+5. 用 Meta 测试号码向企业号码发一条文本，后端日志应可见归一后的
+   `wa:<wa_id>` 会话与队列消费记录；企业号码在 24 小时内回一条文本应成功。
+
+### webhook 握手与签名（铁律）
+
+| 请求 | 校验 | 通过 | 失败 |
+|---|---|---|---|
+| `GET /api/v1/channels/whatsapp` | `hub.mode=subscribe` + `hub.verify_token` 恒时比较（`secrets.compare_digest`）+ `hub.challenge` 非空 | 200 纯文本回显 challenge | 403（`FORBIDDEN`） |
+| `POST /api/v1/channels/whatsapp` | `X-Hub-Signature-256 = sha256=<HMAC-SHA256(raw body, WHATSAPP_APP_SECRET)>` 恒时比较；Content-Type 仅 `application/json`；共享有界读取器（声明 / chunked 超 64 KiB → 400，超限即停） | 200 `{"status":"ok"}` | 签名缺失 / 不符 403；Content-Type / 体非法 / 超限 400 |
+
+- **签名先于解析与去重**：被拒请求不消耗去重窗口（Meta 重投同一 wamid
+  仍可正常消费）；签名对象是**原始请求体字节**（不是解析后的 JSON）。
+- **空凭据形态**：`WHATSAPP_VERIFY_TOKEN` / `WHATSAPP_APP_SECRET` 为空时
+  对应校验关闭（仅开发 / 测试形态）；`ENV=prod` 且通道启用时四项凭据
+  （verify token / app secret / access token / phone number id）任一为空
+  拒绝启动（`packages/harness/config/auth_policy.ensure_auth_policy`）。
+- **恒 200 确认语义**：状态回执 / 不可路由消息 / 队列满丢弃 / 处理失败均
+  返回 `200 {"status": "ok"}`（Meta 对非 2xx 会重投）；错误细节只进日志。
+  端点恒 200（Meta 仅对非 2xx 重投），因此队列满丢弃即最终丢失；不登记
+  去重仅为吸收 Meta 偶发重复推送。
+
+### 载荷示例（Meta webhook JSON）
+
+文本消息（含联系人资料与状态回执示例）：
+
+```json
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550000000",
+              "phone_number_id": "1234567890"
+            },
+            "contacts": [
+              {"profile": {"name": "Alice"}, "wa_id": "15551234567"}
+            ],
+            "messages": [
+              {
+                "from": "15551234567",
+                "id": "wamid.HBgLMTU1NTEyMzQ1NjcVAgARGBI5QjA3QTk2",
+                "timestamp": "1731000000",
+                "type": "text",
+                "text": {"body": "今晚回家吃饭吗？"}
+              }
+            ],
+            "statuses": [
+              {
+                "id": "wamid.HBgLMTU1NTEyMzQ1NjcVAgARGBI5QjA3QTk2",
+                "status": "delivered",
+                "timestamp": "1731000002",
+                "recipient_id": "15551234567"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+媒体消息（图片 / 视频 / 文档携带 caption；音频 / 贴纸无 caption）：
+
+```json
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "metadata": {"phone_number_id": "1234567890"},
+            "messages": [
+              {
+                "from": "15551234567",
+                "id": "wamid.MEDIA-1",
+                "timestamp": "1731000000",
+                "type": "image",
+                "image": {"id": "8807123456", "mime_type": "image/jpeg", "caption": "看这只猫"}
+              },
+              {
+                "from": "15551234567",
+                "id": "wamid.MEDIA-2",
+                "timestamp": "1731000001",
+                "type": "audio",
+                "audio": {"id": "9907123456", "mime_type": "audio/ogg", "voice": true}
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+字段说明（多余字段忽略；缺失字段给默认）：
+
+| 路径 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `entry[].changes[].value.metadata.phone_number_id` | string | 空 | 企业号码 ID（模型化保留；本侧出站用配置值） |
+| `entry[].changes[].value.contacts[].wa_id` | string | 空 | 联系人号码（仅日志观测） |
+| `entry[].changes[].value.contacts[].profile.name` | string | 空 | 联系人显示名（仅日志观测） |
+| `entry[].changes[].value.messages[].from` | string | 空 | 发送者 wa_id；空则丢弃该条 |
+| `entry[].changes[].value.messages[].id` | string | 空 | wamid（去重首选键）；空则丢弃该条 |
+| `entry[].changes[].value.messages[].timestamp` | 秒级数值字符串 | 服务端时钟 | 共享解析（与 SmsForwarder 同源）：×1000 归一 epoch 毫秒；非法 / 非正 / 非有限值（`NaN` / `Infinity` / `"nan"` / `"inf"` / `"Infinity"` / `"1e999"`）/ 溢出 / 缺失回落服务端时钟 |
+| `entry[].changes[].value.messages[].type` | string | 空 | `text` / `image` / `audio` / `document` / `sticker` / `video` / `location` / `button` / `interactive`；其余类型丢弃 |
+| `…messages[].text.body` | string | 空 | 文本正文（空白丢弃） |
+| `…messages[].image/video/document.caption` | string | 空 | 媒体 caption（非空即正文 + `has_user_text=True`；否则占位 `[图片]` / `[视频]` / `[文件]` + `has_user_text=False`） |
+| `…messages[].audio/sticker` | object | — | 无 caption 概念：`[语音]` / `[贴纸]` |
+| `…messages[].location.name/address` | string | 空 | 位置文本回退（空则 `[位置]`） |
+| `…messages[].button.text` | string | 空 | 模板按钮文本回退（空则 `[按钮]`） |
+| `…messages[].interactive.button_reply/list_reply.title` | string | 空 | 交互回复标题回退（空则 `[交互回复]`） |
+| `entry[].changes[].value.statuses[]` | array | 空 | 状态回执：不进路由、不登记去重，只累计 `status_events_ignored` |
+
+### 归一与来源语义（锁定决策）
+
+- **WhatsApp 归一保留国家码**：`wa_id` 是国际号码，国家码是号码本身的
+  一部分。`channels/phone_numbers.py` 的 `normalize_whatsapp_wa_id` 只剥
+  展示分隔符（空格 / 连字符 / 括号 / 点）与前导 `+`，**保留全部数字**——
+  不剥 `86` / `0086`（与 SmsForwarder 的中国码前缀归一不同，短信通道的
+  行为不变）。例：`+86 138 0013 8000` → `8613800138000`；非中国号码
+  `15551234567` 仅剥分隔符后保持原样；
+- **会话键**：`wa:<归一 wa_id>`（如 `wa:8613800138000`）；发送者键 /
+  属主清单匹配 / 出站 `to` 与入站会话键使用同一归一口径——剥掉国家码会
+  让同一联系人在入站与出站两侧得到不同号码，并投递到错误目标。发送者
+  **不是人格 ID**——人格仍由路由器按主人格 / 群聊多人格规则绑定；
+- **仅私聊语义**：Cloud API webhook 不区分群聊，`is_group_chat=False`；
+  群聊多人格路径不适用；
+- **来源分级**：`synthetic=False`（真实人类消息）；默认 `peer`，仅当归一
+  wa_id 命中 `WHATSAPP_OWNER_NUMBERS`（逗号分隔，允许 `+86 138 0013
+  8000` 等展示形态，经 `parse_whatsapp_owner_numbers` 同口径归一）时
+  `is_owner=True`；
+- **时间**：`ts_ms` 恒为 epoch 毫秒；解析与 SmsForwarder 共享
+  `channels/inbound_timestamp.py`——秒级 ×1000、毫秒原样；非法 / 非正 /
+  非有限值（`NaN` / `Infinity` / `"nan"` / `"inf"` / `"Infinity"` /
+  `"1e999"`）/ 溢出 / 缺失统一回落服务端时钟；
+- **附件**：媒体消息只消费 caption / 占位文本，媒体本体（媒体 ID）不入
+  通道附件协议（下载需二次调用媒体端点——本切片不引入）。
+
+### 去重 / 队列 / 丢弃（文档化边界）
+
+- **幂等**：按 wamid 在进程内有界 FIFO 窗口（1024）内吸收重复推送（Meta
+  偶发重复投递同一 wamid）；窗口满按 FIFO 淘汰最旧键。去重是进程内状态
+  （多 worker / 多实例部署各自独立，重启清零）——需要严格幂等时保持单实例
+  或接受跨实例重复消费；
+- **队列**：入站队列容量 64 / worker 2（**代码常量非 env**——与 QQ / 企微 /
+  SmsForwarder runner 同风格）。队列满即丢弃并计 `dropped_inbound`，ERROR
+  含 wamid / chat_id / 队列深度 / 累计丢弃；
+- **丢弃即最终丢失**：端点恒 200（Meta 仅对非 2xx 重投），队列满丢弃的
+  消息不会被 Meta 再次投递；不登记去重仅为吸收 Meta 偶发重复推送（不是
+  恢复通道）。周期观测 INFO 每 60 秒 gate 一次（注入时钟），仅在
+  `pending>0` 或丢弃有增量时输出；
+- **停机**：`request_stop` → 取消 worker → 清空待处理队列（会话级资源零残留）。
+
+### 24 小时客户服务窗与模板边界（锁定）
+
+Cloud API 只允许在用户最后一条消息后的 **24 小时**内发送自由格式消息；
+超出窗口必须使用模板消息（template message）。本通道交付：
+
+- **窗口状态**：runner 在入站入队时登记每会话最近入站 epoch 毫秒；
+  `WhatsAppAdapter` 在发起 Graph API 调用前判定（超出窗口 / 从未收到入站
+  → `CHANNEL_API_ERROR` 受控业务错误，携带 `last_inbound_ms` / `now_ms` /
+  `window_ms`，不发起 HTTP 调用）；
+- **单实例限制**：窗口状态是进程内状态（与去重窗同一边界）——多 worker /
+  多实例部署时，某实例未见过该会话入站会把出站判为窗口外；需要严格窗口
+  语义时保持 `SERVER_WORKERS=1` 并单实例部署；
+- **模板消息未实现**：超窗主动消息（例如 duty 报告向 WhatsApp 属主会话
+  投递）会被拒绝——部署侧应让属主在窗口内发一条消息，或等待后续模板
+  发送交付（`type=template` 的 wire 形状与模板注册均不在本切片）；
+- **入站不受影响**：窗口只约束出站；入站消费、会话落库与记忆写入照常
+  （适配器失败按逐消息隔离，不反噬入站 worker）。
+
+### 出站与错误码映射（WhatsApp 面——复用 channels 域既有码表）
+
+- **仅文本**：`type=text` 整条投递；超长文本（Cloud API 4096 字符上限）
+  不在本侧分段，由平台侧拒绝并映射 `CHANNEL_API_ERROR`；附件被优雅忽略
+  （表情桥附发贴纸不阻断文本）；引用回复不透传（未映射 `context` 字段）；
+- **凭据缺省**：无访问令牌 → `CHANNEL_TOKEN_MISSING`；无企业号码 ID →
+  `CONFIG_INVALID`（均在发起 HTTP 前拒绝，逐消息隔离）。
+
+| 失败类别 | 错误码 | 说明 |
+|---|---|---|
+| 超出 24 小时服务窗 | `CHANNEL_API_ERROR` | 受控业务错误——模板消息未实现；不发起 HTTP |
+| HTTP 401 / 403 | `CHANNEL_TOKEN_MISSING` | 访问令牌无效或与 Meta 应用不一致 |
+| 其余 HTTP 非 2xx / 超时 / 传输失败 / 响应非法 | `CHANNEL_API_ERROR` | 逐消息隔离——不阻断入站消费 |
+| `wa:` grammar 非法 / 空文本 | `VALIDATION_ERROR` | 调用方 bug 面 |
+| `phone_number_id` 未配置 | `CONFIG_INVALID` | 部署配置面 |
+
+### Settings（WhatsApp 分节）
+
+env 面（`env_prefix=WHATSAPP_`；嵌套覆写 `CHANNELS__WHATSAPP__*` 亦可用）：
+
+| 字段 | env 变量 | 默认 | 说明 |
+|---|---|---|---|
+| `enabled` | `WHATSAPP_ENABLED` | `false` | 是否装配文本出站适配器与有界入站 runner（false = 端点照常确认并丢弃） |
+| `verify_token` | `WHATSAPP_VERIFY_TOKEN` | 空 | Meta webhook hub 校验 token（SecretStr；空 = 校验关闭，仅开发 / 测试形态；生产启用时强制非空） |
+| `app_secret` | `WHATSAPP_APP_SECRET` | 空 | Meta 应用密钥（SecretStr——webhook 签名 HMAC；空 = 签名校验关闭；生产启用时强制非空） |
+| `access_token` | `WHATSAPP_ACCESS_TOKEN` | 空 | Graph API 永久访问令牌（SecretStr；生产启用时强制非空） |
+| `phone_number_id` | `WHATSAPP_PHONE_NUMBER_ID` | 空 | 企业号码 ID（出站路径段；生产启用时强制非空） |
+| `api_version` | `WHATSAPP_API_VERSION` | `v21.0` | Graph API 版本段 |
+| `api_base` | `WHATSAPP_API_BASE` | `https://graph.facebook.com` | Graph API 基础 URL（代理 / 测试端点可覆写） |
+| `owner_numbers` | `WHATSAPP_OWNER_NUMBERS` | 空 | 属主号码清单（逗号分隔；须含国家码，如 `+86 138 0013 8000`；空 = 全部发送者按 peer 落档） |
+
+```bash
+# .env 形态（分节 env 前缀）
+WHATSAPP_ENABLED=true
+WHATSAPP_VERIFY_TOKEN=your-long-random-verify-token
+WHATSAPP_APP_SECRET=your-meta-app-secret
+WHATSAPP_ACCESS_TOKEN=your-permanent-access-token
+WHATSAPP_PHONE_NUMBER_ID=1234567890
+WHATSAPP_API_VERSION=v21.0
+WHATSAPP_API_BASE=https://graph.facebook.com
+WHATSAPP_OWNER_NUMBERS=15551234567,妈妈
+```
+
+```yaml
+# config.yaml 不承载通道配置（env 面专属——与 telegram / QQ / 企微 / 抖音 /
+# SmsForwarder 同约定）；嵌套覆写形态（进程环境变量，优先级高于 .env）：
+#   CHANNELS__WHATSAPP__ENABLED=true
+#   CHANNELS__WHATSAPP__PHONE_NUMBER_ID=1234567890
+```
+
+隔离构造（测试 / 工具）：
+
+```python
+from packages.harness.config.models import ChannelsSettings, WhatsAppChannelSettings
+from packages.harness.config.settings import build_isolated_settings
+
+settings = build_isolated_settings(
+    channels=ChannelsSettings(
+        whatsapp=WhatsAppChannelSettings(
+            enabled=True,
+            verify_token="test-only-verify-token",
+            app_secret="test-only-app-secret",
+            access_token="test-only-access-token",
+            phone_number_id="123456",
+        )
+    )
+)
+```
+
+> 注：`backend/.env.example` 键面以 `.env.example`（`pixi run gen-examples`
+> 生成）为真源，本表为语义说明。
+
 ## Settings（`Settings.channels`）——telegram 分节
 
 env 面（`env_prefix=TELEGRAM_`；嵌套覆写 `CHANNELS__TELEGRAM__*` 亦可用）：
@@ -1443,5 +1798,12 @@ settings = build_isolated_settings(
 | `tests/unit/test_app_wecom_channels_lifespan.py` | 企微 enabled / disabled 装配 / 凭据失败仅跳过该通道 / 双通道共用路由器 / 共享 HTTP 池注入 / 停机传导 |
 | `tests/wecom_fakes.py` | 共享 fake 基建：wire 级连接替身（自动应答 / 错误注入 / 断连注入）/ 连接工厂（失败窗口）/ 逐次放行伪休眠 / fake 客户端 / fake 路由器 |
 | `tests/douyin_fakes.py` | 共享 fake 基建：浏览器调用面（navigate 成败 / evaluate 脚本化队列）/ fake 路由器（逐消息异常注入）/ 记录式休眠闸门 |
+| `tests/unit/test_phone_numbers.py` | 发送者归一矩阵（SMS 中国码前缀口径 + WhatsApp 保国家码口径 / 分隔符 / 联系名小写 / 空值）/ 两侧属主清单解析（逗号分隔 / 空项跳过） |
+| `tests/unit/test_whatsapp_models.py` | 载荷模型化与归一：文本 / 媒体 caption 与占位 / 位置与按钮与交互回退 / 状态回执计数 / 缺字段丢弃 / 秒级与非法与非有限时间戳 / 含国家码 wa_id 的会话键与属主命中 / 非中国号码不变 / 多 entry 展平 / 服务窗边界 / wamid 去重 FIFO / 直调路径去重与异常隔离 |
+| `tests/unit/test_whatsapp_runner.py` | 有界队列过载丢弃（不登记去重）/ wamid 重复推送吸收 / 状态计数 / 多消息推送 / 服务窗入站登记 / 属主落档 / 停机零残留 / worker 隔离 / 周期观测 / 批内满队逐条计数与告警 |
+| `tests/unit/test_channels_whatsapp_api.py` | GET hub 握手矩阵（mode / token / challenge / 恒时比较 / 空 token 关闭）；POST 签名矩阵（合法 / 篡改 / 缺失 / 错密钥 / 空密钥关闭 / 被拒不消耗去重）；非 JSON / 非法 JSON / 非对象 / 超限（声明与实读）/ Content-Length 缺失；chunked 逐块上限（超限即停 / 声明超限不读流）；恒 200 ack / runner 立即确认 / 未装配确认丢弃 / 直调路径国家码属主命中 |
+| `tests/unit/test_whatsapp_adapter.py` | MockTransport 出站：wire 形状 / provider message_id / 出站 to 保留国家码 / 401 与 5xx 与超时与非法 JSON 映射 / 服务窗内放行与边界与超窗拒绝 / runner 入站更新服务窗 / grammar 校验 / 附件忽略 / 缺令牌与缺号码 ID |
+| `tests/unit/test_whatsapp_settings.py` | WHATSAPP_ env 面对齐 / 默认值 / SecretStr 不回显 / 聚合面 / 生产 fail-closed（四项凭据任一缺失） |
+| `tests/unit/test_app_whatsapp_lifespan.py` | WhatsApp enabled / disabled 装配 / 适配器与 runner 共享服务窗 / 属主清单接线 / 停机复位 / 窗口外受控拒绝且零 HTTP 请求（事件钩子记录） |
 
 零真实网络（MockTransport / fake）；零真实配置（隔离 Settings + conftest 硬覆盖；测试 token 为专用假值）；全部 `async def test_*`。

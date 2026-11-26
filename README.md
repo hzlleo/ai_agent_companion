@@ -6,7 +6,7 @@
 
 - **多人格注册表**：chara card v2 人设卡 + L/M/S 三层心理状态 + 人格切换/复制，记忆与平台账号按人格隔离
 - **三层记忆**：情景（append-only 事件日志 + 每日日记）/ 策展（MEMORY.md + USER.md + 关系状态）/ 夜间梦境整理（规则门控 + provenance 分级）
-- **统一检索**：SeekDB（向量 + BM25 + 标量过滤单一引擎，MySQL 协议原生 async）+ MySQL 权威关系库；双时间线先以关系建模落地
+- **统一检索**：SeekDB（向量 + BM25 + 标量过滤单一引擎，MySQL 协议原生 async）+ SeekDB 权威关系库（与检索同实例、不同库名）；双时间线先以关系建模落地
 - **值班轮 + 调度**：任务书（charter）模式 + 写入类平台工具经 safety 审批门接入（规划中）+ 全量审计
 - **工具层**：OpenAI 兼容原生工具调用 + docker 沙盒隔离执行 + `look_at` 视觉理解（本地 Qwen3-VL，主模型无需多模态）
 - **管理后台**：人格/记忆/配置/工具全管理 + Token 用量多维分析（时间 × 模型 × 用途 × 输入/输出/总量）
@@ -14,7 +14,7 @@
 - **实时语音全双工**：WebSocket 会话 + 能量/静音 VAD 切段 + 切段转写（节流中途字幕）+ 人格回复逐句 TTS 分片播报 + 打断（取消在途生成/合成）；管理台实时字幕面板；默认关闭
 - **声纹（PIPL 合规）**：同意先于处理、人格 × 发送者隔离、撤回 / 删除即清样本与向量；默认关闭
 - **表情包库**：哈希去重 + 来源与授权备注必填 + VLM 描述 / 标签标注 + 通道附件 v2 收发；默认关闭
-- **平台通道**：Telegram 长轮询 / QQ（NapCat OneBot v11）推送入站 / 企业微信智能机器人长连接（WebSocket——订阅鉴权、心跳保活、退避重连、素材分片上传）/ 抖音 web（浏览器 sidecar 底座上的会话页采集与发送）/ SmsForwarder 手机短信与通知转发（token 鉴权、有界入站队列、仅入站）；共用统一通道路由器与附件协议 v2
+- **平台通道**：Telegram 长轮询 / QQ（NapCat OneBot v11）推送入站 / 企业微信智能机器人长连接（WebSocket——订阅鉴权、心跳保活、退避重连、素材分片上传）/ 抖音 web（浏览器 sidecar 底座上的会话页采集与发送）/ SmsForwarder 手机短信与通知转发（token 鉴权、有界入站队列、仅入站）/ WhatsApp Cloud API（webhook hub 校验 + HMAC 签名、有界入站队列、Graph API 文本出站、24 小时客户服务窗）；共用统一通道路由器与附件协议 v2
 - **画布**：人格作用域的 HTML / SVG / Markdown 渲染产物——管理台沙箱预览、修订留号、单文件导出
 
 ## 技术栈
@@ -23,7 +23,7 @@
 |---|---|
 | 后端 | Python 3.12 + FastAPI + Pydantic v2 + SQLAlchemy 2.0 async |
 | 前端 | React 19 + Vite |
-| 关系库 | MySQL 8.x（aiomysql 异步驱动） |
+| 关系库 | SeekDB 权威存储（MySQL 协议，aiomysql 驱动） |
 | 检索 | SeekDB（AI-native 搜索数据库，MySQL 协议） |
 | 主 LLM | 远端 vLLM 0.32+（多 provider 网关，OpenAI 兼容） |
 | 辅助模型 | Qwen3-VL（look_at）/ Qwen3-Embedding-0.6B / bge-m3（备）/ CosyVoice3 / Qwen3-ASR —— 全部独立本地服务进程 |
@@ -60,6 +60,12 @@ pixi run dev                # 前端开发服务器（5173，连本机后端 800
 手机短信 / 通知转发（SmsForwarder）：后端设 `SMS_FORWARDER_ENABLED=true` 与
 `SMS_FORWARDER_TOKEN`，手机端把模板 POST 到 `/api/v1/channels/sms-forwarder`
 （请求头或查询参数携带同一 token；详见 `docs/backend/channels.md` SmsForwarder 一节）。
+
+WhatsApp Cloud API：后端设 `WHATSAPP_ENABLED=true` 与四项凭据
+（`WHATSAPP_VERIFY_TOKEN` / `WHATSAPP_APP_SECRET` / `WHATSAPP_ACCESS_TOKEN` /
+`WHATSAPP_PHONE_NUMBER_ID`），在 Meta 应用侧把 webhook 指向
+`/api/v1/channels/whatsapp` 并订阅 `messages` 字段（详见 `docs/backend/channels.md`
+WhatsApp 一节；出站仅自由格式文本，受 24 小时客户服务窗约束）。
 
 配置 example 三件套（`.env.example` / `config.example.yaml` / `extensions_config.example.json`）由
 `pixi run gen-examples` 从 Pydantic 配置类自动生成；真实配置经 `pixi run setup` 交互式向导生成，全部配置项均受管理。

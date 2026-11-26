@@ -55,8 +55,8 @@ class InjectionKind(StrEnum):
             一个 AI）——直接改写人设，权重高于其他种类。
         FORMAT_DEMAND: 格式强求（请用 JSON / 只回答 / 重复一遍 / 按以下格式）
             ——单轮输出形态被外部指定。
-        TAG_MIMICRY: 标签模仿（句首成对的 ``<…>…</…>`` 或 ``【…】…【/…】``）
-            ——模仿人格自身的输出协议标签。
+        TAG_MIMICRY: 标签模仿（行内任意位置成对的 ``<…>…</…>`` 或句首
+            ``【…】…【/…】``）——模仿人格自身的输出协议标签。
     """
 
     IMPERATIVE = "imperative"
@@ -330,7 +330,7 @@ INJECTION_RULES: tuple[InjectionRuleModel, ...] = (
     ),
     InjectionRuleModel(
         kind=InjectionKind.TAG_MIMICRY,
-        pattern=re.compile(r"^.{0,8}?<([^<>\n]{1,20})>[^\n]*</\1>"),
+        pattern=re.compile(r"<\s*([^<>\n]{1,20})\s*>[^\n]{0,120}?</\1\s*>"),
         weight=1.0,
     ),
     InjectionRuleModel(

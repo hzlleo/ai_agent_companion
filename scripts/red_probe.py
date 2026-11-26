@@ -26,7 +26,9 @@
 ``--gate`` 模式不执行测试，只校验清单完整性：``backend/src/{packages,app}``
 下的非测试源文件必须落在 ``grandfathered``（首版冻结的存量基线）里，或
 被至少一个 probe 以符号形式覆盖；未覆盖的新源文件即红。同时校验每个
-probe 的符号与测试 node id 真实存在（防登记空探针）。
+probe 的符号与测试 node id 真实存在（防登记空探针）。``grandfathered``
+数量另受 manifest ``[metadata].grandfathered_baseline`` 棘轮约束——当前
+条目数不得高于基线（只冻结不收敛同样红）。
 
 用法::
 
@@ -111,11 +113,13 @@ class RedManifest:
     Attributes:
         version: 清单 schema 版本。
         grandfathered: 首版冻结的现存源文件（相对 ``backend/src``）。
+        grandfathered_baseline: 冻结条目数量棘轮上界（只降不升）。
         probes: probe 登记表。
     """
 
     version: int
     grandfathered: tuple[str, ...]
+    grandfathered_baseline: int
     probes: tuple[ProbeSpec, ...]
 
 
@@ -170,6 +174,17 @@ def _load_manifest(path: Path) -> RedManifest:
             file=sys.stderr,
         )
         raise SystemExit(2)
+    metadata = payload.get("metadata", {})
+    if not isinstance(metadata, dict):
+        print("[red_probe] 清单 metadata 结构非表", file=sys.stderr)
+        raise SystemExit(2)
+    raw_baseline = metadata.get("grandfathered_baseline")
+    if not isinstance(raw_baseline, int) or raw_baseline < 0:
+        print(
+            "[red_probe] 清单缺少 metadata.grandfathered_baseline（非负整数棘轮上界）",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     grandfathered = tuple(str(item) for item in payload.get("grandfathered", []))
     probes: list[ProbeSpec] = []
     for raw in payload.get("probes", []):
@@ -185,7 +200,12 @@ def _load_manifest(path: Path) -> RedManifest:
                 tests=tuple(str(item) for item in raw.get("tests", [])),
             )
         )
-    return RedManifest(version=version, grandfathered=grandfathered, probes=tuple(probes))
+    return RedManifest(
+        version=version,
+        grandfathered=grandfathered,
+        grandfathered_baseline=raw_baseline,
+        probes=tuple(probes),
+    )
 
 
 def _module_path(module: str) -> Path:
@@ -549,11 +569,19 @@ def _run_gate(manifest: RedManifest) -> int:
     grandfathered = set(manifest.grandfathered)
     covered = _probe_covered_files(manifest)
     uncovered = [path for path in sources if path not in grandfathered and path not in covered]
+    overflow = len(manifest.grandfathered) - manifest.grandfathered_baseline
 
     stale = sorted(grandfathered - set(sources) - covered)
     print(
         f"[red_probe] 源文件 {len(sources)} 个；冻结基线 {len(grandfathered)} 个；"
         f"探针 {len(manifest.probes)} 条（覆盖 {len(covered)} 个文件）"
+    )
+    print(
+        f"[red_probe] grandfathered 棘轮: {len(manifest.grandfathered)} 条 "
+        f"<= 基线 {manifest.grandfathered_baseline}"
+        if overflow <= 0
+        else f"[red_probe] grandfathered 棘轮红: {len(manifest.grandfathered)} 条 "
+        f"> 基线 {manifest.grandfathered_baseline}"
     )
     if stale:
         print(
@@ -562,6 +590,14 @@ def _run_gate(manifest: RedManifest) -> int:
         )
         for path in stale[:10]:
             print(f"  - {path}")
+    if overflow > 0:
+        print(
+            "[red_probe] grandfathered 数量棘轮红: "
+            f"{len(manifest.grandfathered)} 条 > 基线 {manifest.grandfathered_baseline}"
+            f"（新增 {overflow} 条——新实现须登记 probe；确需冻结须评审后下调基线）",
+            file=sys.stderr,
+        )
+        return 1
     if uncovered:
         print(
             "[red_probe] 未覆盖的新源文件（新增实现必须登记红探针，或按评审加入冻结基线）:",

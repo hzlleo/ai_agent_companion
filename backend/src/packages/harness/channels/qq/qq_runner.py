@@ -11,7 +11,8 @@
         ② message_id 去重窗（进程内有界 FIFO 1024）
         ③ 入站队列（有界）put_nowait
             └─ 队列满 → 丢弃并计数（ERROR 日志含 msgid / 队列深度；
-               不登记去重——平台重投可重新消费）
+               端点恒 200（上报方仅非 200 重试）→ 满队丢弃即最终丢失；
+               不登记去重仅吸收偶发重复）
     200 {"status": "ok"}
         ↓ 固定 worker（后台任务，跨聊天并行、同聊天由路由器 per-chat 锁串行）
     ChannelRouter.handle_inbound（会话懒建 / 人格绑定 / 心流门控 / ChatService）
@@ -50,7 +51,8 @@ __all__ = [
 
 #: message_id 去重窗口容量（与单事件直调路径同容量——同语义）。
 QQ_DEDUP_WINDOW_SIZE: Final[int] = 1024
-#: 入站待处理队列容量（过载即丢弃并告警——丢弃不登记去重，平台重投可重新消费）。
+#: 入站待处理队列容量（过载即丢弃并告警——端点恒 200，满队丢弃即最终丢失；
+#: 不登记去重仅吸收偶发重复）。
 QQ_INBOUND_QUEUE_SIZE: Final[int] = 64
 #: 入站 worker 数（同聊天由路由器 per-chat 锁串行；多 worker 只提升跨聊天并行度）。
 QQ_INBOUND_WORKER_COUNT: Final[int] = 2
@@ -147,7 +149,7 @@ class QqWebhookRunner:
         except asyncio.QueueFull:
             self._dropped_inbound += 1
             logger.error(
-                "QQ 入站队列已满（丢弃该消息——未登记去重，平台重投可重新消费）: "
+                "QQ 入站队列已满（丢弃该消息——端点恒 200，满队丢弃即最终丢失；未登记去重仅吸收偶发重复）: "
                 "message_id={}, chat_id={}, depth={}, dropped={}",
                 message_id,
                 inbound.chat_id,

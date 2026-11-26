@@ -26,13 +26,14 @@
 
 **不跳过策略**：套件目标经 runner 显式注入的 `SEEKDB_TEST_*` env 解析（`SEEKDB_TEST_URL=host:port`、`SEEKDB_TEST_USER` 默认 `root`、`SEEKDB_TEST_PASSWORD` 默认空、`SEEKDB_TEST_DATABASE` 默认 `aac_ci_verify`）；缺失 `SEEKDB_TEST_URL` 即 `pytest.fail`（失败消息携带本地容器启动命令）——无静默跳过，替代原 env 门控默认跳过的 `test_seekdb_smoke.py`（已删除，混合检索往返契约整体迁入）。套件**不读** `src/conftest.py` 的 S3 硬覆盖 env 面——docker 化测试依赖 + 显式测试 env 是本工程认可的测试服务模式（同 MySQL service container），不属于「真实项目配置」。
 
-**覆盖面**（三模块；scratch 库每模块 DROP+CREATE 重建——hermetic per run，单进程顺序运行）：
+**覆盖面**（四模块；scratch 库每模块 DROP+CREATE 重建——hermetic per run，单进程顺序运行）：
 
 - 迁移链 round-trip：alembic 0001→0008 升级 head（`SHOW TABLES` 收敛 9 表集含 `alembic_version`，版本戳 0008）→ 降级 base → 复升 head；
-- 并发不变式：`uq_ff_personas_primary` 单主人格（NULL 标记多行共存 + 第二 `'primary'` 被 1062 点名拒绝）、`uq_ff_curated_active` 复合单 active（superseded NULL 多代共存）、`uq_ff_chat_messages_seq` 会话内序号唯一、跨连接 `SELECT ... FOR UPDATE` 持锁 / 等锁超时（错误 1205）/ 释放正控——全部 raw SQL 经 aiomysql 直击真引擎；
-- 混合检索往返：`SeekDBStore` 生产路径 `ensure_schema` → 批量 upsert → keyword / hybrid（Form B 融合排序）检索回读 → 同键覆盖幂等 → 人格隔离 → delete 清理。
+- 并发不变式：`uq_ff_personas_primary` 单主人格（NULL 标记多行共存 + 第二 `'primary'` 被 1062 点名拒绝）、`uq_ff_curated_active` 复合单 active（superseded NULL 多代共存）、`uq_ff_chat_messages_seq` 会话内序号唯一、跨连接 `SELECT ... FOR UPDATE` 持锁 / 等锁超时（错误 1205）/ 释放正控、表情双形态收敛（旧快照表预读 → 6235 → 调用方重试收敛 / 无旧快照 → 1062 → 共享锁定读解析胜者）——全部 raw SQL / 服务层共用插入函数经 aiomysql 直击真引擎；
+- 混合检索往返：`SeekDBStore` 生产路径 `ensure_schema` → 批量 upsert → keyword / hybrid（Form B 融合排序）检索回读 → 同键覆盖幂等 → 人格隔离 → delete 清理；
+- 单栈权威引擎：`DatabaseConfig(type=mysql, host/port=真引擎, name=专用 scratch 库)` 走 `init_database` + Alembic 升级 head + 人格创建 / 读取 / 删除 round-trip（权威存储实际跑在 SeekDB，不触碰套件库）。
 
-**方言 bug 起源（制度化理由）**：迁移降级序在 MySQL 系引擎（含 SeekDB）受错误 5320（外键列须保有索引——须先删外键约束再删其索引）约束，SQLite 方言永不暴露该序错误，真引擎 round-trip 验证即为此制度化；同理行锁等待的生效旋钮是 `ob_trx_lock_timeout`（微秒）——`innodb_lock_wait_timeout` 在 SeekDB 为 mock 变量（live 实测读回恒 50、`SET SESSION` 无效）。
+**方言 bug 起源（制度化理由）**：迁移降级序在 MySQL 协议系引擎（含 SeekDB）受错误 5320（外键列须保有索引——须先删外键约束再删其索引）约束，SQLite 方言永不暴露该序错误，真引擎 round-trip 验证即为此制度化；同理行锁等待的生效旋钮是 `ob_trx_lock_timeout`（微秒）——`innodb_lock_wait_timeout` 在 SeekDB 为 mock 变量（live 实测读回恒 50、`SET SESSION` 无效）。
 
 **本地运行**：
 

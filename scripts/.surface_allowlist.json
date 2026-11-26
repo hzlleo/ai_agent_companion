@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "max_entries": 41,
+  "max_entries": 42,
   "note": "HTTP wire 模型导出豁免清单——每项必须写明不导出前端契约的理由（scripts/surface_check.py 消费）；陈旧条目在门禁输出中报告并应删除。max_entries 是规模棘轮：新增豁免须 --update 同步抬高并随 diff 受审。",
   "entries": [
     {
@@ -124,10 +124,6 @@
       "reason": "StrEnum 用量时间桶查询参数值域；导出器不覆盖 Enum，前端以字面量联合类型消费。"
     },
     {
-      "surface": "VoiceTtsRequestDTO",
-      "reason": "TTS 合成请求；前端语音面板未建立类型契约，CLI 直接消费。"
-    },
-    {
       "surface": "VoiceprintConsentGrantDTO",
       "reason": "声纹同意授予请求；PIPL 管理面先行，前端声纹面板未落地。"
     },
@@ -166,6 +162,14 @@
     {
       "surface": "VoiceprintWithdrawResultModel",
       "reason": "声纹同意撤回结果；PIPL 管理面先行，前端声纹面板未落地。"
+    },
+    {
+      "surface": "VoiceTtsRequestDTO",
+      "reason": "TTS 合成请求；前端语音面板未建立类型契约，CLI 直接消费。"
+    },
+    {
+      "surface": "WhatsAppAckDTO",
+      "reason": "WhatsApp webhook 恒 200 确认载荷；仅 Meta 回调链路内部消费，前端不建类型契约。"
     }
   ]
 }

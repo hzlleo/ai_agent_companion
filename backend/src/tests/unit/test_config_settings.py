@@ -23,13 +23,15 @@ from packages.harness.config.models import (
 )
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.core.logging_models import LoggingConfig
+from packages.harness.usage.budget_limits import DAILY_BUDGET_MAX, budget_count_capacity
+from packages.harness.voice.voiceprint_models import VoiceprintSettings
 
 
 async def test_settings_singleton_reads_conftest_env() -> None:
     """全局单例捕获根 conftest 硬覆盖的 env 值（防 shell 泄漏语义）。"""
     assert settings.database.type == "sqlite"
     assert settings.database.host == "localhost"
-    assert settings.database.port == 3306
+    assert settings.database.port == 2881
     assert settings.database.name == "test_db"
     assert settings.database.user == "test_user"
     assert settings.database.password.get_secret_value() == "test_pass"
@@ -70,7 +72,7 @@ async def test_settings_llm_env_section_maps_env() -> None:
 async def test_settings_seekdb_section_maps_env() -> None:
     """seekdb 分节与 SEEKDB_* env 面对齐（默认关闭——测试恒走回退存储）。"""
     assert settings.seekdb.enabled is False
-    assert settings.seekdb.host == "127.0.0.1"
+    assert settings.seekdb.host == "localhost"
     assert settings.seekdb.port == 2881
     assert settings.seekdb.user == "test_user"
     assert settings.seekdb.password_env == "SEEKDB_TEST_PASSWORD"
@@ -99,14 +101,20 @@ async def test_seekdb_settings_defaults_and_pool_bounds(monkeypatch) -> None:
         monkeypatch.delenv(key, raising=False)
     default = SeekDBSettings(env_file=None)
     assert default.enabled is False
-    assert default.host == "127.0.0.1"
-    assert default.port == 2881
-    assert default.user == "root"
-    assert default.password_env == "SEEKDB_PASSWORD"
-    assert default.database == "test"
+    assert default.host is None
+    assert default.port is None
+    assert default.user is None
+    assert default.password_env is None
+    assert default.database == "ai_agent_companion_search"
     assert default.vector_dim == 1024
     assert default.pool_min == 1
     assert default.pool_max == 4
+
+    blank = SeekDBSettings(host="", port="", user="", password_env="", env_file=None)
+    assert blank.host is None
+    assert blank.port is None
+    assert blank.user is None
+    assert blank.password_env is None
 
     with pytest.raises(ValidationError):
         SeekDBSettings(pool_min=4, pool_max=1, env_file=None)
@@ -242,10 +250,45 @@ async def test_llm_logprobs_env_surface_and_validation() -> None:
 
 
 async def test_llm_daily_budget_effective_ceiling_validation() -> None:
-    """LLM 日预算上限：10,000（计数页帽 50×200）通过，10,001 拒绝。"""
-    assert LlmEndpointConfig(daily_budget_global=10_000).daily_budget_global == 10_000
-    assert LlmEndpointConfig(daily_budget_persona=10_000).daily_budget_persona == 10_000
+    """LLM 日预算上限：单源常量通过，常量 + 1 拒绝。"""
+    assert (
+        LlmEndpointConfig(daily_budget_global=DAILY_BUDGET_MAX).daily_budget_global
+        == DAILY_BUDGET_MAX
+    )
+    assert (
+        LlmEndpointConfig(daily_budget_persona=DAILY_BUDGET_MAX).daily_budget_persona
+        == DAILY_BUDGET_MAX
+    )
     with pytest.raises(ValidationError):
-        LlmEndpointConfig(daily_budget_global=10_001)
+        LlmEndpointConfig(daily_budget_global=DAILY_BUDGET_MAX + 1)
     with pytest.raises(ValidationError):
-        LlmEndpointConfig(daily_budget_persona=10_001)
+        LlmEndpointConfig(daily_budget_persona=DAILY_BUDGET_MAX + 1)
+
+
+async def test_daily_budget_limit_is_single_source_across_config_and_counters() -> None:
+    """配置 le 上限与两处预算计数器的页容量同源（单一常量）。"""
+    from packages.harness.config.models import AsrSettings, TtsSettings
+    from packages.harness.llm import gateway
+    from packages.harness.voice import voice_budget
+
+    assert gateway.BUDGET_COUNT_PAGE_LIMIT == voice_budget.BUDGET_COUNT_PAGE_LIMIT
+    assert gateway.BUDGET_COUNT_PAGE_CAP == voice_budget.BUDGET_COUNT_PAGE_CAP
+    assert (
+        gateway.BUDGET_COUNT_PAGE_LIMIT * gateway.BUDGET_COUNT_PAGE_CAP
+        == DAILY_BUDGET_MAX
+    )
+    assert budget_count_capacity() == DAILY_BUDGET_MAX
+
+    checked = 0
+    for model in (LlmEndpointConfig, TtsSettings, AsrSettings, VoiceprintSettings):
+        for name, field in model.model_fields.items():
+            if not name.startswith("daily_budget_"):
+                continue
+            le_values = [
+                getattr(meta, "le", None)
+                for meta in field.metadata
+                if getattr(meta, "le", None) is not None
+            ]
+            assert le_values == [DAILY_BUDGET_MAX], (model.__name__, name, le_values)
+            checked += 1
+    assert checked == 8

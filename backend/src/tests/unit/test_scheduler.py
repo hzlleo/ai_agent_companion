@@ -438,14 +438,15 @@ async def test_dream_job_runs_dream_for_primary_persona() -> None:
         persona_service=FakePersonaService(persona_record),  # type: ignore[arg-type]
         session_factory=session_factory,
         store=None,
-        now_ms=lambda: 123,
+        clock_ms=lambda: 123,
     )
     await factory()
     assert len(dream.calls) == 1
     call = dream.calls[0]
     assert call["persona_ctx"] == "701"
     assert call["persona_name"] == "大肥鱼"
-    assert call["now_ms"] == 123
+    assert call["clock_ms"] is not None
+    assert call["clock_ms"]() == 123
     assert call["store"] is None
     assert session_factory.opened == 1
 

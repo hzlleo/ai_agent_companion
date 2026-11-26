@@ -21,15 +21,18 @@
       启动期 fail-closed，见
       :func:`packages.harness.config.auth_policy.ensure_auth_policy`）。
     - **请求体校验**：仅接受 ``application/json``；非该 Content-Type → 400。
-      体大小上限 :data:`SMS_FORWARDER_MAX_BODY_BYTES`（转发载荷是短文本，
-      64 KiB 已远超正常短信 / 通知长度）——声明或实际超限 → 400。非法
-      JSON / 非 JSON 对象 / 极深嵌套（``RecursionError``）→ 400；对象内
-      字段的合法性由处理器容错解析承担（隔离确认——不进 HTTP 错误面）。
+      体读取经共享有界读取器（:mod:`app.api.inbound_body`）——上限
+      :data:`app.api.inbound_body.SMS_FORWARDER_MAX_BODY_BYTES`（64 KiB；
+      转发载荷是短文本）；声明 Content-Length 超限即 400（零读取），无
+      Content-Length 的 chunked 请求逐块累计、超限即停。空体 / 非法 JSON /
+      非 JSON 对象 / 极深嵌套（``RecursionError``）→ 400；对象内字段的
+      合法性由处理器容错解析承担（隔离确认——不进 HTTP 错误面）。
     - **入站消纳（有界队列）**：通道启用时 lifespan 装配
       ``app.state.channels_sms_forwarder_runner``
       （``SmsForwarderWebhookRunner``）——端点只做鉴权 / 体校验 / 去重
       登记 / 入队后**立即确认**，LLM 回合耗时由后台固定 worker 承担；
-      队列满丢弃并计数（手机端重投可重新消费）。runner 未装配的嵌入形态
+      队列满丢弃并计数（端点恒 200，满队丢弃即最终丢失；不登记去重仅吸收
+      偶发重复）。runner 未装配的嵌入形态
       回落单事件直调（``process_sms_forwarder_payload``）。
     - **路由器未装配**（本通道 / 全通道关闭形态）：确认并丢弃（warning
       日志——通道层是可选装配面，webhook 端点不因配置缺失而 5xx）。
@@ -41,7 +44,6 @@
 
 from __future__ import annotations
 
-import json
 import secrets
 from typing import Final, cast
 
@@ -49,6 +51,10 @@ from fastapi import APIRouter, Request
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from app.api.inbound_body import (
+    SMS_FORWARDER_MAX_BODY_BYTES,
+    read_bounded_json_object,
+)
 from packages.harness.channels.sms_forwarder.sms_models import (
     parse_owner_numbers,
     process_sms_forwarder_payload,
@@ -62,9 +68,6 @@ from packages.harness.core.errors import BusinessException, ErrorCode
 __all__ = ["SMS_FORWARDER_MAX_BODY_BYTES", "SmsForwarderAckDTO", "router"]
 
 router = APIRouter(prefix="/api/v1/channels/sms-forwarder", tags=["channels-sms-forwarder"])
-
-#: 请求体字节上限（短文本转发载荷——64 KiB 已远超正常短信 / 通知长度）。
-SMS_FORWARDER_MAX_BODY_BYTES: Final[int] = 64 * 1024
 
 #: 手机端可配置的鉴权头候选（自定义请求头名称不统一——两种常见拼写均接受）。
 _TOKEN_HEADERS: Final[tuple[str, ...]] = ("x-smsforwarder-token", "x-sms-forwarder-token")
@@ -161,63 +164,6 @@ def _require_json_content_type(request: Request) -> None:
         )
 
 
-async def _read_json_object(request: Request) -> dict[str, object]:
-    """读取并校验 JSON 对象请求体（大小上限 + 解析错误受控）。
-
-    Args:
-        request: 原始 ASGI 请求（请求体消费面）。
-
-    Returns:
-        解析后的 JSON 对象（字段合法性交给处理器容错解析）。
-
-    Raises:
-        BusinessException: 请求体为空 / 超过
-            :data:`SMS_FORWARDER_MAX_BODY_BYTES` / 非法 JSON / 非 JSON 对象
-            （``BAD_REQUEST`` → 400）。
-    """
-    declared_length = request.headers.get("content-length", "").strip()
-    if declared_length.isdigit() and int(declared_length) > SMS_FORWARDER_MAX_BODY_BYTES:
-        raise BusinessException(
-            code=ErrorCode.BAD_REQUEST,
-            message=(
-                "SmsForwarder webhook 请求体超过上限："
-                f"{SMS_FORWARDER_MAX_BODY_BYTES} 字节"
-            ),
-        )
-    try:
-        raw_body = await request.body()
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise BusinessException(
-            code=ErrorCode.BAD_REQUEST,
-            message="SmsForwarder webhook 请求体读取失败",
-        ) from exc
-    if not raw_body.strip():
-        raise BusinessException(
-            code=ErrorCode.BAD_REQUEST,
-            message="SmsForwarder webhook 请求体为空",
-        )
-    if len(raw_body) > SMS_FORWARDER_MAX_BODY_BYTES:
-        raise BusinessException(
-            code=ErrorCode.BAD_REQUEST,
-            message=(
-                "SmsForwarder webhook 请求体超过上限："
-                f"{SMS_FORWARDER_MAX_BODY_BYTES} 字节"
-            ),
-        )
-    try:
-        payload = json.loads(raw_body)
-    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
-        raise BusinessException(
-            code=ErrorCode.BAD_REQUEST,
-            message="SmsForwarder webhook 请求体不是合法 JSON",
-        ) from exc
-    if not isinstance(payload, dict):
-        raise BusinessException(
-            code=ErrorCode.BAD_REQUEST,
-            message="SmsForwarder webhook 请求体须为 JSON 对象（转发模板形态）",
-        )
-    return payload
-
 
 @router.post("", response_model=SmsForwarderAckDTO)
 async def receive_sms_forwarder_webhook(request: Request) -> SmsForwarderAckDTO:
@@ -241,7 +187,12 @@ async def receive_sms_forwarder_webhook(request: Request) -> SmsForwarderAckDTO:
     sms_forwarder = settings.channels.sms_forwarder
     _require_sms_forwarder_auth(request, resolve_sms_forwarder_token(settings))
     _require_json_content_type(request)
-    payload = await _read_json_object(request)
+    payload = await read_bounded_json_object(
+        request,
+        limit=SMS_FORWARDER_MAX_BODY_BYTES,
+        channel_label="SmsForwarder",
+        object_label="转发模板形态",
+    )
     runner: SmsForwarderWebhookRunner | None = getattr(
         request.app.state, "channels_sms_forwarder_runner", None
     )

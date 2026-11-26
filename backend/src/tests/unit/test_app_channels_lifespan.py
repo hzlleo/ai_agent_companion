@@ -43,6 +43,7 @@ from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.intent.intent_models import IntentSettings
 from packages.harness.intent.service import IntentShortcutService
 from packages.harness.rhythm.service import RhythmService
+from tests.async_wait import wait_until
 
 
 def _settings(tmp_path: Path, *, telegram_enabled: bool) -> Settings:
@@ -117,7 +118,7 @@ class DelayedCrashRunner(FakeRunner):
     async def run(self) -> None:
         """模拟在途崩溃（停机 wait_for 等待期间死亡）。"""
         self.ran = True
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.05)  # 真时间语义：模拟停机窗口内在途执行
         raise RuntimeError("在途崩溃（测试注入）")
 
 
@@ -170,11 +171,8 @@ class TestEnabledWiring:
             task = app.state.channels_task
             assert isinstance(runner, FakeRunner)
             # create_task 尚未调度——让出控制点等 run() 进入在途等待
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + 5.0
-            while not runner.ran:
-                assert loop.time() < deadline, "runner 任务未在期限内启动"
-                await asyncio.sleep(0.01)
+            await wait_until(lambda: runner.ran, description="通道 runner 进入等待")
+            assert runner.ran is True
             assert task is not None and not task.done()
             assert task in background_task_manager.tasks
             # 真实 client / router 构造 + 适配器注册（发送面可达）

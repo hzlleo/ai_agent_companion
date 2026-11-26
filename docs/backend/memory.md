@@ -533,13 +533,15 @@ POST /api/v1/memories/search          检索（body: query / mode / kinds / prov
 夜间梦境（dream）是记忆层的巩固任务：把窗口内情景事件按规则门筛选后交 LLM 蒸馏为策展记忆（supersede 语义），再以人格口吻生成第一人称日记落回情景层——「白天积累、夜里整理」。
 
 ```
-DreamService.run_dream(db, gateway=…, persona_name=…, store=?, now_ms=?, cfg=?)
+DreamService.run_dream(db, gateway=…, persona_name=…, store=?, clock_ms=?, cfg=?)
     ↓ ⓪ 孤儿 running 行收敛        stale_running_threshold_ms 阈值内的崩溃遗留行
     │                               批量置 failed（error=「进程崩溃遗留，由调度收敛」）
-    ↓ ⓪.5 重入闸                   本人格存在 started_ms ≥ now − DREAM_REENTRY_WINDOW_MS
+    ↓ ⓪.5 窗内 running 复用        本人格存在 started_ms ≥ now − DREAM_REENTRY_WINDOW_MS
     │                               且无终态的 running 行 → 直接返回该运行记录
-    │                               （不新建行、不再跑阶段——单飞语义）
-    ↓ ① DreamRunRow 落库（status=running——运行日志面，先落库可追溯）
+    │                               （辅助快路径——覆盖短时间重复触发）
+    ↓ ① DreamRunRow 落库（status=running + running_marker='1'——单飞权威
+    │   闸门：唯一键 (persona_id, running_marker) 拒绝并发第二行，回滚后
+    │   返回既有在途运行；运行日志面先落库可追溯）
     ↓ ② fetch_day_episodes          窗口事件取回（[now-window_hours, now) 左闭右开；
     │                               超出 max_episodes 按时间序截断并告警）
     ↓ ③ 既往已晋升集 + active 主题（人格作用域自动过滤；已晋升集仅统计
@@ -635,9 +637,9 @@ dream_score(episode, now, cfg, topic_hits)
 | 日记事件条数 | `DREAM_DIARY_MAX_EPISODES` = 200 条 | 按时间序取样，超出部分丢弃并记 debug 计数（不打印原文） |
 | 日记正文总字符 | `DREAM_DIARY_MAX_CHARS` = 60000 字符 | 按时间序累加，达到上限即截止并记 debug 计数（不打印原文） |
 | 合并 prompt 既有主题 | `DREAM_MERGE_TOPIC_LIMIT` = 50 条 | 按 `updated_at` 降序、同刻 `id` 降序确定性取样（冻结主题先排除） |
-| 重入窗 | `DREAM_REENTRY_WINDOW_MS` = 3600000 毫秒 | 入口发现窗内 running 行即返回该运行记录（单飞闸门） |
+| 重入窗 | `DREAM_REENTRY_WINDOW_MS` = 3600000 毫秒 | 入口发现窗内 running 行即返回该运行记录（单飞辅助快路径；权威防线是不依赖窗宽的 DB 运行标记唯一键） |
 
-上限是模块常量而非 env 键（不新增运行期配置面）；超限只影响本次 prompt / 日记输入，不修改已落库事件。`finished_ms` 与 `started_ms` 同用注入时钟（`run_now`），不读系统时钟。
+上限是模块常量而非 env 键（不新增运行期配置面）；超限只影响本次 prompt / 日记输入，不修改已落库事件。`clock_ms` 是可调用的注入时钟：开始与结束各读取一次，`started_ms` / `finished_ms` 分别为两次读数（结束时刻语义），不读系统时钟；窗内复用与唯一键冲突的提前返回只读取开始读数。
 
 ## LLM 契约（dreaming_prompts.py——Unit 文件）
 
@@ -664,8 +666,9 @@ dream_score(episode, now, cfg, topic_hits)
 |---|---|---|
 | `id` | BIGINT 自增 | 主键 |
 | `persona_id` | String(64)，索引 | 人格 ID（PersonaMixin 自动注入 / 过滤） |
-| `status` | String(16)，索引 | running / success / failed（行创建即落 running——进程崩溃可能遗留孤儿 running 行，由 run_dream 入口按 `stale_running_threshold_ms` 收敛为 failed） |
-| `started_ms` / `finished_ms` | BigInteger | 开始 / 结束时间（均取注入时钟 `run_now`——epoch 毫秒；运行中 finished 为 NULL） |
+| `status` | String(16)，索引 | running / success / failed（行创建即落 running 并持标记——进程崩溃可能遗留孤儿 running 行，由 run_dream 入口按 `stale_running_threshold_ms` 收敛为 failed 并清标记） |
+| `started_ms` / `finished_ms` | BigInteger | 开始 / 结束时间（分别取注入时钟的两次读数——epoch 毫秒；运行中 finished 为 NULL） |
+| `running_marker` | String(16)，唯一键 (persona_id, running_marker) | 单飞守卫标记（运行中 `'1'`；终态 / 失败 / 崩溃收敛清 NULL——唯一键忽略 NULL，历史行多代共存） |
 | `stats` | JSON | DreamRunStatsModel 序列化（candidates / gated / promoted / superseded / skipped_untrusted / skipped_peer / failed / **archived** / **facts_created / facts_merged / facts_dropped**——事实提取阶段三计数 / **skills_created / skills_merged / skills_dropped**——技能挖矿阶段三计数） |
 | `decisions` | JSON | 逐事件决策列表（DreamDecisionModel 序列化；episode_id / topic / kind / action: promoted\|skipped\|merged\|**archived** / reason / **curated_id**——归档决策主体是策展行，episode_id=0、curated_id=行主键、reason=strength_below_threshold） |
 | `diary_episode_id` | BIGINT，FK ff_memory_episodes.id（SET NULL） | 日记事件主键（未生成 / 失败为 NULL） |

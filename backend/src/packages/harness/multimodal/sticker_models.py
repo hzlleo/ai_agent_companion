@@ -356,5 +356,16 @@ class StickerAnnotateGatewayFace(Protocol):
         purpose: str = "chat",
         request_id: str | None = None,
     ) -> ChatResponseModel:
-        """按显式条目调用非流式聊天（视觉标注消费）。"""
+        """按显式条目调用非流式聊天（视觉标注消费）。
+
+        Args:
+            entry: 模型条目（端点 / 凭据 / 采样参数的解析结果）。
+            messages: 对话消息序列（系统提示 + 图片消息）。
+            persona_id: 人格作用域（用量记账与日志归属；None = 无上下文）。
+            purpose: 用量用途标签。
+            request_id: 请求标识（日志关联；None = 无）。
+
+        Returns:
+            非流式聊天响应（视觉标注阶段解析为结构化标注）。
+        """
         ...

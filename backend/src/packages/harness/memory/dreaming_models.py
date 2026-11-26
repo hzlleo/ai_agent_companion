@@ -81,7 +81,8 @@ DREAM_DIARY_MAX_CHARS: int = 60_000
 #: 合并 prompt 的既有 active 主题上限（按 updated_at 降序确定性取样）。
 DREAM_MERGE_TOPIC_LIMIT: int = 50
 #: 梦境重入窗（epoch 毫秒）——run_dream 入口发现本人格在该窗内已有
-#: running 行时直接返回该行（单飞语义：不新建运行、不再跑阶段）。
+#: running 行时直接返回该行（单飞辅助快路径；任意时长的并发触发由
+#: (persona_id, running_marker) 唯一键兜底，不依赖本窗宽度）。
 DREAM_REENTRY_WINDOW_MS: int = 3_600_000
 
 
@@ -89,9 +90,10 @@ DREAM_REENTRY_WINDOW_MS: int = 3_600_000
 class DreamRunStatus(StrEnum):
     """梦境运行状态值域（ff_dream_runs.status）。
 
-    - ``running``：运行中（行创建即落库——进程崩溃可能遗留终态缺失行；
-      孤儿 running 行由 ``run_dream`` 入口按
-      ``stale_running_threshold_ms`` 阈值批量收敛为 failed）；
+    - ``running``：运行中（行创建即落库并持有 ``running_marker='1'``；
+      ``(persona_id, running_marker)`` 唯一键保证同人格单运行。进程
+      崩溃可能遗留终态缺失行——孤儿 running 行由 ``run_dream`` 入口按
+      ``stale_running_threshold_ms`` 阈值批量收敛为 failed 并清标记）；
     - ``success``：成功（合并 + 日记全部完成或按规则跳过）；
     - ``failed``：失败（LLM 输出不可解析 / 调用失败 / 日记生成失败——
       fail-closed 语义见 dreaming 模块文档）。

@@ -45,6 +45,7 @@ from packages.harness.config.models import (
 )
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.core.background_tasks import background_task_manager
+from tests.async_wait import wait_until
 
 
 def _settings(
@@ -177,11 +178,8 @@ class TestEnabledWiring:
             assert scheduler.registered["duty"] == {"kind": "daily", "daily_at": "21:30"}
             assert scheduler.job_names == ["duty"]
             # create_task 尚未调度——让出控制点等 run() 进入在途等待
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + 5.0
-            while not scheduler.ran:
-                assert loop.time() < deadline, "调度器任务未在期限内启动"
-                await asyncio.sleep(0.01)
+            await wait_until(lambda: scheduler.ran, description="调度器任务进入等待")
+            assert scheduler.ran is True
             assert task is not None and not task.done()
             assert task in background_task_manager.tasks
             # 工具注册表装配：内置工具面（get_current_time + search_memory）
@@ -234,7 +232,10 @@ class TestEnabledWiring:
         task = app.state.scheduler_task
         try:
             # create_task 尚未调度——让出控制点等 run() 进入运行态
-            await asyncio.sleep(0.01)
+            await wait_until(
+                lambda: scheduler is not None and scheduler.started is True,
+                description="调度器进入运行态",
+            )
             assert scheduler is not None and scheduler.started is True
             assert scheduler.job_names == ["duty"]
             assert task is not None and not task.done()

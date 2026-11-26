@@ -35,6 +35,7 @@ from packages.harness.llm.llm_models import (
     LlmUsageEvent,
 )
 from packages.harness.pools.manager import PoolManager
+from packages.harness.usage.budget_limits import DAILY_BUDGET_MAX
 from packages.harness.usage.dtos import UsageQueryDTO
 from packages.harness.usage.models import UsagePurpose, UsageStatus
 from packages.harness.usage.orm import UsageRecordRow  # 模型注册副作用导入（共享建表）
@@ -849,9 +850,11 @@ async def test_default_usage_counter_empty_day_is_zero(
 async def test_default_usage_counter_stops_at_page_cap(
     db_session: AsyncSession, default_usage_counter: UsageCounter
 ) -> None:
-    """10,200 行：50 页帽截断，计数 = 10,000（不再请求第 51 页）。"""
-    await _seed_usage_rows(db_session, 10_200, persona_id="p-cap", ts_ms=_DAY_START_MS + 1)
-    assert await default_usage_counter("p-cap", _DAY_START_MS) == 10_000
+    """超出单日可计数上限的行：页帽截断在单源常量（不再请求下一页）。"""
+    await _seed_usage_rows(
+        db_session, DAILY_BUDGET_MAX + 200, persona_id="p-cap", ts_ms=_DAY_START_MS + 1
+    )
+    assert await default_usage_counter("p-cap", _DAY_START_MS) == DAILY_BUDGET_MAX
 
 
 # ---------------------------------------------------------------------------

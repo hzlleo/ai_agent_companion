@@ -1,4 +1,4 @@
-// 前端产物体积门禁（R4-1）：解码 Vite 构建 manifest，区分初始加载 JS 与路由级
+// 前端产物体积门禁：解码 Vite 构建 manifest，区分初始加载 JS 与路由级
 // 动态 chunk，按固定阈值判定。纯 Node 内置模块，零第三方依赖。
 //
 // 阈值（唯一常量来源；文档可引用数值，不复写判定逻辑）：
@@ -113,6 +113,7 @@ const lazyRows = lazyFiles.map((file) => ({ file, ...measure(file) }))
 const initialTotal = initialRows.reduce((sum, row) => sum + row.bytes, 0)
 const initialGzip = initialRows.reduce((sum, row) => sum + row.gzip, 0)
 const lazyTotal = lazyRows.reduce((sum, row) => sum + row.bytes, 0)
+const lazyGzip = lazyRows.reduce((sum, row) => sum + row.gzip, 0)
 
 for (const row of initialRows) {
   process.stdout.write(`[bundle-budget] initial ${row.file} bytes=${row.bytes} gzip=${row.gzip}\n`)
@@ -121,7 +122,7 @@ for (const row of lazyRows) {
   process.stdout.write(`[bundle-budget] lazy ${row.file} bytes=${row.bytes} gzip=${row.gzip}\n`)
 }
 process.stdout.write(
-  `[bundle-budget] summary initial_bytes=${initialTotal} initial_gzip=${initialGzip} lazy_bytes=${lazyTotal}\n`,
+  `[bundle-budget] summary initial_bytes=${initialTotal} initial_gzip=${initialGzip} lazy_bytes=${lazyTotal} lazy_gzip=${lazyGzip} lazy_chunks=${lazyRows.length}\n`,
 )
 
 if (initialTotal > INITIAL_JS_BUDGET_BYTES) {

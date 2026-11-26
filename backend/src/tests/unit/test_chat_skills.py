@@ -180,7 +180,7 @@ async def test_compose_inserts_skills_between_facts_and_protocol() -> None:
         _state(),
         directives=["以后都用简体中文"],
         facts=["【偏好】主人喜欢无糖乌龙茶"],
-        skills=[_skill()],
+        skills=[_skill()], wrap_current_message=False
     )
     prompt = result.system_prompt
     facts_index = prompt.index("【关于对方】")
@@ -192,7 +192,7 @@ async def test_compose_inserts_skills_between_facts_and_protocol() -> None:
 
 async def test_compose_without_skills_unchanged() -> None:
     """未提供技能：system 提示不含相关技能块（既有形态零变更）。"""
-    result = compose_messages(_state())
+    result = compose_messages(_state(), wrap_current_message=False)
     assert "【相关技能】" not in result.system_prompt
 
 

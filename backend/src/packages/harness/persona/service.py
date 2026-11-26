@@ -58,18 +58,21 @@ import json
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from hashlib import sha256
-from typing import Any
+from pathlib import Path
+from typing import Any, Final
 
 from loguru import logger
-from sqlalchemy import delete, desc, select, update
+from sqlalchemy import BigInteger, Integer, delete, desc, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.harness.core.context import RequestContext, bind_context
 from packages.harness.core.dtos import PageResponse, decode_cursor, encode_cursor
 from packages.harness.core.errors import BusinessException, ErrorCode
-from packages.harness.database.base import PERSONA_FILTER_SKIP_OPTION
-from packages.harness.memory.dreaming_orm import DreamRunRow
+from packages.harness.core.file_utils import unlink_missing_ok
+from packages.harness.core.thread_pool import run_blocking_ops
+from packages.harness.database.base import PERSONA_FILTER_SKIP_OPTION, Base
+from packages.harness.database.models import load_all_models
 from packages.harness.memory.orm import (
     ChatMessageRow,
     ChatSessionRow,
@@ -78,7 +81,7 @@ from packages.harness.memory.orm import (
 )
 from packages.harness.memory.retrieval import MemoryIndexer
 from packages.harness.memory.retrieval_models import MemoryRefType
-from packages.harness.memory.sqlite_store import MemoryIndexLiteRow
+from packages.harness.multimodal.sticker_orm import StickerRow
 from packages.harness.persona.chara_card import CharaCardModel
 from packages.harness.persona.core_memory_orm import (
     CoreMemoryBlockRow,
@@ -109,10 +112,72 @@ from packages.harness.persona.models import (
     PersonaStatus,
 )
 from packages.harness.persona.orm import PERSONA_PRIMARY_MARKER, PersonaRow, PersonaStateRow
-from packages.harness.persona.skills_orm import PersonaSkillRow
 from packages.harness.voice.voice_models import VoiceProfileModel
+from packages.harness.voice.voiceprint_orm import VoiceprintSampleRow
 
-__all__ = ["PersonaService", "bind_persona_context", "canonical_card_hash"]
+__all__ = [
+    "PersonaService",
+    "bind_persona_context",
+    "canonical_card_hash",
+    "PERSONA_DELETE_RETAINED_TABLES",
+    "REFERENCE_SCOPED_PERSONA_TABLES",
+]
+
+#: 人格删除后**保留**的 persona_id 作用域表（跨人格聚合真源——用量账按条目 /
+#: 用途 / 时间做全库聚合，人格删除后历史用量仍需可查）。
+PERSONA_DELETE_RETAINED_TABLES: Final[frozenset[str]] = frozenset({"ff_usage_records"})
+
+#: 无 persona_id 列、按归属轴（会话 / 块）显式清理的依赖表。新增同类表必须
+#: 在此声明或自挂 persona_id 列（后者由元数据派生自动覆盖）。
+REFERENCE_SCOPED_PERSONA_TABLES: Final[frozenset[str]] = frozenset(
+    {"ff_chat_messages", "ff_core_memory_revisions"}
+)
+
+
+def _persona_cascade_models() -> tuple[type[Any], ...]:
+    """从 ``Base.metadata`` 派生人格删除的全部 persona_id 作用域模型。
+
+    级联范围不再手写清单：任何含 ``persona_id`` 列的表（含未来新增表，
+    含未挂 ``PersonaMixin`` 的整数列依赖表）都自动进入删除集合；保留表
+    （:data:`PERSONA_DELETE_RETAINED_TABLES`）除外。结构守卫测试断言本
+    集合与元数据 persona_id 表全集（扣除保留表）相等。
+
+    Returns:
+        待按 persona_id 批删的 ORM 模型元组（``Base.registry`` 注册序）。
+    """
+    load_all_models()
+    persona_tables = {
+        table.name
+        for table in Base.metadata.tables.values()
+        if "persona_id" in table.c
+        and table.name not in PERSONA_DELETE_RETAINED_TABLES
+    }
+    models: list[type[Any]] = []
+    for mapper in Base.registry.mappers:
+        tablename = getattr(mapper.class_, "__tablename__", None)
+        if tablename in persona_tables:
+            models.append(mapper.class_)
+    return tuple(models)
+
+
+def _persona_value_for(model: type[Any], persona_id: int) -> int | str:
+    """按列的存储类型折算 persona_id 比较值（跨方言类型一致）。
+
+    PersonaMixin 的 ``persona_id`` 为字符串列，部分手工依赖表为整数列
+    （如 ``ff_persona_states`` / ``ff_memory_index_lite``）；从列类型派生
+    比较值，避免硬编码。
+
+    Args:
+        model: ORM 模型类。
+        persona_id: 人格主键。
+
+    Returns:
+        整数列返回 int，其余（字符串列）返回 str。
+    """
+    column_type = model.__table__.c.persona_id.type
+    if isinstance(column_type, (Integer, BigInteger)):
+        return persona_id
+    return str(persona_id)
 
 
 @asynccontextmanager
@@ -492,23 +557,33 @@ class PersonaService:
     async def delete(self, session: AsyncSession, persona_id: int) -> None:
         """删除人格（**主人格守卫：当前主人格禁止删除**——先另设主人格）。
 
-        级联范围（同一事务内按 persona_id 批删——本工程无跨域外键依赖，
-        由服务层显式批删保证 SQLite / MySQL 方言一致）：
+        级联范围从 ``Base.metadata`` 派生（同一事务内按 persona_id 批删——
+        本工程无跨域外键依赖，由服务层显式批删保证 SQLite / MySQL 方言
+        一致）：
 
-            - ``ff_persona_states``（M/S 状态层）；
-            - ``ff_memory_episodes`` / ``ff_curated_memory`` /
-              ``ff_dream_runs``（记忆域情景 / 策展 / 梦境运行日志）；
-            - ``ff_persona_facts`` / ``ff_persona_skills`` /
-              ``ff_core_memory_blocks`` / ``ff_core_memory_revisions``
-              （人物画像 / 技能 / 自我模型）；
-            - ``ff_chat_sessions`` 与其 ``ff_chat_messages``（工作层会话
-              归属人格，消息经 session_id 批量清理）。
+            - 全部挂 ``PersonaMixin`` 的表（当前为 ``ff_persona_states`` /
+              ``ff_memory_episodes`` / ``ff_curated_memory`` / ``ff_dream_runs``
+              / ``ff_persona_facts`` / ``ff_persona_skills`` /
+              ``ff_core_memory_blocks`` / ``ff_chat_sessions`` / ``ff_stickers``
+              / ``ff_voiceprint_samples`` / ``ff_voiceprint_consents`` /
+              ``ff_reminders`` / ``ff_canvas_documents``；未来新增表自动
+              纳入——:func:`_persona_cascade_models` 派生，不维护手写清单）；
+            - 无 persona_id 的依赖表按归属轴清理：``ff_chat_messages`` 经
+              session ids；``ff_core_memory_revisions`` 经块 ids；
+              ``ff_memory_index_lite`` 经 persona_id 谓词（整数列）；
+            - ``ff_usage_records`` 有意**保留**（跨人格聚合真源——见
+              :data:`PERSONA_DELETE_RETAINED_TABLES`）。
+
+        磁盘文件同生命周期（锁定边界）：删除前先收集表情包
+        ``storage_path`` 与声纹样本 ``sample_path``；**事务提交后**逐路径
+        best-effort 删除（失败仅告警，不翻转删除结果——DB 行已清理，
+        残留文件不参与查询）。收集失败不阻断：行删除仍以 DB 为准。
 
         检索索引行同步清理：``ff_memory_index_lite``（SQLite 回退索引表）
-        按收集到的 episode / curated ref 集合在同事务内删除；SeekDB 生产
-        索引（``ff_memory_index``，独立数据面）在提交后经注入的
-        ``indexer.dispatch_delete`` best-effort 清理（失败不翻转删除结果
-        ——与 memory 域既有索引删除面同语义）。
+        在同事务内按 persona_id 删除；SeekDB 生产索引（``ff_memory_index``，
+        独立数据面）在提交后经注入的 ``indexer.dispatch_delete``
+        best-effort 清理（失败不翻转删除结果——与 memory 域既有索引删除
+        面同语义）。
 
         Args:
             session: 注入的异步 Session。
@@ -563,24 +638,9 @@ class PersonaService:
             .scalars()
             .all()
         )
-        # 回退索引表（非 PersonaMixin——显式 persona 谓词 + ref 集合）：
-        # 与业务行删除同事务，避免删除提交后残留 orphan 索引行。
-        if episode_ids:
-            await session.execute(
-                delete(MemoryIndexLiteRow).where(
-                    MemoryIndexLiteRow.persona_id == persona_id,
-                    MemoryIndexLiteRow.ref_type == MemoryRefType.EPISODE.value,
-                    MemoryIndexLiteRow.ref_id.in_(episode_ids),
-                )
-            )
-        if curated_ids:
-            await session.execute(
-                delete(MemoryIndexLiteRow).where(
-                    MemoryIndexLiteRow.persona_id == persona_id,
-                    MemoryIndexLiteRow.ref_type == MemoryRefType.CURATED.value,
-                    MemoryIndexLiteRow.ref_id.in_(curated_ids),
-                )
-            )
+        file_paths = await self._collect_persona_file_paths(
+            session, persona_id, skip_filter=skip_filter
+        )
         if session_ids:
             await session.execute(
                 delete(ChatMessageRow).where(ChatMessageRow.session_id.in_(session_ids))
@@ -599,6 +659,7 @@ class PersonaService:
             .values(superseded_by_id=None),
             execution_options=skip_filter,
         )
+        # 修订链在块行之前删除（块行 CASCADE 的子表；显式序保证跨方言一致）。
         await session.execute(
             delete(CoreMemoryRevisionRow).where(
                 CoreMemoryRevisionRow.block_id.in_(
@@ -608,34 +669,102 @@ class PersonaService:
                 )
             )
         )
-        for model in (
-            PersonaFactRow,
-            PersonaSkillRow,
-            CuratedMemoryRow,
-            MemoryEpisodeRow,
-            DreamRunRow,
-            CoreMemoryBlockRow,
-            ChatSessionRow,
-        ):
+        for model in _persona_cascade_models():
             await session.execute(
-                delete(model).where(model.persona_id == str(persona_id)),
+                delete(model).where(
+                    model.persona_id == _persona_value_for(model, persona_id)
+                ),
                 execution_options=skip_filter,
             )
-        await session.execute(
-            delete(PersonaStateRow).where(PersonaStateRow.persona_id == persona_id)
-        )
         await session.delete(row)
         await self._commit(session)
         await self._purge_remote_index(
             persona_id, episode_ids=episode_ids, curated_ids=curated_ids
         )
+        await self._purge_persona_files(file_paths)
         logger.info(
-            "人格已删除: id={}, episodes={}, curated={}, sessions={}",
+            "人格已删除: id={}, episodes={}, curated={}, sessions={}, files={}",
             persona_id,
             len(episode_ids),
             len(curated_ids),
             len(session_ids),
+            len(file_paths),
         )
+
+    async def _collect_persona_file_paths(
+        self,
+        session: AsyncSession,
+        persona_id: int,
+        *,
+        skip_filter: dict[str, bool],
+    ) -> list[Path]:
+        """收集人格删除前需要清理的磁盘文件路径（行删除即失去定位面）。
+
+        逐表 best-effort：表情 / 声纹路径查询各自隔离异常——单表查询失败
+        仅告警并跳过该表文件清理，不阻断人格行删除（与删除 docstring 的
+        「收集失败不阻断」一致；残留文件不参与查询）。
+
+        Args:
+            session: 注入的异步 Session。
+            persona_id: 人格主键。
+            skip_filter: 绕过人格自动过滤的 execution options（管理面显式谓词）。
+
+        Returns:
+            表情包文件路径 + 声纹样本路径（去重；已存在性由删除面容错）。
+        """
+        sticker_paths: list[str] = []
+        try:
+            sticker_paths = list(
+                (
+                    await session.execute(
+                        select(StickerRow.storage_path).where(
+                            StickerRow.persona_id == str(persona_id)
+                        ),
+                        execution_options=skip_filter,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        except Exception:  # best-effort: 单表路径收集失败不阻断人格删除
+            logger.opt(exception=True).warning(
+                "人格删除的表情包文件路径收集失败（跳过该表文件清理）: persona_id={}",
+                persona_id,
+            )
+        sample_paths: list[str] = []
+        try:
+            sample_paths = list(
+                (
+                    await session.execute(
+                        select(VoiceprintSampleRow.sample_path).where(
+                            VoiceprintSampleRow.persona_id == str(persona_id)
+                        ),
+                        execution_options=skip_filter,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        except Exception:  # best-effort: 单表路径收集失败不阻断人格删除
+            logger.opt(exception=True).warning(
+                "人格删除的声纹样本路径收集失败（跳过该表文件清理）: persona_id={}",
+                persona_id,
+            )
+        return [Path(path) for path in (*sticker_paths, *sample_paths)]
+
+    async def _purge_persona_files(self, paths: Sequence[Path]) -> None:
+        """提交后 best-effort 删除人格的磁盘文件（失败仅告警，不阻断）。
+
+        Args:
+            paths: 事务提交前收集的文件路径。
+        """
+        for path in paths:
+            try:
+                await run_blocking_ops(unlink_missing_ok, path)
+            except OSError:
+                logger.opt(exception=True).warning(
+                    "人格删除的文件清理失败（已吞没，DB 行已删除）: {}", path
+                )
 
     async def _purge_remote_index(
         self,

@@ -1,4 +1,4 @@
-"""持久化提醒表迁移（reminders 域——P10=B）。
+"""持久化提醒表迁移（reminders 域——定时提醒落库）。
 
 ``ff_reminders``：主人预约的定时提醒（PersonaMixin 人格作用域——与记忆
 表同轴隔离）；扫描作业到期后经属主通道投递（见 harness/reminders/job）。

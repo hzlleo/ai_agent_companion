@@ -42,7 +42,7 @@ from pydantic import ValidationError
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.time_utils import now_ms
 from packages.harness.tools.browser_models import (
-    BROWSER_TOOL_NAMES,
+    BROWSER_LLM_TOOL_NAMES,
     BrowserSidecarClientFace,
     BrowserSidecarSettingsFace,
     HealthResponseModel,
@@ -324,14 +324,23 @@ def _format_browser_tool_result(tool: str, result: dict[str, Any]) -> dict[str, 
     return result
 
 
-def build_browser_specs() -> tuple[ToolSpecModel, ...]:
-    """构建全部浏览器工具规格（八工具——注册 / 装配面共用）。
+def build_browser_specs(*, include_evaluate: bool = False) -> tuple[ToolSpecModel, ...]:
+    """构建 LLM 工具面的浏览器规格（默认七工具——evaluate 默认关闭）。
+
+    evaluate 在页面上下文执行任意 JS（副作用面），默认不暴露给 LLM；
+    抖音通道的内部采集 / 发送面经 ``client.invoke(EVALUATE_TOOL_NAME)``
+    直调，不依赖本规格面。需要 LLM 求值的装配点可显式
+    ``include_evaluate=True``（默认关闭，无新增 env 开关）。
+
+    Args:
+        include_evaluate: 是否把 evaluate 规格追加到 LLM 工具面（默认 False）。
 
     Returns:
         规格元组（注册序——navigate / read_text / screenshot / click /
-            fill / list_tabs / close_tab / evaluate）。
+            fill / list_tabs / close_tab；include_evaluate=True 时末位追加
+            evaluate）。
     """
-    return (
+    specs = (
         build_navigate_spec(),
         build_read_text_spec(),
         build_screenshot_spec(),
@@ -339,14 +348,19 @@ def build_browser_specs() -> tuple[ToolSpecModel, ...]:
         build_fill_spec(),
         build_list_tabs_spec(),
         build_close_tab_spec(),
-        build_evaluate_spec(),
     )
+    if include_evaluate:
+        return (*specs, build_evaluate_spec())
+    return specs
 
 
 def register_browser_sidecar_tools(
-    registry: ToolRegistry, client: BrowserSidecarClientFace
+    registry: ToolRegistry,
+    client: BrowserSidecarClientFace,
+    *,
+    include_evaluate: bool = False,
 ) -> None:
-    """注册全部浏览器代理工具（八工具——duty / chat 注册表共用入口）。
+    """注册浏览器代理工具到 LLM 工具注册表（默认七工具——evaluate 关闭）。
 
     失败语义（与 ``register_sandbox_tool`` 同范式）：客户端恒不抛
     （ok=False 终态）；代理执行器把 ok=False 转 ``INTERNAL_ERROR`` 业务
@@ -359,8 +373,10 @@ def register_browser_sidecar_tools(
         registry: 工具注册表（装配目标——同名后写覆盖前写）。
         client: sidecar 客户端（真实 :class:`BrowserSidecarClient` / 测试
             fake 均可——结构化协议）。
+        include_evaluate: 是否把 evaluate 也注册到 LLM 工具面（默认 False
+            ——evaluate 供内部直用，不进 LLM 循环）。
     """
-    specs = build_browser_specs()
+    specs = build_browser_specs(include_evaluate=include_evaluate)
 
     def _build_executor(spec: ToolSpecModel) -> ToolExecutor:
         """按规格构建代理执行器（闭包持 client + 规格——结果格式化分派）。"""
@@ -381,5 +397,5 @@ def register_browser_sidecar_tools(
         registry.register(spec, _build_executor(spec))
     logger.info(
         "浏览器 sidecar 工具已注册: tools=[{}]",
-        ", ".join(BROWSER_TOOL_NAMES),
+        ", ".join(BROWSER_LLM_TOOL_NAMES),
     )

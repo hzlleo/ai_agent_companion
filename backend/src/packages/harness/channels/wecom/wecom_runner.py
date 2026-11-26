@@ -28,8 +28,10 @@
         │    上下文缺失 / 过期 → aibot_send_msg（chatid + chat_type）
         │    续段：恒 aibot_send_msg（同一 req_id 多条回复语义官方未文档化）
         ↓ ④ 附件：解析字节（base64 直接 / url 经共享 HTTP 池下载 / path 本地读）
-        │    出站守卫：url 仅 http/https 且非私网 IP 字面量；三种源统一
-        │    8MB 字节上限（超限逐附件受控失败，不阻断文本）
+        │    出站守卫：url 仅 http/https；主机归一后解析，全部地址须为公网
+        │    （私网 / loopback / link-local / 保留 / 组播 / v4-mapped 均拒绝）；
+        │    重定向手动跟随 ≤3 跳且每跳重新校验；三种源统一 8MB 字节上限
+        │    （超限逐附件受控失败，不阻断文本）
         │    → 分片上传取 media_id → aibot_send_msg（image / voice / file）
         ↓ ChannelDeliveryResultModel（message_ids 恒空——平台应答不含消息 ID；
               attachment_results 逐附件结局）
@@ -40,7 +42,8 @@
       ``VALIDATION_ERROR``）——路由器 ``handle_inbound`` 统一兜底隔离；
     - **单附件失败不上抛**：``AttachmentDeliveryResult(ok=False)`` 承载原因，
       文本与其余附件照常投递（语音超 2MB、格式平台不认、URL 下载失败等）；
-    - 入站队列满 = 过载：丢弃并记 ERROR（平台侧重投由 msgid 去重兜底）；
+    - 入站队列满 = 过载：丢弃并记 ERROR——回调即时确认（平台仅对失败回调
+      重试），故满队丢弃即最终丢失；不登记去重仅吸收平台偶发重复；
     - 回调处理恒不击穿收帧循环（客户端面已隔离单帧异常）。
 
 引用回复（文档化偏差）：``OutboundMessageModel.reply_to_message_id`` 不透传——
@@ -56,6 +59,7 @@ from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
+from urllib.parse import urljoin
 
 import httpx
 from loguru import logger
@@ -71,6 +75,7 @@ from packages.harness.channels.channel_models import (
 from packages.harness.channels.channel_service import ChannelRouter
 from packages.harness.channels.outbound_guard import (
     OUTBOUND_ATTACHMENT_MAX_BYTES,
+    HostAddressResolver,
     validate_attachment_size,
     validate_http_url,
 )
@@ -105,7 +110,8 @@ __all__ = [
 
 #: msgid 去重窗口容量（官方文档：msgid 用于事件排重；窗口超容按 FIFO 淘汰）。
 WECOM_DEDUP_WINDOW_SIZE: Final[int] = 1024
-#: 入站待处理队列容量（过载即丢弃并告警——丢弃不登记去重，平台重投可重新消费）。
+#: 入站待处理队列容量（过载即丢弃并告警——丢弃不登记去重；回调即时确认，
+#: 满队丢弃即最终丢失，不登记仅吸收平台偶发重复）。
 WECOM_INBOUND_QUEUE_SIZE: Final[int] = 64
 #: 入站 worker 数（同聊天由路由器 per-chat 锁串行；多 worker 只提升跨聊天并行度）。
 WECOM_INBOUND_WORKER_COUNT: Final[int] = 2
@@ -113,6 +119,10 @@ WECOM_INBOUND_WORKER_COUNT: Final[int] = 2
 WECOM_STATS_INTERVAL_MS: Final[int] = 60_000
 #: 附件上传缺省 MIME 子类型（media_type 缺线索时的文件名后缀）。
 _UPLOAD_DEFAULT_SUBTYPE: Final[str] = "bin"
+#: 附件 url 源允许的最大重定向跳数（每跳重新校验目标——防跳转到私网）。
+_MAX_REDIRECTS: Final[int] = 3
+#: 视为重定向的 HTTP 状态码（3xx 无 Location 受控失败）。
+_REDIRECT_STATUS_CODES: Final[frozenset[int]] = frozenset({301, 302, 303, 307, 308})
 
 
 class WeComMessageDedupWindow:
@@ -181,6 +191,7 @@ class WeComChannelRunner:
         router: ChannelRouter,
         reply_window_seconds: float = 86400.0,
         http_client: httpx.AsyncClient | None = None,
+        host_resolver: HostAddressResolver | None = None,
         dedup_capacity: int = WECOM_DEDUP_WINDOW_SIZE,
         inbound_queue_size: int = WECOM_INBOUND_QUEUE_SIZE,
         worker_count: int = WECOM_INBOUND_WORKER_COUNT,
@@ -195,6 +206,8 @@ class WeComChannelRunner:
                 后 24 小时内可回复该会话——超期降级为主动推送）。
             http_client: 共享 HTTP 客户端（附件 ``url`` 源下载；None = 不支持
                 url 源——逐附件失败承载）。
+            host_resolver: 出站附件 URL 的主机解析面（None = 系统
+                ``socket.getaddrinfo``；测试注入 fake——逐跳重定向同样使用）。
             dedup_capacity: msgid 去重窗口容量。
             inbound_queue_size: 入站队列容量（过载丢弃）。
             worker_count: 入站 worker 数（≤0 视为 1）。
@@ -204,6 +217,7 @@ class WeComChannelRunner:
         self._router = router
         self._reply_window_ms = int(reply_window_seconds * 1000)
         self._http = http_client
+        self._host_resolver = host_resolver
         self._dedup = WeComMessageDedupWindow(dedup_capacity)
         self._inbound_queue: asyncio.Queue[InboundMessageModel | None] = asyncio.Queue(
             maxsize=max(1, inbound_queue_size)
@@ -341,7 +355,7 @@ class WeComChannelRunner:
         except asyncio.QueueFull:
             self._dropped_inbound += 1
             logger.error(
-                "企微入站队列已满（丢弃该消息——未登记去重，平台重投可重新消费）: "
+                "企微入站队列已满（丢弃该消息——回调即时确认，满队丢弃即最终丢失；未登记去重仅吸收偶发重复）: "
                 "chat_id={}, msgid={}, dropped={}",
                 inbound.chat_id,
                 inbound.message_id,
@@ -569,11 +583,14 @@ class WeComChannelRunner:
         return await run_blocking_ops(lambda: _read_local_file(path))
 
     async def _fetch_url(self, url: str) -> bytes:
-        """经共享 HTTP 客户端下载附件内容（无私有连接）。
+        """经共享 HTTP 客户端下载附件内容（无私有连接、手动重定向循环）。
 
-        URL 先过出站守卫（http/https + 非私网 IP 字面量）；响应按字节流
-        累积并在超过 :data:`OUTBOUND_ATTACHMENT_MAX_BYTES` 时立即受控
-        失败（不把超大响应完整读入内存）。
+        每一跳都先过出站守卫（http/https + 主机归一 + 解析后全地址私网
+        拒绝）；重定向由本方法手动跟随（≤ :data:`_MAX_REDIRECTS` 跳），
+        客户端侧自动跟随关闭——避免第一跳校验后由 httpx 直接跳到私网。
+        3xx 缺少 ``Location`` / 超过跳数上限均受控失败；响应按字节流累积
+        并在超过 :data:`OUTBOUND_ATTACHMENT_MAX_BYTES` 时立即受控失败
+        （不把超大响应完整读入内存）。
 
         Args:
             url: 媒体 URL（外部载荷来源）。
@@ -582,9 +599,9 @@ class WeComChannelRunner:
             下载字节（不超过大小上限）。
 
         Raises:
-            BusinessException: URL 形态违规（``VALIDATION_ERROR``）；
-                HTTP 客户端未装配 / 下载失败 / 超出大小上限
-                （``CHANNEL_API_ERROR``）。
+            BusinessException: URL 形态违规 / 解析失败 / 重定向异常
+                （``VALIDATION_ERROR``）；HTTP 客户端未装配 / 下载失败 /
+                超出大小上限（``CHANNEL_API_ERROR``）。
         """
         if self._http is None:
             raise BusinessException(
@@ -592,22 +609,59 @@ class WeComChannelRunner:
                 message="企微附件 url 源需要共享 HTTP 客户端（装配缺失）",
                 details={"url": url},
             )
-        validate_http_url(url)
+        current_url = url
+        redirects = 0
         try:
-            async with self._http.stream("GET", url) as response:
-                if response.status_code != 200:
-                    raise BusinessException(
-                        code=ErrorCode.CHANNEL_API_ERROR,
-                        message=f"企微附件下载失败（HTTP {response.status_code}）: {url}",
-                        details={"url": url, "status_code": response.status_code},
-                    )
-                chunks: list[bytes] = []
-                total = 0
-                async for chunk in response.aiter_bytes():
-                    total += len(chunk)
-                    validate_attachment_size(total, source="url")
-                    chunks.append(chunk)
-                return b"".join(chunks)
+            while True:
+                await validate_http_url(current_url, resolver=self._host_resolver)
+                async with self._http.stream(
+                    "GET", current_url, follow_redirects=False
+                ) as response:
+                    if response.status_code in _REDIRECT_STATUS_CODES:
+                        location = response.headers.get("location", "").strip()
+                        if not location:
+                            raise BusinessException(
+                                code=ErrorCode.CHANNEL_API_ERROR,
+                                message=(
+                                    "企微附件下载失败（重定向缺少 Location）: "
+                                    f"{current_url}"
+                                ),
+                                details={
+                                    "url": current_url,
+                                    "status_code": response.status_code,
+                                },
+                            )
+                        if redirects >= _MAX_REDIRECTS:
+                            raise BusinessException(
+                                code=ErrorCode.CHANNEL_API_ERROR,
+                                message=(
+                                    "企微附件下载失败（重定向超过 "
+                                    f"{_MAX_REDIRECTS} 跳）: {url}"
+                                ),
+                                details={"url": url, "redirects": redirects},
+                            )
+                        redirects += 1
+                        current_url = urljoin(current_url, location)
+                        continue
+                    if response.status_code != 200:
+                        raise BusinessException(
+                            code=ErrorCode.CHANNEL_API_ERROR,
+                            message=(
+                                "企微附件下载失败"
+                                f"（HTTP {response.status_code}）: {current_url}"
+                            ),
+                            details={
+                                "url": current_url,
+                                "status_code": response.status_code,
+                            },
+                        )
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        validate_attachment_size(total, source="url")
+                        chunks.append(chunk)
+                    return b"".join(chunks)
         except httpx.HTTPError as exc:
             raise BusinessException(
                 code=ErrorCode.CHANNEL_API_ERROR,

@@ -14,7 +14,7 @@
 
 扫描并发语义（锁定决策）：
 
-    - 选中语句带 ``FOR UPDATE SKIP LOCKED``（MySQL 8 / SeekDB 支持——并发
+    - 选中语句带 ``FOR UPDATE SKIP LOCKED``（MySQL 协议 / SeekDB 支持——并发
       扫描实例抢占不重叠的行）；SQLite 测试方言忽略该子句（单写者语义
       天然串行），方言差异文档化；
     - **扫描不投递**：本方法只返回到期行快照并结束事务（锁随提交释放），

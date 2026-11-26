@@ -17,12 +17,13 @@
       断言（1.5 分——同样低于阈值）。
 
 服务层用例覆盖：owner / peer 来源标签、检测禁用、提示禁用、流式路径、
-历史 user 回合包裹上限、工具循环 × 注入共存，以及合规重试复用组装消息时
+全部历史 user 回合包裹、工具循环 × 注入共存，以及合规重试复用组装消息时
 包裹与提示块的不变量。
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
@@ -39,7 +40,6 @@ from packages.harness.chat.prompts import (
     UNTRUSTED_LABEL_PEER,
 )
 from packages.harness.chat.service import (
-    HISTORY_WRAP_MAX_TURNS,
     ChatService,
     compose_messages,
 )
@@ -138,8 +138,7 @@ _NEGATIVE_TEMPLATES = tuple(
     (name, text) for name, text, suspected in RED_TEAM_TEMPLATES if not suspected
 )
 
-#: 阳性模板的覆盖矩阵完整性（红队集最小规模锁定）。
-_RED_TEAM_MINIMUM: int = 30
+#: 阳性模板的覆盖矩阵完整性（红队集规模由精确计数用例锁定）。
 
 
 def _card() -> CharaCardModel:
@@ -232,11 +231,11 @@ def _settings(
     )
 
 
-async def test_red_team_set_covers_minimum_templates() -> None:
-    """红队集规模：模板总数与阳性 / 阴性分档均满足最小覆盖。"""
-    assert len(RED_TEAM_TEMPLATES) >= _RED_TEAM_MINIMUM
-    assert len(_POSITIVE_TEMPLATES) >= 15
-    assert len(_NEGATIVE_TEMPLATES) >= 15
+async def test_red_team_set_has_exact_template_counts() -> None:
+    """红队集规模：模板总数与阳性 / 阴性分档精确锁定（防静默增删模板）。"""
+    assert len(RED_TEAM_TEMPLATES) == 55
+    assert len(_POSITIVE_TEMPLATES) == 29
+    assert len(_NEGATIVE_TEMPLATES) == 26
 
 
 @pytest.mark.parametrize(("name", "text", "expected"), RED_TEAM_TEMPLATES)
@@ -291,7 +290,7 @@ async def test_compose_defenses_for_positive_templates(name: str, text: str) -> 
     assert hint.split("\n", 1)[0].startswith("【")
     assert any(candidate in hint for candidate in _counter_texts(CounterStyle.SASSY))
     assert len(hint) > 0
-    # assistant 历史保持原文；user 历史经包裹（见上限用例）
+    # assistant 历史保持原文；user 历史经包裹（见全量包裹用例）
     assert result.messages[1].content == "你回来啦！"
 
 
@@ -408,8 +407,8 @@ async def test_threshold_override_suppresses_hint() -> None:
     assert messages[-1].content.startswith("[[[内容开始 ")
 
 
-async def test_compose_wraps_recent_history_user_turns_up_to_cap() -> None:
-    """历史包裹上限：最近 10 条 user 回合包裹，更早 user 与 assistant 原文；原文不变。"""
+async def test_compose_wraps_all_history_user_turns_with_independent_nonce() -> None:
+    """历史包裹无上限：11 条历史 user 全部包裹且逐条 nonce 独立；assistant 原文。"""
     state = ChatSessionStateModel(persona_id=7, persona_name="大肥鱼", card=_card())
     for index in range(1, 12):
         state.append_turn(ChatMessageRole.USER, f"历史问句{index}")
@@ -420,14 +419,20 @@ async def test_compose_wraps_recent_history_user_turns_up_to_cap() -> None:
         wrap_current_message=True,
         current_message_label=UNTRUSTED_LABEL_OWNER,
     )
-    assert HISTORY_WRAP_MAX_TURNS == 10
-    assert result.messages[1].content == "历史问句1"
-    for history_index in range(2, 12):
+    history_nonces: list[str] = []
+    for history_index in range(1, 12):
         message = result.messages[1 + (history_index - 1) * 2]
         opening = message.content.split("\n", 1)[0]
-        assert opening.startswith("[[[内容开始 ")
-        assert UNTRUSTED_LABEL_HISTORY in opening
+        match = re.fullmatch(
+            rf"\[\[\[内容开始 ([0-9a-f]{{12}}) · {re.escape(UNTRUSTED_LABEL_HISTORY)}\]\]\]",
+            opening,
+        )
+        assert match is not None
+        history_nonces.append(match.group(1))
+        assert message.content.rstrip().endswith(f"[[[内容结束 {match.group(1)}]]]")
         assert f"历史问句{history_index}" in message.content
+    assert len(history_nonces) == 11
+    assert len(set(history_nonces)) == 11
     for history_index in range(1, 12):
         assistant_message = result.messages[2 + (history_index - 1) * 2]
         assert assistant_message.role == ChatMessageRole.ASSISTANT
@@ -437,7 +442,7 @@ async def test_compose_wraps_recent_history_user_turns_up_to_cap() -> None:
     assert state.turns[0].content == "历史问句1"
     assert state.turns[-1].content == "当轮消息"
 
-    unwrapped = compose_messages(state)
+    unwrapped = compose_messages(state, wrap_current_message=False)
     assert [message.content for message in unwrapped.messages[1:]] == [
         turn.content for turn in state.turns
     ]

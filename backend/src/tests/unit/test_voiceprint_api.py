@@ -32,6 +32,7 @@ from packages.harness.voice.voiceprint_models import (
     VoiceprintSettings,
 )
 from packages.harness.voice.voiceprint_service import VoiceprintService
+from tests.unit.test_voiceprint_service import _wav_bytes
 
 
 class FakeEmbedding:
@@ -45,7 +46,7 @@ class FakeEmbedding:
 def _sample(audio: bytes, *, duration_ms: int = 2000) -> dict[str, Any]:
     """构造注册 / 校验样本 JSON 载荷。"""
     return {
-        "audio_base64": base64.b64encode(audio).decode("ascii"),
+        "audio_base64": base64.b64encode(_wav_bytes(audio)).decode("ascii"),
         "content_type": "audio/wav",
         "duration_ms": duration_ms,
         "sample_rate_hz": 16000,

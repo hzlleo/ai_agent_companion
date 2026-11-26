@@ -37,8 +37,8 @@ wire 形态（锁定——单一命令包裹，字段名对齐官方文档）::
     - 文本归一：``text.content`` 原样；``voice.content`` 为平台已转写的
       语音文本（可直接进 LLM）；``mixed``（图文混排）逐项拼接（文本项原文、
       图片项占位符）；纯媒体消息（image / file / video）以占位符兜底为文本
-      ——``InboundMessageModel.text`` 要求非空，占位符让「用户只发了张图」仍是
-      一个可复述的回合（与 QQ 段展平占位符同哲学）；
+      面，但 ``has_user_text=False``——占位符不算用户字面文本，路由器跳过
+      生成、照常收录附件与推进游标（与 QQ / Telegram 的纯媒体语义一致）；
     - 媒体附件：``image`` / ``mixed`` 内图片 / ``file`` / ``video`` 的
       ``url`` + ``aeskey`` 输出为 ``ChannelMessageAttachment``（``url`` 源；
       video 归 ``file`` 类且 ``media_type="video/mp4"``）。平台对这三类资源
@@ -209,7 +209,7 @@ WECOM_UPLOAD_MIN_SIZE_BYTES: Final[int] = 5
 #: markdown 消息 content 上限（官方文档：≤20480 字节 UTF-8）。
 WECOM_MARKDOWN_MAX_BYTES: Final[int] = 20480
 
-#: 纯媒体入站的文本占位符（企微回调消费面——附件仅占位文本，保留可回复语义）。
+#: 纯媒体入站的文本占位面（``has_user_text=False``——占位符不进生成）。
 WECOM_PLACEHOLDER_IMAGE: Final[str] = "[图片]"
 #: 文件入站的文本占位符。
 WECOM_PLACEHOLDER_FILE: Final[str] = "[文件]"
@@ -814,6 +814,32 @@ def flatten_wecom_callback_text(body: WeComCallbackBodyModel) -> str:
     return ""
 
 
+def _has_wecom_user_text(body: WeComCallbackBodyModel) -> bool:
+    """判定回调是否携带用户字面文本（纯媒体 / 纯表情占位文本为 False）。
+
+    Args:
+        body: 回调 body。
+
+    Returns:
+        True = 文本 / 语音转写 / 图文混排中的非空文本项；纯图片 / 文件 /
+        视频（占位文本形态）返回 False。
+    """
+    if body.msgtype == "text":
+        return body.text is not None and bool(body.text.content.strip())
+    if body.msgtype == "voice":
+        return body.voice is not None and bool(body.voice.content.strip())
+    if body.msgtype == "mixed":
+        if body.mixed is None:
+            return False
+        return any(
+            item.msgtype == "text"
+            and item.text is not None
+            and bool(item.text.content.strip())
+            for item in body.mixed.msg_item
+        )
+    return False
+
+
 def map_wecom_callback_to_inbound(
     frame: WeComCallbackFrameModel,
     *,
@@ -863,6 +889,7 @@ def map_wecom_callback_to_inbound(
         attachments=extract_wecom_attachments(body),
         synthetic=body.compat_info is not None,
         is_group_chat=is_group_chat,
+        has_user_text=_has_wecom_user_text(body),
     )
 
 

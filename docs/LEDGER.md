@@ -12,7 +12,7 @@
 - 本地路径：`/home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion`
 - 远端：`https://github.com/hzlleo/ai_agent_companion`（主分支 `main`）
 - 部署目标机：Clevo DTR（i9-9900K + 64G RAM + RTX 3080-Laptop 16GB + Kali Linux）；开发机（本机）为 i9-12900H 笔记本（无 NVIDIA dGPU——GPU 部署项归属 Clevo）
-- 技术栈：Python 3.12 / FastAPI / SQLAlchemy async / MySQL 8（aiomysql）生产 + SQLite 测试 / SeekDB 1.4.0（真引擎，MySQL 协议 2881）/ React 19 + Vite 管理台 / docker 隔离树（tool-sandbox-agent、browser-sidecar）/ pixi 管理环境 / 模型子模组（ModelScope 源：Qwen3-VL-4B-GGUF、Qwen3-Embedding-0.6B-GGUF、Qwen3-ASR-0.6B、Fun-CosyVoice3-0.5B-2512）
+- 技术栈：Python 3.12 / FastAPI / SQLAlchemy async / SeekDB 1.4.0（权威 + 检索单栈，MySQL 协议 2881，aiomysql 驱动）+ SQLite 测试/ React 19 + Vite 管理台 / docker 隔离树（tool-sandbox-agent、browser-sidecar）/ pixi 管理环境 / 模型子模组（ModelScope 源：Qwen3-VL-4B-GGUF、Qwen3-Embedding-0.6B-GGUF、Qwen3-ASR-0.6B、Fun-CosyVoice3-0.5B-2512）
 - 主 LLM：远端 vLLM 0.32+（OpenAI 兼容端点，工程内仅消费不集成）
 
 ## 2. 硬约束（用户全文，必须逐条遵守）
@@ -52,6 +52,7 @@
 15.2 注释严禁元数据：日期 / 拍板编号 / P-编号 / 批次号 / 会话出处一律不入代码注释——出处与决策史归 git 提交信息与计划档案；注释只保留 WHY / 规则 / 机制 / 约束 / 数值等实质信息。
 15.3 修改注释严禁机械式替换：脚本 / 正则 / tokenize 批量改写不得作为产出手段（定位盘点可辅助）；每处修改前必须读齐上下文——整个 docstring / 连续注释段 + 其描述的代码实况 + 段内被引用的符号。
 15.4 注释产出必须是完整的、真正语义通顺的、包含完全真实信息的、给人看的正确版注释：完整句段不留残句；不留悬空代指（「该批 / 上述拍板 / 这个问题 / 此前」等须写明具体所指或重组句式消除）；每处写完自读——不了解历史的工程师能否无歧义理解，不能就重写。同规则适用于文档批（docs 改动同 15.2-15.4 口径）。
+20. 修正必须根修（root fix）：任何缺陷修正必须消除根因（被破坏的不变量、机制或数据流），禁止以症状打补丁、文档豁免、特例分支或仅补测试掩盖；确因客观边界只能临时缓解时，提交与台账必须显式标注「缓解（非根修）」并给出根修排期；复审发现非根修即视为未修复。
 16. app/ 只做 API 层，其余逻辑全部放 harness/（包括 docker/ 文件夹下的沙盒镜像源码）。
 17. backend 和所有沙盒以及每个沙盒之间源码必须是完整隔离的。严禁任何交叉引用或代码共用。
 18. 除特殊情况禁止裸 dict（包括已有 Model Class 内的成员），必须优先 Model Class 且与代码逻辑分开单独放在 Unit 文件中。
@@ -95,12 +96,12 @@
 | R3-2 限流与背压 | QQ 入站有界 / 实时语音 TTS 队列与会话帽 / LLM 日预算闸 / 多 worker 语义 / 最小观测面 / 前端 Node 护栏与构建体积基线（P1×1 + P2×7；复审 6×P2 闭环） | ✅ merged（PR #36；证据 `fe261c9a`；PR body 引用的 `0276c1a5` 为首提交树证据，终态以 `fe261c9a` 为准） |
 | R3-3 性能基线 | `bench_core.py` 6 项纯函数微基准 + `api_smoke.py` 4 端点进程内冒烟 + 门禁链落位（复审 4×P2 闭环；终局复核 7×P2 闭环） | ✅ merged（PR #37 → main `3f313a6`；评审 head `66b14b3`，终态含 `ecb7714`/`ee9381a`；canonical 证据 `16b07c7c`，历史 `bc71f261`） |
 
-| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（PoC 门，Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 本分支工作区（R4-1 / R4-2 / R4-3 已合并；其余切片待开工） |
+| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（PoC 门，Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 本分支（`feat/r4-5-whatsapp`）工作区（R4-1 / R4-2 / R4-3 已合并；其余切片待开工） |
 
 **当前分支状态**：
-- main：`3f313a6`（PR#34–#37 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
+- main：`f8eb398`（PR#34–#43 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
 - `feat/r3-perf`：R3-3 性能基线，已合并（PR #37），可删除。
-- R4：已开工（R4-4 本分支；R4-1 / R4-2 / R4-3 已合并），后续切片待排期。
+- R4：R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 在当前分支 `feat/r4-5-whatsapp` 工作区（R4-1 / R4-2 / R4-3 已合并），后续切片待排期。
 - 历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入 main，可删除；工作区 clean。
 
 ## 4. 全部拍板记录（原文语义）
@@ -125,12 +126,12 @@
 
 ### 其他重要决策（历史）
 - 模型无关：主 LLM 远端 vLLM/任意 OpenAI 兼容；辅助模型本地独立服务（D3-B 全原生进程）。
-- 记忆存储=SeekDB 统一检索（Q3 方案 A）+MySQL 权威库；知识图谱后置（D2 未来 FalkorDB/Graphiti 可选）。
+- 记忆存储=单栈 SeekDB（Q3 方案 A：权威库与检索库同实例、不同库名；行锁语义沿用 MySQL 协议历史术语）；知识图谱后置（D2 未来 FalkorDB/Graphiti 可选）。
 - 向量库/ES 弃用（SeekDB 覆盖）；Form B 为官方混合检索（DBMS_HYBRID_SEARCH）；零命中=SQL NULL 单元格。
 - 微信=企微智能机器人主轨+GUI 微信实验轨（D2-A）；抖音=GUI/浏览器底座（D4）；短信=SmsForwarder 记账推迟（D3）。
 - TTS=CosyVoice3-0.5B、ASR=Qwen3-ASR-0.6B、Embedding=Qwen3-Embedding-0.6B 主+bge-m3 备、look_at=Qwen3-VL（GGUF）。
 - 管理台鉴权=owner Bearer（ADMIN_AUTH_TOKEN env；空=禁用+启动提示）。
-- 数据库迁移链 0001..0018；0012=curated lifecycle；0013=persona facts；0014=persona skills；0015=core memory（blocks + append-only revisions）；0016=voiceprint samples/consents + sticker library；0017=canvas documents；0018=persona facts 复合索引（persona_id/status/confidence）。
+- 数据库迁移链 0001..0019；0012=curated lifecycle；0013=persona facts；0014=persona skills；0015=core memory（blocks + append-only revisions）；0016=voiceprint samples/consents + sticker library；0017=canvas documents；0018=persona facts 复合索引（persona_id/status/confidence）；0019=dream_runs 单飞标记（running_marker 唯一键）。
 - **记忆域保留期 = append-only 无限期保留**：不设 TTL 自动清理；删除权由单条管理面删除 + 人格级联删除覆盖。理由：审计与梦境回溯（运行决策 / 证据链 / 修订链需全量可复算）。
 
 ### 4.1 拍板三案对照（抽样归档）
@@ -159,7 +160,7 @@
 
 | 方案 | 优点 | 缺点 | 结论 |
 |---|---|---|---|
-| A SeekDB 统一检索 + MySQL 权威库 | 单一检索栈，少一套引擎运维；官方混合检索能力可直接用；知识图谱后置不阻塞 | 双栈一致性需服务层治理（提交后分发/补偿） | **选定（原始记录：Q3 方案 A；知识图谱后置，D2 未来 FalkorDB/Graphiti 可选）** |
+| A SeekDB 统一检索 + SeekDB 权威库（单栈同实例） | 单一检索栈 + 单一引擎运维；官方混合检索能力可直接用；知识图谱后置不阻塞 | 权威库与检索库同实例共用容量 / 故障域（拆分实例需另立决策，启动期不变式 fail loud） | **选定（原始记录：Q3 方案 A；知识图谱后置，D2 未来 FalkorDB/Graphiti 可选）** |
 | B 独立向量库（Milvus / Qdrant）+ 关系库 | 向量生态成熟，容量与索引选项多 | 多一套引擎、同步链路与备份面；与权威库的一致性成本更高 | 非选定（重建） |
 | C 纯关系库全文检索（FULLTEXT / SQL LIKE） | 零新增引擎，部署最轻 | 语义召回弱；规模上升后相关性与延迟不足 | 非选定（重建） |
 
@@ -178,12 +179,12 @@
 
 ### 门禁与验证命令（全部经 pixi）
 ```
-cd backend && pixi run tests-all            # 全量后端测试（当前 3125 passed）
+cd backend && pixi run tests-all            # 全量后端测试（数量以 canonical 证据 JSON 为准）
 cd backend && pixi run coverage-gates       # 24 组 ≥80% enforce
-cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖 220/220/sandbox-drift；当前 mypy 204 文件零问题）
-cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎 11 用例（迁移链/并发唯一键/行锁/混合检索）
-cd frontend && pixi run test / coverage / lint / build   # 675 passed（高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
-cd frontend && pixi run build && pixi run bundle-check     # 体积门禁（需先 build）；PASS 尾标记 total=389799 lazy=25
+cd backend && pixi run lint / typecheck / gates（注释门/棘轮/noqa冻结/conftest env 硬覆盖/sandbox-drift；源文件数等明细以 canonical 证据 JSON 为准）
+cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto   # 强制真引擎（迁移链 head 以 `backend/alembic/versions` 为准，由 doc-counts 机械校验；覆盖并发唯一键/行锁/混合检索/梦境单飞）
+cd frontend && pixi run test / coverage / lint / build   # 用例数与构建耗时以 canonical 证据 JSON 为准（高负载机器跑 coverage 可加 -- --maxWorkers=4 稳定）
+cd frontend && pixi run build && pixi run bundle-check     # 体积门禁（需先 build）；聚合数字以 canonical 证据 JSON / bundle-check 输出为准
 cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar && pixi run tests-unit
 根级：pixi run gen-examples（三件套再生成）、pixi run gates
 ```
@@ -255,7 +256,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 **已完成**：
 1. `chat/injection_models.py` / `injection_guard.py` / `injection_counter_texts.py`：不可信内容 nonce 定界包裹（12 位十六进制，碰撞重生成上限 8 次，内容逐字节保真）+ 规则表加权检测（5 种类 / 24 条规则 / 身份断言 1.5 / 保守阈值 2.0）+ 三风格台词确定性选句。
 2. `chat/prompts.py`：`CONSTITUTION_TEMPLATE`（五条）、`UNTRUSTED_WRAP_*_TEMPLATE`、`INJECTION_HINT_TEMPLATE`、来源标签常量；PROMPTS_VERSION 1.6.0（1.5.0 → 1.6.0）；既有模板字节零变更。
-3. `chat/service.py`：compose 链人格正典之后恒注入宪章；`compose_messages` 新增 `wrap_current_message` / `current_message_label` / `injection_hint`（包裹当轮入站与最近 10 条历史 user 回合；assistant 与更早回合原文）；`ChatService` 装配 `InjectionGuardSettings`（`INJECTION_` env），reply / stream_reply 检测 + 提示 + 来源标签，工具循环 tool 轮正文定界包裹。
+3. `chat/service.py`：compose 链人格正典之后恒注入宪章；`compose_messages` 新增 `wrap_current_message` / `current_message_label` / `injection_hint`（包裹当轮入站与最近 10 条历史 user 回合；assistant 与更早回合原文）；`ChatService` 装配 `InjectionGuardSettings`（`INJECTION_` env），reply / stream_reply 检测 + 提示 + 来源标签，工具循环 tool 轮正文定界包裹。**已根修（G1）**：包裹 / 来源标签 / 检测提示裁决收敛为 `compose_for_generation` 单一入口（`compose_messages.wrap_current_message` 必填），结构测试枚举直连调用点——见「G1 审计非根修项根修」节。
 4. `duty/duty_prompts.py`：值班工具反馈恒加「工具结果」定界包裹（与 chat 同语义；不跟随 chat 开关，文档化）。
 5. 测试：`test_injection_guard.py`（机制）+ `test_prompt_injection_red_team.py`（38 条模板 / 20 阳性 / 18 阴性 + 服务层开关与流式）+ prompts byte-lock 增补；既有测试仅按新契约更新 3 处断言（tool 反馈包裹正文、resume 续聊当轮包裹）。
 6. docs：`backend/defense.md`（攻击面 × 防线 × 缺口矩阵 / 包裹格式 / 检测矩阵 / JSON 示例 / env 表）、chat.md / channels.md / backend README。
@@ -263,11 +264,11 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 **办结**：`INJECTION_*` 四键已由主 Agent 纳入 `.env.example` / Setup Wizard 生成器（已验证两处各 4 键）；R2b+ 的 compliance_guard 联动已落地（见上节）。
 **Oracle 深审修复批次（P1/P2 全闭环）**：swipe 重生成末位 user 回合复用 compose 包裹开关 + 检测提示（缺省「消息」标签 / 默认台词风格）；检测前归一副本（NFKC + 零宽剔除 + 空白折叠，留证取自副本）并新增 5 条英文规则（规则表 24 → 29 条）；compose 对最近 10 条历史 user 回合定界包裹（标签「历史消息」，assistant / 更早回合原文）；红队集 38 → 47 条（含混淆形与防误报阴性）、prose pin 改结构断言、补工具循环×注入共存与合规重试不变量用例；defense.md 失效部署待办删除并同步矩阵 / 边界，chat.md 同步 compose 链与 swipe 说明。
 
-**Oracle 复审修复批次（第二轮 P1/P2 闭环）**：复审未通过项逐条闭环——(1) 检测前归一由固定零宽字符表改为剔除全部 Unicode `Cf` 类别 + 变体选择符 U+FE00–FE0F（`Mn` 组合附加符保留），红队补软连字符 / word joiner 阳性与「归一后与无混淆基线同分」防回归断言；(2) `tag_mimicry` 的 `<…>` 规则锚点由句首放宽到 8 字符内短前缀（闭合回引 / 权重不变），补短前缀阳性与长前缀阴性，defense.md 边界表述同步；(3) `as an AI` 权重 2.0 → 1.5（与中文身份断言同权），补 4 条良性英文阴性（`as an AI` / `you are now` / `act as` / `pretend to be`），规则表总数不变（29 条）；(4) `SwipeService` 构造注入 `InjectionGuardSettings`（`app/api/memories.py` 装配点显式注入），变体路径的包裹 / 检测 / 提示 / 阈值 / 风格随 `INJECTION_` 配置生效，补停用 / 提示关闭 / 阈值抬高 3 例，chat.md / defense.md kill-switch 表述改为 reply/stream 与 swipe 变体均按配置生效；(5) 红队测试注释订正（assistant 历史原文 / user 历史包裹）。红队 47 → 55 条（29 阳性 / 26 阴性）。**验证**：`pixi run tests-all` → 0（2808 passed）；`pixi run coverage-gates` → 0（24 组全 ≥80，harness/chat 96.3%）；`pixi run lint` → 0；`pixi run typecheck` → 0（191 文件）；根 `pixi run gates` → 0（注释门 / 棘轮 +0 / noqa 冻结 / 漂移 38 项一致）；`backend pixi run gen-examples` → 0（三件套再生成无 diff，幂等）。
+**Oracle 复审修复批次（第二轮 P1/P2 闭环）**：复审未通过项逐条闭环——(1) 检测前归一由固定零宽字符表改为剔除全部 Unicode `Cf` 类别 + 变体选择符 U+FE00–FE0F（`Mn` 组合附加符保留），红队补软连字符 / word joiner 阳性与「归一后与无混淆基线同分」防回归断言（**已根修（G1）**：剔除面扩为 Unicode 默认可忽略码点集 + Hangul 填充符，保留可见组合附加符，见「G1 审计非根修项根修」节）；(2) `tag_mimicry` 的 `<…>` 规则锚点由句首放宽到 8 字符内短前缀（闭合回引 / 权重不变），补短前缀阳性与长前缀阴性，defense.md 边界表述同步；(3) `as an AI` 权重 2.0 → 1.5（与中文身份断言同权），补 4 条良性英文阴性（`as an AI` / `you are now` / `act as` / `pretend to be`），规则表总数不变（29 条）；(4) `SwipeService` 构造注入 `InjectionGuardSettings`（`app/api/memories.py` 装配点显式注入），变体路径的包裹 / 检测 / 提示 / 阈值 / 风格随 `INJECTION_` 配置生效，补停用 / 提示关闭 / 阈值抬高 3 例，chat.md / defense.md kill-switch 表述改为 reply/stream 与 swipe 变体均按配置生效；(5) 红队测试注释订正（assistant 历史原文 / user 历史包裹）。红队 47 → 55 条（29 阳性 / 26 阴性）。**验证**：`pixi run tests-all` → 0（2808 passed）；`pixi run coverage-gates` → 0（24 组全 ≥80，harness/chat 96.3%）；`pixi run lint` → 0；`pixi run typecheck` → 0（191 文件）；根 `pixi run gates` → 0（注释门 / 棘轮 +0 / noqa 冻结 / 漂移 38 项一致）；`backend pixi run gen-examples` → 0（三件套再生成无 diff，幂等）。
 
 ### 已完成切片：R2d-1 心流门控 + 群聊多人格（未提交工作区）
 **已完成**：
-1. `chat/flow_models.py` / `chat/flow_gate.py`：门控 Model Classes（`FLOW_` env 面：连发窗口 / 合并静默与上限 / 回复最小间隔 / 积压阶梯与封顶 / 排程丢失宽限）与全纯函数判定——裁决 `reply | defer | merge | skip`、理由枚举、`now_ms` 由调用方注入；判定矩阵锁定（机器事件不回复、睡眠窗口延迟、连发合并、密度节流、积压延迟、亲近 / 亲密关系优先、节律拟人延迟），连发合并保留最近条目并报告丢弃条数。
+1. `chat/flow_models.py` / `chat/flow_gate.py`：门控 Model Classes（`FLOW_` env 面：连发窗口 / 合并静默与上限 / 回复最小间隔 / 积压阶梯与封顶 / 排程丢失宽限）与全纯函数判定——裁决 `reply | defer | merge | skip`、理由枚举、`now_ms` 由调用方注入；判定矩阵锁定（机器事件不回复、睡眠窗口延迟、连发合并、密度节流、积压延迟、亲近 / 亲密关系优先、节律拟人延迟），连发合并保留最近条目并报告丢弃条数。**已根修（G1）**：判定输入改为显式 `prior_arrivals_ms`（路由器先取历史 → 门控 → 再记录当前），删除 `recent[-1]==now_ms` 分支推断——见「G1 审计非根修项根修」节。
 2. `chat/persona_rotation_models.py` / `chat/persona_rotation.py`：群聊多人格 Model Classes（`GROUP_PERSONA_` env 面：开关 / 应答人数上限 / 冷却）与确定性选择纯函数——冷却排除、上一轮未发言者优先（轮转）、重复兜底、全冷却选最早应答者；单聊与功能关闭返回空选择。
 3. `channels/channel_service.py`：门控接入入站回复管线（判定 → 即时回复 / 调度器一次性作业排程 / 不回复）；延迟批次在同一 per-chat 锁内执行，静默窗口未满或睡眠窗口未结束按剩余时长重排，排程失败与调度器缺失降级立即回复；群聊多人格选择接线（`list_addressable` → 逐人格独立会话 `channel:<ch>:<chat>:persona:<id>` → 逐条投递，逐人格失败隔离）；单聊与非启用形态保持既有单人格即时回复语义。
 4. `scheduler.py`：新增一次性延迟作业面 `schedule_once(name, factory, delay_ms)`（到期先移除再执行——不重复触发、同名可复用；负延迟 / 在途重名 fail loud）。
@@ -295,7 +296,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 ### 已完成切片：R2e-1 企业微信智能机器人长连接通道（本分支未提交工作区）
 **已完成**：
-1. `harness/channels/wecom/wecom_models.py`：长连接 wire Model Classes（Unit 文件）——订阅 / 心跳 / 消息与事件回调 / 应答 / 回复（markdown）/ 主动推送（markdown、image、voice、file）/ 素材分片上传（init / chunk / finish）命令；入站映射（`single:<userid>` / `group:<chatid>` 会话键、文本 / 语音转写 / 图文混排 / 图片 / 文件 / 视频归一与占位符、媒体 url 附件、`compat_info` → `synthetic`）；chat_id grammar 解析；markdown 20480 字节分段（换行边界优先、UTF-8 硬切不破字符）。
+1. `harness/channels/wecom/wecom_models.py`：长连接 wire Model Classes（Unit 文件）——订阅 / 心跳 / 消息与事件回调 / 应答 / 回复（markdown）/ 主动推送（markdown、image、voice、file）/ 素材分片上传（init / chunk / finish）命令；入站映射（`single:<userid>` / `group:<chatid>` 会话键、文本 / 语音转写 / 图文混排 / 图片 / 文件 / 视频归一与占位符、媒体 url 附件、`compat_info` → `synthetic`）；chat_id grammar 解析；markdown 20480 字节分段（换行边界优先、UTF-8 硬切不破字符）。**已根修（G1）**：纯媒体占位文本统一声明 `has_user_text=False`（路由器跳过生成）——见「G1 审计非根修项根修」节。
 2. `harness/channels/wecom/wecom_client.py`：长连接客户端——BotID + Secret（环境变量间接，缺失即 `CHANNEL_TOKEN_MISSING`）订阅；req_id 应答关联（超时 / 平台拒绝 / 断连均拒绝在途请求）；应用层心跳（间隔 30s 缺省、应答超时判失效）；指数退避重连 + 比例抖动（可被停机即时打断）；单连接不变式（重复 run 幂等）；`disconnected_event` 被踢下线即停止重连；优雅停机（关闭连接 + STOPPED）；连接状态观测日志；素材分片上传（512KB/片、100 片上限、类型体积上限）。连接传输面经 `connector` 注入（生产 websockets，测试进程内 fake）——`websockets` 由声明的 `uvicorn[standard]` 提供，未新增依赖。
 3. `harness/channels/wecom/wecom_runner.py`：runner——回调去重（msgid，有界 FIFO 1024）、回复上下文登记与时效判定、有界入站队列 + 固定 worker（解耦收帧循环与 LLM 耗时）、出站文本分段（首段回复 / 续段推送）、附件三源（base64 / url 经共享池 / path 本地）上传与推送、逐附件失败承载、停机收尾。
 4. `channel_models.py`：`ChannelType.WECOM`；`config/models.py`：`WecomChannelSettings`（`WECOM_` env 面 12 字段 + 不变式：启用必填 BotID / 退避边界 / 心跳预算 / 抖动值域）并聚合进 `ChannelsSettings`；协议面不引入 `corp_id` / `agent_id` / access_token（长连接只认 BotID + Secret，文档化理由）。
@@ -315,7 +316,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **已完成**：
 1. `docker/browser-sidecar`：新增第八工具 `evaluate`（`EvaluateArgsModel` script / max_chars / timeout_ms；页面上下文执行；结果 JSON 序列化规模超 `max_chars` 受控失败不截断；超时受控失败）+ `PageFace.evaluate` / `PlaywrightPage.evaluate` + 运行时注册；sidecar 单元测试补 5 例（成功 / 超限 / 脚本异常 / 超时 / 参数边界）。
-2. 后端 `harness/tools/browser_models.py` / `browser.py`：镜像 `EvaluateArgsModel` 与 `EVALUATE_TOOL_NAME`（byte 级，漂移门 +2 项 = 38 项）、`build_evaluate_spec` + 注册（duty / chat 双面，八工具）；`scripts/check_sandbox_dtos_drift.py` 与 tools-browser.md 同步。
+2. 后端 `harness/tools/browser_models.py` / `browser.py`：镜像 `EvaluateArgsModel` 与 `EVALUATE_TOOL_NAME`（byte 级，漂移门 +2 项 = 38 项）、`build_evaluate_spec` + 注册（duty / chat 双面，八工具）；`scripts/check_sandbox_dtos_drift.py` 与 tools-browser.md 同步。**已根修（G1）**：`evaluate` 退出 chat / duty LLM 工具注册表（LLM 面七工具；抖音内部直调保留 + 显式 opt-in）——见「G1 审计非根修项根修」节。
 3. `harness/channels/douyin/`：`douyin_models`（会话键 `im:<conversation_id>` grammar / wire 快照 / 归一：自身回声剔除、系统消息 synthetic、群聊标记、图片 URL 附件、缺失时间兜底、批内重复与已去重过滤、上限截断）、`douyin_scripts`（采集 / 发送 JS 表达式构造——参数 JSON 嵌入、候选选择器与文本哈希兜底、受控 input 事件与发送按钮 / 回车回落）、`douyin_client`（注入 `DouyinBrowserInvoker`——生产为 sidecar 客户端；采集 / 发送 / 打开会话页；失败归一 `CHANNEL_API_ERROR`）、`douyin_runner`（轮询 / 去重窗口 1024 / 逐消息路由隔离 / 指数退避可被停机打断 / 单实例不变式 / 出站文本 + 附件逐条不支持承载）。
 4. 配置与装配：`ChannelType.DOUYIN`；`DouyinChannelSettings`（`DOUYIN_` env 面 7 键：enabled / chat_url / conversation_id / poll_interval / max_messages_per_poll / backoff_base / backoff_max；chat_url 协议校验与退避不变式）并聚合进 `ChannelsSettings`；`app/main.py` `_startup_douyin_channel`（底座未就绪只跳过该通道）+ 停机槽位与传导；`.env.example` CHANNELS.DOUYIN 分节再生成；Setup Wizard「抖音 web 通道配置」步骤；conftest 硬覆盖。
 5. 画布：迁移 0017 `ff_canvas_documents`（人格作用域 / 标题 / 类型 / 内容 / 修订号 / 时间戳 + 人格 × 更新时间索引）；`harness/canvas/{canvas_models,canvas_orm,canvas_service}`（类型值域 / 上限 / 创建 / 列举 / 读取 / 修订递增 / 幂等删除 / 导出命名与 MIME）；`app/api/canvas.py`（列表 / 创建 / 读取 / 修订 / 删除 / 导出）挂管理面鉴权；CORS 暴露 `Content-Disposition`（前端读导出文件名）。
@@ -438,7 +439,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **已完成**（逐条闭环）：
 
-1. **P1 人格删除级联**：`PersonaService.delete` 在同一事务内按 `persona_id` 批删 `ff_persona_states` / `ff_memory_episodes` / `ff_curated_memory` / `ff_dream_runs` / `ff_persona_facts` / `ff_persona_skills` / `ff_core_memory_blocks` / `ff_core_memory_revisions` / `ff_chat_sessions` / `ff_chat_messages`；事实与策展自引用 `superseded_by_id` 先置 NULL；`ff_memory_index_lite` 按 episode / curated ref 集合同事务清理，SeekDB `ff_memory_index` 经 `app.state.memory_indexer` 提交后 best-effort 分发删除（`app/api/personas.py` 的 delete / batch-delete 解析请求级 indexer）。测试 `test_delete_cascades_entire_memory_domain` 覆盖双人格七表 + 索引行（A 全空 / B 原样 / 二次删除 NOT_FOUND）；docs persona.md / database.md 写明级联范围与「无跨域 FK，由服务层批删」。
+1. **P1 人格删除级联**：`PersonaService.delete` 在同一事务内按 `persona_id` 批删 `ff_persona_states` / `ff_memory_episodes` / `ff_curated_memory` / `ff_dream_runs` / `ff_persona_facts` / `ff_persona_skills` / `ff_core_memory_blocks` / `ff_core_memory_revisions` / `ff_chat_sessions` / `ff_chat_messages`；事实与策展自引用 `superseded_by_id` 先置 NULL；`ff_memory_index_lite` 按 episode / curated ref 集合同事务清理，SeekDB `ff_memory_index` 经 `app.state.memory_indexer` 提交后 best-effort 分发删除（`app/api/personas.py` 的 delete / batch-delete 解析请求级 indexer）。测试 `test_delete_cascades_entire_memory_domain` 覆盖双人格七表 + 索引行（A 全空 / B 原样 / 二次删除 NOT_FOUND）；docs persona.md / database.md 写明级联范围与「无跨域 FK，由服务层批删」。**已根修（G1）**：级联范围改为 `Base.metadata` 派生（含磁盘文件清理 + 保留表白名单），结构守卫测试断言派生集合 == 元数据 persona_id 表全集——见「G1 审计非根修项根修」节。
 2. **P2 梦境输入上限**：`dreaming_models` 新增 `DREAM_EVENT_TEXT_MAX_CHARS=500` / `DREAM_DIARY_MAX_EPISODES=200` / `DREAM_DIARY_MAX_CHARS=60000` / `DREAM_MERGE_TOPIC_LIMIT=50`；`dreaming_prompts` 统一截断单事件正文（省略标记、按码点不破 UTF-8）、日记双帽取样、合并主题按 `updated_at`/`id` 降序取样；`_run_phases` 接线并记 debug 计数（不打印原文）。测试覆盖长事件截断 / 日记条数与总字符双帽 / 主题上限与同刻确定性；docs memory.md 增上限表。
 3. **P2 梦境重入闸**：`DREAM_REENTRY_WINDOW_MS=3600000`；`run_dream` 在孤儿收敛后查询本人格窗内 running 行，命中直接返回该记录（不新建行、不跑阶段、零模型调用）。测试覆盖连续两次触发返回同一 run id 且网关零调用；既有 `test_run_dream_converges_stale_running_rows` 的期望按新单飞契约调整（新鲜 running 行改为返回而非新建运行——任务要求的行为变更）。docs memory.md 记录。
 4. **P2 活引擎并发覆盖**：`test_concurrency_invariants.py` 新增 facts 更正腾位写序（NULL 标记插入 → 旧行 superseded → 取标记；两连接重叠事务，后提交者 1062 `uq_ff_persona_facts_active`，终态仅一条 active）、skills slug（`uq_ff_persona_skills_slug`）、core memory key（`uq_ff_core_memory_blocks_key`）三例；均断言 1062 + 约束名，实跑活 SeekDB 通过。
@@ -509,7 +510,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 1. **P1 密度节流语义**：`evaluate_flow_gate` 的密度锚点改为「当前消息之前最近一条入站」——判定历史含当前条目时取 `recent[-2]`，否则取 `recent[-1]`；仅 `elapsed < min_reply_gap_ms` 时才置 `density_wait`，达到或超过即落入后续规则（连发合并仍按含当前消息的窗口计数）。单测改为生产形态（`[now-300, now]` → 900ms），保留未含当前条目的历史形态用例并注明其与生产形态等价，新增「间隔 3500ms ≥ gap → `reply/normal` 不延迟」用例；路由器级 `test_density_gap_reached_replies_without_scheduling` 断言追发 3500ms 后立即回复且 `scheduler.jobs == []`。chat.md ⑤ 行同步为「以上一条入站为锚，间隔 < 阈值才延迟并补齐剩余毫秒；间隔 ≥ 阈值立即回复」。
 2. **P2 声纹校验时长带**：`_validate_sample` 增加必填 `min_duration_ms` 参数；注册传 `min_sample_duration_ms`，校验传 `min_verify_duration_ms`——校验不再套注册门槛，`[min_verify, min_sample)` 区间正常进入相似度比对而非 422；低于校验门槛仍返回 `matched=false` / `audio_too_short`。新增该区间用例（900ms 落在 800-1000ms 带内 → `matched=true`，不抛异常）。voice.md 链路节写明两条阈值的独立关系与裁决形态。
-3. **P2 并发唯一键收敛**：表情包批量上传逐文件经 `begin_nested()` 保存点隔离，撞 `uq_ff_stickers_persona_sha` 时只回滚该条目、计入 duplicate 拒收并清理无引用文件，同批其余条目照常入库；声纹注册撞 `uq_ff_voiceprint_samples_persona_sender_sha` 时整体回滚、清理本批孤儿文件并按 duplicate 语义抛 `CONFLICT`（details.reason=duplicate）。新增两个确定性竞态单测（预检窗口外注入同哈希行）分别验证保存点隔离与异常收敛。真引擎套件补 `ff_stickers` 同人格同哈希、`ff_voiceprint_samples` 同人格同发送者同样本哈希两条 1062 + 约束点名用例，并保留跨人格 / 跨发送者正控。
+3. **P2 并发唯一键收敛**：表情包批量上传逐文件经 `begin_nested()` 保存点隔离，撞 `uq_ff_stickers_persona_sha` 时只回滚该条目、计入 duplicate 拒收并清理无引用文件，同批其余条目照常入库；声纹注册撞 `uq_ff_voiceprint_samples_persona_sender_sha` 时整体回滚、清理本批孤儿文件并按 duplicate 语义抛 `CONFLICT`（details.reason=duplicate）。新增两个确定性竞态单测（预检窗口外注入同哈希行）分别验证保存点隔离与异常收敛。真引擎套件补 `ff_stickers` 同人格同哈希、`ff_voiceprint_samples` 同人格同发送者同样本哈希两条 1062 + 约束点名用例，并保留跨人格 / 跨发送者正控。**已根修（G1）**：保存点 + 胜者行/文件判定抽为 `sticker_service` 共用插入函数，`ingest_bytes` 复用（并发冲突 + 顺序同哈希双路用例）——见「G1 审计非根修项根修」节。
 4. **P2 conftest 硬覆盖**：`backend/src/conftest.py` 按生成器清单硬赋值 `FLOW_*`（10）/ `GROUP_PERSONA_*`（3）/ `VOICEPRINT_*`（15）/ `STICKER_*`（9）共 37 键（S3 硬覆盖口径）；裸构造 `FlowGateSettings()` / `GroupPersonaSettings()` / `VoiceprintSettings()` / `StickerSettings()` 与 app 级 Settings 在开发者本地 `.env` 存在同名键时仍取测试值。默认值用例同步断言四组关键值作为 hermetic 守卫。
 5. **P2 实时语音边界声明**：chat.md 心流门控节与 realtime-voice.md 边界节均明示「心流门控仅作用于通道入站；实时语音直连 `ChatService.stream_reply`，不经门控裁决」。
 6. **P2 排序 docstring**：`persona_rotation.py` 规则④补「主人格（`is_primary`）优先于主键次序」，与排序键 `(上一轮未发言, is_primary, id)` 一致；channels.md 选人流程与规则说明同步。
@@ -557,7 +558,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 
 **已完成**（逐条闭环，分支 `feat/audit-a-fixes`，基线 main `f43d705`）：
 
-1. **P1 QQ 纯附件消息被前置丢弃**：`qq_webhook` 先提取附件再判文本——仅有附件（纯图片 / 纯表情）而无用户字面文本时归一为 `text=""` 入站并投递（`_has_user_text` 剥离占位符与 CQ 码字面判定）；`InboundMessageModel.text` 允许空串（说明同步：仅附件入站语义）；`ChannelRouter.handle_inbound` 在表情收录与门控游标之后对空文本短路——不调用生成、不发兜底、不写空回合，只累加 `empty_text_skip_count`。同语义同步到 Telegram（`map_tg_message_to_inbound` 纯媒体无 caption → `text=""` 入站，sticker 附件可进表情桥）。既无文本又无附件仍丢弃。
+1. **P1 QQ 纯附件消息被前置丢弃**：`qq_webhook` 先提取附件再判文本——仅有附件（纯图片 / 纯表情）而无用户字面文本时归一为 `text=""` 入站并投递（`_has_user_text` 剥离占位符与 CQ 码字面判定）；`InboundMessageModel.text` 允许空串（说明同步：仅附件入站语义）；`ChannelRouter.handle_inbound` 在表情收录与门控游标之后对空文本短路——不调用生成、不发兜底、不写空回合，只累加 `empty_text_skip_count`。同语义同步到 Telegram（`map_tg_message_to_inbound` 纯媒体无 caption → `text=""` 入站，sticker 附件可进表情桥）。既无文本又无附件仍丢弃。**已根修（G1）**：占位语义统一为 `has_user_text` 字段（四通道适配器按 wire 语义声明 + 路由器按字段跳过生成），跨通道用例锁定——见「G1 审计非根修项根修」节。
 2. **P1 实时语音任务异常静默**：`_spawn` 的 done 回调消费并记录非取消异常（`logger.opt(exception=...)` + 任务名，`task_failure_count` 观测面）；`_audio_worker` 主体加防御——未预期异常记日志、下行可恢复 `INTERNAL_ERROR` error、`_request_close(INTERNAL_ERROR)`（不再永久失聪至最大时长）；`_transcribe_segment` 的 `pcm16_to_wav` 移入异常处理范围（空 / 不足一帧 PCM 不抛）。
 3. **P2 写侧裸 dict 绕过 Model**：`_emotion_round_meta` 构造既有 `ChatMessageMetaModel`（thought / emotion_deltas / emotion_snapshot / variant_index 对齐），`_persist_turn` 形参改该 Model，落库前 `model_dump(exclude={"variant_index", "selected_variant_id"})` 保持旧三键 JSON 字节结构；读侧 DTO 兼容不变。
 4. **P2 app/ 表情桥业务逻辑**：解码 / 筛选 / 出站包装下沉 `harness/multimodal/sticker_bridge.py`（`StickerBridge` + `decode_inbound_stickers` + `InboundStickerPayloadModel` + 服务面 Protocol）；`app/main.py` 删除两个闭包，仅注入 `StickerService` / `session_scope` 并接线钩子；「只收录内联 base64」与失败隔离语义不变。
@@ -1320,7 +1321,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
    命令与日志见 `docs/evidence/`）；根 `gates` / 前端 `bundle-check` /
    `gen-examples` 幂等均 0。
 
-### 已完成切片：R4-4 SmsForwarder 短信 / 通知转发通道（仅入站，本分支工作区）
+### 已完成切片：R4-4 SmsForwarder 短信 / 通知转发通道（仅入站，已合并 PR #43 → main `f8eb398`）
 
 **已完成**：
 1. **协议与安全**（`app/api/channels_sms_forwarder.py`）：公开路由
@@ -1441,16 +1442,579 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
   → 0（5 步全 PASS：tests-all=3125 / coverage-gates=24 / typecheck=204；
   canonical `9010c7b8`）。
 
+### 已完成切片：R4-5 WhatsApp Cloud API 通道（webhook 入站 + 文本出站 + 24h 服务窗，本分支工作区）
+
+**已完成**：
+1. **Webhook 安全**（`app/api/channels_whatsapp.py`）：公开 GET
+   `/api/v1/channels/whatsapp` 做 Meta hub 校验（`hub.mode=subscribe` +
+   `hub.verify_token` 与 `WHATSAPP_VERIFY_TOKEN` 恒时比较 + challenge 非空
+   → 200 纯文本回显；不匹配 403）；POST 同路径先校验
+   `X-Hub-Signature-256 = sha256=<HMAC-SHA256(raw body, WHATSAPP_APP_SECRET)>`
+   （缺失 / 不符 403，**先于** JSON 解析与去重登记），再校验
+   `application/json` 与 64 KiB 上限（Content-Length 先检；无
+   Content-Length 的 chunked 请求按 64 KiB 逐块累计中止——超限即停，
+   不整包读入；反代建议再设 client_max_body_size）。
+   空 verify token / app secret = 对应校验关闭（开发 / 测试形态）；
+   `ENV=prod` + 通道启用时四项凭据任一为空拒绝启动
+   （`auth_policy.ensure_auth_policy` 扩展）。
+2. **协议归一**（`channels/whatsapp/whatsapp_models.py`）：模型化
+   `entry[].changes[].value`（metadata / contacts / messages / statuses）；
+   `text.body`；image / audio / document / sticker / video 取 caption 或
+   中文占位标签；location / button / interactive 取文本回退；statuses[]
+   只累计 `status_events_ignored`；会话键 `wa:<wa_id>`、sender=wa_id、
+   `synthetic=False`、`is_group_chat=False`（群聊不适用）；默认 peer，仅
+   `WHATSAPP_OWNER_NUMBERS` 命中时 `is_owner=True`；空正文 / 缺 wamid /
+   缺发送者丢弃；时间戳秒级 ×1000、非法 / 缺失回落服务端时钟。
+   号码归一抽取到 `channels/phone_numbers.py`：WhatsApp 使用
+   `normalize_whatsapp_wa_id` / `parse_whatsapp_owner_numbers`（剥分隔符与
+   前导 `+`、保留国家码，会话键 / 属主 / 出站 `to` 同源）；SmsForwarder
+   继续使用中国码前缀归一的旧函数（行为不变）。
+3. **有界幂等**（`channels/whatsapp/whatsapp_runner.py`）：校验 → wamid
+   去重（进程内 FIFO 1024）→ 入有界队列（容量 64 / worker 2，代码常量）
+   → 立即 200；满队丢弃不登记去重（端点恒 200，丢弃即最终丢失；不登记
+   去重仅吸收 Meta 偶发重复推送），ERROR 含 wamid /
+   chat_id / 深度 / 累计；statuses / 不可路由不登记；worker 异常隔离；
+   停机 cancel + 清队零残留；未装配 runner 的嵌入形态保留
+   `process_whatsapp_webhook_payload` 直调回落。
+4. **文本出站与 24h 窗**（`channels/whatsapp/whatsapp_client.py` /
+   `whatsapp_adapter.py`）：共享 httpx 注入（测试 MockTransport）调用
+   `POST {API_BASE}/{API_VERSION}/{phone_number_id}/messages`（Bearer /
+   type=text / to=wa_id），解析返回 message_id；401/403 →
+   `CHANNEL_TOKEN_MISSING`，其余非 2xx / 超时 / 响应非法 →
+   `CHANNEL_API_ERROR`；runner 登记每会话最近入站毫秒（与适配器共享同一
+   `WhatsAppServiceWindow`），超 24h / 从未入站 → 受控 `CHANNEL_API_ERROR`
+   且不发起 HTTP；模板消息未实现（文档写明）；附件忽略、引用回复不透传；
+   适配器失败不反噬入站。
+5. **配置四表面**：`WhatsAppChannelSettings`（`WHATSAPP_ENABLED` 默认
+   false / `VERIFY_TOKEN` / `APP_SECRET` / `ACCESS_TOKEN` 三份 SecretStr /
+   `PHONE_NUMBER_ID` / `API_VERSION` 默认 v21.0 / `API_BASE` 默认
+   `https://graph.facebook.com` / `OWNER_NUMBERS`）；`.env.example` 与
+   config.md 分节表由生成器重出；Wizard 新增 `WHATSAPP_` 前缀步骤；
+   conftest 八键硬覆盖（conftest-env 228/228）；`ChannelType.WHATSAPP`
+   与值域断言同步；默认关闭零影响。
+6. **测试**（新增 143 例——含复审修复 20 例（第 1 轮 18 + 第 2 轮 2）+
+   枚举值域断言同步 1 处，全异步、
+   伪时钟、零真网）：
+   `test_whatsapp_models.py`（载荷变体 / 媒体与结构化回退 / 状态计数 /
+   缺字段 / 时间戳含非有限值 / 含国家码会话键与属主 / 多 entry / 服务窗 /
+   去重 / 直调隔离）、
+   `test_whatsapp_runner.py`（过载丢弃（不登记去重）/ 重复推送吸收 /
+   状态计数 / 服务窗登记 / 属主 / 停机零残留 / worker 隔离 / 观测）、
+   `test_channels_whatsapp_api.py`（GET 握手矩阵 + 恒时比较；签名
+   合法/篡改/缺失/错密钥/空密钥；非 JSON/非法/非对象/超限（声明 /
+   chunked 逐块，声明超限不读流）/Content-Length 缺失；被拒不消耗去重；
+   立即 ack / 未装配确认丢弃）、
+   `test_whatsapp_adapter.py`（MockTransport 成功 message_id / 出站 to 保留
+   国家码 / 401 / 5xx / 超时 / 非法 JSON / 窗口内外与边界 / runner 入站更新 /
+   grammar / 附件 / 缺令牌与号码 ID）、`test_whatsapp_settings.py`（默认 /
+   env / SecretStr / 生产 fail-closed）、`test_phone_numbers.py`（SMS 与
+   WhatsApp 两侧归一矩阵）、
+   `test_app_whatsapp_lifespan.py`（装配 / 共享服务窗 / 停机复位 / 窗口外
+   零请求）、`test_channels_models.py`（枚举值域同步）。
+7. **文档与门禁产物**：channels.md 新增 WhatsApp 整节（Meta 配置步骤 /
+   握手与签名 / 完整 JSON 示例 / 字段表 / 链路 / 去重队列丢弃 / 24h 窗
+   与模板边界 / 群聊不适用 / 出站错误码 / Settings）；README /
+   docs/backend/README / defense.md / config.md 同步；红探针 7 条
+   （phone_numbers 两侧归一 / WhatsApp 四源文件 / API 路由）逐条实测 RED；
+   surface 豁免新增 `WhatsAppAckDTO`（42/42）。
+
+**设计取舍 / 偏离**：
+- 24h 服务窗状态为进程内状态（单实例限制文档写明）；多 worker / 多实例
+  部署下窗口判定可能偏严（未见过入站的实例拒绝出站）。
+- 模板消息未实现：24h 窗外自由格式出站以受控业务错误拒绝；duty 等主动
+  报文本通道投递需属主在窗口内先发消息。
+- 出站仅文本：附件优雅忽略、超长文本不分段（平台 4096 上限侧拒绝）、
+  引用回复未映射 `context` 字段。
+- `WHATSAPP_API_TIMEOUT_SECONDS` 为客户端代码常量（任务配置最小集不含
+  超时键）。
+- 号码归一按通道分口径：WhatsApp `wa_id` 保留国家码（只剥分隔符与前导
+  `+`，不剥 `86` / `0086`）——剥掉会让 `+86 138 0013 8000` 与 Cloud API
+  的 `8613800138000` 互不相认并把出站投到错误号码；SmsForwarder 继续中国码
+  前缀归一（行为不变），两侧不共享归一函数。
+- 无迁移、无新依赖；前端未动。
+
+**实测（本机，命令 + 退出码；第 1 轮复审后树）**：
+- `cd backend && pixi run tests-all` → 0：3266 passed。
+- `cd backend && pixi run coverage-gates` → 0：24 组 ≥80%
+  （harness/channels 97.3%（3182/3270）、app/api 85.2%（1257/1476））。
+- `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0
+  （Success: no issues found in 210 source files）。
+- `cd backend && pixi run conftest-env` → 0（228/228）。
+- `cd backend && pixi run gen-examples` → 0；连跑两次三件套 sha256 一致
+  （`.env.example` `01b87d59…` / `config.example.yaml` `19bba95d…` /
+  `extensions_config.example.json` `1a17d6e6…`，幂等）；
+  `generate_examples_env.py --check-docs` → 0（gates 内 docs-truth）。
+- 根 `pixi run gates` → 0（comment-gates / sync-test-ratchet / noqa-freeze /
+  conftest-env 228/228 / sandbox-drift 38 项 / red-probe 209 源文件 23 探针
+  覆盖 22 文件 / docs-truth / assertion-freeze asserts=9193 raises=671 /
+  surface-check 42/42 / bench 自检与门禁 / api-smoke 自检 / prose-pin）。
+- 红探针 `pixi run red-probe --all` → 0：23 条全部 RED（errors=0）——
+  `phone-number-normalize-removal` failed=8、新增
+  `whatsapp-wa-id-normalize-removal` failed=1、其余 21 条各 ≥1（`flow-gate-removal`、`sticker-bridge-decode-removal`、`auth-policy-removal` 为 failed=2）。
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0
+  （5 步全 PASS：tests-all=3266 / coverage-gates=24 / lint / typecheck=210 /
+  gates；证据 `docs/evidence/r4-5-whatsapp-1a50b8fc.json`，
+  sha8=`1a50b8fc`（现为历史）；`5547e269` 为更早历史证据）。
+- 前端未动；无迁移，未跑 SeekDB 真引擎套件。
+
+**复审修复（Oracle R4-5 深审 1×P1 + 5×P2 逐条闭环；历史证据
+`1a50b8fc`）**：
+1. **P1 出站 to 丢 +86 国家码**：`channels/phone_numbers.py` 新增
+   `normalize_whatsapp_wa_id` / `parse_whatsapp_owner_numbers`（只剥分隔符
+   与前导 `+`，保留全部数字——不剥 `86` / `0086`；SMS 旧归一函数与行为
+   不变）；`whatsapp_models` 的发送者键 / 会话键 / 联系名映射、
+   `whatsapp_adapter` 的 `to`、`main.py` 与 webhook 直调路径的属主解析
+   全部改用新口径；channels.md 的 `to` / 会话键 / 归一说明同步为
+   `wa:8613800138000`。证据：`test_whatsapp_wa_id_preserves_country_code_for_chat_key_and_owner`
+   （入站 `8613800138000` → `wa:8613800138000`、属主清单
+   `+86 138 0013 8000` 命中、非中国号码 `15551234567` 不变）、
+   `test_send_preserves_country_code_in_wire_to_field`（MockTransport 断言
+   `to=="8613800138000"`）、`test_normalize_whatsapp_wa_id_preserves_country_code`、
+   `test_parse_whatsapp_owner_numbers_preserves_country_code`；红探针
+   `whatsapp-wa-id-normalize-removal` → RED（failed=1, errors=0）。
+2. **P2 恒 200 与重投语义**：统一为「端点恒 200（Meta 仅对非 2xx 重投），
+   因此队列满丢弃即最终丢失；不登记去重仅为吸收 Meta 偶发重复推送」——
+   改写 channels.md 丢弃 / 恒 200 两节、本段队列句、runner 模块 docstring /
+   队列容量常量注释 / 队列满 ERROR 文案；用例更名
+   `test_dropped_message_leaves_dedup_unregistered`（保留「不登记」断言，
+   不再暗示恢复），相关 docstring 的「重投」改「重复推送 / 再次到达」。
+3. **P2 chunked 体无界**：`channels_whatsapp.py` 新增
+   `_read_request_body_bounded`——`request.stream()` 逐块累计，累计超限
+   立即抛受控 400（不再整包 `request.body()` 读入），保留 Content-Length
+   预检；channels.md / 本段写明「无 Content-Length 的 chunked 请求按
+   64 KiB 逐块上限中止；反代建议再设 client_max_body_size」。证据：
+   `test_bounded_body_reader_stops_reading_after_limit`（第二块触发超限后
+   第三次 receive 未被调用）、
+   `test_declared_oversize_rejected_without_reading_stream`（手工
+   `starlette.requests.Request` 直接调用端点：受控 `BAD_REQUEST`，receive
+   从未被调用）。
+4. **P2 NaN / Infinity 时间戳 500**：`resolve_whatsapp_timestamp_ms` 先做
+   `math.isfinite` 判定并捕获 `OverflowError` / `ValueError`，非有限值
+   回落服务端时钟；时间戳矩阵补 `math.nan` / `math.inf` / `"inf"` 三参数。
+   SMS 同病不在本批，§6 记一行遗留。
+5. **P2 豁免接线实证**：`test_admin_auth.py::TestAssembledAppMatrix` 新增
+   两条基于真实 `create_app()` 的用例——admin token 已配置且无 admin 头时
+   WhatsApp GET 握手 200 回显 challenge；POST 无签名 403（而非 401，证明
+   未被 admin 依赖掩蔽）。
+6. **P2 lifespan 用例实证 + 链路顺序**：lifespan 用例经
+   `WhatsAppCloudClient.http_client` 的 httpx request 事件钩子挂记录器，
+   窗口外拒绝后断言 `requests == []`；channels.md 链路图把服务窗登记移到
+   入队之后（与 `whatsapp_runner.py` 的 put_nowait → dedup 登记 → 服务窗
+   记录顺序一致），runner 模块 docstring 同步。
+7. **附（台账 / 探针 / 最终树复跑）**：§3 R4-4 改「已合并（PR #43 → main
+   `f8eb398`）」、R4-5 标当前分支；red_manifest 增
+   `normalize_whatsapp_wa_id` 探针（映射 +86 用例）。当轮树复跑：
+   `pixi run tests-all` → 0（3266 passed）；`pixi run coverage-gates` → 0
+   （24 组 ≥80%）；`pixi run lint` → 0；`pixi run typecheck` → 0（210 源
+   文件）；`pixi run conftest-env` → 0（228/228）；`pixi run gen-examples`
+   连跑两次 → 0（幂等）；根 `pixi run gates` → 0；`pixi run red-probe --all`
+   → 0（23 条全 RED）；`pixi run verify-slice -- --slice r4-5-whatsapp`
+   → 0（canonical `1a50b8fc`，现为历史；`5547e269` 更早）。
+
+**复审修复（Oracle R4-5 第 2 轮复审 4×P2 + 台账项逐条闭环；canonical 证据
+`d90786ec`）**：
+1. **P2-1 属主解析回归钉**：`test_app_whatsapp_lifespan.py` 属主清单改
+   `+86 138 0013 8000,妈妈`，断言 `_owner_numbers == {"8613800138000",
+   "妈妈"}`；`test_channels_whatsapp_api.py` 直调路径补国家码属主用例
+   （`from=8613800138000` → `wa:8613800138000` 且 `is_owner=True`，属主清单
+   同上）。变异自证：`main.py` 与 `channels_whatsapp.py` 分别临时换回
+   `parse_phone_owner_numbers` → 前者红于 owner 集合断言、后者红于
+   `is_owner` 断言；复原后相关三文件 46 例全绿。
+2. **P2-2 归一口径文档残留 + 国家码告知**：`config/models.py` 的 WhatsApp
+   设置 docstring / Attributes / Field description 改为「独立归一、保留国家
+   码，清单须含国家码（如 `+86 138 0013 8000`）」；`sms_models.py` 两处委托
+   说明改为「短信口径（中国码前缀归一）；WhatsApp 使用保留国家码的独立
+   归一」；channels.md 设置表 `owner_numbers` 行同步国家码示例；
+   `pixi run gen-examples` 重出 `.env.example`（`WHATSAPP_OWNER_NUMBERS`
+   注释同步）。全仓 grep 无「WhatsApp 与短信共享归一 / 逐字节一致」类现行句。
+3. **P2-3 零请求钩子**：lifespan 用例的 httpx request 钩子改 `async def`
+   （httpx 以 await 调用）；出站 `api_base` 指向 `http://127.0.0.1:9`
+   （本机不可路由——判定被绕过也不打真网）。变异自证：临时跳过适配器
+   24h 服务窗判定 → 用例红于 `recorder.requests == []`（钩子确有记录，传输
+   失败仍映射 `CHANNEL_API_ERROR`）；复原后绿。
+4. **P2-4 批内满队少计**：`whatsapp_runner.py` 满队分支改为对当前及批内
+   剩余每条消息分别 `_dropped_inbound += 1` + ERROR（wamid / 深度 / 累计）
+   后 `continue`，不再首条满队即返回；批内任一条丢弃时 `submit` 返回 False。
+   新增用例：容量 1、单推送 3 条 → 首条入队、`dropped_inbound==2`、两条
+   ERROR（`dropped=1` / `dropped=2`）；既有容量 2 / 单条满队断言语义未变、
+   保持通过。
+5. **备注项**：§3 main 指针改 `f8eb398`（PR#34–#43 已并入）；
+   `whatsapp_models.py` 服务窗 docstring「乱序重投」改「乱序到达」；§6 增
+   SmsForwarder runner 满队分支同形遗留一行（单条载荷下无少计，扩展批载荷
+   前需同法逐条计数）。
+6. **最终树复跑（命令 + 退出码）**：`cd backend && pixi run tests-all` → 0
+   （3268 passed）；`pixi run coverage-gates` → 0（24 组 ≥80%；
+   harness/channels 97.4%（3185/3271）、app/api 85.2%（1257/1476））；
+   `pixi run lint` → 0；`pixi run typecheck` → 0（210 源文件）；`pixi run
+   conftest-env` → 0（228/228）；`pixi run gen-examples` 连跑两次 → 0
+   （三件套 sha256 一致，幂等；`.env.example` `02872633…`、
+   `config.example.yaml` `19bba95d…`、`extensions_config.example.json`
+   `1a17d6e6…`）；根 `pixi run gates` → 0（assertion-freeze asserts=9202
+   raises=671 / red-probe 209 源文件 23 探针 / surface-check 42/42）；
+   `pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：
+   tests-all=3268 / coverage-gates=24 / lint / typecheck=210 / gates；
+   canonical 证据 `docs/evidence/r4-5-whatsapp-d90786ec.json`，
+   sha8=`d90786ec`（G1 根修前 canonical，现为历史）；`1c33f1fe`（第 3 轮备注收尾前树）与 `1a50b8fc` 为历史）。
+
+**复审备注收尾（第 3 轮复审 4 条备注 + 企微派发用例根修；canonical 证据
+`d90786ec`——G1 根修前，现为历史，最新见下节 `bd3bdfd3`）**：
+1. **企微派发用例根修**：`test_wecom_client.py` 的「回调无处理器丢弃」分支由
+   单次 `asyncio.sleep(0)` 赌派发改为 loguru 事件门控（命中「企微回调无处理器」
+   即放行，1s 超时即红）——分支执行从抖动变为确定；连跑 5 轮稳定，`harness/
+   channels` 覆盖率稳定 97.4%（3185/3271）。原先 3183/3185 的覆盖率抖动即该
+   竞态的产物，非 R4-5 代码问题。
+2. **台账门禁头**：3268 passed / conftest 228/228 / mypy 210 / 前端 702 passed
+   （build 2.52s、bundle 389799·25）。
+3. **红探针计数表述**：其余 21 条各 ≥1，其中 `flow-gate-removal`、`sticker-
+   bridge-decode-removal`、`auth-policy-removal` 为 failed=2。
+4. **channels.md 测试面表**：补 runner「批内满队逐条计数与告警」与 API「直调
+   路径国家码属主命中」两条。
+5. 复跑：`pixi run tests-all` → 0（3268）；`coverage-gates` → 0（24 组）；
+   `lint` / `typecheck`（210）/ `conftest-env`（228/228）/ 根 `gates` → 0；
+   `verify-slice -- --slice r4-5-whatsapp` → 0（5 步；canonical
+   `docs/evidence/r4-5-whatsapp-d90786ec.json`，sha8=`d90786ec`，700 文件；
+   G1 根修后由 `bd3bdfd3` 取代，本行保留为历史）。
+
+### 已完成切片：G1 审计非根修项根修（§20 修正必须根修——本分支工作区）
+
+**背景**：G1 审计判定 7 项此前的修复止于症状面（补白名单 / 补测试 / 补分支推断 / 补文档），未消除再发机制。按新硬约束 §20 逐条根修——范围由元数据派生、裁决收敛为单一入口、状态显式化、语义字段化、判据由默认可忽略码点集定义、并发路径共用同一插入函数。
+
+逐条（原修复位置 → 根修位置 → 结构性守卫测试）：
+
+1. **P1-1 人格删除级联**：原修复（`R2c 记忆批次 Oracle 深审` P1）在 `PersonaService.delete` 内手写七表白名单，新增表（表情 / 声纹 / 提醒 / 画布）静默漏删。根修：`packages/harness/persona/service.py` 的 `_persona_cascade_models()` 从 `Base.metadata` 派生全部含 `persona_id` 列的表（含未挂 PersonaMixin 的整数列依赖表；比较值按列类型派生），新增 ORM 注册锚 `packages/harness/database/models.py`（唯一显式注册入口，防导入序静默缩水）；无 persona_id 的 `ff_chat_messages` / `ff_core_memory_revisions` 按归属轴清理；`ff_usage_records` 明确保留（`PERSONA_DELETE_RETAINED_TABLES`）；删除前收集表情 `storage_path` / 声纹 `sample_path`，提交后 best-effort 删文件（失败仅告警）。守卫：`test_persona_cascade_derives_every_persona_id_table`（派生集合 == 元数据全集，未覆盖即红）+ `test_delete_clears_every_persona_scoped_table_and_files`（13 张 persona_id 表 + 会话消息 / 修订 / 索引造行 + 双人格 + 文件：A 全清 / B 全留 / 文件不存在 / 二次删 NOT_FOUND）。
+2. **P1-2 evaluate 退出 LLM 工具面**：原修复（`R2e-2 抖音 web 通道` item 2）把 `evaluate` 注册进 duty / chat 双面（八工具），页面上下文任意 JS 的副作用暴露给 LLM。根修：`tools/browser_models.py` 拆 `BROWSER_LLM_TOOL_NAMES`（七工具）与协议能力面 `BROWSER_TOOL_NAMES`（八工具）；`build_browser_specs` / `register_browser_sidecar_tools` 默认不含 evaluate（`include_evaluate=True` 显式 opt-in，默认关闭，无新增 env 键）；`app/main.py` 两处注册与日志改用七工具名。抖音通道内部 `client.invoke(EVALUATE_TOOL_NAME)` 不受影响。守卫：`test_all_tools_in_order`（evaluate 不在注册表）+ `test_evaluate_opt_in_extends_llm_surface` + `test_evaluate_still_callable_through_client_for_internal_use` + lifespan 用例断言 chat / duty 注册表均不含 evaluate。
+3. **P2-8 注入防御内聚**：原修复（`R2-defense` item 3）在 `ChatService._injection_compose_inputs` 与 `SwipeService` 各自复制包裹 / 标签 / 提示裁决。根修：`chat/service.py` 新增 `compose_for_generation(state, *, injection, intent, provenance, ...)` 单一入口（`GenerationIntent` = reply/stream/swipe；会话回合缺来源分级 fail loud；swipe 默认标签）统一裁决；`compose_messages.wrap_current_message` 改为**必填关键字**；`ChatService.reply` / `stream_reply` / `SwipeService.ride` 全部改经该入口，`_injection_compose_inputs` 删除。守卫：`test_only_unified_entry_calls_compose_messages_in_production`（AST 枚举生产直连点，仅统一入口可直连）+ 统一入口语义三例（标签按分级 / 停用不包裹 / swipe 默认标签）；既有红队与 swipe 用例零行为回归（新增必填参数在测试直调点显式传入）。
+4. **P2-10 心流门控隐式契约**：原修复（`R2d-1` item 1 及后续密度锚点补丁）用 `recent[-1] == now_ms` 推断「当前消息是否已入历史」，同毫秒历史产生歧义。根修：`FlowGateInputModel` 删除 `state` 输入，改为显式 `prior_arrivals_ms`（不含当前）+ `backlog_count`；`evaluate_flow_gate` 用「窗口内历史 + 当前」计连发、历史末条作密度锚，删除分支推断；`ChannelRouter._apply_flow_gate` 改为先取历史 → 门控 → 再 `record_inbound`（仅附件按 `has_user_text=False` 不入缓冲）。守卫：重写 `test_flow_gate.py` 的连发 / 密度 / 同毫秒历史 / 空历史用例（旧「两种形态等价」用例删除）。
+5. **P2-3 占位文本语义统一**：原修复（`审计 A` P1 + `R2d 复审` P2）由路由器嗅探 `text.strip()` / 各适配器自行清空文本，WeCom / 抖音的 `[图片]` 占位仍被当作可回复文本。根修：`InboundMessageModel.has_user_text`（空文本模型校验强制 False），QQ / Telegram / WeCom / 抖音 / WhatsApp 适配器按各自 wire 语义声明；路由器改按该字段跳过生成（附件收录 / 游标推进不变），观测计数更名 `no_user_text_skip_count`。守卫：四通道纯媒体「不生成 / 不兜底」跨通道用例 + 混合文本仍生成用例 + 各适配器映射断言（wecom / douyin / qq / tg / whatsapp）。
+6. **P2-2 归一口径**：原修复（`R2-defense` 复审 item 1）只剔除 `Cf` + U+FE00–FE0F，U+034F / U+180B–180D / U+E0100–E01EF / Hangul 填充符插入仍改变得分。根修：`chat/text_normalization.py` 改为 Unicode 默认可忽略码点可见性等价集（`Cf` 全类 + 不可见 `Mn` 族 + Hangul 填充符；可见组合附加符保留），只作用于匹配副本、原文不动。守卫：`test_chat_text_normalization.py`（12 个不可见码点插入后检测得分与基线一致 + 可见重音阴性集 + NFKC 折叠保持）。
+7. **P2-1 表情并发根修**：原修复（`R2d 声纹/表情复审` item 3）把保存点 + 胜者判定只写在 `upload_batch`，`ingest_bytes` 无保存点，竞态落败方整事务回滚并可能删除胜者文件。根修：`multimodal/sticker_service.py` 抽出共用 `_insert_sticker`（落盘 → 保存点插入 → 撞唯一键解析胜者行，仅当胜者路径 ≠ 本路径才删落败文件），`upload_batch` 与 `ingest_bytes` 共用。守卫：`test_insert_sticker_conflict_resolves_winner_and_keeps_file`（冲突分支：行唯一 / 胜者文件在 / get_binary 可用）+ `test_ingest_same_hash_twice_single_row_and_file`（顺序同哈希：单行 / 文件在 / 返回既有记录）。
+
+**文档同步**：persona.md / database.md（级联由元数据派生 + 文件清理 + 保留表）、tools-browser.md（LLM 七工具 / evaluate 内部直调 + opt-in）、channels.md（has_user_text 全 wire 形态 / 心流先历史后记录 / 抖音 evaluate 内部面）、chat.md（统一入口 / 必填参数 / 先历史门控矩阵）、defense.md（缺口矩阵 evaluate 行 + swipe 统一入口 + 默认可忽略归一）、wecom_models / douyin_models docstring（占位不算用户文本）。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3297 / coverage-gates=24 组 ≥80% / lint / typecheck=211 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-bd3bdfd3.json`，canonical sha8=`bd3bdfd3`（702 文件级证据；`--hash-only` 复算一致）；`fbc7dc56`（G1 中间树）、`d90786ec`（G1 根修前）与更早证据均为历史，按 README 口径只认与当前 `--hash-only` 一致的一份）。
+- `cd backend && pixi run tests-all` → 0（3297 passed）；`pixi run coverage-gates` → 0（24 组 ≥80%：harness/persona 95.6%（1774/1855）、harness/channels 97.3%（3210/3299）、harness/chat 96.3%（1551/1611）、harness/multimodal 94.0%（669/712）、harness/database 94.0%（189/201）、app/main.py 94.1%（556/591）、app/api 85.2%（1257/1476））；`pixi run lint` → 0；`pixi run typecheck` → 0（211 源文件）；`pixi run conftest-env` → 0（228/228）；`pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `02872633…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）；根 `pixi run gates` → 0（comment-gates violations=0 / sync-test-ratchet +0 / noqa-freeze 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 24 条覆盖 23 文件 / docs-truth / assertion-freeze asserts=9265 raises=673 / surface-check 42/42 + env 791 行 / bench-core PASS / api-smoke PASS / prose-pin 报告）。
+- `cd backend && pixi run red-probe --all` → 0：24 条全部 RED（errors=0，含新增 `orm-registry-anchor-removal` → failed=1）。
+- 无迁移、无新依赖；前端未动。
+
+### 已完成切片：G1 根修 B1（§20 剩余非根修项——本分支工作区）
+
+**背景**：G1 审计另列 5 项非根修修复（时钟单一读数、窗宽单飞、声明时长、墙钟轮询、首调用同步读盘）与 1 项注释段落缺口。本批按 §20 逐条消除再发机制，并补齐对应结构性守卫。
+
+逐条（原修复位置 → 根修位置 → 守卫测试）：
+
+1. **梦境终态时钟**：原实现 `run_dream(now_ms=…)` 用单一读数同时写 `started_ms` / `finished_ms`（运行耗时恒 0，终态时间不是结束时刻）。根修：入口改为可调用 `clock_ms`（`packages/harness/memory/dreaming.py`），开始与结束各读取一次，`finished_ms` 取第二次读数；调度器透传可调用时钟，API 缺省真实时钟。守卫：`test_run_dream_finished_ms_uses_injected_clock`（可推进伪时钟：两次读数、`finished_ms > started_ms` 且等于第二读数）、调度器透传用例。
+2. **梦境单飞**：原实现以 `DREAM_REENTRY_WINDOW_MS` 窗内查询为唯一防线——窗外的并发触发会双插 running 行。根修：迁移 `0019_dream_runs_single_flight` 给 `ff_dream_runs` 增可空 `running_marker` + 唯一键 `uq_ff_dream_runs_persona_running (persona_id, running_marker)`（运行中 `'1'`，终态 / 失败 / 崩溃收敛清 NULL）；`run_dream` 以插入带标记行为权威单飞动作，唯一键冲突回滚后读回既有运行并原样返回；窗内复用保留为辅助快路径，二者关系写入 memory.md。守卫：`test_run_dream_unique_marker_conflict_returns_existing`（窗外在途行撞键复用）、`test_run_dream_clears_marker_and_allows_rerun`、`test_run_dream_failed_terminal_clears_marker`、`test_migration_dream_single_flight.py`（SQLite 升 / 降 / 复升 + 唯一键行为）、SeekDB `test_dream_run_single_flight_marker_unique`（1062 约束点名 + 清标记后可再插）、迁移链 0019 升级 / 降级 / 复升断言。
+3. **声纹实测时长**：原实现信任上传方 `duration_ms` / `sample_rate_hz` 声明。根修：新增 `packages/harness/voice/voiceprint_audio.py` + `VoiceprintAudioProbeModel`——WAV 从 RIFF/fmt/data 头实测采样率 / 声道 / 时长，裸 PCM 按声明采样率与字节长度换算，不可解析容器回落声明；注册与校验的时长 / 采样率门槛及落库元数据一律用实测值，非法 / 截断头按 `payload_invalid` 拒收。守卫：`test_voiceprint_audio.py`（不同时长 / 采样率 / 双声道 / 裸 PCM / 非法与截断头 / 容器回落）、`test_voiceprint_service.py` 的声明撒谎（短音频声明长时长、低采样率声明高采样率）注册与校验双路径拒收；既有用例已改为真实 WAV 载荷（列明于 voice.md 测试面）。
+4. **测试去墙钟**：原实现 10 处 `_wait_until` 与多处以 2-5s 墙钟 deadline + 固定睡眠轮询，慢机抖动会翻面。根修：新增 `tests/async_wait.py`（`wait_until` 10,000 次零延时让出封顶、`drain_loop` 固定次数让出），10 处本地 helper 与 duty / channels / reminders 的轮询循环统一接入；负向断言改 `drain_loop`。保留的真实时间面逐条注明：企微心跳超时改 `closed_event` 事件门（`wait_for` 为真实超时语义）、`DelayedCrashRunner` 0.05s 模拟停机窗口内在途、后台任务 30s 阻塞哨兵、`tg_runner` 线程池往返 0.01s、`realtime_fakes` 3600s 常驻哨兵、`realtime_fakes.py:628` 的 `wait_until` 2s 兜底预算、`test_app_realtime_voice.py:98` 的 `FakeWebSocket.wait_for` 5s deadline。守卫：`test_async_wait.py`（注入记录器断言只请求零延时让出 + 失败消息携带预算与描述 + `drain_loop` 零延时）。
+5. **特质库预加载**：原实现首个管理面请求在事件循环内同步读 YAML。根修：`trait_library` 新增 `load_official_presets_async` / `load_official_components_async` / `preload_official_trait_library`（读盘 + 解析经 `run_blocking_ops`），`app/main.py` 启动期预加载，`app/api/personas.py` 两处读取改异步入口（未预加载的懒路径同样下沉线程池）。守卫：`test_preload_warms_official_cache`（预加载后缓存命中且异步读取返回同实例）、`test_lazy_official_loader_uses_blocking_sink`（注入记录器断言懒路径经 `run_blocking_ops`）、`test_app_main.py` 启动后缓存已热；persona.md 同步。
+6. **注释段落**：`sticker_bridge.py` / `sticker_models.py` / `sticker_service.py` / `realtime_models.py` / `realtime_session.py` / `realtime_vad.py` 的 8 条 hints 逐处读上下文后补 Google 段落（Args / Returns / Raises 按实际签名）。注释门复跑：violations=0、hints=23（剩余均为本批范围外存量：browser-sidecar 17 条 + 其 server 1 条、tool-sandbox server 1 条、chat cli 2 条、duty 1 条、douyin runner 1 条——均为各自域后续注释批次，非本批文件）。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3316 / coverage-gates=24 组 / lint / typecheck=212 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-fc26e182.json`，sha8=`fc26e182`（707 文件级证据；`--hash-only` 复算一致）；B2 后由 `a09677e7` 取代，本行保留为历史；`bd3bdfd3`（G1 根修前）与更早证据同样为历史，按 README 口径只认与当前 `--hash-only` 一致的一份）。
+- `cd backend && pixi run tests-all` → 0（3316 passed）；`pixi run coverage-gates` → 0（24 组 ≥80%：harness/voice 93.1%（2628/2822）、harness/memory 94.8%（1902/2007）、harness/persona 95.7%（1783/1864）、harness/channels 97.3%（3211/3299）、app/main.py 93.9%（558/594）、app/api 85.2%（1257/1476））；`pixi run lint` → 0；`pixi run typecheck` → 0（212 源文件）；`pixi run conftest-env` → 0（228/228，豁免 0）；`pixi run gen-examples` 连跑两次 → 0（三件套 sha256 与连跑前一致：`.env.example` `02872633…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）；根 `pixi run gates` → 0（comment-gates violations=0 hints=23 / sync-test-ratchet +0 / noqa-freeze 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 25 条覆盖 24 文件 / docs-truth / assertion-freeze asserts=9316 raises=679 / surface-check 42/42 + env 791 行 / bench-core PASS / api-smoke PASS / prose-pin 报告）。
+- `cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto` → 0（12 passed：迁移链 0019 真引擎升 / 降 / 复升、梦境单飞 1062、既有并发唯一键 / 行锁 / 混合检索）。
+- `cd frontend && pixi run npx vitest run src/test/contract/dtoContract.test.ts` → 0（2 passed；前端源码未改动，契约 fixture 与后端导出面一致）。
+- 无新增依赖 / env 键；迁移号 `0019`。
+
+### 已完成切片：G1 根修 B2（§20 剩余非根修项——本分支工作区）
+
+**背景**：G1 审计剩余 4 项非根修（群聊表情固定收录 `pool[0]`、历史 user 回合包裹条数上限、`tag_mimicry` 短前缀锚点、配置 / 计数口径多处硬编码）与 1 项缓解台账缺失。本批按 §20 逐条消除再发机制，并新增文档数字单源门与两条数量棘轮。
+
+逐条（原修复位置 → 根修位置 → 守卫）：
+
+1. **P2-4 群聊表情收录归属**：原实现群聊入站表情固定写入第一位候选（`pool[0]`）素材库，与本轮实际应答集合脱节，非应答人格与多人格应答者的库长期偏斜。根修：`packages/harness/channels/channel_service.py` 抽出 `_select_group_responders`（纯读取选择结论）与 `_group_responder_persona_ids`，表情收录按**本轮全部应答人格**逐人绑定上下文调用收录桥，逐人格独立哈希去重与失败隔离；单聊仍只收录主人格，应答侧「各人格用各自库」不变。守卫：`test_group_sticker_ingested_into_every_responder_library`（两位应答者各一份、第三人不在应答集不受影响）、`test_group_sticker_same_hash_deduped_independently_per_library`（同哈希跨人格互不吞并、各库去重）、`test_group_sticker_ingest_failure_isolated_from_reply`（单人格收录失败不阻断其余人格与回复）。
+2. **P2-8 历史 user 回合全包裹**：原实现 `HISTORY_WRAP_MAX_TURNS=10` 只包裹最近 10 条历史 user 回合，更早回合裸文本进入请求面，边界信号随会话长度失效。根修：删除该常量与切片，`compose_messages` 对**全部历史 user 回合**逐条独立 nonce 定界包裹（assistant 回合保持原文）；包裹总开销与 user 回合数线性（每条两行定界 + 12 位 nonce），不改变 `state.turns` 原文与落库内容。守卫：`test_compose_wraps_all_history_user_turns_with_independent_nonce`（11 条历史 user 全部包裹、逐条开闭 nonce 独立且不重复、assistant 原文、原文 / 落库不变）。
+3. **TAG 前缀任意位置**：原实现 `tag_mimicry` 的 `<…>…</…>` 规则锚定句首且仅允许 ≤8 字符前缀，长前缀中段标签不命中。根修：规则改为行内任意位置匹配同名开闭标签对（内容段 ≤120 字符、闭合回引同名），权重保持 1.0（单项不达阈值，防误报）；`【…】…【/…】` 句首规则不变。守卫：`test_tag_mimicry_matches_pair_anywhere_in_line`（超 8 字符深前缀命中且单项不触发）、`test_tag_mimicry_leaves_non_pairs_unmatched`（无闭合对 / 异名对 / 普通尖括号比较不误报）；原 55 条红队矩阵阳性集零回归。
+4. **P2-11 口径单源与机械守卫**：
+   a. `config/loader.py` 顶层段白名单改为公开常量 `KNOWN_TOP_LEVEL_SECTIONS`（并由 `LLM_SECTION_KEY` / `SEARCH_SECTION_KEY` 组成），未知键告警文案由常量生成；`config/search_registry.py` 的读取与 `_section_key` 引用同一常量，不再三处硬编码。
+   b. `config/wizard_generators.py` docstring 删除手写「当前 31 个」，改为「覆盖 `_ENV_SECTIONS` 全量登记前缀」。
+   c. 计数改为精确断言：`test_injection_rule_table_has_exact_kind_counts`（29 条 + 逐种类 10/5/8/4/2）与 `test_red_team_set_has_exact_template_counts`（55 总 / 29 阳 / 26 阴）。新增 `scripts/check_doc_counts.py`：从 `INJECTION_RULES`、红队模板表与生成器 `_ENV_SECTIONS` 派生计数，校验 `docs/backend/{defense.md,chat.md,config.md}` 内数字字面（解析失败 / 不一致即红）；backend `doc-counts` 任务接入根 gates 的 docs-truth 之后。
+   d. `scripts/prose_pin_check.py` 增加 `--gate` / `--baseline` / `--update`：当前 prose 计数（基线 `scripts/.prose_pin_baseline.json` = 75）不得高于基线，report 模式保留；根 gates 的 prose-pin 改为 `--gate`。
+   e. `scripts/red_probe.py --gate` 增加冻结数量棘轮：`backend/red_manifest.toml` 的 `[metadata].grandfathered_baseline = 190`，当前 `grandfathered` 条目数 190 不得高于基线（只冻结不收敛同样红），`--prune` 精简后同步下调。
+5. **缓解台账落档**：§6 新增「缓解台账（非根修，已排期）」表，逐项记录仍属缓解的 5 项（流式合规不重试 / 实时语音多段完成序 / TG 429 夹取单次重试 / 注释门测试面豁免 / 梦境 `stats`/`decisions` JSON 动态键），含现状、暂不根修理由与根修方案 / 目标批次；历史包裹与 TAG 前缀两条本批已根修，不再列入缓解表。
+
+**文档同步**：channels.md（表情收录归属改为本轮全部应答人格 + 逐人格去重 / 失败隔离）、defense.md（全部历史 user 包裹与线性开销、tag_mimicry 任意位置与残余跨行边界、红队 55 条分档与精确计数说明）、chat.md（compose 链 / 注入面 / 测试面索引去上限化 + 线性常数开销）、docs/README.md（doc-counts / prose 棘轮 / 红探针冻结数量棘轮）。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3322 / coverage-gates=24 组 / lint / typecheck=212 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-a09677e7.json`，canonical sha8=`a09677e7`（709 文件级证据；`--hash-only` 复算 `sha8=a09677e7 files=709` 一致；G1 复审修复后由 `a9b45231` 取代，本行保留为历史）；`d41a6aa2` / `5a5446ad`（B2 中间树）、`fc26e182`（B1）与更早证据为历史，按 README 口径只认与当前 `--hash-only` 一致的一份）。
+- `cd backend && pixi run tests-all` → 0（3322 passed）；`pixi run coverage-gates` → 0（24 组 ≥80%：harness/channels 97.3%（3227/3315）、harness/chat 96.3%（1550/1610）、harness/config 96.6%（1554/1609）、app/main.py 93.9%（558/594）、app/api 85.2%（1257/1476））；`pixi run lint` → 0；`pixi run typecheck` → 0（212 源文件）；`pixi run conftest-env` → 0（228/228，豁免 0）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `02872633…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）。
+- 根 `pixi run gates` → 0（comment-gates violations=0 hints=23 / sync-test-ratchet +0 / noqa-freeze scripts 7≤7 其余 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 25 条覆盖 24 文件 + grandfathered 棘轮 190≤190 / docs-truth / doc-counts 12 项（规则 29 / 红队 55 / 配置分节 31）/ assertion-freeze asserts=9333 raises=679 / surface-check 42/42 + env 791 行 / bench-core PASS / api-smoke PASS / prose-pin 棘轮 75≤75）。
+- 无新增依赖 / env 键 / 迁移；前端未动（`--with-frontend` 未跑，源码零改动）。
+
+### 已完成切片：G1 复审修复（8×P2 + 4 条备注逐条根修——本分支工作区）
+
+**背景**：G1 根修复审给出有条件通过项——8 条 P2 与 4 条备注仍属症状面（快照读假设、可忽略集缺口、声明值回落台账缺失、适配器映射守卫不完整、纯媒体推高未读积压、段键硬编码、去重自证与双时钟、AST 守卫可绕过、收集失败语义不符）。本批按 §20 逐条消除再发机制并留守卫；旧 canonical `a09677e7` 自本批起为历史。
+
+逐条（原修复位置 → 根修位置 → 结构性守卫）：
+
+1. **P2-1 快照读（MySQL 协议 / SeekDB 行锁语义）**：冲突后胜者解析原为普通 ``SELECT``（RR 下可能落入事务早先读视图而看不到对方已提交行）。根修：`multimodal/sticker_service.py` 抽出 `_winner_select`，胜者查询带 ``with_for_update()`` 行锁（当前读，规避快照读（行锁语义）落入事务早先读视图）。守卫：`test_winner_select_uses_locking_read`（现已更名为 `test_winner_select_uses_shared_locking_read`；MySQL 方言编译断言锁定子句——快照读回归即红）+ SeekDB `test_sticker_conflict_across_connections_uses_current_read`（现已更名为 `test_sticker_conflict_stale_snapshot_retries_to_winner`；显式 RR 引擎、B 先建读视图、A 提交后同哈希落败：单行、胜者文件存在、败者文件已清、胜者主键一致）；同连接冲突分支既有用例保留。
+2. **P2-2 可忽略集补全**：原剔除面为 `Cf` + 少量不可见 `Mn` + Hangul 填充符，漏 Khmer 固有元音 / 蒙古文 FVS4 / 未赋值可忽略段。根修：`chat/text_normalization.py` 改为 Unicode `Default_Ignorable_Code_Point` 属性全族区间表（含 U+17B4–17B5、U+180B–180F、U+FFF0–FFF8、U+E0000–E0FFF 等；保留 `Cf` 超集面）。守卫：`test_chat_text_normalization.py` 新增 9 个码点参数 + 句首 / 「忽略」中间 / 句尾逐位置同分（检测得分与归一副本一致）+ 可见组合符 / 常规 Hangul 字母与音节阴性集；defense.md 写明「默认可忽略属性全族」。
+3. **P2-9 不可解析容器回落**：LEDGER §6 缓解台账新增「声纹不可解析容器（MP3/OGG/WebM/MP4）回落声明值」行（现状 / 原因 / 根修方案：容器头探测或供应商元数据 / 目标 R5-2）；voice.md 校验链与数据模型表改为「WAV / PCM 以实测为准；不可解析容器回落声明并见缓解台账」。
+4. **P2-3 WhatsApp 映射守卫**：`test_whatsapp_models.py` 回退矩阵新增 `has_user_text` 期望列（文本 / caption True；媒体纯占位 False）并断言映射结果——与 QQ / Telegram / WeCom / 抖音四适配器的 `has_user_text` 断言一致（五适配器映射面完整）。
+5. **P2-3 纯媒体积压**：`chat/flow_gate.py` 的 `record_inbound` 参数改为语义字段 `has_user_text`——仅用户文本入站递增未读积压并进缓冲，纯媒体只推进到达历史（`channels/channel_service.py` 显式传入）。守卫：`test_flow_gate.py` 纯媒体零积压 / 文本正常计数；`test_channel_router_flow.py` 连发纯媒体积压为 0、6 图后文本立即应答（不触发积压延迟 8s）、合并批次缓冲仍无空条目。
+6. **P2-11 段键硬编码**：`config/registry_admin.py` 的 `_section_key` 改返回 `config_loader.LLM_SECTION_KEY`（已导入同一 loader，无循环导入）。
+7. **P2-4 去重自证 + 双时钟**：`test_channel_router_sticker.py` 的同哈希群聊用例改为记录逐次收录调用（不再用自去重 set 掩盖调用次数），断言各库按哈希独立去重且重复到达逐次进入对应库；`channels/channel_service.py` 的 `handle_inbound` 每入站只读一次时钟，`_apply_flow_gate` / `_reply_via_group` 显式接收 `now_ms`（收录选择与应答选择同源；成功应答时间戳用同一次读数）。守卫：`test_group_sticker_cooling_boundary_single_clock_read_keeps_sets_aligned`（逐次推进时钟 + 冷却边界：时钟读数恰 1 次、收录集 == 应答集；变异回二次读数即红）。
+8. **P2-8 AST 守卫绕过**：`test_chat_service.py` 抽出 `_compose_message_call_sites`——覆盖 `ast.Name`、`ast.Attribute.attr`、`ImportFrom` 别名，并扫描模块层调用；生产守卫改为消费该 matcher。守卫：别名导入调用与 `service.compose_messages(...)` / 模块层直调两条反例证明可命中；生产面仍断言仅 `compose_for_generation` 可直连。
+9. **备注项**：`persona/service.py` 的表情 / 声纹路径收集各自 try/except 告警（与「收集失败不阻断」docstring 一致；用例 `test_delete_survives_file_path_collection_failure` 证明行照删、声纹文件仍清、表情残留无害）；§6 实时语音多段完成序目标批次改 `R5-1`；B1 真实等待清单补 `realtime_fakes.py:628`（2s 兜底预算）与 `test_app_realtime_voice.py:98`（5s deadline）；`BROWSER_TOOL_NAMES` 注为协议能力面单一真源（无运行时消费方，由文档与 `test_protocol_surface_is_llm_surface_plus_evaluate` 结构测试对照，不再是无说明死常量）。
+10. **文档同步**：defense.md（DI 全族）/ channels.md（纯媒体不计未读 + 单次时钟）/ chat.md（积压只计用户文本）/ voice.md / tools-browser.md；§6 缓解台账与目标批次同步。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3352 / coverage-gates=24 组 / lint / typecheck=212 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-a9b45231.json`，canonical sha8=`a9b45231`（709 文件级证据；**本批后由 `ddc4fb27` 取代，本行与证据为历史**；旧 `a09677e7`、`fc26e182`、`bd3bdfd3` 与更早证据均为历史）。
+- `cd backend && pixi run tests-all` → 0（3352 passed）；`pixi run coverage-gates` → 0（24 组 ≥80%：harness/channels 97.3%（3225/3316）、harness/chat 96.3%（1547/1607）、harness/multimodal 94.0%（671/714）、harness/persona 95.6%（1790/1872）、harness/config 96.6%（1554/1609）、harness/voice 93.1%（2628/2822）、app/main.py 93.9%（558/594）、app/api 85.2%（1257/1476））。
+- `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0（Success: no issues found in 212 source files）；`pixi run conftest-env` → 0（228/228，豁免 0）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `02872633…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）。
+- 根 `pixi run gates` → 0（comment-gates violations=0 hints=23 / sync-test-ratchet 无回升 / noqa-freeze 基线 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 211 源文件 25 探针覆盖 24 文件 + grandfathered 190≤190 / docs-truth / doc-counts 12 项 / assertion-freeze asserts=9369 raises=679 / surface-check 42/42 + env 791 行 / bench-core PASS / api-smoke PASS / prose-pin 75≤75）。
+- `cd backend && pixi run red-probe --all` → 0：25 条全部 RED（errors=0）。
+- `cd backend && SEEKDB_TEST_URL=127.0.0.1:2881 pixi run pytest src/tests/integration_seekdb -q --asyncio-mode=auto` → 0（13 passed：含新增双连接同哈希 RR 收敛用例；活容器 `seekdb-smoke`）。
+- 无迁移 / 无新增依赖 / 无新增 env 键；前端未动。
+
+
+### 已完成切片：G1 三审 3×P2 根修 + 单栈 SeekDB 拍板落地（本分支工作区）
+
+**背景**：G1 三审给出 3 条 P2（锁读形态 / SeekDB 用例前提 / 6235 与 1213 收敛仅缓解）与 4 条备注；用户同时拍板「方案 B：单栈 SeekDB + 清理行锁引擎误导表述 / 路径 / 命名」。本批按 §20 逐条根修并新增机械守卫。
+
+**A 部分（G1 三审 3×P2 + 备注）**
+
+1. **A1 锁读形态**：`multimodal/sticker_service.py` 的 `_winner_select` 由 `with_for_update()` 改为 `with_for_update(read=True)`（方言编译 `LOCK IN SHARE MODE`）——不请求排他锁，消除「唯一键检查已持共享锁 → 胜者查询升级排他锁」的 S→X 升级死锁。守卫：`test_winner_select_uses_shared_locking_read`（方言编译断言共享锁子句；撤锁 / 回退 FOR UPDATE 即红）。
+2. **A2 SeekDB 用例前提**：`test_concurrency_invariants.py` 的跨连接用例 B 首条语句改为 `ff_stickers` 表快照读（与生产 `upload_batch` / `ingest_bytes` 预读同形），断言旧读视图普通 SELECT 不可见胜者、SeekDB 落败插入实测抛 6235、调用方回滚单次重试后收敛为既有胜者（单行 / 胜者文件保留 / 落败 webp 清理 / 零异常）；另立无旧快照用例证明 1062 分支的共享锁定读解析胜者。删除「`SELECT 1` 建立读视图」错误前提（`SELECT 1` 不触表、不建快照）。变异撤锁子句 → 首用例红（实测）。
+3. **A3 6235 / 1213 收敛（根修）**：新增 `packages/harness/database/conflict_retry.py`——`is_transaction_conflict` 只按 `orig.args[0] in {6235, 1213}` 判定；`run_with_conflict_retry` 在**调用方**捕获后 `rollback` → 可选胜者保护文件清理 → 整段操作单次重试（预读命中已提交胜者 → 既有行 / 重复拒收；二次冲突原样上抛；非冲突驱动错误不重试）。`upload_batch` / `ingest_bytes` 接入（单条上传无独立路径），落盘尝试日志 + `_discard_loser_attempts`（只清理无已提交行引用、且胜者路径不同的落败文件——胜者文件恒保留）。守卫：一次性 6235 → 上传 dupe / 收录既有记录（零异常）；连续两次 → 上抛且只重试一次；1213 同收敛；1042 等非冲突错误一次即上抛；红探针 `transaction-conflict-retry-removal`（去实现 → 2 用例 RED）。
+4. **A4 备注**：`persona_rotation_models.py` 冷却定义改为「自该轮入站时刻起」（与单次时钟读数一致）；`channels.md` 占位语义区分「纯媒体占位不算用户文本；位置 / 按钮 / 交互回执属用户动作按含内容处理」；`voiceprint_audio.py` 首行改为「WAV / 裸 PCM 以实测为准；不可解析容器回落声明值（见缓解台账）」；既有冷却用例已断言逐人格集合相等 + 时钟读数恰 1 次，无需加强。
+
+**引擎矩阵实测（真实 `StickerService`；临时 `mysql:8.0.42` 容器 `--rm --tmpfs` 用完移除）**：
+- MySQL 协议族 / 旧快照：普通 SELECT 不可见（0）；`LOCK IN SHARE MODE` 与 `FOR UPDATE` 均为当前读（可见 1）；落败插入 1062 → 共享锁定读收敛（created=False + 胜者主键，胜者文件保留、败者清理）。
+- SeekDB / 旧快照：普通 SELECT 不可见（0）；锁定读**不跨越旧快照**（共享 / 排他均 0，实测）；落败插入 `OperationalError 6235` → 调用方重试收敛（既有 id / 单行 / 落败 webp 清理 / 零异常）。
+- SeekDB / 无旧快照：落败插入 1062 → 共享锁定读可见胜者（1）并收敛。
+- S→X 升级死锁：MySQL 协议族两事务各持共享锁后同时 `FOR UPDATE` → 1213；改 `LOCK IN SHARE MODE` → 无错误。SeekDB 实测共享锁与共享锁互斥（第二把共享读 1205），故其并发收敛由 6235 重试承载而非锁定读跨快照——文档与用例按实测锁定该边界。
+
+**B 部分（单栈 SeekDB 方案 B）**
+
+1. **B1 默认单栈**：`DatabaseConfig` 默认 `127.0.0.1:2881 / root / 空密码 / ai_agent_companion`（SeekDB 实例）；`SeekDBSettings` 仅保留检索池字段（enabled / database / vector_dim / pool_min / pool_max），host / port / user / password 改为可选覆盖（None = 继承权威库，password 留空继承 `DATABASE_PASSWORD`），检索库名默认 `ai_agent_companion_search`（同实例、不同库名）。新增 `pools/seekdb_compat.resolve_seekdb_config`：显式 host / port 与权威库不一致 → `BusinessException(CONFIG_INVALID)`「单栈 SeekDB：权威库与检索池必须同实例；拆分需另立决策」（dev 同口径）；`PoolManager.start` 与 `build_memory_store` 均经该唯一解析入口。
+2. **B2 去误导命名**：`backend/src` / `docs` / `scripts` / `pixi` 说明的旧口径「MySQL 8」权威存储统一改为「SeekDB 权威存储（MySQL 协议，aiomysql 驱动）」；裸行锁引擎泛称改「MySQL 协议 / SeekDB 行锁语义」；`innodb_lock_wait_timeout` 保留处注明「SeekDB 兼容占位变量，生效旋钮 `ob_trx_lock_timeout`」；driver 字符串 `mysql+aiomysql` 不变（协议层）。
+3. **B3 单栈证据**：`integration_seekdb/test_authority_engine.py`——专用 scratch 库 `aac_authority_verify` 经 Alembic 升级 head 后 `init_database(DatabaseConfig(type=mysql, host/port=真引擎))`，完成人格创建 / 读取 / 删除 round-trip；不触碰套件库，结束恢复引擎持有器槽位；缺 `SEEKDB_TEST_URL` 按套件策略 FAIL 不 skip。
+4. **B4 配置与文档**：`.env.example` 重新生成（DATABASE_PORT 2881、SEEKDB_* 留空继承说明）；config.md（单栈不变式段）/ database.md（单栈段 + 方言表）/ README（关系库选型）/ pools.md（检索池配置与解析入口）/ wizard 分节文案同步；LEDGER §4 Q3 改为「单栈 SeekDB（权威库与检索库同实例、不同库名；行锁语义沿用 MySQL 协议历史术语）」。
+5. **B5 守卫**：单栈不变式单测（host / port 不一致 → `CONFIG_INVALID`；留空继承 / 显式一致通过）；`scripts/check_doc_counts.py` 新增全仓措辞机械检查（禁把 MySQL 8 表述为权威存储的旧口径（须带 SeekDB 或 MySQL 协议限定）+ 裸行锁引擎泛称，唯一白名单 `innodb_lock_wait_timeout`；扫描 505 文件），随 `doc-counts` 接入根 gates。
+
+**文档同步**：multimodal.md（并发冲突语义：1062 共享锁定读 / 6235+1213 回滚单次重试 / 胜者文件保护）、database.md（单栈）、config.md（单栈配置）、pools.md、channels.md（占位语义区分）、voiceprint_audio 首行、persona_rotation_models 冷却口径、test-strategy/README（四模块 + 双形态收敛 + 权威引擎用例）、LEDGER §4/§6。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3359 / coverage-gates=24 组 / lint / typecheck=213 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-5f3a5e42.json`，canonical sha8=`5f3a5e42`（711 文件级证据；**G1 四审修复后由 `ee6fa370` 取代，本行与证据为历史**；`18ba54f1` / `ddc4fb27`（本批中间树）与 `a9b45231` 及更早证据为历史）。
+- `cd backend && pixi run tests-all` → 0（3359 passed）；`pixi run coverage-gates` → 0（24 组 ≥80%：harness/database 93.5%（215/230）、harness/multimodal 94.0%（694/738）、harness/pools 100.0%（271/271）、harness/channels 97.3%（3226/3316）、harness/chat 96.3%（1547/1607）、harness/config 96.6%（1554/1609）、harness/memory 94.8%（1904/2009）、harness/persona 95.6%（1790/1872）、harness/voice 93.1%（2628/2822）、app/main.py 93.9%（558/594）、app/api 85.2%（1257/1476））。
+- `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0（Success: no issues found in 213 source files）；`pixi run conftest-env` → 0（228/228，豁免 0）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `1df4d48c…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`——`.env.example` 因配置面变更更新且复跑 byte-stable）。
+- 根 `pixi run gates` → 0（comment-gates files=246 violations=0 hints=23 / sync-test-ratchet 无回升 / noqa-freeze 基线 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 212 源文件 26 探针覆盖 25 文件 + grandfathered 190≤190 / docs-truth / doc-counts 12 项（规则 29 / 红队 55 / 配置分节 31 / 措辞扫描 505 文件）/ assertion-freeze asserts=9399 raises=684 / surface-check 42/42 + env 791 行 / bench-core PASS / api-smoke PASS / prose-pin 75≤75）。
+- `cd backend && pixi run red-probe --all` → 0（26 条全部 RED，errors=0）。
+- `cd backend && pixi run tests-seekdb` → 0（15 passed：迁移链 / 并发不变式（含双形态表情收敛）/ 混合检索往返 / 权威引擎单栈 round-trip；活容器 `seekdb-smoke`）。
+- 无迁移 / 无新增依赖 / 无新增 env 键；前端未动（`--with-frontend` 未跑，源码零改动）。
+
+### 已完成切片：G1 四审 4×P2 修复（本分支工作区）
+
+**背景**：G1 四审给出 4 条 P2——同扩展名胜者文件在终态失败时被误删、重试前失败留下孤儿文件、措辞门禁未覆盖仓库根三处残留、复审段历史断言被后续批次改写。本批逐条根修并留守卫；旧 canonical `5f3a5e42` 自本批起为历史，中间树 `06d6b7a5`（补 `dist` 跳过前的验收树）亦为历史。
+
+逐条（原缺陷位置 → 根修位置 → 结构性守卫）：
+
+1. **F1 同扩展名胜者文件误删**：`multimodal/sticker_service.py` 的 `_insert_sticker` 在 1062 分支保留胜者路径文件后，后续终态提交失败曾按日志清理该路径，删掉胜者仍引用的字节。根修：终态失败清理由 F2 的 `_remove_unreferenced_files` 按已提交行裁决（同路径已有胜者行即保留）；`_insert_sticker` 的 1062 分支不再需要把同路径尝试移出 `written`，该对象身份分支在 F2 落地后冗余并已删除。守卫：`test_same_path_winner_file_survives_terminal_commit_failure`（同人格同哈希同扩展名胜者行已提交 → 批内 1062 → 终局提交抛非冲突 2013 → 胜者行与其文件均在——经 F2 的已提交行裁决通过）；`test_different_extension_winner_still_removes_loser_file`（异扩展名胜者：落败文件仍按路径判定清理）。
+2. **F2 重试前失败孤儿文件**：`_discard_loser_attempts` 清理并清空 `written` 后，重试若在预读阶段即抛非冲突错误，前一次保留的落盘文件无人跟踪而残留。根修：该方法返回「文件保留、本次行未提交」的尝试集合；`_insert_sticker` 重写同一路径即从该集合移除（重写者接管清理责任）；`upload_batch` / `ingest_bytes` 的终态失败路径改走 `_remove_unreferenced_files`——按同一人格哈希面查询已提交行，仅删除路径无任何已提交行引用的文件（查询失败保留文件，不掩盖原异常）。守卫：`test_retry_pre_read_failure_removes_orphan_file`（6235 清理保留 X → 重试预读 2013 → X 清除、无行残留）、`test_retry_pre_read_failure_keeps_winner_referenced_file`（同一路径已有已提交胜者行 → X 不删）。
+3. **F3 措辞门禁全仓化**：`scripts/check_doc_counts.py` 的扫描根由限定清单改为仓库根全树（后缀 `.md/.py/.toml/.ini/.yml/.yaml/.example`），跳过 `.git` / `.pixi` / `node_modules` / `dist` / `coverage*` / `docs/evidence/logs` / `docs/evidence/*.json` / `__pycache__` / 脚本自身（跳过清单与理由写入模块 docstring）；禁用正则放宽为 `MySQL\s*(8(\.\d+(\.x)?)?)?\s*[（(]?\s*权威`（「MySQL 协议」不误伤）。同时修 3 处残留：`backend/alembic.ini:4`、`database/units/engine_holder.py:33`、`database/engine.py:56` 统一改为「SeekDB 权威存储（MySQL 协议）/ SQLite 测试」。变异实证：把旧句写进 `backend/alembic/env.py`（旧门禁扫不到）→ 新门禁 exit 1；`alembic.ini` 回旧句 → exit 1；写入「MySQL 协议权威」→ exit 0。
+4. **F4 台账历史段还原**：`docs/LEDGER.md` 的 G1 复审段恢复当时事实——`_winner_select` 当时为 `with_for_update()` 行锁（当前读，规避快照读（行锁语义）落入事务早先读视图），不改写为后续批次的「共享锁定读」；两个守卫用例名加注现名（`test_winner_select_uses_shared_locking_read` / `test_sticker_conflict_stale_snapshot_retries_to_winner`）；同段其余历史断言逐条核对未被本批改写。
+5. **备注项**：multimodal.md 并发语义补「SeekDB 共享锁互斥 → 1205 不在重试集合（仅 6235 / 1213）；当前两入口均先预读故不可达；未来新增不预读调用方需补 1205 处理」；database.md / config.md 单栈段写明 `DATABASE_TYPE=sqlite` 时不变式仍按 host / port 字面比较（dev 同口径，无方言豁免；仅 `seekdb.enabled=true` 时校验）。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3363 / coverage-gates=24 组 / lint / typecheck=213 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-ee6fa370.json`，canonical sha8=`ee6fa370`（711 文件级证据；`--hash-only` 复算 `sha8=ee6fa370 files=711` 一致）；`06d6b7a5`（本批中间树）与 `5f3a5e42` 及更早证据为历史）。
+- `cd backend && pixi run tests-all` → 0（3363 passed）。
+- `cd backend && pixi run coverage-gates` → 0（24 组 ≥80%：harness/multimodal 95.3%（733/769）、harness/database 93.5%（215/230）、harness/channels 97.3%（3226/3316）、harness/chat 96.3%（1547/1607）、harness/config 96.6%（1554/1609）、harness/persona 95.6%（1790/1872）、harness/voice 93.1%（2628/2822）、app/main.py 93.9%（558/594）、app/api 85.2%（1257/1476））。
+- `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0（213 源文件）；`pixi run conftest-env` → 0（228/228，豁免 0）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `1df4d48c…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）。
+- 根 `pixi run gates` → 0（comment-gates files=246 violations=0 hints=23 / sync-test-ratchet 无回升 / noqa-freeze 基线 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 212 源文件 26 探针覆盖 25 文件 + grandfathered 190≤190 / docs-truth / doc-counts 12 项（规则 29 / 红队 55 / 配置分节 31 / 措辞扫描 575 文件）/ assertion-freeze asserts=9420 raises=687 / surface-check 42/42 + env 791 行 / bench-core PASS / api-smoke PASS / prose-pin 75≤75）。
+- `cd backend && pixi run tests-seekdb` → 0（15 passed：迁移链 / 并发不变式（含双形态表情收敛）/ 混合检索往返 / 权威引擎单栈 round-trip；活容器 `seekdb-smoke`）。
+- F3 变异实证（退出码）：`backend/alembic/env.py` 写旧句 → 1（命中 `env.py:116`）；`backend/alembic.ini` 回旧句 → 1（命中 `alembic.ini:4`）；写「MySQL 协议权威」→ 0（不误伤）。
+- 无迁移 / 无新增依赖 / 无新增 env 键；前端未动（`--with-frontend` 未跑，源码零改动）。
+
+### 已完成切片：G2 全局审计 5×P2 运行时正确性根修（本分支工作区）
+
+**背景**：G2 全局审计给出 5 条运行时正确性 P2（N1 公开入站体无界、N2 出站私网守卫可被非规范形态 / 自动重定向绕过、N3 满队丢弃文案与端点恒 200 实现矛盾、N4 时间戳解析双实现且 SMS 非有限值可能抛错、N9 流式收尾句柄被外部取消时泄漏）。本批逐条根修并留守卫；旧 canonical `ee6fa370`（G1 四审）自本批起为历史。
+
+逐条（原缺陷位置 → 根修位置 → 结构性守卫）：
+
+1. **N1 公开入站体有界（三端点统一）**：QQ / SmsForwarder 端点此前分别整包 `request.json()` / `request.body()`（chunked 无 Content-Length 时无上限），WhatsApp 仅有局部实现。根修：新增 `backend/src/app/api/inbound_body.py` 单源模块——`read_bounded_body` 以 `request.stream()` 逐块累计（累计超限瞬间抛受控 400，异常传播终止迭代、后续块不再索取），声明 Content-Length 预检保留；`parse_json_object` / `read_bounded_json_object` 统一空体 / 非法 JSON / 非对象错误面；per-channel 上限常量单源（QQ 8 MiB——容纳 OneBot `base64://` 媒体段，按出站附件 8 MiB 帽与表情单文件 5 MiB 的 base64 膨胀留余量；SmsForwarder / WhatsApp 64 KiB）。三端点全部接入。守卫：三端点 chunked 超限伪 stream 提前中止（`test_channels_{qq,sms_forwarder,whatsapp}_api.py`）、声明超限零读取、QQ 8 MiB 内 base64 通过 / 超 8 MiB 拒；`test_inbound_body_structure.py` AST 枚举 `main.py` 豁免鉴权 POST 路由，断言每个处理函数调用共享读取器且不直接 `request.json()/body()`（新增豁免 POST 未接即红）。
+2. **N2 出站目标守卫（防 SSRF 绕过）**：`outbound_guard` 此前仅拒绝可被 `ipaddress` 直接解析的私网字面量，且 `wecom_runner._fetch_url` 依赖 httpx 自动重定向（首跳校验后可直接跳到私网）。根修：`validate_http_url` 改为「主机归一（去空白 / 尾点 / 方括号 / 大小写）→ 可注入 resolver（默认 `asyncio` 事件循环 `socket.getaddrinfo`）→ 全部地址判公网（loopback / link-local / private / reserved / multicast / unspecified / IPv6 / v4-mapped）」，解析失败 / 空结果 fail-closed；非规范 IPv4 形态（`127.1` / `2130706433` / `0x7f.1` / `0177.0.0.1` / `0`）一律按解析结果判定。`wecom_runner._fetch_url` 改手动重定向循环（≤3 跳、每跳重新校验目标、3xx 无 `Location` 受控失败），客户端自动跟随关闭；流式限读与 8 MiB 帽保留。守卫：`test_outbound_guard.py` 七类非规范 / 特殊形态全部拒绝、多地址任一私网拒绝、公网通过、resolver 抛错 / 空结果 / 非法地址 fail-closed、主机归一矩阵；`test_wecom_runner.py` 重定向链逐跳校验、重定向到私网、无 Location、超跳数、resolver 失败；既有企微 URL 用例同步列明并注入 fake resolver（`test_url_attachment_downloaded_via_shared_client` / `test_url_http_error_reported_per_attachment` / `test_url_transport_error_reported_per_attachment` / `test_url_response_over_size_cap_fails_per_attachment`）。
+3. **N3 丢弃语义文案单源**：QQ / SMS / 企微 runner 的模块 docstring、队列常量注释、满队 ERROR 文案与 `channels.md` 多处旧口径「平台 / 手机端重投可重新消费」与端点恒 200（仅非 200 重试）矛盾。根修：统一为真源口径「端点恒 200（上报方仅非 200 重试）→ 满队丢弃即最终丢失；不登记去重仅吸收偶发重复」；企微长连接按「回调即时确认（平台仅对失败回调重试）」同义收口。用例更名 `test_dropped_message_not_dedup_registered_so_repeat_can_be_consumed`（QQ / SMS），并各补「满队丢弃后端点仍 200」端点用例（`TestQueueFullAck::test_queue_full_drop_still_returns_ok`）。
+4. **N4 时间戳解析单源**：SMS 与 WhatsApp 各持一份解析实现，SMS 缺 `math.isfinite` / `OverflowError` 护栏（非有限值可能抛错）。根修：新增 `backend/src/packages/harness/channels/inbound_timestamp.py` 共享实现（入口标识 `channel_label` 仅用于诊断），非有限值（`NaN` / `Infinity` / `"nan"` / `"inf"` / `"Infinity"` / `"1e999"`）与溢出 / 非法 / 缺失 / 非正统一回落服务端 Epoch 毫秒；SMS / WhatsApp 的 `resolve_*_timestamp_ms` 仅保留自有名字与 docstring 并委托共享实现；删除 SMS 旧实现与 §6 对应遗留行。守卫：`test_channel_timestamp.py` 两通道同一参数化矩阵（秒 / 毫秒 / 非有限 / 非法字符串 / 缺失 / 布尔 / 非正）与逐值一致性。
+5. **N9 流式收尾句柄收口**：`realtime_session._finish_stream_segment` 对 `CancelledError` 仅原样上抛，挂起中的 `finish()` 被外部取消时连接句柄无人收口；`asr_stream_client.finish()` 取消路径同样未关闭传输；用量包装在收尾未落定时会被清理 cancel 补记。根修：`_finish_stream_segment` 捕获取消后以独立任务 + `asyncio.shield` 驱动 `handle.cancel()` 至完成（幂等、屏蔽二次取消）再上抛；`asr_stream_client.finish()` 取消路径经同样的 shield 收口（传输关闭 + 派生任务回收）；`_StreamAsrUsageHandle` 标记「finish 已发起但未落定」，随后的清理 `cancel()` 只关闭连接、不补记 usage 行（与 finish 失败回退批量口径一致）；会话关闭 / 对端断开路径经 `_finalize` 的 stale 任务取消链同步收口。守卫：`test_realtime_session_streaming.py` 外部取消 / 传输断开落在 finish 挂起时句柄已取消、任务集合清零、无 final；`test_voice_stream_clients.py` finish 取消后 cancel 事件出站、传输关闭、`_tasks` 清零、cancel 幂等；`test_voice_service_streaming.py` 取消后清理不留 usage 行；`voice.md` 计次表补「finish 被外部取消 → 0 行」行。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp` → 0（5 步全 PASS：tests-all=3442 / coverage-gates=24 组 / lint / typecheck=215 源文件 / gates；证据 `docs/evidence/r4-5-whatsapp-ac48f039.json`，sha8=`ac48f039`（716 文件级证据；**G2 审计修复 B2 后由 `eeed61b8` 取代，本行为历史**）；`6fd7efc8`（本批最终文案收口前树）、`ee6fa370`（G1 四审）与更早证据为历史）。
+- `cd backend && pixi run tests-all` → 0（3442 passed；G1 四审基线 3363，本批 +79）。
+- `cd backend && pixi run coverage-gates` → 0（24 组 ≥80%：app/api 85.3%（1249/1465）、harness/channels 97.5%（3277/3362）、harness/voice 93.0%（2657/2857）、harness/database 93.5%（215/230）、harness/multimodal 95.3%（733/769）、harness/persona 95.6%（1790/1872）、app/main.py 93.9%（558/594））。
+- `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0（215 源文件）；`pixi run conftest-env` → 0（228/228，豁免 0）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `1df4d48c…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）。
+- 根 `pixi run gates` → 0（comment-gates files=248 violations=0 hints=23 / sync-test-ratchet +0 / noqa-freeze 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 源文件 214、冻结基线 190、探针 28 条覆盖 27 文件 / docs-truth / doc-counts 12 项（规则 29 / 红队 55 / 配置分节 31 / 措辞扫描 580 文件）/ assertion-freeze files=224 asserts=9506 raises=700 / surface-check app/api 104→62 已登记 + 42 豁免、env 791 行 / bench-core PASS 6 项 / api-smoke PASS 4 端点 / prose-pin 75≤75）。
+- 红探针 adhoc：`app.api.inbound_body:read_bounded_body` → RED（failed=1）；`packages.harness.channels.inbound_timestamp:resolve_epoch_ms_timestamp` → RED（failed=42）。
+- `cd backend && pixi run tests-seekdb` → 0（15 passed；活容器 `seekdb-smoke`）。
+- 无迁移 / 无新增依赖 / 无新增 env 键；前端未动（`--with-frontend` 未跑，源码零改动）。
+
+### 已完成切片：G2 审计修复 B2（N5–N8 / N10–N12 + 缓解表逐条根修——本分支工作区）
+
+**背景**：G2 审计剩余 N5–N8 / N10–N12 与缓解台账缺项。本批逐条消除再发机制：预算上限与用途分区单源、注释门编号正则与前端扫描、措辞门同行判定、F1 与 F2 机制归并、断言棘轮新文件收紧、台账迁移 head 机械校验、前端构建聚合基线与两条结构测试；旧 canonical `ac48f039` 自本批起为历史。
+
+逐条（根修位置 → 守卫 / 变异证据）：
+
+1. **N5 预算上限单源**：新增 `packages/harness/usage/budget_limits.py`——`BUDGET_COUNT_PAGE_LIMIT=200` / `BUDGET_COUNT_PAGE_CAP=50` / `DAILY_BUDGET_MAX=乘积` 与运行时容量访问器；LLM 网关与 voice 预算计数器引用同一页常量，`config/models.py` 六处与 `voiceprint_models.py` 两处 `le` 全部改引用 `DAILY_BUDGET_MAX`。用途分区单源改为 `usage/models.py` 的 `BudgetPurposeGroup` + `BUDGET_PURPOSE_GROUPS`（llm / voice / search / exempt）。守卫：`test_daily_budget_limit_is_single_source_across_config_and_counters`（逐字段 `le == DAILY_BUDGET_MAX`、两计数器页常量同源、容量访问器一致）、`test_budget_purpose_partition_covers_usage_enum_without_overlap`（分区并集 == `set(UsagePurpose)` 且互不重叠）；红探针 `daily-budget-limit-single-source-removal`（`budget_count_capacity` 桩 → failed=1）。变异：任一 `le` 改为 `DAILY_BUDGET_MAX + 1` → 单源测试 1 failed。
+2. **N6 注释门泛化**：`check_chinese_comments.py` 的编号正则改为独立记号 `R\d[a-z]?(-\d+)?` / `G\d+` / `D\d+(-\d+)?` / `P\d+`（词边界排除 `R2D2` / `MP3` / `UUID4` / `chunk_index`）；扫描根补 `frontend/src`，以最小词法状态机只解析 TS/JS 注释（字符串与模板字符串不入检查面）；清理 `realtime_session.py` 3 处、`voice_service.py` 1 处、`export_dto_schemas.py` 4 处、前端三文件 4 处编号残留（逐处按上下文改写为自证语义）。变异：生产注释写回 `R4` → exit 1；写 `R2D2` → exit 0。门禁：files=356 violations=0 hints=23。
+3. **N7 措辞门可绕过**：`check_doc_counts.py` 改为同行规则——`(?i)\bmysql\b` 与「权威」同现且该行不含 `SeekDB` 与「协议」即红；后缀补 `.ts/.tsx/.js/.mjs/.json/.cfg/.sh` 与无后缀 `Dockerfile/Makefile`；跳过清单保持不变并写入模块 docstring。变异矩阵 8 形态（4 正 4 反）：`MySQL 8.0.42 权威存储` / `小写 mysql 8 权威` / `MySQL 5.7 权威` / `以 MySQL 8 作为权威库` → 4 行红；`SeekDB 权威存储（MySQL 协议）` / `MySQL 协议 / SeekDB 行锁语义` / `SeekDB … 底层为 MySQL` / 含「协议」限定 → 不误伤。新暴露残留（`.env.example`、`config/models.py` 的 `mysql（生产权威）` 描述、LEDGER 自身旧口径）已同步改写/重生成。门禁：13 项一致、措辞扫描 817 文件。
+4. **N8 F1 / F2 机制归并**：`multimodal/sticker_service.py` 删除 1062 分支内「按对象身份把同路径尝试移出 `written`」的冗余分支——终态失败清理由 F2 的 `_remove_unreferenced_files` 按已提交行裁决（胜者路径恒保留）。`test_same_path_winner_file_survives_terminal_commit_failure` 经 F2 仍绿；变异：把 `_remove_unreferenced_files` 改为无条件删除 → 该用例 1 failed。直接状态断言未新增：删行后 `written` 合法保留同路径尝试，原「不含该尝试」断言不再成立，改由终态已提交行裁决覆盖。
+5. **N10 断言棘轮收紧**：`assertion_freeze.py` 的 gate 语义改为「基线外新测试文件即红（提示评审后 `--update`）」；`--update` 将当前 27 份基线外新文件并入（基线 225 文件 / asserts=9535 / raises=702）。脚本自证：临时新增 `test_tmp_freeze_probe.py` → `--enforce` exit 1（明细「基线外新测试文件」）；`--update` 后 exit 0；删除该文件 → exit 1（基线内文件缺失）；再 `--update` → exit 0。新增 `test_assertion_freeze_gate.py` 两用例（`_report` 判红 + `_write_baseline` 并入）。
+6. **N11 台账与性能文档**：LEDGER 迁移链改 `0001..0019` 并补 0019 说明；§5 门禁命令的易变数字（后端用例数 / mypy 文件数 / 前端用例与构建耗时 / bundle 数字）改为「以 canonical 证据 JSON 为准」，仅保留可机械核对的迁移 head——`check_doc_counts.py` 从 `backend/alembic/versions` 派生 head 并校验（变异 0019→0018 → exit 1）。`docs/backend/performance.md` 构建基线改为聚合口径（初始 JS / lazy chunk 数与总量 / 构建耗时，删除内容哈希文件名，注明明细以 `pixi run bundle-check` 输出为准）；本机实测：初始 389,799 B（gzip 123,627 B）、lazy 25 个 / 340,756 B（gzip 110,888 B）、暖缓存构建 2.78s。`check_bundle_budget.mjs` 的 summary 行补 `lazy_gzip` / `lazy_chunks` 聚合字段。
+7. **N12 结构测试**：`config/auth_policy.py` 新增 `WEBHOOK_PATH_AUTH_CHECKS`（path 前缀 → 检查函数）单源表，`ensure_auth_policy` 逐项派发；`test_auth_policy.py` 机械枚举 `main.py` 豁免鉴权 POST 路由并断言每条路径命中映射，且生产策略逐项执行全部检查（变异：删除 whatsapp 映射项 → 1 failed）。`test_pools_seekdb.py` 新增单栈 SeekDB 参数化矩阵 18 形态（enabled 9：继承 / 显式一致 / 用户与密码变量覆盖 / host / port / 双不一致 fail loud；disabled 9：不变式不校验、显式覆盖原样解析、PoolManager 零 SeekDB 装配）（变异：不变式 `or` → `and` → 4 failed）。
+8. **缓解表补齐**：§6 新增 SmsForwarder 发送者归一碰撞面（R5-3，需产品决定点号语义）与流式 ASR 起始边界（R5-1，VAD 候选帧纳入流式起点）两行（现状 / 原因 / 根修方案 / 目标批次）；N3 满队短计说明与 N4 时间戳旧行已清；N9 finish 句柄已根修，无残留行。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run verify-slice -- --slice r4-5-whatsapp --with-seekdb --with-frontend` → 0（10 步全 PASS：tests-all=3466 / coverage-gates=24 组 / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=702 / frontend-coverage=96.08 / frontend-lint / frontend-build=3.08s；证据 `docs/evidence/r4-5-whatsapp-eeed61b8.json`，canonical sha8=`eeed61b8`（718 文件级证据；`ac48f039`（G2 运行时修复）与更早证据均为历史）。
+- `cd frontend && pixi run bundle-check` → 0（PASS total=389799 lazy=25；summary initial_gzip=123627 lazy_bytes=340756 lazy_gzip=110888 lazy_chunks=25）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `e756beba…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）。
+- 根 `pixi run gates` → 0（comment-gates files=356 violations=0 / red-probe-gate 29 探针覆盖 28 文件 / doc-counts 13 项 / assertion-freeze asserts=9535 raises=702 / 其余门禁同链）。
+- 变异证据：N5 `le + 1` → 单源测试 failed；N6 注释写回 `R4` → exit 1、`R2D2` → exit 0；N7 8 形态 4 红 4 绿；N8 无条件删除孤儿清理 → F1 用例 failed；N10 临时新文件 → exit 1 → `--update` → exit 0；N11 迁移 head 0018 → exit 1；N12 删除 whatsapp 映射 → failed、单栈不变式 `or`→`and` → 4 failed。
+- 无新增依赖 / env 键 / 迁移；前端源码改动仅清理注释，后端与外键面未变。
+
+### 已完成切片：G2 终审修复（N9 / N7 / N6 / N3 / N11 逐条收口——本分支工作区）
+
+**背景**：G2 终审给出 5 条 P2（N9 finish 尾段收口仍可被取消打断、N7 措辞门把 `mysqld` 误当 MySQL 字样、N6 注释门未覆盖 `backend/alembic` 与 `frontend/scripts`、N3 企微用例 docstring 沿用旧「重投可重新消费」口径、N11 台账仍以证据 JSON 指代迁移链 head）。本批逐条根修并留守卫 / 变异；旧 canonical `eeed61b8`（G2 审计修复 B2）自本批起为历史。
+
+逐条（根修位置 → 守卫 / 变异证据）：
+
+1. **N9 finish 终段取消安全**：`asr_stream_client.finish()` 成功尾段的 `_shutdown` 与 `_wait_settled` 超时收尾改经 `_finalize_cancellation_safe`——收尾（关闭传输 + 回收派生任务 + 置终态）作为独立任务挂起，以 `asyncio.shield` 循环等待至完成，重复取消只记录不打断，收尾完成后原取消信号优先上抛（收尾异常不掩盖）。`cancel()` 与既有取消路径语义（cancel 事件 + 正常关闭 + 幂等）不变。守卫：`test_voice_stream_clients.py` 新增「传输 close 被门闩挂起时取消 finish → 关闭完成 / `_tasks` 清零 / 零新增挂起任务 / 二次 cancel 不重复关闭」与「关闭在途重复取消仍完整收口」；`test_voice_service_streaming.py` 新增真客户端同场景「零 usage 行」。变异：尾段改回直接 `await self._shutdown(...)` → 上述 3 用例红（3 failed / 37 passed）。
+2. **N7 措辞门词边界**：`check_doc_counts.py` 的 MySQL 判定改为 `(?i)\bmysql(?![a-z])`——`MySQL8.0.42` / `MySQL8` 这类紧贴版本号的写法仍算命中（缺 SeekDB / 协议限定即红），`mysqld` 守护进程名不再误伤；同行判定与裸行锁引擎泛称判定不变。变异矩阵 10 形态（5 红 5 绿）：原 4 条阳性 + `MySQL8.0.42 权威存储`（缺 SeekDB / 协议限定）→ 红；`mysqld 权威守护` + 原 4 条阴性（带 SeekDB 或「协议」限定）→ 绿。
+3. **N6 注释门扫描根补齐**：`check_chinese_comments.py` 的 `_TREE_ROOTS` 增 `backend/alembic`（Python 面同 backend/src 规则）与 `frontend/scripts`（TS/JS 注释词法面），模块 docstring 同步扫描范围。新暴露 8 行编号残留逐处按上下文语义化改写：`alembic/env.py`「迁移链起点无域表」、`000000000001_initial.py`「版本链锚点，无域表」、`009`「回合观测元数据」、`010`「swipes 候选重生成」、`011`「定时提醒落库」、`012`「置顶 / 冻结 / 检索强化的持久面」、`013`「事实 / 证据链 / 更正循环」、`check_bundle_budget.mjs` 去掉批次前缀。变异：`backend/alembic/env.py` 与 `frontend/scripts/check_bundle_budget.mjs` 注释各写 `R4` → exit 1（逐文件命中）；改写 `R2D2` → exit 0。门禁：files=377 violations=0 hints=23。
+4. **N3 企微用例口径**：`test_wecom_runner.py::test_queue_overflow_does_not_register_dropped_msgid` 的 docstring 改为「丢弃不登记去重：同 msgid 再次到达仍可消费（仅吸收平台偶发重复）」，与 `wecom_runner` 模块 docstring「满队丢弃即最终丢失；不登记去重仅吸收平台偶发重复」及 `channels.md` 同源。
+5. **N11 迁移 head 指针**：§5 门禁命令的迁移链说明改为「迁移链 head 以 `backend/alembic/versions` 为准，由 doc-counts 机械校验」；`check_doc_counts.py` 的 `_migration_facts`（从版本目录派生 head 并校验 LEDGER 字面）仍在 gates 链内。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3469 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=702 / frontend-coverage=96.08 / frontend-lint / frontend-build=2.66s；证据 `docs/evidence/r4-5-whatsapp-819c3f22.json`，canonical sha8=`819c3f22`（718 文件级证据；`--hash-only` 复算一致；**G2 五审修复后由 `87fc56e8`、其后由 `5eb1d5ea` 取代，本行为历史**）；`eeed61b8`（G2 审计修复 B2）与更早证据均为历史）。
+- 变异证据：N9 尾段回退直接 await → 新 3 用例红（3 failed / 37 passed）；N7 10 形态 5 红 5 绿；N6 两扫描根写 `R4` → exit 1、写 `R2D2` → exit 0。
+- 根 `pixi run gates` → 0（comment-gates files=377 violations=0 / red-probe-gate 29 探针覆盖 28 文件 / doc-counts 13 项 / assertion-freeze asserts=9549 raises=705 / 其余门禁同链）。
+- `cd backend && pixi run tests-seekdb` → 0（15 passed；活容器 `seekdb-smoke`）。
+- 无迁移 / 无新增依赖 / 无新增 env 键；前端仅 `scripts/check_bundle_budget.mjs` 注释一行。
+
+### 已完成切片：G2 五审修复（N9 三条取消安全守卫 + 证据 / 注释门覆盖边角——本分支工作区）
+
+**背景**：G2 五审唯一 P2——`asr_stream_client.finish()` 的四处 `_finalize_cancellation_safe` 接入中，此前只有成功尾段有「关闭在途取消仍收口」的红守卫；收尾超时、业务失败、外部取消三条出口的守卫缺失，回退为直接 `await` 不会变红。本批补三条门闩用例，并收口两个覆盖边角（证据哈希根覆盖注释门已纳入的树、注释门前端配置面）；旧 canonical `819c3f22`（G2 终审修复）自本批起为历史。
+
+逐条（守卫 → 断言面 / 变异证据）：
+
+1. **收尾超时出口守卫**：`test_asr_settle_timeout_close_cancel_still_finalizes`——final 事件永不到达触发 settle 超时，`close_gate` 把 `_shutdown(STREAM_CLOSE_GOING_AWAY, "settle_timeout")` 挂在传输关闭在途；此时取消 `finish` → 断言关闭码 `(1001, "settle_timeout")`、`close_calls == 1`、`handle._tasks` 为空、`_closed` 为真，取消信号上抛。
+2. **业务失败出口守卫**：`test_asr_business_failure_cancel_still_finalizes`——收尾事件出站后注入对端 1011 断流触发 `BusinessException` 出口，`cancel()` 收口挂在关闭在途；关闭在途重复取消两次 → 断言 `session.cancel` 出站、关闭码 `(1000, "client_cancel")`、连接只关一次、`handle._tasks` 为空，取消信号上抛（不暴露业务失败异常）。
+3. **外部取消出口守卫**：`test_asr_cancel_exit_second_cancel_still_finalizes`——外部取消进入 `CancelledError` 出口的 `cancel()` 收口并挂在关闭在途；期间二次取消 → 断言连接只关一次、`_tasks` 为空、无新增挂起任务、取消信号上抛，收口完成后幂等 `cancel()` 不重复关闭。
+4. **变异矩阵（四接入点；逐处临时回退为直接 `await`，复原后 29 passed）**：业务失败出口 `_finalize_cancellation_safe(self.cancel())` → `await self.cancel()` → 仅用例 2 红（1 failed / 28 passed）；外部取消出口同改 → 仅用例 3 红（1 failed / 28 passed）；收尾超时出口 `_finalize_cancellation_safe(self._shutdown(STREAM_CLOSE_GOING_AWAY, "settle_timeout", ...))` → 直接 `await` → 仅用例 1 红（1 failed / 28 passed）；成功尾段 `_finalize_cancellation_safe(self._shutdown(STREAM_CLOSE_NORMAL, "session_finished", ...))` → 直接 `await` → 既有两条成功尾段守卫同时红（2 failed / 27 passed）。
+5. **证据哈希根覆盖边角**：`verify_slice.py` 的 `_HASH_ROOTS` 增 `backend/alembic` 与 `frontend/scripts`（与注释门扫描根对齐——证据哈希须覆盖被门禁约束的树）。新增根枚举 22 个源文件（21 个 Alembic 环境 / 迁移文件 + 1 个前端预算脚本），`__pycache__` 按既有跳过口径剔除，无缓存 / 生成物。canonical 由 718 文件增至 740 文件级证据。
+6. **注释门前端配置面**：`check_chinese_comments.py` 的 `_TREE_ROOTS["frontend"]` 增 `frontend/eslint.config.js` / `frontend/vite.config.ts` / `frontend/vitest.config.ts`（TS/JS 注释词法面），模块 docstring 同步。前端树 files=111 violations=0；全链 comment-gates files=380 violations=0 hints=23（原 377——新增三文件均无编号残留，无需清理暴露项）。
+7. **断言基线**：三条守卫新增断言后运行 `pixi run python ../scripts/assertion_freeze.py --update`（exit 0），基线 asserts 9549→9570（+21）、raises 705→708（+3）、文件 225 不变；`--enforce` 复跑 exit 0。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd backend && pixi run pytest src/tests/unit/test_voice_stream_clients.py -q --asyncio-mode=auto` → 0（29 passed——既有 26 + 新增 3）。
+- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=702 / frontend-coverage=96.08 / frontend-lint / frontend-build=3.36s；证据 `docs/evidence/r4-5-whatsapp-5eb1d5ea.json`，canonical sha8=`5eb1d5ea`（743 文件级证据；`--hash-only` 复算一致；G2 六审边角并入后由本行取代 `87fc56e8`，后者为历史）；`819c3f22` 与更早证据均为历史）。
+- `cd backend && pixi run coverage-gates` → 0（24 组 ≥80%：harness/voice 93.0%（2667/2868）、harness/channels 97.4%（3276/3362）、app/api 85.3%（1249/1465）、app/main.py 93.9%（558/594）等全组 PASS）。
+- `cd backend && pixi run lint` → 0；`pixi run typecheck` → 0（216 源文件）；`pixi run conftest-env` → 0（228/228，豁免 0）。
+- `cd backend && pixi run gen-examples` 连跑两次 → 0（三件套 sha256 一致：`.env.example` `e756beba…` / `config.example.yaml` `19bba95d…` / `extensions_config.example.json` `1a17d6e6…`）。
+- 根 `pixi run gates` → 0（comment-gates files=380 violations=0 hints=23 / sync-test-ratchet 无回升 / noqa-freeze 基线 0 / conftest-env 228/228 / sandbox-drift 38 项 / red-probe-gate 源文件 215、冻结基线 190、探针 29 条覆盖 28 文件 / docs-truth / doc-counts 13 项（规则 29 / 红队 55 / 配置分节 31 / 措辞扫描 817 文件）/ assertion-freeze asserts=9570 raises=708 / surface-check 62 已登记 + 42 豁免、env 791 行 / bench-core PASS 6 项 / api-smoke PASS 4 端点 / prose-pin 75≤75）。
+- `cd backend && pixi run tests-seekdb` → 0（15 passed；活容器 `seekdb-smoke`）。
+- 变异矩阵见逐条第 4 项；复原后源文件与 HEAD 零差异（`_finalize_cancellation_safe` 四处接入原样）。
+- 无迁移 / 无新增依赖 / 无新增 env 键；前端仅新增三处配置扫描根（源码零改动）。
+
+**G2 六审边角并入**：`scripts/verify_slice.py` 的 `_HASH_ROOTS` 增补
+`frontend/eslint.config.js` / `frontend/vite.config.ts` / `frontend/vitest.config.ts`
+（注释门扫描根与证据哈希根对齐；文件数 740→743，canonical 更新为 `5eb1d5ea`）。
+
+### 已完成切片：前端实时语音 act 警告根修 + 采集生命周期守卫（本分支工作区）
+
+**背景**：8 条 React `act(...)` 警告来自 `RealtimeVoicePage` 的 `ready` 分支——fire-and-forget 续体在 `await capture.start()` 后于 act 外回写会话状态，测试却以同步 `act(() => client.emit(ready))` 立即断言。组件面另有一处真实缺陷：`MicrophoneCapture.stop()` 在 `getUserMedia` 未决时为空操作，迟到的媒体流随后照建且无人停轨（麦克风常开 / 隐私风险）；停止后立即重开时旧会话的迟到结果还可能覆盖新会话能力与暂停态。本批逐条根修；旧 canonical `5eb1d5ea` 自本批起为历史。
+
+逐条（根修位置 → 守卫 / 变异证据）：
+
+1. **测试根修（8 处）**：`RealtimeVoicePage.capabilities.test.tsx`（2 处）与 `RealtimeVoicePage.test.tsx`（6 处）中「同步 emit ready 后立即断言」的块改为 `await act(async () => { client.emit(...); await Promise.resolve() })`；内层 `await` 满足 `require-await`，断言保持原样（未改为 `findBy` / `waitFor`）。`src/pages/realtime` 复跑：21 passed（7+14）、输出中 `not wrapped in act` 计数 0。
+2. **能力回读补强**：新增「浏览器未生效 AEC 时摘要展示降级（服务端公告为开）」用例——fake 采集注入 `echoCancellation:false`，断言摘要行 `回声消除 降级` 与 AEC 提示条。把该用例的 act 临时改回同步后，断言立即失败（`Unable to find ... /回声消除 降级/`）并同时触发 2 条 act 告警，证明该语义锁定的是异步回读链路而非默认值兜底。
+3. **页面会话身份守卫**：`ready` 异步续体在 `await capture.start()` 后与每次回写前检查 `captureRef.current === capture`，不等则直接返回；`resumeCapture` 的 `await capture.resume()` 后同样校验。停止 / 重开的旧会话结果不再覆盖新状态（原「可恢复错误」用例的迟到回写也被该守卫消除——这正是修复前门禁实测需要同时回退该守卫才能复现 8 例的原因）。
+4. **采集世代 / pending-stop**：`MicrophoneCapture` 增加世代计数与 `pendingStop` 标记；`stop()` / `pause()` 自增世代，`startInternal` 在 `getUserMedia`、`AudioContext.resume`、worklet 加载（含节点创建）后的每个 `await` 检查世代，过期时停轨、断开节点、关闭上下文并返回；启动资源改为局部束、成功后才提交实例字段，迟到启动无法覆盖新会话。`stop()` 在启动在途时会等待其迟到清理完成（`finally` 复位 `pendingStop`），重复 stop 幂等；新会话在 stop 等待期间启动时不会误清其资源。
+5. **两例生命周期测试**：`realtimeVoiceClient.test.ts` 新增「`getUserMedia` 未决时 stop → 迟到媒体流被停轨、不建上下文、无残留」与「stop 后立即重开 → 旧 start 迟到结果不覆盖新会话能力 / 暂停态（旧轨停止、新上下文保留、暂停态不被改写）」；以手动 deferred Promise 驱动，无真实等待。
+6. **act 门禁**：`src/test/setup.ts` 包装 `console.error`，仅匹配 `not wrapped in act(...)` 文案并计数，其余日志原样透传；`beforeEach` 经 `context.onTestFinished` 在用例结束（宏任务排空 + afterAll 兜底；onTestFinished 晚于 `afterEach`（含 RTL cleanup））按条数与用例名抛错。
+
+**实测（命令 + 退出码；最终树）**：
+- 修复前门禁复现（临时回退 8 处 async act 与页面身份守卫）：`cd frontend && pixi run npx vitest run src/pages/realtime --reporter=default` → 8 failed / 12 passed；失败用例与修复前采集到的 8 条 act 告警逐条对应（capabilities 2 + RealtimeVoicePage 6）。
+- `cd frontend && pixi run npx vitest run src/pages/realtime --reporter=default` → 0（21 passed（7+14）；`not wrapped in act` 计数 0、门禁告警 0）。
+- `cd frontend && pixi run test` → 0（705 passed；相对修复前 702 增加 3 个用例——2 个采集生命周期 + 1 个能力回读；全量 act 门禁 0 告警）。
+- `cd frontend && pixi run coverage` → 0（statements 95.86% / branches 91.87% / functions 95.75% / lines 96.05%，perFile ≥80% 门禁通过）；`pixi run lint` → 0；`pixi run build` → 0（3.31s，初始 chunk 389.80 kB / gzip 123.62 kB）。
+- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=705 / frontend-coverage=95.86 / frontend-lint / frontend-build=3.28s；证据 `docs/evidence/r4-5-whatsapp-f8403536.json`，canonical sha8=`f8403536`（743 文件级证据）；`5eb1d5ea` 与更早证据均为历史）。
+- 无后端改动 / 无新增依赖 / 无新增 env 键 / 无迁移；前端改动文件：`src/pages/realtime/RealtimeVoicePage.tsx`、`src/pages/realtime/RealtimeVoicePage.capabilities.test.tsx`、`src/pages/realtime/RealtimeVoicePage.test.tsx`、`src/lib/realtimeVoiceClient.ts`、`src/lib/realtimeVoiceClient.test.ts`、`src/test/setup.ts`。
+
+### 已完成切片：前端实时语音承载性守卫 + act 门禁宏任务归属 + 清理异常收口（本分支工作区）
+
+**背景**：复审（`bbf0592`）给出 2 P1 / 4 P2：采集层三处承载性检查（worklet 窗口 stop、getUserMedia 窗口 pause、stop 等待在途清理）无红守卫；页面两处会话身份守卫无红守卫；启动失败时清理异常会掩盖 `onError`；`pendingStop` 为死字段且建节点后同步复核不可达；act 门禁仅排空微任务，迟到宏任务告警与文件末条 / afterAll 残留会漏记。本批逐条根修并留守卫 / 变异；旧 canonical `f8403536` 自本批起为历史。
+
+逐条（根修位置 → 守卫 / 变异证据）：
+
+1. **采集承载性守卫（P1-1）**：`MicrophoneCapture` 的 `stop` / `pause` 世代与在途等待语义由三条 deferred 门闩用例锁定（无真实等待）：
+   - 「stop 落在 worklet addModule 窗口」——addModule 挂起时 stop、放行后断言停轨 1 / 关上下文 1 / `getCapabilities()===null` / 不建 worklet 节点；删除 `startInternal` 中 worklet 后的过期检查 → 1 failed / 16 skipped。
+   - 「pause 落在 getUserMedia 窗口」——媒体流挂起时 pause、放行后断言 `isPaused()===true` / 停轨 1 / 未建上下文；删除 `pause()` 的世代自增 → 1 failed / 16 skipped。
+   - 「stop 等待在途启动的迟到清理」——addModule 放行后 context.close 挂起，断言 stop 在 close 放行前未 settle；删除 `stop()` 的 `await inflight.task` → 1 failed / 16 skipped。
+2. **页面会话身份守卫（P1-2）**：`RealtimeVoicePage.capabilities.test.tsx` 的 FakeCapture 支持挂起 start / resume，并在 `stop()` 清空 capabilities（与真实采集一致）。两条用例覆盖「停止→重开→旧 ready 的 start 迟到」与「停止→重开→旧 resume 迟到」：旧会话回读不得覆盖新会话能力 / 暂停提示。删除 ready / AEC 公告 / resume 三处身份守卫 → 2 failed / 7 skipped；复原后 9 passed（`src/pages/realtime` 现 23 条 = 9 + 14）。
+3. **清理异常不掩盖启动失败（P2-1）**：`startInternal` 的业务失败出口与三处过期清理统一改为 `await this.releaseResources(...).catch(() => undefined)` 后再 `onError`（过期路径同样吞清理异常，避免二次释放）。新增「启动失败 + context.close reject」用例：`start()` resolve、`onError` 一次、关上下文 1 次、停轨 1 次；回退该 `.catch` → 1 failed / 16 skipped。
+4. **死字段与不可达复核（P2-2）**：删除 `pendingStop` 字段及全部读写（`isStale` 仅保留世代比较），删除 `createWorkletNode` 后的同步复核（建节点为同步调用，世代不可能在该区间变化）。`stop()` / `pause()` 的世代自增是过期判定的唯一来源，删后语义不变；全量 713 用例保持绿。
+5. **act 门禁宏任务归属（P2-3）**：门禁逻辑抽到 `src/test/actWarningGate.ts`；`onTestFinished` 先排空一个宏任务（真实计时 `setTimeout(0)`；`vi.isFakeTimers()` 为真时 `vi.advanceTimersByTime(0)`），再按条数 / 用例名判错并清空归属；`afterAll` 经 `finishRun` 对尝试收尾后的残留按无归属判错，覆盖一个宏任务窗口内与文件收尾 hooks 内的告警；迟到 ≥2 个宏任务的合成告警可能漏记 / 归属到下一条用例（React act 告警在 setState 时同步发出，本套件内够不到）。新增两条门禁单测（收尾抛错并清空、afterAll 残留判错）。
+   - 临时探针实测：迟到宏任务告警在有排空时归属到该用例（1 failed / 1 passed）；删除排空后 2 passed（漏记）。afterAll 告警 → `残留告警 1 条（无归属...）` 文件级失败；retry 首轮告警后次轮干净 → 1 passed（首轮告警不记到次轮）。
+6. **说明与台账（P2-4）**：`setup.ts` 注释更正为「onTestFinished 在 afterEach（含 RTL cleanup）之后执行，见 vitest 4 生命周期」；上文两处 `src/pages/realtime` 实数按实测改为 21（7+14）。
+
+**实测（命令 + 退出码；最终树）**：
+- `cd frontend && pixi run npx vitest run` → 0（713 passed；新增 8 条：采集承载性 3 + 清理 1 + 页面身份 2 + 门禁 2；全量 act 门禁 0 告警）。
+- `cd frontend && pixi run npx vitest run --coverage` → 0（statements 95.98% / branches 92.12% / functions 95.5% / lines 96.18%，perFile ≥80% 通过）。
+- `cd frontend && pixi run lint` → 0；`pixi run build` → 0（3.24s，初始 chunk 389.80 kB / gzip 123.62 kB）。
+- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=713 / frontend-coverage=95.98 / frontend-lint / frontend-build=2.94s；证据 `docs/evidence/r4-5-whatsapp-5eb8fd3b.json`，canonical sha8=`5eb8fd3b`（745 文件级证据；`--hash-only` 复算一致）；`f8403536` 与更早证据均为历史；本批 `5eb8fd3b` 自「收尾复审修复」起亦为历史，见下条）。
+- 根 `pixi run gates` → 0（comment-gates files=380 violations=0 hints=23 / red-probe 29 探针覆盖 28 文件 / assertion-freeze asserts=9570 raises=708 / prose-pin 75≤75 / 其余门禁同链）。
+- 变异清单见逐条第 1-3、5 项；复原后 `git status` 仅本批预期改动。
+- 无后端改动 / 无新增依赖 / 无新增 env 键 / 无迁移；前端改动文件：`src/lib/realtimeVoiceClient.ts`、`src/lib/realtimeVoiceClient.test.ts`、`src/pages/realtime/RealtimeVoicePage.capabilities.test.tsx`、`src/test/setup.ts`、`src/test/actWarningGate.ts`、`src/test/actWarningGate.test.ts`、`docs/LEDGER.md`。
+
+### 已完成切片：收尾复审修复（P2-1..P2-4，本分支工作区）
+
+**背景**：对 `8ae5206` 的收尾复审给出 4×P2（无 P0/P1）：三处过期清理 `.catch` 无红守卫；act 门禁「抛出并清空」未被断言；台账 `stop()` 世代自增漏写 `pause()`；门禁覆盖面措辞过宽。本批逐条闭环，旧 canonical `5eb8fd3b` 自本条起为历史。
+
+逐条（根修 / 守卫位置 → 变异实证）：
+
+1. **三处过期清理 `.catch` 红守卫（P2-1）**：`startInternal` 三条过期清理（`realtimeVoiceClient.ts:456/471/490`）各配一条无真实等待的 deferred 门闩用例：
+   - worklet addModule 窗口 + `context.close()` reject：`start()` / `stop()` 均 resolve、`onError` 0、停轨 1、close 1、不建节点；删 `:490` 的 `.catch` → 1 failed / 19 passed（首红断言 `stopped()` 由 1→2，`test.ts:602`；`closeCalls` 同为 2，断言在 `:603` 未执行到）。
+   - resume 窗口 + `context.close()` reject：同上断言（停轨 1 / close 1 / 不提交能力 / 无暂停误置）；删 `:471` 的 `.catch` → 1 failed / 19 passed（二次释放）。
+   - getUserMedia 窗口 + 过期清理停轨抛出：`start()` / `stop()` 均 resolve、停轨调用 1、`onError` 0、不建上下文；删 `:456` 的 `.catch` → 1 failed / 19 passed（停轨由 1→2）。
+2. **门禁「抛出并清空」断言（P2-2）**：`actWarningGate.test.ts` 单测 1 在 `finishAttempt` 抛出后追加 `finishRun()` 不抛出（证明 `warnings` 已清空）；删除 `reportOrClear` 的 `this.warnings = []` → 1 failed / 1 passed（残留告警 1 条）。
+3. **台账措辞（P2-3）**：`stop()` 的世代自增表述补为 `stop()` / `pause()`。
+4. **门禁覆盖面措辞收窄（P2-4）**：`actWarningGate.ts` 头注与台账同步改为「覆盖一个宏任务窗口内与文件收尾 hooks 内的告警；更迟的告警不保证归属」，并注明「迟到 ≥2 个宏任务的合成告警可能漏记 / 归属到下一条用例（React act 告警在 setState 时同步发出，本套件内够不到）」。
+
+**实测（命令 + 退出码；最终树）**：
+- 定向：`cd frontend && pixi run npx vitest run src/lib/realtimeVoiceClient.test.ts src/test/actWarningGate.test.ts` → 0（22 passed）。
+- 变异：删 `realtimeVoiceClient.ts` 的 `:456` / `:471` / `:490` 任一 `.catch` → 各 1 failed / 19 passed（恢复后 20 passed）；删 `actWarningGate.ts` 的 `this.warnings = []` → 1 failed / 1 passed（恢复后 2 passed）。
+- `cd frontend && pixi run npx vitest run` → 0（716 passed；相对 713 增加 3 条过期清理变体；全量 act 门禁 0 告警）。
+- `cd frontend && pixi run npx vitest run --coverage` → 0（statements 96.15% / branches 92.18% / functions 95.76% / lines 96.35%，perFile ≥80% 通过）。
+- `cd frontend && pixi run lint` → 0；`pixi run build` → 0（3.83s，初始 chunk 389.80 kB / gzip 123.62 kB）。
+- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 / typecheck=216 / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build=3.08s；证据 `docs/evidence/r4-5-whatsapp-01f95d4e.json`，canonical sha8=`01f95d4e`（745 文件级证据）；`5eb8fd3b` 与更早证据均为历史）。
+- 无后端改动 / 无新增依赖 / 无新增 env 键 / 无迁移；前端改动文件：`src/lib/realtimeVoiceClient.test.ts`、`src/test/actWarningGate.ts`、`src/test/actWarningGate.test.ts`、`docs/LEDGER.md`、`docs/evidence/r4-5-whatsapp-01f95d4e.json`、`docs/evidence/logs/r4-5-whatsapp-01f95d4e-*.log`（10 份）。
+
 ## 6. 遗留与部署台账（非阻塞）
 
+### 缓解台账（非根修，已排期）
+
+| 项 | 现状 | 为何暂不根修 | 根修方案 + 目标批次 |
+|---|---|---|---|
+| 流式路径合规守卫不重试 | `stream_reply` 已逐块交付消费方，助手腔检测命中时不重试（只覆盖非流式 `reply`） | 流式输出无法回撤已发送块；重生成会造成可见重复 | 有界首段缓冲（首句成稿前完成检测）或在收尾时追加一次角色提醒纠偏；目标 R5-1 |
+| 实时语音多段转写完成序 | 多段转写可并行，最终稿按**转写完成序**进入待生成通道；客户端靠 `segment_id` 对齐 | 会话通道按到达序串行消费，暂无跨段排序状态；改动触及实时轮次状态机 | 携带段序并在生成入口做有界重排（超时即按完成序放行）；目标 R5-1 |
+| 声纹不可解析容器回落声明值 | MP3 / OGG / WebM / MP4 等容器在零依赖探测面（`voiceprint_audio.py`）不解析，时长 / 采样率沿用上传方声明值（`source=declared`）；WAV / 裸 PCM 已实测 | 当前无容器解析依赖；引入探测库或元数据读取会扩大依赖面，且语音样本主形态为 WAV / PCM | 容器头探测（MP3 frame header / OGG page / ISO-BMFF box）或供应商元数据字段；目标 R5-2 |
+| TG 429 `retry_after` 夹取 1..30s 单次重试 | 出站 429 按 `parameters.retry_after` 夹取到 1..30s 后单次重试，其余错误不重试 | 单次重试是成本 / 时延的可预测边界；持续限流需上层退避与再入队 | 可取消的预算内退避 + 失败消息再入队（不阻塞 send 调用）；目标 R5-1 |
+| 注释门对测试面豁免 | `check_chinese_comments.py` 整树豁免 `tests/` 与 `test_*.py` | 测试 docstring 以用例名 / 行为说明为主，强制 Google 段落会显著增噪 | 对测试 helper 采用放宽策略（仅要求中文说明，不强制 Args/Returns）；目标 R5-1 |
+| SmsForwarder 通知发送者归一碰撞面 | 仅点位置不同的包名共用会话（`com.example.app` / `com.exampleapp` → 同一 `sms:` 会话键） | 归一规则未区分包名点号语义；收紧需产品决定点号是否参与会话身份 | 点分段归一或保留原始包名作为会话键的一部分；目标 R5-3（需产品决定点语义） |
+| 流式 ASR 起始边界 | 流式通道从 SPEECH_START 帧起喂，VAD 防抖候选帧（默认 3 帧）仅入批量缓冲，流式最终稿可能缺句首约 200ms；`test_realtime_session_streaming.py` 的 `frames[1:]` 已固化该行为 | 候选帧在起说确认前不进流式缓冲，避免误触发占用连接；改起点需重排候选帧与握手时序 | 把 VAD 候选帧纳入流式起点（起说确认后回放候选帧）并更新固化用例；目标 R5-1 |
+| 梦境 `stats` / `decisions` JSON 动态键 | `ff_dream_runs.stats` / `decisions` 为 JSON 列，写入 `DreamRunStatsModel` / `DreamDecisionModel` 的 dump 形态，列类型仍是 `dict` / `list` | 无当前缺陷；转 Pydantic 列需 TypeDecorator + 迁移，成本高于本批收益 | **已记录例外**（不排期）；随 memory 域 schema 批次转模型时一并迁移 |
+
 - Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
-- SmsForwarder 短信 / 通知转发通道已交付（默认关闭、仅入站；部署侧配置 `SMS_FORWARDER_*` 并在手机端配置 Webhook 与 token）；WhatsApp Cloud API（R4-5）等其余通道未开工。
-- SmsForwarder 通知发送者归一碰撞面：仅点位置不同的包名共用会话（`com.example.app` / `com.exampleapp` → 同一 `sms:` 会话键），可选收紧归一（需评审）。
+- SmsForwarder 短信 / 通知转发通道已交付（默认关闭、仅入站；部署侧配置 `SMS_FORWARDER_*` 并在手机端配置 Webhook 与 token）；WhatsApp Cloud API 通道已交付（`WHATSAPP_ENABLED` 默认关闭；Meta 应用侧配置 webhook / 订阅 messages + 四项凭据；出站仅自由格式文本并受 24h 客户服务窗约束——窗外主动消息需模板发送（未实现）或属主先发消息；窗口状态与 wamid 去重均为进程内单实例语义）。
 - 声纹（PIPL 合规）与表情包素材法律边界提示义务已随 R2d-2 交付（默认关闭，部署侧按需配置 `VOICEPRINT_*` / `STICKER_*` 并起说话人向量服务）。
 - 预算边界（R3-2 → R4-2 已分面）：LLM 日预算只计 LLM 用途行；ASR / TTS / voiceprint 各自独立预算（按 purpose 计数，见 [usage.md](backend/usage.md#分面日预算asr--tts--voiceprint)）。
 - 实时语音（R2f）遗留：AEC/移动端已由 R4-3 前置（浏览器 AEC/Worklet），残余：真实设备验证、真流式供应商连通验证（双轨默认关闭；步骤见 docs/backend/realtime-voice.md「部署侧一次性真机验证」）；实时语音轮次不注入工具面（需要搜索/沙盒走文字通道）。
-- 流式 ASR 起始边界（R4-3 记录，后续排期）：流式通道从 SPEECH_START 帧起喂，VAD 防抖候选帧（默认 3 帧）仅入批量缓冲，流式最终稿可能缺句首约 200ms；`test_realtime_session_streaming.py` 的 `frames[1:]` 已固化该行为。
-- 流式收尾句柄（R4-3 记录，既有风险）：`finish()` 被外部取消时句柄未必收口（非会话路径，代码走读发现），后续排期补用例与收口。
 - 已知部署机注意：开发机无 NVIDIA GPU（Iris Xe）；GPU/模型项一律在 Clevo 机执行。
 
 ## 7. 恢复指引（新会话首读）

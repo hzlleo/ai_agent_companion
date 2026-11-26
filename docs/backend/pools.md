@@ -9,7 +9,7 @@
 | `manager.py` | PoolManager 生命周期（start / stop，LIFO）+ 全局单例 | `PoolManager` / `init_pool_manager` / `pool_manager` / `get_seekdb_pool` |
 | `http_pool.py` | 共享 `httpx.AsyncClient` 构建器（limits / timeouts） | `build_shared_http_client` |
 | `llm_pool.py` | 熔断状态机 + per-entry 信号量注册表 + 组合门 | `CircuitBreaker` / `LlmEntryPool` / `entry_gate` |
-| `seekdb_compat.py` | aiomysql 类型化访问面（importlib 动态加载 + Protocol 收口 + 密码 env 解析 + 错误基类） | `create_seekdb_pool` / `resolve_seekdb_password` |
+| `seekdb_compat.py` | aiomysql 类型化访问面（Protocol 收口 + 单栈 SeekDB 解析 / 不变式 + 密码 env 解析 + 错误基类） | `create_seekdb_pool` / `resolve_seekdb_config` / `resolve_seekdb_password` |
 
 依赖方向：pools → config（Settings / PoolsConfig / SeekDBSettings / LlmModelEntry）+ core（thread_pool / errors / time_utils），合法。
 
@@ -22,7 +22,7 @@ lifespan startup（app/main.py 装配）:
         1. core.init_shared_thread_pool(POOLS_THREAD_POOL_SIZE)   # 线程池下沉
         2. build_shared_http_client(POOLS_*)                       # 通用出站 HTTP
         3. LlmEntryPool(POOLS_*)                                    # 信号量/熔断（惰性注册）
-        4. create_seekdb_pool(SEEKDB_*)                             # 检索池（仅 ENABLED 时）
+        4. resolve_seekdb_config（单栈不变式）→ create_seekdb_pool   # 检索池（仅 ENABLED 时）
 
 lifespan shutdown（LIFO）:
     await pool_manager.stop()
@@ -52,9 +52,9 @@ app lifespan 的装配顺序契约（唯一真相 = `app/main.py`）：startup �
 | `POOLS_CB_FAIL_MAX` | 5 | 熔断失败阈值 |
 | `POOLS_CB_RESET_TIMEOUT_SECONDS` | 60 | 熔断冷却秒数 |
 | `SEEKDB_ENABLED` | false | SeekDB 检索池启动开关（false = 不启动，检索走 SQLite 回退） |
-| `SEEKDB_HOST` / `SEEKDB_PORT` | 127.0.0.1 / 2881 | SeekDB 实例地址（MySQL 线协议端口） |
-| `SEEKDB_USER` / `SEEKDB_DATABASE` | root / test | 连接用户名 / 库名 |
-| `SEEKDB_PASSWORD_ENV` | SEEKDB_PASSWORD | 密码环境变量名（密码本值从该变量读取——env 间接） |
+| `SEEKDB_HOST` / `SEEKDB_PORT` | 空（继承权威库）/ 空 | 检索池主机 / 端口覆盖——留空继承 `DATABASE_*` 权威库；显式值必须与权威库一致（单栈不变式，启动期 fail loud） |
+| `SEEKDB_USER` / `SEEKDB_DATABASE` | 空（继承权威库）/ `ai_agent_companion_search` | 用户名覆盖（留空继承权威库）/ 检索库名（与权威库同实例、不同库名） |
+| `SEEKDB_PASSWORD_ENV` | 空（继承 `DATABASE_PASSWORD`） | 密码环境变量名覆盖（密码本值从该变量读取——env 间接） |
 | `SEEKDB_POOL_MIN` / `SEEKDB_POOL_MAX` | 1 / 4 | 检索池常驻 / 上限连接数 |
 
 ## 共享 HTTP 池（http_pool.py）

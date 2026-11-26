@@ -42,6 +42,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 
 import httpx
@@ -345,7 +346,7 @@ class VoiceService:
     ) -> AsrStreamHandleFace:
         """建立一条流式识别连接（预算闸先于建连；计量口径见类 docstring）。
 
-        计次口径（锁定，与 R4-2 分面语义一致）：连接**成功开启**计 1 次，
+        计次口径（锁定，与分面预算语义一致）：连接**成功开启**计 1 次，
         用量行在连接收尾（``finish`` 成功或 ``cancel``）时落账；开启失败
         （握手失败 / 超时）不落行。被预算拒绝时**零建连、零出站**。
 
@@ -586,6 +587,7 @@ class _StreamAsrUsageHandle:
         "_request_id",
         "_started_ms",
         "_settled",
+        "_finish_unsettled",
     )
 
     def __init__(
@@ -605,6 +607,7 @@ class _StreamAsrUsageHandle:
         self._request_id = request_id
         self._started_ms = started_ms
         self._settled = False
+        self._finish_unsettled = False
 
     async def feed(self, pcm16: bytes) -> None:
         """追加一帧 PCM16（委托底层连接）。
@@ -617,20 +620,31 @@ class _StreamAsrUsageHandle:
     async def finish(self) -> AsrResultModel:
         """提交并等待最终稿（成功后落一行用量）。
 
+        ``finish`` 已发起但未成功落定（失败 / 被外部取消）时标记
+        ``_finish_unsettled``：随后会话清理路径的 ``cancel()`` 只关闭
+        连接，不再补记一行——与「流式失败回退批量、由批量路径记账」的
+        既有计次口径一致。
+
         Returns:
             最终转写结果。
 
         Raises:
             BusinessException: 收尾失败（``LLM_CALL_FAILED``——调用方回退批量）。
+            asyncio.CancelledError: 收尾等待被外部取消（原样上抛）。
         """
-        result = await self._handle.finish()
+        try:
+            result = await self._handle.finish()
+        except (Exception, asyncio.CancelledError):
+            self._finish_unsettled = True
+            raise
         await self._settle()
         return result
 
     async def cancel(self) -> None:
-        """取消并关闭连接（落一行用量——连接已成功开启并干净收尾）。"""
+        """取消并关闭连接（干净取消落一行用量；收尾未落定的清理不补记）。"""
         await self._handle.cancel()
-        await self._settle()
+        if not self._finish_unsettled:
+            await self._settle()
 
     @property
     def frames_dropped(self) -> int:

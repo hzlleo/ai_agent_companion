@@ -1,6 +1,6 @@
 # database — 数据库域
 
-`backend/src/packages/harness/database/` 承载 SQLAlchemy 2.0 async 引擎工厂（MySQL 8 权威 / SQLite 测试）、声明式基类与 Mixin（含 PersonaMixin 人格作用域自动隔离）、会话门面与引擎持有器；`backend/alembic/` 承载异步迁移环境。
+`backend/src/packages/harness/database/` 承载 SQLAlchemy 2.0 async 引擎工厂（SeekDB 权威存储（MySQL 协议，aiomysql 驱动） / SQLite 测试）、声明式基类与 Mixin（含 PersonaMixin 人格作用域自动隔离）、会话门面与引擎持有器；`backend/alembic/` 承载异步迁移环境。
 
 ## 模块一览
 
@@ -18,10 +18,12 @@
 
 | 方言 | 触发 | URL 形态 | 池语义 |
 |---|---|---|---|
-| MySQL 8（权威，aiomysql） | `DATABASE_TYPE=mysql` | `mysql+aiomysql://user:pwd@host:port/db?charset=utf8mb4` | `pool_size` / `max_overflow` / `pool_recycle`（防 wait_timeout 断连）/ `pool_pre_ping` 全量生效 |
+| SeekDB（权威，MySQL 协议 aiomysql） | `DATABASE_TYPE=mysql` | `mysql+aiomysql://user:pwd@host:port/db?charset=utf8mb4` | `pool_size` / `max_overflow` / `pool_recycle`（防 wait_timeout 断连）/ `pool_pre_ping` 全量生效；默认端口 2881（SeekDB MySQL 线协议） |
 | SQLite（测试，aiosqlite） | `DATABASE_TYPE=sqlite` | `sqlite+aiosqlite:///{name}` | `name=":memory:"` → `StaticPool`（单连接共享——SQLite 内存库 per-connection 语义的必然选择）；文件库默认 QueuePool |
 
-`BigIntIdMixin` 主键在 SQLite 方言渲染为 INTEGER（`with_variant`）——SQLite 仅对 `INTEGER PRIMARY KEY` 启用 rowid 自增；MySQL 侧保持 BIGINT AUTOINCREMENT。
+`BigIntIdMixin` 主键在 SQLite 方言渲染为 INTEGER（`with_variant`）——SQLite 仅对 `INTEGER PRIMARY KEY` 启用 rowid 自增；MySQL 协议方言侧保持 BIGINT AUTOINCREMENT。
+
+**单栈 SeekDB（锁定）**：权威库与检索库同实例、不同库名——`DatabaseConfig` 即 SeekDB 连接（默认 `127.0.0.1:2881` / root / 空密码 / `ai_agent_companion`），`SeekDBSettings` 的 host / port / user / password 留空即继承权威库，显式设置时必须与权威库一致（启动期 `BusinessException(CONFIG_INVALID)` fail loud；拆分实例需另立决策）。不变式按 host / port 字面比较，`DATABASE_TYPE=sqlite` 时同样执行（dev 同口径，无方言豁免；仅在 `seekdb.enabled=true` 时校验）。行锁语义沿用 MySQL 协议 / SeekDB 术语——`innodb_lock_wait_timeout` 仅为 SeekDB 兼容占位变量，生效旋钮是 `ob_trx_lock_timeout`。
 
 ## Mixin 字段表
 
@@ -97,7 +99,7 @@ pixi run alembic upgrade head                        # 应用迁移
 ```
 
 - `alembic/env.py`：异步引擎（`run_sync` 桥接）+ `sqlalchemy.url` 由 `settings.database.async_sqlalchemy_url` 动态注入（alembic.ini 留空）+ `sys.path` 注入 backend/src；
-- `versions/000000000001_initial.py`：空基线（版本链锚点）；域表迁移链：`0002_add_usage_records`（用量）→ `0003_add_personas`（人格注册表 + 状态）→ `0004_add_memory_tables`（记忆四表）→ `0005_add_dream_runs`（梦境运行日志）→ `0006_add_persona_voice_profile`（人格音色绑定）→ `0007_memory_concurrency_constraints`（策展单 active 唯一键 + 会话消息 seq 唯一键——memory 域并发不变式）→ `0008_persona_primary_marker`（persona 域多激活可寻址模型：`ff_personas` 增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active` 单激活位退役——旧激活行回填 `'primary'` 后删列，降级逆向重建；与 0007 同「NULL 共存唯一键」模式）→ `0009_add_chat_message_meta`（会话消息 meta 列）→ `0010_chat_message_variants`（消息变体列）→ `0011_add_reminders`（提醒表）→ `0012_curated_lifecycle`（策展生命周期列）→ `0013_persona_facts`（人物事实）→ `0014_persona_skills`（程序性技能）→ `0015_core_memory`（核心记忆块 + append-only 修订）→ `0016_voiceprint_sticker`（声纹样本 / 同意记录 / 表情包库三表）→ `0017_canvas_documents`（画布产物表 + 人格 / 更新时间复合索引）→ `0018_persona_facts_confidence_index`（人物事实 `(persona_id, status, confidence)` 复合索引）；
+- `versions/000000000001_initial.py`：空基线（版本链锚点）；域表迁移链：`0002_add_usage_records`（用量）→ `0003_add_personas`（人格注册表 + 状态）→ `0004_add_memory_tables`（记忆四表）→ `0005_add_dream_runs`（梦境运行日志）→ `0006_add_persona_voice_profile`（人格音色绑定）→ `0007_memory_concurrency_constraints`（策展单 active 唯一键 + 会话消息 seq 唯一键——memory 域并发不变式）→ `0008_persona_primary_marker`（persona 域多激活可寻址模型：`ff_personas` 增 `is_primary_marker` 可空列 + 唯一键 `uq_ff_personas_primary`，旧 `is_active` 单激活位退役——旧激活行回填 `'primary'` 后删列，降级逆向重建；与 0007 同「NULL 共存唯一键」模式）→ `0009_add_chat_message_meta`（会话消息 meta 列）→ `0010_chat_message_variants`（消息变体列）→ `0011_add_reminders`（提醒表）→ `0012_curated_lifecycle`（策展生命周期列）→ `0013_persona_facts`（人物事实）→ `0014_persona_skills`（程序性技能）→ `0015_core_memory`（核心记忆块 + append-only 修订）→ `0016_voiceprint_sticker`（声纹样本 / 同意记录 / 表情包库三表）→ `0017_canvas_documents`（画布产物表 + 人格 / 更新时间复合索引）→ `0018_persona_facts_confidence_index`（人物事实 `(persona_id, status, confidence)` 复合索引）→ `0019_dream_runs_single_flight`（梦境运行日志 `running_marker` 可空列 + `(persona_id, running_marker)` 唯一键——单飞守卫）；
 - `target_metadata = Base.metadata`（autogenerate 对比基准）。
 
 ### 0017_canvas_documents（画布产物）
@@ -108,9 +110,13 @@ pixi run alembic upgrade head                        # 应用迁移
 
 为 `ff_persona_facts` 增加 `ix_ff_persona_facts_persona_status_confidence (persona_id, status, confidence)`：服务层按人格作用域 + 状态过滤、再按置信度排序读取现行事实面（管理面板 / compose 注入候选 / 关系摘要派生）。表时间列为 epoch 毫秒（`created_at` / `updated_at` BigInteger），`confidence` 为 0-1 浮点。升级仅建索引、无数据迁移；降级仅删索引、事实行保留。
 
+### 0019_dream_runs_single_flight（梦境运行单飞守卫）
+
+为 `ff_dream_runs` 增加可空 `running_marker`（String(16)）与唯一键 `uq_ff_dream_runs_persona_running (persona_id, running_marker)`：运行中行写固定 `'1'`，终态 / 失败 / 进程崩溃收敛清 NULL；MySQL / SQLite 唯一键均忽略 NULL，历史运行行多代共存。服务层 `DreamService.run_dream` 以插入带标记行为单飞动作，并发第二行被 1062 拒绝后回滚并返回既有在途运行。升级顺序为增列 → 按人格回填最新运行中行 → 建唯一键；降级先删约束再删列（运行行保留，标记数据丢弃）。唯一键名与语义见 [memory.md](memory.md#夜间梦境记忆巩固)。
+
 ## 人格级联删除（服务层批删，无跨域 FK）
 
-记忆域 / 画像域表与 `ff_personas` 之间**没有跨域外键**（PersonaMixin 是逻辑作用域列，不是 FK）——人格删除的级联由 `PersonaService.delete` 在单事务内按 `persona_id` 批删：`ff_persona_states` / `ff_memory_episodes` / `ff_curated_memory` / `ff_dream_runs` / `ff_persona_facts` / `ff_persona_skills` / `ff_core_memory_blocks` / `ff_core_memory_revisions` / `ff_chat_sessions` / `ff_chat_messages`，并同步清理 `ff_memory_index_lite` 回退索引行（SeekDB 生产索引经注入 indexer 提交后 best-effort 清理）。这条服务层级联是方言一致性的唯一保证（SQLite 测试方言默认不启用 FK 强制；DB 级 CASCADE 仅作直删 SQL 兜底）。范围与逐表处理见 [persona.md](persona.md#删除级联范围personaservicedelete)。
+记忆域 / 画像域表与 `ff_personas` 之间**没有跨域外键**（PersonaMixin 是逻辑作用域列，不是 FK）——人格删除的级联由 `PersonaService.delete` 在单事务内按 `persona_id` 批删，**范围从 `Base.metadata` 派生**：所有含 `persona_id` 列的表自动纳入（当前含状态 / 情景 / 策展 / 梦境 / 事实 / 技能 / 核心记忆块 / 会话 / 表情包 / 声纹样本与同意 / 提醒 / 画布），无 persona_id 的依赖表按归属轴清理（聊天消息经 session_id、核心记忆修订经 block_id），回退索引 `ff_memory_index_lite` 同事务按 persona_id 删除，SeekDB 生产索引经注入 indexer 提交后 best-effort 清理；`ff_usage_records` 有意保留（跨人格聚合真源）。磁盘文件（表情 / 声纹样本）在提交后 best-effort 删除。这条服务层级联是方言一致性的唯一保证（SQLite 测试方言默认不启用 FK 强制；DB 级 CASCADE 仅作直删 SQL 兜底）；结构测试守护「派生集合 == 元数据全集」。范围与逐表处理见 [persona.md](persona.md#删除级联范围personaservicedelete)。
 
 ## 测试与门禁
 

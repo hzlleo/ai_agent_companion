@@ -342,9 +342,10 @@ def parse_webhook_event(payload: dict[str, Any]) -> InboundMessageModel | None:
         )
         return None
     has_non_text_content = _has_non_text_content(event.message)
+    user_text = _has_user_text(event.message)
     text = flatten_message_text(event.message)
     attachments = extract_message_attachments(event.message)
-    if not _has_user_text(event.message) and has_non_text_content:
+    if not user_text and has_non_text_content:
         # 占位文本不算用户文本：纯媒体（两种 wire 形态一致）以空文本
         # 投递——路由器跳过生成，无可提取附件时按 no-op 收录。
         text = ""
@@ -379,6 +380,7 @@ def parse_webhook_event(payload: dict[str, Any]) -> InboundMessageModel | None:
         ts_ms=ts_ms,
         attachments=attachments,
         is_group_chat=chat_id.startswith("group:"),
+        has_user_text=user_text,
     )
 
 

@@ -15,8 +15,8 @@
 
 关键工程事实（live 实测，v1.4.0 镜像 ``1.4.0-100000172026082615``）：
 
-    - ``innodb_lock_wait_timeout`` 为 **mock 变量**（读回恒 50、
-      ``SET SESSION`` 无效——不报错但也不生效）；行锁等待的实际旋钮是
+    - SeekDB 兼容占位变量 ``innodb_lock_wait_timeout`` 为 **mock 变量**
+      （读回恒 50、``SET SESSION`` 无效——不报错但也不生效）；行锁等待的实际旋钮是
       OceanBase 原生 ``ob_trx_lock_timeout``（微秒），超时抛 MySQL
       错误 1205；
     - 唯一键冲突为 pymysql ``IntegrityError``（错误 1062），消息携带
@@ -86,14 +86,15 @@ _MISSING_ENV_MESSAGE = (
     "未注入测试服务 env 的本地运行。"
 )
 
-#: alembic 迁移链 head 版本戳（0018——人物事实复合索引迁移）。
-HEAD_REVISION = "000000000018"
+#: alembic 迁移链 head 版本戳（0019——梦境运行单飞守卫迁移）。
+HEAD_REVISION = "000000000019"
 
 #: 升级 head 后的全量表集（alembic_version + 17 张 ff_* 域表——0011 新增
 #: ff_reminders；0013 新增 ff_persona_facts；0014 新增 ff_persona_skills；
 #: 0015 新增 ff_core_memory_blocks / ff_core_memory_revisions；0016 新增
 #: ff_voiceprint_samples / ff_voiceprint_consents / ff_stickers；0017 新增
-#: ff_canvas_documents；0018 为 ff_persona_facts 复合索引，不新增表）。
+#: ff_canvas_documents；0018 为 ff_persona_facts 复合索引；0019 为
+#: ff_dream_runs 单飞标记列 + 唯一键，均不新增表）。
 EXPECTED_HEAD_TABLES: frozenset[str] = frozenset(
     {
         "alembic_version",
@@ -455,7 +456,7 @@ async def assert_reminder_scan_lock(target: SeekDbTestTarget) -> None:
     """真引擎断言提醒扫描锁定子句可用（FOR UPDATE SKIP LOCKED）。
 
     语义（锁定决策）：扫描作业以 ``FOR UPDATE SKIP LOCKED`` 让并发扫描
-    实例抢占互不重叠的到期行；MySQL 8 / SeekDB 支持该子句，SQLite 方言
+    实例抢占互不重叠的到期行；MySQL 协议 / SeekDB 支持该子句，SQLite 方言
     忽略——因此该能力只能在真引擎锁定。断言形态：插入一条到期行 → 两
     个连接分别执行同形扫描语句（autocommit=False 持锁）——第一个连接
     命中并持锁，第二个连接因 SKIP LOCKED 立即返回空集（不阻塞、不报错）。

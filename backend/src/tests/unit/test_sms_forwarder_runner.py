@@ -24,6 +24,7 @@ from packages.harness.channels.sms_forwarder.sms_runner import (
     SMS_FORWARDER_STATS_INTERVAL_MS,
     SmsForwarderWebhookRunner,
 )
+from tests.async_wait import wait_until
 
 _WAIT_TIMEOUT: float = 5.0
 
@@ -119,17 +120,6 @@ def _runner(
     )
 
 
-async def _wait_until(predicate: Any) -> None:
-    """事件门轮询（零固定睡眠——仅让出事件循环直到条件成立）。"""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + _WAIT_TIMEOUT
-    while not predicate():
-        remaining = deadline - loop.time()
-        if remaining <= 0:
-            raise TimeoutError("等待条件超时")
-        await asyncio.wait_for(asyncio.sleep(0), timeout=remaining)
-
-
 class TestQueueBackpressure:
     async def test_default_queue_capacity_matches_qq_style(self) -> None:
         """默认队列容量与 QQ / 企微同风格（64）。"""
@@ -157,8 +147,8 @@ class TestQueueBackpressure:
             for message in captured
         )
 
-    async def test_dropped_message_is_not_dedup_registered_and_retry_succeeds(self) -> None:
-        """丢弃不登记去重：腾出队列后同 msgid 重投可重新消费。"""
+    async def test_dropped_message_not_dedup_registered_so_repeat_can_be_consumed(self) -> None:
+        """丢弃不登记去重：腾出队列后同 msgid 再次到达（偶发重复）仍可消费。"""
         runner = _runner(router=RecordingRouter(), clock=_Clock(), inbound_queue_size=1)
         assert runner.submit(_payload(msgid="10")) is True
         assert runner.submit(_payload(msgid="11")) is False
@@ -218,7 +208,7 @@ class TestOwnerRouting:
         task = asyncio.create_task(runner.run())
         try:
             assert runner.submit(_payload(msgid="40")) is True
-            await _wait_until(lambda: len(router.received) == 1)
+            await wait_until(lambda: len(router.received) == 1)
             assert router.received[0].is_owner is True
             assert router.received[0].chat_id == "sms:13800138000"
         finally:
@@ -234,7 +224,7 @@ class TestLifecycle:
         task = asyncio.create_task(runner.run())
         try:
             assert runner.submit(_payload(msgid="50")) is True
-            await _wait_until(lambda: len(router.received) == 1)
+            await wait_until(lambda: len(router.received) == 1)
             assert runner.pending_inbound == 0
         finally:
             runner.request_stop()
@@ -275,7 +265,7 @@ class TestLifecycle:
         task = asyncio.create_task(runner.run())
         try:
             assert runner.submit(_payload(msgid="60")) is True
-            await _wait_until(lambda: router.started.is_set())
+            await wait_until(lambda: router.started.is_set())
             assert runner.submit(_payload(msgid="61")) is True
             assert runner.pending_inbound == 1
         finally:

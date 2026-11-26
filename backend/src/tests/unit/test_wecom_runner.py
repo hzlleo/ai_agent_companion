@@ -28,7 +28,10 @@ from packages.harness.channels.channel_models import (
     ChannelMessageAttachment,
     OutboundMessageModel,
 )
-from packages.harness.channels.outbound_guard import OUTBOUND_ATTACHMENT_MAX_BYTES
+from packages.harness.channels.outbound_guard import (
+    OUTBOUND_ATTACHMENT_MAX_BYTES,
+    HostAddressResolver,
+)
 from packages.harness.channels.wecom.wecom_models import (
     WECOM_MARKDOWN_MAX_BYTES,
     WeComCallbackFrameModel,
@@ -36,6 +39,7 @@ from packages.harness.channels.wecom.wecom_models import (
 )
 from packages.harness.channels.wecom.wecom_runner import WeComChannelRunner
 from packages.harness.core.errors import BusinessException, ErrorCode
+from tests.async_wait import drain_loop, wait_until
 from tests.wecom_fakes import FakeRouter, FakeWeComClient, make_callback_frame
 
 
@@ -63,12 +67,29 @@ class _Clock:
         self.now_ms += delta_ms
 
 
+def _resolver(addresses: dict[str, tuple[str, ...]]) -> HostAddressResolver:
+    """构造主机名 → 地址集合的 fake resolver（出站 URL 守卫测试）。
+
+    Args:
+        addresses: 主机名到地址元组的映射（未命中返回空元组）。
+
+    Returns:
+        异步解析函数。
+    """
+
+    async def _resolve(host: str) -> tuple[str, ...]:
+        return addresses.get(host, ())
+
+    return _resolve
+
+
 def _runner(
     *,
     client: Any = None,
     router: Any = None,
     clock: _Clock | None = None,
     http_client: httpx.AsyncClient | None = None,
+    host_resolver: HostAddressResolver | None = None,
     reply_window_seconds: float = 86400.0,
     inbound_queue_size: int = 16,
     worker_count: int = 1,
@@ -81,6 +102,7 @@ def _runner(
         router: 路由器替身（None = 新建）。
         clock: 测试时钟（None = 新建）。
         http_client: 共享 HTTP 替身（附件 url 源）。
+        host_resolver: 出站附件 URL 主机解析替身（None = 系统解析）。
         reply_window_seconds: 回复窗口秒数。
         inbound_queue_size: 入站队列容量。
         worker_count: 入站 worker 数。
@@ -94,6 +116,7 @@ def _runner(
         router=router if router is not None else FakeRouter(),
         reply_window_seconds=reply_window_seconds,
         http_client=http_client,
+        host_resolver=host_resolver,
         inbound_queue_size=inbound_queue_size,
         worker_count=worker_count,
         dedup_capacity=dedup_capacity,
@@ -137,22 +160,6 @@ def _text_frame(
     )
 
 
-async def _wait_until(predicate: Any, *, timeout_seconds: float = 2.0) -> None:
-    """让出控制点直到条件成立（有界等待——超时即失败）。
-
-    Args:
-        predicate: 零参判定函数。
-        timeout_seconds: 等待上限秒数。
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_seconds
-    while loop.time() < deadline:
-        if predicate():
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError("条件在等待上限内未成立")
-
-
 class TestInbound:
     async def test_single_chat_message_routed(self) -> None:
         """单聊文本 → 路由器收到 single: 会话键的入站消息。"""
@@ -161,9 +168,9 @@ class TestInbound:
         runner = _runner(client=client, router=router)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame())
-            await _wait_until(lambda: len(router.received) == 1)
+            await wait_until(lambda: len(router.received) == 1)
             inbound = router.received[0]
             assert inbound.chat_id == "single:u1"
             assert inbound.text == "你好"
@@ -180,11 +187,11 @@ class TestInbound:
         runner = _runner(client=client, router=router)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(
                 _text_frame(chattype="group", chatid="chat-1", userid="u9")
             )
-            await _wait_until(lambda: len(router.received) == 1)
+            await wait_until(lambda: len(router.received) == 1)
             assert router.received[0].chat_id == "group:chat-1"
             assert router.received[0].is_group_chat is True
         finally:
@@ -198,12 +205,12 @@ class TestInbound:
         runner = _runner(client=client, router=router)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             frame = _text_frame(msgid="dup-1")
             await client.emit_frame(frame)
-            await _wait_until(lambda: len(router.received) == 1)
+            await wait_until(lambda: len(router.received) == 1)
             await client.emit_frame(frame)
-            await asyncio.sleep(0.02)
+            await drain_loop()
             assert len(router.received) == 1
         finally:
             runner.request_stop()
@@ -216,7 +223,7 @@ class TestInbound:
         runner = _runner(client=client, router=router)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             event = WeComCallbackFrameModel.model_validate(
                 {
                     "cmd": "aibot_event_callback",
@@ -229,7 +236,7 @@ class TestInbound:
                 }
             )
             await client.emit_frame(event)
-            await asyncio.sleep(0.02)
+            await drain_loop()
             assert router.received == []
         finally:
             runner.request_stop()
@@ -242,7 +249,7 @@ class TestInbound:
         runner = _runner(client=client, router=router)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             frame = WeComCallbackFrameModel.model_validate_json(
                 make_callback_frame(
                     {
@@ -254,7 +261,7 @@ class TestInbound:
                 )
             )
             await client.emit_frame(frame)
-            await asyncio.sleep(0.02)
+            await drain_loop()
             assert router.received == []
         finally:
             runner.request_stop()
@@ -268,23 +275,23 @@ class TestInbound:
         runner = _runner(client=client, router=router, inbound_queue_size=1, worker_count=1)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(msgid="q1"))
             # 等 worker 取走第一条（队列空）后 worker 被闸门占住——此时容量 1 的
             # 队列可容纳 q2，q3 必然丢弃。
-            await _wait_until(lambda: runner.pending_inbound == 0)
+            await wait_until(lambda: runner.pending_inbound == 0)
             await client.emit_frame(_text_frame(msgid="q2"))
             await client.emit_frame(_text_frame(msgid="q3"))
             assert runner.dropped_inbound == 1
             router.hold.set()
-            await _wait_until(lambda: len(router.received) == 2)
+            await wait_until(lambda: len(router.received) == 2)
         finally:
             router.hold.set()
             runner.request_stop()
             await asyncio.wait_for(task, timeout=2.0)
 
     async def test_queue_overflow_does_not_register_dropped_msgid(self) -> None:
-        """丢弃不登记去重：队列排空后平台重投同 msgid 可重新消费。"""
+        """丢弃不登记去重：同 msgid 再次到达仍可消费（仅吸收平台偶发重复）。"""
         router = FakeRouter()
         router.hold = asyncio.Event()
         client = FakeWeComClient()
@@ -293,9 +300,9 @@ class TestInbound:
         handler_id = logger.add(lambda message: captured.append(str(message)), level="ERROR")
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(msgid="q1"))
-            await _wait_until(lambda: runner.pending_inbound == 0)
+            await wait_until(lambda: runner.pending_inbound == 0)
             await client.emit_frame(_text_frame(msgid="q2"))
             await client.emit_frame(_text_frame(msgid="q3"))
             assert runner.dropped_inbound == 1
@@ -307,9 +314,9 @@ class TestInbound:
                 for message in captured
             )
             router.hold.set()
-            await _wait_until(lambda: len(router.received) == 2 and runner.pending_inbound == 0)
+            await wait_until(lambda: len(router.received) == 2 and runner.pending_inbound == 0)
             await client.emit_frame(_text_frame(msgid="q3"))
-            await _wait_until(lambda: len(router.received) == 3)
+            await wait_until(lambda: len(router.received) == 3)
             assert [message.message_id for message in router.received] == ["q1", "q2", "q3"]
             assert runner.dropped_inbound == 1
         finally:
@@ -326,10 +333,10 @@ class TestInbound:
         runner = _runner(client=client, router=router)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(msgid="f1"))
             await client.emit_frame(_text_frame(msgid="f2"))
-            await _wait_until(lambda: len(router.received) == 1)
+            await wait_until(lambda: len(router.received) == 1)
             assert router.received[0].message_id == "f2"
         finally:
             runner.request_stop()
@@ -343,7 +350,7 @@ class TestReplyContext:
         runner = _runner(client=client)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(req_id="cb-42"))
             context = runner.reply_context("single:u1")
             assert context is not None
@@ -360,7 +367,7 @@ class TestReplyContext:
         runner = _runner(client=client, clock=clock, reply_window_seconds=60.0)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(req_id="cb-9"))
             assert runner.reply_context("single:u1") is not None
             clock.advance_ms(61_000)
@@ -377,7 +384,7 @@ class TestOutboundText:
         runner = _runner(client=client)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(req_id="cb-77"))
             result = await runner.send_message(
                 OutboundMessageModel(chat_id="single:u1", text="好的", silent=True)
@@ -395,7 +402,7 @@ class TestOutboundText:
         runner = _runner(client=client)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await runner.send_message(
                 OutboundMessageModel(chat_id="group:chat-9", text="播报")
             )
@@ -415,7 +422,7 @@ class TestOutboundText:
         runner = _runner(client=client, clock=clock, reply_window_seconds=60.0)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(req_id="cb-old"))
             clock.advance_ms(120_000)
             await runner.send_message(OutboundMessageModel(chat_id="single:u1", text="迟到"))
@@ -432,7 +439,7 @@ class TestOutboundText:
         long_text = "a" * (WECOM_MARKDOWN_MAX_BYTES + 5)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(req_id="cb-long"))
             await runner.send_message(
                 OutboundMessageModel(chat_id="single:u1", text=long_text)
@@ -525,9 +532,12 @@ class TestOutboundAttachments:
             return httpx.Response(status_code=200, content=b"remote-bytes")
 
         transport = httpx.MockTransport(_handler)
+        resolver = _resolver({"cdn.example.com": ("93.184.216.34",)})
         async with httpx.AsyncClient(transport=transport) as http_client:
             client = FakeWeComClient()
-            runner = _runner(client=client, http_client=http_client)
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=resolver
+            )
             attachment = ChannelMessageAttachment(
                 kind=ChannelAttachmentKind.IMAGE, url="https://cdn.example.com/a.png"
             )
@@ -537,6 +547,177 @@ class TestOutboundAttachments:
         assert requests == ["https://cdn.example.com/a.png"]
         assert client.uploaded_content == [b"remote-bytes"]
         assert result.attachment_results[0].ok is True
+
+    async def test_url_redirect_chain_follows_and_revalidates_each_hop(self) -> None:
+        """重定向链：每跳重新过守卫（公网→公网）后跟随，最终下载成功。"""
+        requests: list[str] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            requests.append(str(request.url))
+            if request.url.host == "cdn.example.com":
+                return httpx.Response(
+                    status_code=302,
+                    headers={"location": "https://cdn2.example.com/b.png"},
+                )
+            return httpx.Response(status_code=200, content=b"redirected-bytes")
+
+        resolver = _resolver(
+            {
+                "cdn.example.com": ("93.184.216.34",),
+                "cdn2.example.com": ("93.184.216.35",),
+            }
+        )
+        transport = httpx.MockTransport(_handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = FakeWeComClient()
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=resolver
+            )
+            result = await runner.send_message(
+                OutboundMessageModel(
+                    chat_id="single:u1",
+                    text="远程图",
+                    attachments=[
+                        ChannelMessageAttachment(
+                            kind=ChannelAttachmentKind.IMAGE,
+                            url="https://cdn.example.com/a.png",
+                        )
+                    ],
+                )
+            )
+        assert requests == [
+            "https://cdn.example.com/a.png",
+            "https://cdn2.example.com/b.png",
+        ]
+        assert client.uploaded_content == [b"redirected-bytes"]
+        assert result.attachment_results[0].ok is True
+
+    async def test_url_redirect_to_private_rejected_before_second_request(self) -> None:
+        """重定向到私网：第二跳守卫拒绝，不发出第二次请求。"""
+        requests: list[str] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            requests.append(str(request.url))
+            return httpx.Response(
+                status_code=307,
+                headers={"location": "http://internal.example.com/secret.png"},
+            )
+
+        resolver = _resolver(
+            {
+                "cdn.example.com": ("93.184.216.34",),
+                "internal.example.com": ("10.0.0.7",),
+            }
+        )
+        transport = httpx.MockTransport(_handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = FakeWeComClient()
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=resolver
+            )
+            result = await runner.send_message(
+                OutboundMessageModel(
+                    chat_id="single:u1",
+                    text="远程图",
+                    attachments=[
+                        ChannelMessageAttachment(
+                            kind=ChannelAttachmentKind.IMAGE,
+                            url="https://cdn.example.com/a.png",
+                        )
+                    ],
+                )
+            )
+        assert requests == ["https://cdn.example.com/a.png"]
+        assert result.attachment_results[0].ok is False
+        assert "私网" in (result.attachment_results[0].error or "")
+
+    async def test_url_redirect_without_location_fails_controlled(self) -> None:
+        """3xx 缺少 Location：受控失败（不无限循环 / 不整包读）。"""
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(status_code=302)
+        )
+        resolver = _resolver({"cdn.example.com": ("93.184.216.34",)})
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = FakeWeComClient()
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=resolver
+            )
+            result = await runner.send_message(
+                OutboundMessageModel(
+                    chat_id="single:u1",
+                    text="远程图",
+                    attachments=[
+                        ChannelMessageAttachment(
+                            kind=ChannelAttachmentKind.IMAGE,
+                            url="https://cdn.example.com/a.png",
+                        )
+                    ],
+                )
+            )
+        assert result.attachment_results[0].ok is False
+        assert "Location" in (result.attachment_results[0].error or "")
+
+    async def test_url_redirect_exceeds_max_hops_fails_controlled(self) -> None:
+        """重定向超过 3 跳：受控失败（初始请求 + 3 跳后第 4 个 3xx 触发）。"""
+        requests: list[str] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            requests.append(str(request.url))
+            return httpx.Response(
+                status_code=302, headers={"location": "/next.png"}
+            )
+
+        resolver = _resolver({"cdn.example.com": ("93.184.216.34",)})
+        transport = httpx.MockTransport(_handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = FakeWeComClient()
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=resolver
+            )
+            result = await runner.send_message(
+                OutboundMessageModel(
+                    chat_id="single:u1",
+                    text="远程图",
+                    attachments=[
+                        ChannelMessageAttachment(
+                            kind=ChannelAttachmentKind.IMAGE,
+                            url="https://cdn.example.com/a.png",
+                        )
+                    ],
+                )
+            )
+        assert len(requests) == 4
+        assert result.attachment_results[0].ok is False
+        assert "重定向超过" in (result.attachment_results[0].error or "")
+
+    async def test_url_resolver_failure_fails_closed_per_attachment(self) -> None:
+        """resolver 失败：逐附件受控失败（fail-closed），文本照常投递。"""
+        async def _boom(host: str) -> tuple[str, ...]:
+            raise OSError("dns down")
+
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(status_code=200, content=b"never")
+        )
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = FakeWeComClient()
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=_boom
+            )
+            result = await runner.send_message(
+                OutboundMessageModel(
+                    chat_id="single:u1",
+                    text="远程图",
+                    attachments=[
+                        ChannelMessageAttachment(
+                            kind=ChannelAttachmentKind.IMAGE,
+                            url="https://cdn.example.com/a.png",
+                        )
+                    ],
+                )
+            )
+        assert result.attachment_results[0].ok is False
+        assert "fail-closed" in (result.attachment_results[0].error or "")
+        assert len(client.markdown_pushes) == 1
 
     async def test_url_without_http_client_fails_per_attachment(self) -> None:
         """未装配共享 HTTP 客户端 → 该附件 ok=False（文本照常投递）。"""
@@ -608,7 +789,7 @@ class TestLifecycle:
         client = FakeWeComClient()
         runner = _runner(client=client)
         task = asyncio.create_task(runner.run())
-        await _wait_until(lambda: client.run_started)
+        await wait_until(lambda: client.run_started)
         runner.request_stop()
         await asyncio.wait_for(task, timeout=2.0)
         assert client.stop_requested is True
@@ -623,11 +804,11 @@ class TestDedupWindow:
         runner = _runner(client=client, router=router, dedup_capacity=1)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             await client.emit_frame(_text_frame(msgid="old-1"))
             await client.emit_frame(_text_frame(msgid="new-1"))
             await client.emit_frame(_text_frame(msgid="old-1"))
-            await _wait_until(lambda: len(router.received) == 3)
+            await wait_until(lambda: len(router.received) == 3)
             assert [message.message_id for message in router.received] == [
                 "old-1",
                 "new-1",
@@ -652,7 +833,7 @@ class TestObservationSurface:
         runner = _runner(client=client, router=router)
         task = asyncio.create_task(runner.run())
         try:
-            await _wait_until(lambda: client.run_started)
+            await wait_until(lambda: client.run_started)
             frame = WeComCallbackFrameModel.model_validate(
                 {
                     "cmd": "aibot_event_callback",
@@ -665,7 +846,7 @@ class TestObservationSurface:
                 }
             )
             await client.emit_frame(frame)
-            await asyncio.sleep(0.02)
+            await drain_loop()
             assert router.received == []
         finally:
             runner.request_stop()
@@ -701,7 +882,9 @@ class TestAttachmentFailureSurfaces:
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
             client = FakeWeComClient()
-            runner = _runner(client=client, http_client=http_client)
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=_resolver({"cdn.example.com": ("93.184.216.34",)})
+            )
             attachment = ChannelMessageAttachment(
                 kind=ChannelAttachmentKind.IMAGE, url="https://cdn.example.com/gone.png"
             )
@@ -719,7 +902,9 @@ class TestAttachmentFailureSurfaces:
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
             client = FakeWeComClient()
-            runner = _runner(client=client, http_client=http_client)
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=_resolver({"cdn.example.com": ("93.184.216.34",)})
+            )
             attachment = ChannelMessageAttachment(
                 kind=ChannelAttachmentKind.IMAGE, url="https://cdn.example.com/x.png"
             )
@@ -752,7 +937,9 @@ class TestAttachmentFailureSurfaces:
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
             client = FakeWeComClient()
-            runner = _runner(client=client, http_client=http_client)
+            runner = _runner(
+                client=client, http_client=http_client, host_resolver=_resolver({"cdn.example.com": ("93.184.216.34",)})
+            )
             attachment = ChannelMessageAttachment(
                 kind=ChannelAttachmentKind.IMAGE, url="https://cdn.example.com/big.png"
             )
