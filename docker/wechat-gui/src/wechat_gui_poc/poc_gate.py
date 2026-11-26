@@ -334,7 +334,7 @@ async def http_status(host: str, port: int, path: str, *, timeout: float) -> int
     return int(match.group(1))
 
 
-def _xev_connected(pid: int) -> bool:
+def _xev_connected(pid: int, *, proc_root: Path = Path("/proc")) -> bool:
     """判断 ``xev`` 是否已连上 X 服务器（或已退出）。
 
     注入早于 ``xev`` 完成 SelectInput 时事件会全部丢失；``xev -root`` 不
@@ -344,11 +344,12 @@ def _xev_connected(pid: int) -> bool:
 
     Args:
         pid: ``xev`` 进程号。
+        proc_root: ``proc`` 文件系统根（测试可指向临时目录）。
 
     Returns:
         True 表示可以注入。
     """
-    fd_dir = Path(f"/proc/{pid}/fd")
+    fd_dir = proc_root / str(pid) / "fd"
     try:
         entries = list(fd_dir.iterdir())
     except OSError:

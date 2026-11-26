@@ -1282,12 +1282,28 @@ README「本机实测结果」与 `docs/evidence/poc/`；字段含
 注入失败回 `{"ok":false,"command":"key","error":"..."}`（守护不中断）；
 字段非法 / 未知命令回 `ok=false` 且 `command` 为空字符串。
 
-`uinput-devices.json`（uinputd 落盘）：`width` / `height`（integer，绝对
-指针轴上限对应屏幕尺寸）+ `keyboard` / `pointer` 各含 `name`（内核设备名）
-与 `event_path`（容器内事件节点）。门报告字段（`verdict` / `steps[]` /
-`hostname` / `kernel` / `docker` / `started_at_ms` / `duration_perf_counter_ms`
-及宿主运行器追加的 `run_mode` / `build_attempts` / `container_exit_code` /
-`host_session_guard`）逐项说明见沙盒树 README「门报告字段」，
+`uinput-devices.json`（uinputd 落盘，root 持有）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `width` / `height` | integer | 绝对指针轴上限对应的屏幕尺寸（正数） |
+| `keyboard.name` / `pointer.name` | string | 内核设备名（Xorg 静态段的 Identifier 与此一致） |
+| `keyboard.event_path` / `pointer.event_path` | string | 容器内事件节点（按 sysfs `dev` 号 mknod 后 chown 给运行用户） |
+
+门报告字段（`--out` 落盘与 stdout 单行 JSON 同源）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `verdict` | string | `PASS` / `FAIL` |
+| `steps[]` | array | 七步：`name` / `status` / `duration_perf_counter_ms` / `detail` |
+| `hostname` / `kernel` | string | 容器主机名 / 内核版本 |
+| `docker` | string \| null | Docker 版本（容器内不可得为 `null`） |
+| `started_at_ms` | integer | 启动时刻，Unix Epoch 毫秒 |
+| `duration_perf_counter_ms` | integer | 总耗时毫秒 |
+| `run_mode` / `build_attempts` / `container_exit_code` | string / integer / integer | 宿主运行器追加 |
+| `host_session_guard` | object | 宿主运行器追加：`host_session_active` / `host_display` / `allow_host_session` / `floated_devices` / `ignored_devices` / `residual_devices` / `float_wait` / `float_sync_ms` |
+
+字段级说明与样例以沙盒树 README「设备制品 / 门报告字段」为准，
 `docs/evidence/poc/` 下的入库证据即完整样例。
 
 ### 门后的通道设计预告（不在本阶段实现）
@@ -1324,11 +1340,12 @@ README「本机实测结果」与 `docs/evidence/poc/`；字段含
 - **输入面是内核全局对象（事实约束）**：uinput 设备不只属于容器——宿主
   图形会话（或同机其它 X 会话）会接入 `wechat-gui virtual*` 并接收注入。
   PoC 复跑前须在宿主 `xinput float` 该设备（运行器在有宿主会话时默认
-  拒绝运行，`WECHAT_GUI_POC_ALLOW_HOST_SESSION=1` 放行后自动浮动并把
-  结果写进证据）；生产形态必须在部署机配置宿主 udev 规则（对
-  `wechat-gui virtual*` 置 `LIBINPUT_IGNORE_DEVICE="1"` 或清空
-  `ID_INPUT*`）并实测确认——该缓解未在本门验证，属通道实现开工前置项；
-  无法满足时按 VM 隔离评估。
+  拒绝运行，`WECHAT_GUI_POC_ALLOW_HOST_SESSION=1` 放行后自动浮动，并在
+  两台设备浮动完成后才放行容器启动 Xorg，结果写进证据）；生产形态用仓库
+  内 `docker/wechat-gui/udev/90-wechat-gui-ignore.rules`（对
+  `wechat-gui virtual*` 置 `LIBINPUT_IGNORE_DEVICE="1"` 并清空
+  `ID_INPUT*`）——开发机 X11 + Xorg libinput 已实测通过，部署机待复验；
+  Wayland 会话下 `xinput float` 不可行，须依赖该规则或 VM 隔离。
 
 ## SmsForwarder 短信 / 通知转发通道（SMS_FORWARDER——仅入站）
 

@@ -12,6 +12,14 @@
 #   # 可选辅助模型服务（look_at 视觉 + embed 嵌入；需 NVIDIA Container Toolkit）：
 #   docker compose up -d llama-server-vision llama-server-embed
 #
+# 项目名固定为 `ai_agent_companion`（顶层 `name:`）。否则 compose 按所在
+# 目录名派生项目名（`docker`），会与同机其它工程（如 ec-skill-eval）的栈
+# 撞成同一项目，产生 orphan 警告并共享网络 / 卷命名空间。
+#
+# GUI 微信实验轨**不在本文件**：它有自己的 compose 项目与网络，见
+# docker-compose.wechat-gui.yml（`docker compose -f
+# docker-compose.wechat-gui.yml up -d`，不需要砂盒 token）。
+#
 # 辅助模型服务：
 #   - llama-server-vision：Qwen3-VL-4B（Q4_K_M + F16 mmproj）——look_at 角色
 #     端点（backend llm 注册表条目 base_url=http://127.0.0.1:8080/v1，
@@ -77,6 +85,8 @@
 #   - **不设 read_only**（profiles 卷需要写——持久登录态是职能面；
 #     写面收敛到命名卷，不挂宿主路径）；
 #   - restart: unless-stopped（宿主机重启后自动恢复）。
+
+name: ai_agent_companion
 
 services:
   tool-sandbox-agent:
@@ -186,73 +196,8 @@ services:
     networks:
       - tool-sandbox
 
-  # ─── GUI 微信实验轨：Xorg + uinput 栈（PoC 门阶段，默认不启动） ───────────
-  # 仅沙盒运行时：过门后才接后端通道（当前无 wire 契约——不参与
-  # sandbox-drift 门禁）。启动：
-  #   export WECHAT_GUI_VNC_PASSWORD_FILE=/path/to/vnc.pass   # 真实密码文件
-  #   cd docker && docker compose --profile wechat-gui up -d wechat-gui
-  #
-  # 安全边界（生产运行——与非 privileged 的设备 / 能力最小集）：
-  #   - **不使用 privileged**：只映射 /dev/uinput（可选 /dev/dri）；
-  #   - cap_drop ALL + 仅补 MKNOD（容器内 /dev/input 事件节点无 udev，
-  #     由 uinputd 按 sysfs dev 号 mknod）与 CHOWN（把节点交给运行用户）；
-  #   - 端口仅回环：5900（x11vnc）/ 6080（noVNC）；VNC 密码经文件 secret；
-  #   - 入口以 root 启动、Xorg / x11vnc / websockify 降权到 wechat 用户；
-  #   - no-new-privileges + 资源限额（Xorg / VNC 风暴隔离）；
-  #   - VNC 密码文件必须对运行用户 wechat 可读（推荐 wechat:wechat 0400；
-  #     root 持有 0400 时入口会复制到 /run/wechat-gui/vnc.pass 并改属主，
-  #     复制失败即容器失败）；WECHAT_GUI_VNC_PASSWORD 明文优先于文件。
-  #   - uinput 设备是内核全局对象：宿主图形会话会接入
-  #     wechat-gui virtual* 并接收注入，部署机须配宿主 udev 规则
-  #     （LIBINPUT_IGNORE_DEVICE=1 或清空 ID_INPUT*）并实测确认。
-  # PoC 宿主运行器（poc/run_stack_poc.sh）为兼容性使用 --privileged；生产
-  # 以本服务形态为准（见 docker/wechat-gui/README.md「安全边界」）。
-  wechat-gui:
-    profiles: ["wechat-gui"]
-    build:
-      context: ./wechat-gui
-      dockerfile: Dockerfile
-    image: wechat-gui:0.1.0
-    container_name: wechat-gui
-    environment:
-      # x11vnc 密码文件（compose secret 挂载点；文件内容为单行密码）。
-      WECHAT_GUI_VNC_PASSWDFILE: /run/secrets/wechat_gui_vnc_password
-      WECHAT_GUI_DISPLAY: ":99"
-    secrets:
-      - wechat_gui_vnc_password
-    devices:
-      # uinput 主设备（生产不 privileged 时的唯一必需设备映射）。
-      - /dev/uinput:/dev/uinput
-      # 可选：宿主 GPU 渲染（dummy 驱动不需要；接入微信客户端后可按需启用）。
-      # - /dev/dri:/dev/dri
-    device_cgroup_rules:
-      # uinput 动态创建的 input 事件节点属主设备号 13；不 privileged 时
-      # 必须显式放行该字符设备类别（映射 /dev/uinput 只放行 10:223）。
-      - "c 13:* rwm"
-    ports:
-      # 仅回环暴露：宿主浏览器访问 noVNC；VNC 直连亦仅本机。
-      - "127.0.0.1:5900:5900"
-      - "127.0.0.1:6080:6080"
-    # 容器内 /dev/uinput 由 root 打开；事件节点 mknod/chown 需要最小能力集。
-    cap_drop:
-      - ALL
-    cap_add:
-      # 容器内无 udev：mknod 事件节点 + chown 给运行用户 + runuser 降权
-      # + 清理时向降权子进程发信号。
-      - MKNOD
-      - CHOWN
-      - SETUID
-      - SETGID
-      - KILL
-    security_opt:
-      - no-new-privileges:true
-    # Xorg + VNC 的资源上限（按部署机实测收紧）。
-    shm_size: 256m
-    mem_limit: 1g
-    cpus: 1.0
-    restart: unless-stopped
-    networks:
-      - tool-sandbox
+  # GUI 微信实验轨已在 docker-compose.wechat-gui.yml（独立项目 / 网络 /
+  # secret）；本文件不再声明该服务，也不再有 wechat-gui profile。
 
   # ─── 待接入（部署面占位，未启用） ────────────────────────────────────────────
   # TTS（CosyVoice3）：models/Fun-CosyVoice3-0.5B-2512 权重 + 官方运行时薄包装，
@@ -272,9 +217,3 @@ volumes:
   # 浏览器 sidecar 持久登录态（profiles/<name>——cookies / localStorage
   # 跨重启留存；写面收敛到命名卷，不挂宿主路径）。
   browser-sidecar-profiles:
-
-secrets:
-  # x11vnc 密码文件（内容为单行密码）。缺省指向仓库内开发占位文件；
-  # 生产必须经 WECHAT_GUI_VNC_PASSWORD_FILE 指向真实密码文件（不入库）。
-  wechat_gui_vnc_password:
-    file: ${WECHAT_GUI_VNC_PASSWORD_FILE:-./wechat-gui/vnc.pass.default}

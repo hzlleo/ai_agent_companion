@@ -904,3 +904,16 @@ async def test_main_usage_error_exits_two() -> None:
     with pytest.raises(SystemExit) as excinfo:
         await asyncio.to_thread(poc_gate.main, ["--unknown-flag"])
     assert excinfo.value.code == 2
+
+
+async def test_xev_connected_requires_socket_fd(tmp_path: Path) -> None:
+    """就绪探测只认 socket fd：仅普通 fd 为未就绪，进程消失视为可继续。"""
+    pid = 4242
+    fd_dir = tmp_path / str(pid) / "fd"
+    fd_dir.mkdir(parents=True)
+    (fd_dir / "0").symlink_to("/dev/null")
+    (fd_dir / "1").symlink_to("/dev/null")
+    assert poc_gate._xev_connected(pid, proc_root=tmp_path) is False
+    (fd_dir / "3").symlink_to("socket:[12345]")
+    assert poc_gate._xev_connected(pid, proc_root=tmp_path) is True
+    assert poc_gate._xev_connected(9999, proc_root=tmp_path) is True

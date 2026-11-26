@@ -22,6 +22,7 @@ async def _resolve(
     source: Path,
     runtime: Path,
     password: str | None = None,
+    probe_body: str | None = None,
 ) -> tuple[int, str, str]:
     """在子 shell 中调用入口脚本的密码解析函数。
 
@@ -29,6 +30,7 @@ async def _resolve(
         source: 密码文件路径。
         runtime: 运行目录。
         password: 明文密码（None 表示不设 ``WECHAT_GUI_VNC_PASSWORD``）。
+        probe_body: 注入的探针函数定义（None 表示用入口的默认 setpriv 探针）。
 
     Returns:
         (退出码, 标准输出, 标准错误)。
@@ -36,7 +38,12 @@ async def _resolve(
     env = {key: value for key, value in os.environ.items() if key != "WECHAT_GUI_VNC_PASSWORD"}
     if password is not None:
         env["WECHAT_GUI_VNC_PASSWORD"] = password
-    script = 'source "$1" || exit 99; resolve_vnc_passfile "$2" "$3" "$4"'
+    calls = 'resolve_vnc_passfile "$2" "$3" "$4"'
+    prelude = ""
+    if probe_body is not None:
+        prelude = f"{probe_body}; "
+        calls = 'resolve_vnc_passfile "$2" "$3" "$4" masked_probe'
+    script = f'source "$1" || exit 99; {prelude}{calls}'
     process = await asyncio.create_subprocess_exec(
         "bash",
         "-c",
@@ -107,3 +114,30 @@ async def test_resolve_fails_when_nobody_can_read(tmp_path: Path) -> None:
     code, stdout, _stderr = await _resolve(source=source, runtime=tmp_path / "run")
     assert code != 0
     assert stdout == ""
+
+
+async def test_resolve_probe_distinguishes_run_user_from_caller(tmp_path: Path) -> None:
+    """调用方可读而运行用户不可读时走复制，钉住探针不可退化为 test -r。
+
+    非 root 单测无法真降权到第二个 uid；把「运行用户是否可读」的探针做成
+    可注入的函数入参后，用只拒绝源文件的替身构造该场景：若实现改用调用方
+    口径的 ``[[ -r ]]``，会直接复用源文件（stdout 为 source）而红。
+    """
+    source = tmp_path / "vnc.pass"
+    source.write_text("secret\n", encoding="utf-8")
+    source.chmod(0o400)
+    runtime = tmp_path / "run"
+    runtime.mkdir()
+    probe_body = f'masked_probe() {{ [[ "$1" != "{source}" ]]; }}'
+    code, stdout, _stderr = await _resolve(
+        source=source,
+        runtime=runtime,
+        probe_body=probe_body,
+    )
+    assert code == 0
+    target = runtime / "vnc.pass"
+    assert stdout == str(target)
+    assert target.read_text(encoding="utf-8") == "secret\n"
+    stat_result = target.stat()
+    assert stat_result.st_mode & 0o777 == 0o400
+    assert stat_result.st_uid == os.getuid()

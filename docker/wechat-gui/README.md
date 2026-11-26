@@ -26,6 +26,7 @@ docker/wechat-gui/
 │   └── poc_gate.py           # 七步 PoC 门 + 解析 / 校验 / 单行 JSON 报告
 ├── src/tests/unit/           # hermetic 异步单测（零真实 X / 零真实 uinput）
 ├── poc/run_stack_poc.sh      # 宿主运行器（构建 + 特权容器内跑门 + 证据落盘）
+├── udev/90-wechat-gui-ignore.rules  # 宿主 udev 参考件（LIBINPUT 忽略虚拟设备）
 └── vnc.pass.default          # compose 缺省 VNC 密码文件（开发占位，生产覆盖）
 ```
 
@@ -108,7 +109,7 @@ input-event-codes 数值（`30` = `KEY_A`）。
 | `run_mode` | string | 宿主运行器追加：`privileged` / `unprivileged` |
 | `build_attempts` | integer | 宿主运行器追加：镜像构建实际尝试次数（1-3） |
 | `container_exit_code` | integer | 宿主运行器追加：PoC 容器退出码 |
-| `host_session_guard` | object | 宿主运行器追加：`host_session_active`（bool）/ `host_display`（string\|null）/ `allow_host_session`（bool）/ `floated_devices`（array）/ `residual_devices`（array） |
+| `host_session_guard` | object | 宿主运行器追加：`host_session_active`（bool）/ `host_display`（string\|null）/ `allow_host_session`（bool）/ `floated_devices`（array）/ `ignored_devices`（array，xinput 不可见、由宿主 udev 规则忽略）/ `residual_devices`（array）/ `float_wait`（bool，容器等待安全态完成）/ `float_sync_ms`（integer，安全态同步耗时） |
 
 ## 构建与 PoC 门（本机）
 
@@ -135,16 +136,32 @@ SETUID/SETGID/KILL + `no-new-privileges`），运行 `poc_gate`，把单行 JSON
 弱口令）。
 
 **宿主图形会话守卫（uinput 是内核全局设备）**：运行器在构建 / 运行前探测
-宿主活动图形会话（`DISPLAY` 可连，或 `/tmp/.X11-unix/X*` 存在且 `xdpyinfo`
-可连）。检测到即默认拒绝运行并打印说明——容器内创建的
-`wechat-gui virtual keyboard/pointer` 会被宿主 X 会话接入并接收注入的按键
-与点击。显式 `WECHAT_GUI_POC_ALLOW_HOST_SESSION=1` 才放行，放行后在设备
-出现时用镜像内的 `xinput` 于宿主逐一 `float`（只处理确实出现的设备）并
-写入证据 `host_session_guard`；运行结束校验宿主无残留设备。生产形态的
-根治是部署机 udev 规则（对 `wechat-gui virtual*` 置
-`LIBINPUT_IGNORE_DEVICE="1"` 或清空 `ID_INPUT*`）并实测确认——该缓解未在
-本门验证，属通道实现（R4-6b）开工前置项；无法配置 udev 的部署机按 VM
-隔离评估。
+宿主活动图形会话——任何 `/tmp/.X11-unix/X*` 或
+`${XDG_RUNTIME_DIR:-/run/user/<uid>}/wayland-*` 套接字存在即视为活动（不要求
+`xdpyinfo` 可连，连接失败也可能是会话存在但授权受限）。检测到即默认拒绝
+运行并打印说明——容器内创建的 `wechat-gui virtual keyboard/pointer` 会被宿主
+X 会话接入并接收注入的按键与点击。存在 Wayland 套接字时**直接拒绝**：合成器
+原生接入内核设备，镜像内 `xinput` 经 XWayland 的 `float` 摘不掉，须用宿主
+udev 规则或 VM 隔离。
+
+显式 `WECHAT_GUI_POC_ALLOW_HOST_SESSION=1` 才放行，且放行有前置条件与同步：
+
+- 先用镜像内 `xinput list` 连一次宿主显示（`Authorization required` 等连接
+  失败直接拒绝，不留到浮动阶段才发现）；
+- 运行器以 `WECHAT_GUI_HOST_FLOAT_WAIT=1` 启动 PoC 容器；入口在启动 Xorg
+  **之前**有界等待 `/run/wechat-gui/host-float.done`（超时 exit 1 并说明）；
+- 运行器在设备出现后判定安全态：`xinput` 可见的设备必须逐一 `float`；
+  sysfs 已存在但 `xinput` 看不到的设备视为被宿主 udev 规则忽略（连续两轮
+  确认）；两台都安全后 `docker exec` 在容器内落 done 文件，容器才继续
+  启动 Xorg；截止内不满足即 `docker rm -f` 并 exit 1（注入不发生）；
+- 证据 `host_session_guard` 记录 `floated_devices` / `ignored_devices` /
+  `float_wait` / `float_sync_ms`；运行结束 `residual_devices` 非空即
+  exit 1。
+
+生产形态的根治是部署机宿主 udev 规则——本仓库提供逐字参考件
+`udev/90-wechat-gui-ignore.rules`（见「宿主 udev 规则部署」），开发机已实测
+通过；部署机仍须复验，无法配置 udev 的机器按 Wayland 情形同样走拒绝 / VM
+隔离。
 
 ### PoC 门步骤与判定
 
@@ -166,22 +183,29 @@ SETUID/SETGID/KILL + `no-new-privileges`），运行 `poc_gate`，把单行 JSON
 
 ### 本机实测结果
 
-宿主有活动 KDE 图形会话（`:0`）：两次运行都经
-`WECHAT_GUI_POC_ALLOW_HOST_SESSION=1` 放行，运行器在设备出现后于宿主
-`xinput float` 了 `wechat-gui virtual keyboard` 与 `wechat-gui virtual
-pointer`，证据 `host_session_guard` 记录 `host_session_active=true` /
-`floated_devices` 两项 / `residual_devices=[]`；运行结束后宿主
-`/sys/class/input` 无该设备、无残留容器。未设置放行变量时运行器直接拒绝
-运行（退出码 1）并打印宿主注入面说明。
+宿主有活动 X11 KDE 图形会话（`:0`）。`WECHAT_GUI_POC_ALLOW_HOST_SESSION=1`
+放行后，运行器首次启动容器即置 `WECHAT_GUI_HOST_FLOAT_WAIT=1`，入口在启动
+Xorg 前等待安全态完成标记。两种宿主状态都实测过：
+
+- **无 udev 规则时（历史证据 11:47）**：设备出现在宿主 `xinput`，运行器
+  逐一 `float` 两台，证据 `floated_devices` 两项；
+- **装 udev 规则后（12:39 起，本轮证据）**：设备在 `xinput` 不可见，运行器
+  判定为已被忽略（`ignored_devices` 两项），安全态同步完成
+  （`float_wait=true` / `float_sync_ms≈1.2s`）后容器才启动 Xorg。
+
+两轮结束后宿主 `/sys/class/input` 均无该设备、无残留容器；未设置放行变量
+时运行器直接拒绝（退出码 1），`XAUTHORITY` 不可达时在启动容器前拒绝
+（退出码 1，注入不发生）。
 
 | 形态 | 结果 | 证据 | 总耗时 |
 |---|---|---|---|
-| 特权 PoC（`--privileged`，仅本门兼容性） | **PASS**（7/7） | `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-privileged-20261126T034706Z.json` | 221 ms |
-| 非特权（`--device /dev/uinput` + `c 13:* rwm` + 最小能力集 + `no-new-privileges`） | **PASS**（7/7） | `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-unprivileged-20261126T034711Z.json` | 240 ms |
+| 特权 PoC（`--privileged`，仅本门兼容性） | **PASS**（7/7） | `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-privileged-20261126T045413Z.json` | 193 ms |
+| 非特权（`--device /dev/uinput` + `c 13:* rwm` + 最小能力集 + `no-new-privileges`） | **PASS**（7/7） | `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-unprivileged-20261126T045418Z.json` | 174 ms |
+| 历史（udev 规则前，真实 float 路径） | PASS 7/7 | `...-privileged-20261126T034706Z.json` / `...-unprivileged-20261126T034711Z.json` | 221 / 240 ms |
 
-- 各步耗时（perf_counter ms，非特权形态）：`x_up` 3、`uinput_create` 83、
-  `xinput_visible` 3、`event_roundtrip` 54（单轮注入，五类事件各 1）、
-  `screenshot` 77、`clipboard` 8、`vnc_up` 8；`build_attempts=1`、
+- 各步耗时（perf_counter ms，本轮非特权形态）：`x_up` 2、`uinput_create` 62、
+  `xinput_visible` 2、`event_roundtrip` 54（单轮注入，五类事件各 1）、
+  `screenshot` 41、`clipboard` 5、`vnc_up` 4；`build_attempts=1`、
   `container_exit_code=0`。
 - 单轮注入把事件回环从「每读一行注入一批」（旧证据 284 ms / 20 轮）收敛
   到 54 ms；`stdbuf -oL` 行缓冲是「注入一次即可采到完整回环」的前提。
@@ -199,15 +223,22 @@ pointer`，证据 `host_session_guard` 记录 `host_session_active=true` /
 
 ## 生产运行（非特权）
 
-生产**禁止 `--privileged`**：只映射 uinput 设备与最小能力集。compose
-服务在 `profiles: [wechat-gui]` 下默认不启动：
+生产**禁止 `--privileged`**：只映射 uinput 设备与最小能力集。GUI 微信栈
+在**独立的 compose 文件 / 项目**（`ai_agent_companion-wechat-gui`）里，
+与默认工具栈的网络 / 项目名隔离，不需要 `SANDBOX_TOKEN` /
+`BROWSER_SIDECAR_TOKEN`：
 
 ```bash
 cd docker
 export WECHAT_GUI_VNC_PASSWORD_FILE=/secure/wechat-gui-vnc.pass  # 真实密码文件
-docker compose --profile wechat-gui up -d wechat-gui
-docker compose --profile wechat-gui logs -f wechat-gui
+docker compose -f docker-compose.wechat-gui.yml up -d
+docker compose -f docker-compose.wechat-gui.yml logs -f wechat-gui
+docker compose -f docker-compose.wechat-gui.yml down
 ```
+
+> 迁移：旧布局用 `docker compose --profile wechat-gui up -d wechat-gui`
+> 启动，容器属于 compose 项目 `docker`。升级前先 `docker rm -f wechat-gui`
+> 再按上面命令启动。
 
 等价的裸 `docker run`（如需 GPU 渲染，追加 `--device /dev/dri:/dev/dri`）：
 
@@ -222,10 +253,12 @@ docker run -d --name wechat-gui \
   wechat-gui:0.1.0 serve
 ```
 
-- 能力解释：MKNOD 用于容器内事件节点落位（无 udev），CHOWN 用于把节点
-  交给 `wechat` 运行用户，SETUID/SETGID 供 `runuser` 降权，KILL 供入口
-  清理降权子进程；入口以 root 启动后 Xorg / x11vnc / websockify 均降权
-  到 `wechat`。
+- 能力解释（与 compose 的五项逐项对齐）：MKNOD 用于容器内事件节点落位
+  （无 udev），CHOWN 用于把节点 / 密码文件交给 `wechat` 运行用户，
+  SETUID/SETGID 供 `setpriv` / `runuser` 降权，KILL 供入口清理降权子进程；
+  入口以 root 启动后 Xorg / x11vnc / websockify 均降权到 `wechat`。生产
+  能力集**不含 FOWNER**，故写盘步骤一律「先写 + chmod（仍归 root）再
+  chown」，chown 之后不再 chmod。
 - **device cgroup 规则**：uinput 动态创建的事件节点是字符设备 13:*；仅
   映射 `/dev/uinput` 时容器 device cgroup 会以 EPERM 拒绝打开事件节点，
   必须显式放行 `c 13:* rwm`（compose 已声明）。
@@ -236,18 +269,56 @@ docker run -d --name wechat-gui \
   x11vnc 以不可读密码文件空跑）。宿主侧无需固定 uid：运行器把临时密码
   文件置 `0644` 放在 `0700` 临时目录内，容器内绑定挂载因此不依赖「宿主
   调用者 uid == wechat uid」这一隐含前提。
-- **密码解析冒烟（root 0400 复制路径）**：入口函数可在镜像内直调，验证
-  复制后的属主与权限（期望输出 `wechat:wechat 400`）：
+- **密码解析冒烟（生产同款能力集）**：入口函数可在镜像内直调，验证复制 /
+  明文两条路径在最严能力集下都能得到 `wechat:wechat 400`（期望两行输出）：
 
   ```bash
-  docker run --rm --entrypoint bash wechat-gui:0.1.0 -c '
-    mkdir -p /tmp/run && printf "smoke\n" > /tmp/pass
+  docker run --rm \
+    --cap-drop ALL --cap-add MKNOD --cap-add CHOWN \
+    --cap-add SETUID --cap-add SETGID --cap-add KILL \
+    --security-opt no-new-privileges:true \
+    --entrypoint bash wechat-gui:0.1.0 -c '
+    set -e
+    mkdir -p /tmp/run /tmp/run2 && printf "smoke\n" > /tmp/pass
     chown root:root /tmp/pass && chmod 0400 /tmp/pass
     source /usr/local/bin/entrypoint.sh
-    target="$(resolve_vnc_passfile /tmp/pass wechat /tmp/run)"
-    printf "resolved=%s\n" "${target}"; stat -c "%U:%G %a" "${target}"'
+    t1="$(resolve_vnc_passfile /tmp/pass wechat /tmp/run)"
+    printf "copy=%s " "$(stat -c "%U:%G %a" "${t1}")"
+    t2="$(WECHAT_GUI_VNC_PASSWORD=envsecret \
+      resolve_vnc_passfile /tmp/missing wechat /tmp/run2)"
+    printf "env=%s\n" "$(stat -c "%U:%G %a" "${t2}")"'
   ```
 - 资源限额（compose：1g / 1.0 CPU / 256m shm）按部署机实测收紧。
+
+## 宿主 udev 规则部署（生产根治面）
+
+容器内 uinput 创建的是**内核全局**设备，宿主图形会话会接入并接收注入。
+仓库提供已验证的参考件
+[`udev/90-wechat-gui-ignore.rules`](udev/90-wechat-gui-ignore.rules)：对
+`ATTRS{name}=="wechat-gui virtual *"` 的事件节点置
+`LIBINPUT_IGNORE_DEVICE="1"` 并清空全部 `ID_INPUT*`。
+
+部署步骤（必须在**首次启动容器前**就位，否则设备首次出现时仍会接入宿主）：
+
+1. 整份复制到宿主：
+   `sudo cp udev/90-wechat-gui-ignore.rules /etc/udev/rules.d/`
+2. `sudo udevadm control --reload`
+3. 验证三步：
+   - 找到真实节点：
+     `for p in /sys/class/input/event*/device/name; do n=$(cat "$p"); [[ "$n" == "wechat-gui virtual "* ]] && echo "${p%/device/name} -> $n"; done`
+   - `udevadm info "/dev/input/eventN"` 须含 `E: LIBINPUT_IGNORE_DEVICE=1`
+     且**没有** `E: ID_INPUT*` 行（N 取上一步节点号）；
+   - 宿主 `xinput list` 不出现该设备。宿主未装 `xinput` 时用镜像内的
+     `xinput` 接宿主显示（`DISPLAY` 指向宿主会话，`XAUTHORITY` 可读时挂载）：
+     ```bash
+     docker run --rm -e DISPLAY="${DISPLAY:-:0}" \
+       -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
+       --entrypoint xinput wechat-gui:0.1.0 list
+     ```
+
+本机（X11 + Xorg libinput）已验证：`event24` / `event25` 均
+`LIBINPUT_IGNORE_DEVICE=1`、无 `ID_INPUT*`、宿主 `xinput` 无该设备；部署机
+仍须复验。Wayland 会话下 `xinput float` 不可行，只能依赖本规则或 VM 隔离。
 
 ## noVNC 登录与微信客户端安装（Live 阶段）
 
@@ -303,10 +374,9 @@ docker run -d --name wechat-gui \
   退出而销毁；但设备是**内核全局**对象——宿主图形会话（或同机其它 X 会话）
   会接入这两个设备并接收注入。本机复跑前必须在宿主 `xinput float` 该
   设备（`poc/run_stack_poc.sh` 在有宿主会话时默认拒绝运行，放行后自动浮动
-  并记录证据）；生产形态必须在部署机配置宿主 udev 规则（对
-  `wechat-gui virtual*` 置 `LIBINPUT_IGNORE_DEVICE="1"` 或清空 `ID_INPUT*`）
-  并实测确认——该缓解未在本次验证，属通道实现（R4-6b）开工前置项；无法
-  满足时按 VM 隔离评估。
+  并在浮动完成后才放行容器启动 Xorg，记录 `float_wait` / `float_sync_ms`）；
+  生产形态用仓库内 `udev/90-wechat-gui-ignore.rules`（开发机已验证，
+  部署机待复验）；Wayland 会话或无法配置 udev 的机器按 VM 隔离评估。
 - **可信边界**：本树不解析平台业务数据；截图与注入是唯一对外原语。
   视觉模型对截图的消费在通道层（过门后）承担。
 
@@ -317,8 +387,12 @@ docker run -d --name wechat-gui \
 | `src/tests/unit/test_uinput_devices.py` | ioctl 编号 / `uinput_user_dev` 结构体布局 / 能力注册序列 / sysfs 发现 / mknod / 事件字节 / 销毁幂等 |
 | `src/tests/unit/test_uinputd.py` | 控制面五命令解码为具体模型 / 非法载荷矩阵 / 设备信息落盘与读取 / 属主调整 / Unix socket 服务与客户端 / 探测字段不完整与类型非法 / CLI 接线 |
 | `src/tests/unit/test_poc_gate.py` | xdpyinfo / xinput / xev 解析 / 截图校验 / 命令执行与超时 / 步骤编排与跳过 / 报告与退出码 / 七个门步骤（临时 PATH 假命令）/ 单轮注入与 Motion·ButtonRelease 断言 / 注入失败 / 剪贴板回读不一致 / noVNC 非 200 |
-| `src/tests/unit/test_entrypoint_password.py` | 入口密码解析：运行用户可读直接使用 / 明文密码回退（0400）/ 明文优先于文件 / 两者不可读即失败 |
+| `src/tests/unit/test_entrypoint_password.py` | 入口密码解析：运行用户可读直接使用 / 明文密码回退（0400）/ 明文优先于文件 / 两者不可读即失败 / 探针注入区分 setpriv 与调用方口径 |
+| `src/tests/unit/test_run_stack_poc.py` | 宿主会话探测 fail-closed：无套接字 / 仅 X11 套接字 / Wayland 套接字（临时 socket 根） |
 | `src/tests/unit/test_xorg.py` | 静态 evdev 段 / dummy 屏幕 / 配置落盘 |
+
+`.dockerignore` 刻意排除 `udev/`：规则文件是**宿主侧**部署制品，镜像内不
+需要，排除以保持镜像精简（与 `poc/`、`src/tests` 同理）。
 
 ## 故障排查
 

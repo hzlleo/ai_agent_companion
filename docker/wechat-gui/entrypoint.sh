@@ -39,47 +39,69 @@ readonly X11VNC_LOG="${RUNTIME_DIR}/x11vnc.log"
 readonly NOVNC_LOG="${RUNTIME_DIR}/novnc.log"
 readonly SOURCE_PASSFILE="${WECHAT_GUI_VNC_PASSWDFILE:-/run/secrets/wechat_gui_vnc_password}"
 readonly RUN_USER="wechat"
+readonly HOST_FLOAT_TIMEOUT="${WECHAT_GUI_HOST_FLOAT_TIMEOUT:-60}"
 
 log() {
     printf '[entrypoint] %s\n' "$*" >&2
 }
 
-run_user_can_read() {
+# 按运行用户的 uid/gid 判断文件可读性（root 的 test -r 恒真，不可用）。
+# 清空补充组需要 root，故保留调用方组位（密码文件口径为 0400，组位不参与
+# 判定）。
+probe_readable_as_user() {
     local path="$1"
     local user="$2"
     local uid gid
     uid="$(id -u "${user}")"
     gid="$(id -g "${user}")"
-    # root 的 test -r 恒真，必须按运行用户的 uid/gid 判定；清空补充组需要
-    # root，故保留调用方组位（密码文件口径为 0400，组位不参与判定）。
     setpriv --reuid="${uid}" --regid="${gid}" --keep-groups test -r "${path}"
 }
 
+# 可读性判定入口：``probe`` 可注入（测试用「调用方可读而运行用户不可读」
+# 的替身区分 setpriv 探针与 root/调用方口径的 test -r）。
+run_user_can_read() {
+    local path="$1"
+    local user="$2"
+    local probe="${3:-probe_readable_as_user}"
+    "${probe}" "${path}" "${user}"
+}
+
+# 解析 x11vnc 密码文件。写盘类的步骤必须「先落内容 + chmod（仍归 root）再
+# chown」：文件一旦归运行用户，无 CAP_FOWNER 的 root 再 chmod 会 EPERM
+# （生产能力集 cap_drop ALL + 最小补集不含 FOWNER）。
+#
+# ``source_probe`` 只覆盖「源文件对运行用户是否可读」这一判定；复制后的
+# 目标校验仍用真实探针。
 resolve_vnc_passfile() {
     local source="$1"
     local user="$2"
     local runtime_dir="$3"
+    local source_probe="${4:-probe_readable_as_user}"
     local target="${runtime_dir}/vnc.pass"
     if [[ -n "${WECHAT_GUI_VNC_PASSWORD:-}" ]]; then
         # 明确给出明文密码时优先于文件；子 shell 内收窄 umask，避免影响
         # 后续运行期制品（设备信息 / socket）的权限。
+        rm -f -- "${target}" || return 1
         (umask 077; printf '%s\n' "${WECHAT_GUI_VNC_PASSWORD}" >"${target}") || return 1
-        chown "${user}:${user}" "${target}" || return 1
         chmod 0400 "${target}" || return 1
+        chown "${user}:${user}" "${target}" || return 1
         run_user_can_read "${target}" "${user}" || return 1
         printf '%s\n' "${target}"
         return 0
     fi
-    if run_user_can_read "${source}" "${user}"; then
+    if run_user_can_read "${source}" "${user}" "${source_probe}"; then
         printf '%s\n' "${source}"
         return 0
     fi
     # 运行用户读不到；root 读得到（典型为挂载进来的 0400 root 文件）时
-    # 复制到运行目录并交给运行用户。
+    # 复制到运行目录并交给运行用户。install 不带 -o/-g：先以 root 落
+    # 0400，再 chown，避免 chown 后失去 chmod 权限。
     if [[ ! -r "${source}" ]]; then
         return 1
     fi
-    install -o "${user}" -g "${user}" -m 0400 "${source}" "${target}" || return 1
+    rm -f -- "${target}" || return 1
+    install -m 0400 "${source}" "${target}" || return 1
+    chown "${user}:${user}" "${target}" || return 1
     run_user_can_read "${target}" "${user}" || return 1
     printf '%s\n' "${target}"
 }
@@ -149,6 +171,10 @@ main() {
     fi
 
     mkdir -p "${RUNTIME_DIR}"
+    # 重启面：上一轮运行用户写出的日志归 wechat；chown -R 会把它改成
+    # root:wechat 且组无写位，重启后 Xorg / x11vnc 打开日志即 Permission
+    # denied。运行期日志先行删除（设备信息 / socket 由 root 重写）。
+    rm -f -- "${XORG_LOG}" "${X11VNC_LOG}" "${NOVNC_LOG}"
     # root 持有目录（写设备信息 / socket），wechat 组可写（Xorg / VNC 日志）。
     chown -R "root:${RUN_USER}" "${RUNTIME_DIR}"
     chmod 0770 "${RUNTIME_DIR}"
@@ -158,6 +184,11 @@ main() {
     # X 的本地套接字目录：非 root Xorg 无法自行创建，由入口以 root 预建。
     mkdir -p /tmp/.X11-unix
     chmod 1777 /tmp/.X11-unix
+    # 重启面：上一轮遗留的 lock / 套接字会让 Xorg 报
+    #「Server is already active for display N」而拒绝启动。
+    local display_number="${DISPLAY_NUM#:}"
+    display_number="${display_number%%.*}"
+    rm -f -- "/tmp/.X${display_number}-lock" "/tmp/.X11-unix/X${display_number}"
 
     if ! PASSFILE="$(resolve_vnc_passfile "${SOURCE_PASSFILE}" "${RUN_USER}" "${RUNTIME_DIR}")"; then
         log "VNC 密码不可用：${SOURCE_PASSFILE} 对 ${RUN_USER} 不可读，且未设置 WECHAT_GUI_VNC_PASSWORD（或复制失败）"
@@ -178,6 +209,24 @@ main() {
     wait_for_file "${DEVICES_JSON}" 200
     wait_for_file "${CONTROL_SOCKET}" 200
     log "设备与 Xorg 配置就绪：${XORG_CONF}"
+
+    # 宿主浮动同步：uinput 设备此刻已在宿主可见，运行器必须在 Xorg / 注入
+    # 之前把它们从宿主图形会话上 float 掉。等运行器落 done 标记再启动 Xorg；
+    # 截止未到即失败（不让注入先落到宿主桌面）。
+    if [[ "${WECHAT_GUI_HOST_FLOAT_WAIT:-0}" == "1" ]]; then
+        if ! [[ "${HOST_FLOAT_TIMEOUT}" =~ ^[0-9]+$ ]]; then
+            log "WECHAT_GUI_HOST_FLOAT_TIMEOUT 非整数：${HOST_FLOAT_TIMEOUT}"
+            exit 1
+        fi
+        local float_done="${RUNTIME_DIR}/host-float.done"
+        rm -f -- "${float_done}"
+        log "等待宿主浮动完成（${float_done}，${HOST_FLOAT_TIMEOUT}s 截止）"
+        if ! wait_for_file "${float_done}" "$((HOST_FLOAT_TIMEOUT * 20))"; then
+            log "宿主浮动未在截止内完成：设备仍可能落在宿主图形会话上，拒绝启动 Xorg"
+            exit 1
+        fi
+        log "宿主浮动已完成，继续启动 Xorg"
+    fi
 
     log "启动 Xorg（${DISPLAY_NUM}，${WIDTH}x${HEIGHT}x24）"
     start_as_user Xorg "${DISPLAY_NUM}" \

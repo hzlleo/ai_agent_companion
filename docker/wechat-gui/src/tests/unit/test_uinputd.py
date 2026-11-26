@@ -502,3 +502,11 @@ async def test_main_usage_error_exits_two() -> None:
     with pytest.raises(SystemExit) as excinfo:
         await asyncio.to_thread(uinputd.main, ["--unknown-flag"])
     assert excinfo.value.code == 2
+
+
+async def test_dispatch_key_release_forwarded(tmp_path: Path) -> None:
+    """按键释放（pressed=False）按原值下发，不被硬编码成按下。"""
+    emitter = FakeEmitter(_pair(tmp_path))
+    outcome = uinputd.dispatch_command(emitter, KeyRequest(code=KEY_A, pressed=False))
+    assert outcome.ok is True
+    assert emitter.calls == [("key", (KEY_A, False))]

@@ -70,6 +70,7 @@ _HASH_ROOTS: tuple[str, ...] = (
     "docker/browser-sidecar/src",
     "docker/browser-sidecar/server.py",
     "docker/wechat-gui/src",
+    "docker/wechat-gui/entrypoint.sh",
     "frontend/scripts",
     "frontend/src",
     "frontend/package.json",

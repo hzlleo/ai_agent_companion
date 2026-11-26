@@ -157,8 +157,6 @@ _EVENT_SIZE = struct.calcsize(_EVENT_FORMAT)
 #: 内核 ``uinput_user_dev`` 结构体格式（80 字节名 + input_id 8 字节 +
 #: 4 字节 ff_effects_max + 4×64 个 32 位轴参数）。
 _USER_DEV_FORMAT = "<80sHHHH I 256i"
-#: ``uinput_user_dev`` 字节数。
-_USER_DEV_SIZE = struct.calcsize(_USER_DEV_FORMAT)
 
 #: 设备发现轮询间隔（秒；带截止的有界轮询，不做固定长睡眠）。
 _DISCOVERY_POLL_SECONDS = 0.02

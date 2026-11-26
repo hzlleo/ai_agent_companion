@@ -210,25 +210,6 @@ def _require_int(payload: Mapping[str, object], key: str) -> int:
     return value
 
 
-def _require_bool(payload: Mapping[str, object], key: str) -> bool:
-    """读取必填布尔字段。
-
-    Args:
-        payload: 载荷对象。
-        key: 字段名。
-
-    Returns:
-        字段值。
-
-    Raises:
-        TypeError: 字段缺失或类型不符。
-    """
-    value = payload.get(key)
-    if not isinstance(value, bool):
-        raise TypeError(f"字段 {key} 必须是布尔值")
-    return value
-
-
 def decode_control_request(raw: bytes) -> ControlRequest:
     """把单行 JSON 请求解码为具体请求模型。
 
