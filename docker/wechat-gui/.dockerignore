@@ -1,0 +1,11 @@
+.pixi
+.pytest_cache
+.mypy_cache
+.ruff_cache
+__pycache__
+*.egg-info
+coverage.json
+.coverage
+src/tests
+poc
+vnc.pass.default

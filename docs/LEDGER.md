@@ -90,18 +90,18 @@
 | R2-defense | 丙+丁：D1 结构隔离 + 宪章五条 + nonce 定界、D2 注入检测 + 角色内反击（毒舌 / 温柔 / 傲娇）、D3 peer 记忆免疫与来源标注、D4 38 条红队回归集 | ✅ merged（PR #13 → main `7fe68a0`；`INJECTION_*` 与 compliance 示例模板生成已并入主线） |
 | R2b+ 亲密补强 | 甲套件（角色契约/禁止自我审查/示例台词 few-shot/compliance_guard 1次重试）+乙分轨（roles:intimate 可开端点）+组件库A（120+组件×12类目×3-5台词）+成熟度分层（safe/suggestive/explicit+intimacy_level 0-3+四态场景脚本）+关系连续性A（关系进展摘要注入） | ✅ merged（PR #15）；四切片 + 逐批评审修复全部 PASS；示例台词已由组件库生成期折叠 mes_example 落地（证据见第 5 节） |
 | R2d 心流社交 | R2d-1 心流门控（`FLOW_` env 面——判定矩阵 / 连发合并 / 延迟批次经调度器 / 关系与节律输入）+ 群聊多人格（`GROUP_PERSONA_` env 面——轮转 / 冷却 / 重复抑制 / 人格会话归属）；R2d-2 声纹（`VOICEPRINT_` env 面——PIPL 告知 / 同意记录 / 注册 / 校验 / 撤回删除 / 保存期）+ 表情包库与 VLM 标注（`STICKER_` env 面——哈希去重 / 来源授权备注 / 标注状态机 / 通道附件 v2 收发桥 / 前端面板），迁移 0016 | ✅ merged（PR #16；复审修复 PR #29）；全门禁与证据见第 5 节 |
-| R2e 通道扩展 | R2e-1 企微智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 去重 / 回复上下文 / 文本分段 / 素材分片上传 / 配置面 / 装配 / 文档）；R2e-2 抖音 web 通道（浏览器 sidecar 底座：页面采集 / 发送脚本、去重、synthetic、图片附件、指数退避、配置面、装配、文档）+ 画布产物面（迁移 0017 / 服务 / API / 沙箱预览面板 / 导出）；余项：GUI 微信容器化（PoC 门——部署机未跑） | 🔄 R2e-1 ✅ merged（PR #16 的 WeCom 提交）；R2e-2 ✅ merged（PR #17；复审修复 PR #30）；GUI 微信容器化 ⏳（部署机 PoC 门，见第 6 节） |
+| R2e 通道扩展 | R2e-1 企微智能机器人长连接（WebSocket 订阅 / 心跳 / 退避重连 / 去重 / 回复上下文 / 文本分段 / 素材分片上传 / 配置面 / 装配 / 文档）；R2e-2 抖音 web 通道（浏览器 sidecar 底座：页面采集 / 发送脚本、去重、synthetic、图片附件、指数退避、配置面、装配、文档）+ 画布产物面（迁移 0017 / 服务 / API / 沙箱预览面板 / 导出）；余项：GUI 微信容器化（PoC 门制品与本机栈实测已交付；通道本体与 Live 待后续阶段） | 🔄 R2e-1 ✅ merged（PR #16 的 WeCom 提交）；R2e-2 ✅ merged（PR #17；复审修复 PR #30）；GUI 微信容器化 ✅ 本机栈 PoC PASS（证据 `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-20261126T025721Z.json`；部署机复跑 + 微信客户端 Live 随统一阶段，见第 6 节） |
 | R2f 实时语音 | 实时语音全双工会话：WS 协议 + 相位状态机 + 能量/静音 VAD 切段 + 切段转写（节流中途字幕）+ 人格回复句切与逐句 TTS 分片下行 + barge-in（取消在途生成/合成 + 清空队列）+ 会话资源上限（背压/空闲/最大时长/优雅关闭）+ `REALTIME_VOICE_` env 面 + 管理台实时字幕面板 | ✅ merged（PR #18；复审修复 PR #31）；溢出项与验证数值见第 5 节 |
 | R3-1 安全纵深 | 提示注入纵深 / SSRF 对称 / 密钥与鉴权治理 / base64 载荷上限 / 日志掩码（P1×2 + P2×5） | ✅ merged（PR #35；证据 `e8232b42`） |
 | R3-2 限流与背压 | QQ 入站有界 / 实时语音 TTS 队列与会话帽 / LLM 日预算闸 / 多 worker 语义 / 最小观测面 / 前端 Node 护栏与构建体积基线（P1×1 + P2×7；复审 6×P2 闭环） | ✅ merged（PR #36；证据 `fe261c9a`；PR body 引用的 `0276c1a5` 为首提交树证据，终态以 `fe261c9a` 为准） |
 | R3-3 性能基线 | `bench_core.py` 6 项纯函数微基准 + `api_smoke.py` 4 端点进程内冒烟 + 门禁链落位（复审 4×P2 闭环；终局复核 7×P2 闭环） | ✅ merged（PR #37 → main `3f313a6`；评审 head `66b14b3`，终态含 `ecb7714`/`ee9381a`；canonical 证据 `16b07c7c`，历史 `bc71f261`） |
 
-| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（PoC 门，Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 本分支（`feat/r4-5-whatsapp`）工作区（R4-1 / R4-2 / R4-3 已合并；其余切片待开工） |
+| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（R4-6a PoC 门制品 + 本机栈实测；R4-6b 通道本体待过门；Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 已合并（PR #44 → main `215317c`）；R4-6a 本分支（`feat/r4-6-wechat-gui`）工作区（本机栈 PoC PASS；R4-6b 待过门后实现）；R4-1 / R4-2 / R4-3 已合并；R4-7 / R4-8 待开工 |
 
 **当前分支状态**：
-- main：`f8eb398`（PR#34–#43 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
+- main：`215317c`（PR#34–#44 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
 - `feat/r3-perf`：R3-3 性能基线，已合并（PR #37），可删除。
-- R4：R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 在当前分支 `feat/r4-5-whatsapp` 工作区（R4-1 / R4-2 / R4-3 已合并），后续切片待排期。
+- R4：R4-4 已合并（PR #43 → `f8eb398`）；R4-5 已合并（PR #44 → `215317c`）；R4-6a 在当前分支 `feat/r4-6-wechat-gui` 工作区（本机栈 PoC PASS）；R4-1 / R4-2 / R4-3 已合并；R4-6b（通道本体）待过门，R4-7 / R4-8 待排期。
 - 历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入 main，可删除；工作区 clean。
 
 ## 4. 全部拍板记录（原文语义）
@@ -166,7 +166,7 @@
 
 ### R4 方向拍板（用户）
 - 主题=体验多模态 + 平台化扩展 + 规模性能（B+C+D）；生产化与统一 Live 测试（A）推迟到全部开发完成后统一执行。
-- GUI 微信容器化：纳入 R4，先跑部署机 PoC 门；Live 测试随统一 Live 推迟。
+- GUI 微信：企微智能机器人长连接为生产主轨，GUI 微信为实验轨（D2-A）；会话键=B（联系人备注名 + VLM 校验，P4）；PoC 门=Xorg+uinput 栈验证，通过才实现通道本体，不通过整轨推迟；Live（客户端安装 / 登录 / 真消息）随统一 Live 阶段。
 - 部署真网验证：先做最低三项（企微 WSS 握手 / 抖音选择器 / ASR-TTS 连通），完整上线就绪包归统一 Live 阶段。
 - 实时语音：全量增强（真流式 ASR/TTS 通道 + AEC + 移动端采集优化）。
 - 预算与限额：按 purpose 分面（ASR/TTS/voiceprint 独立预算）。
@@ -1675,6 +1675,120 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
    `docs/evidence/r4-5-whatsapp-d90786ec.json`，sha8=`d90786ec`，700 文件；
    G1 根修后由 `bd3bdfd3` 取代，本行保留为历史）。
 
+### 已完成切片：R4-6a GUI 微信容器化 PoC 门制品 + 本机栈实测（本分支工作区）
+
+**已完成**：
+1. **独立沙盒树 `docker/wechat-gui/`**（与后端及其余沙盒零代码共享）：
+   独立 `pixi.toml`（Python 3.12 + 系统工具；任务名契约
+   `tests-unit` / `lint` / `typecheck` / `coverage-gates`，另加
+   `poc-stack`）、`pyproject.toml`（运行时仅 Pillow，dev extras 含
+   pytest/ruff/mypy）、`Dockerfile`（debian:bookworm-slim tag+digest
+   固定；清华 apt 镜像；Xorg dummy/evdev、x11vnc、novnc/websockify、
+   imagemagick/xclip、python3-minimal/python3-pil、tini；不装微信客户端）、
+   `entrypoint.sh`（root 建运行时目录 → uinputd → 降权 Xorg :99 →
+   x11vnc 5900 → websockify/noVNC 6080 → `serve`/`poc` 两模式；
+   HEALTHCHECK 探 X 与 noVNC）、`poc/run_stack_poc.sh`（防御式宿主运行器：
+   build 网络重试 ≤3、trap 清理、特权仅 PoC、证据落
+   `docs/evidence/poc/wechat-gui-stack-<host>-<UTC>.json`）。
+2. **uinput 注入器** `uinput_devices.py`（纯 stdlib）：`UI_SET_EVBIT` /
+   `UI_SET_KEYBIT` / `UI_SET_ABSBIT` / `UI_SET_PROPBIT` / `UI_DEV_CREATE` /
+   `UI_DEV_DESTROY` ioctl 编码，`uinput_user_dev` 结构体（1116 字节）
+   打包，`input_event`（24 字节）写入；虚拟键盘 + 绝对指针；sysfs 名称
+   发现 + 容器内按 `dev` 号 `mknod`（无 udev）；`create()` /
+   `emit_key()` / `emit_move()` / `emit_click()` / `destroy()`。
+3. **控制面守护** `uinputd.py`：设备生命周期持有、Xorg 静态配置生成、
+   设备信息落盘、事件节点 chown 给 wechat 用户、Unix socket JSON 行协议
+   （ping/key/move/click/shutdown；非法载荷归一 `ok=false`）、客户端
+   封装、SIGTERM/SIGINT 收口。
+4. **PoC 门** `poc_gate.py`：七步（x_up / uinput_create / xinput_visible /
+   event_roundtrip / screenshot / clipboard / vnc_up），每步
+   `perf_counter` 毫秒耗时与结果；首失败即 FAIL 并跳过后续；单行 JSON
+   报告（verdict/steps/hostname/kernel/docker/时间）到 stdout 与 `--out`；
+   退出码 0/1/2；事件回环用 `xev` 流式读取 + 带截止注入（无固定长睡眠）；
+   截图 Pillow 校验 PNG/尺寸/非全黑/非全同色。
+5. **单测**（全异步、hermetic）：`test_uinput_devices.py`（ioctl 编号 /
+   结构体布局 / 能力注册 / sysfs 发现 / mknod / 事件字节 / 销毁）、
+   `test_uinputd.py`（协议矩阵 / 落盘 / chown / Unix socket 服务与客户端 /
+   非法响应 / CLI）、`test_poc_gate.py`（解析器 / 截图校验 / 命令超时 /
+   步骤编排与跳过 / 报告与退出码 / 七步经临时 PATH 假命令）、
+   `test_xorg.py`（静态 evdev 段 / dummy 屏幕）。
+6. **接线**：`scripts/check_coverage_per_module.py` 增 `wechat-gui` 剖面；
+   `scripts/check_chinese_comments.py` / `noqa_freeze_check.py` /
+   `count_sync_tests.py`（基线 0）/ `verify_slice.py` 的 `_HASH_ROOTS`
+   （`docker/wechat-gui/src`）纳入本树；`docker/docker-compose.yml` 增
+   `wechat-gui` 服务（profile 默认不启动；仅回环端口；`/dev/uinput` 设备；
+   `cap_drop ALL` + MKNOD/CHOWN/SETUID/SETGID/KILL + `device_cgroup_rules`
+   `c 13:* rwm`（uinput 事件节点主设备号 13；仅映射 /dev/uinput 会被
+   device cgroup EPERM 拒绝）；`no-new-privileges`；VNC 密码文件 secret；
+   **不 privileged**）；`.github/workflows/ci.yml` 增
+   `wechat-gui (tests + lint + typecheck)` job（不构建镜像）。
+7. **文档**：本树 README（职责 / 架构 / PoC / 生产非特权 / noVNC 登录与
+   微信客户端安装 / 会话键 B 预告 / 安全边界 / 排查）；channels.md 增
+   「GUI 微信实验轨（PoC 门阶段——尚未接后端）」整节。
+
+**本机实测（命令 + 退出码）**：
+- `cd docker/wechat-gui && pixi install` → 0。
+- `pixi run tests-unit` → 0：70 passed；总覆盖率 92.2%。
+- `pixi run coverage-gates` → 0：5 组 ≥80%（`__init__.py` 100% /
+  `poc_gate.py` 90.2% / `uinput_devices.py` 96.5% / `uinputd.py` 95.3% /
+  `xorg.py` 100%）。
+- `pixi run lint` → 0（All checks passed）；`pixi run typecheck` → 0
+  （Success: no issues found in 5 source files）。
+- `bash docker/wechat-gui/poc/run_stack_poc.sh` → 0：镜像构建第 1 次
+  尝试成功；容器内门 **PASS 7/7**；各步耗时（perf_counter ms）：
+  x_up 3 / uinput_create 62 / xinput_visible 3 / event_roundtrip 284
+  （20 轮注入，KeyPress/KeyRelease/ButtonPress/Motion 各 ≥1）/
+  screenshot 107 / clipboard 10 / vnc_up 10；总 483 ms；证据
+  `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-20261126T025721Z.json`
+  （`docker` 字段为 null——门脚本在容器内，镜像不含 docker CLI）。
+- `cd docker && SANDBOX_TOKEN=x BROWSER_SIDECAR_TOKEN=x docker compose
+  --profile wechat-gui config` → 0（服务 ports host_ip=127.0.0.1、
+  `/dev/uinput` 设备映射、`c 13:* rwm` 规则、secret 文件、无 privileged）。
+- **生产形态非特权冒烟**：以 `--device /dev/uinput` +
+  `--device-cgroup-rule "c 13:* rwm"` + `cap_drop ALL` +
+  MKNOD/CHOWN/SETUID/SETGID/KILL + no-new-privileges 起服务 → HEALTHCHECK
+  `healthy`；容器内 `python3 -m wechat_gui_poc.poc_gate` → PASS 7/7
+  （总 481 ms）。
+
+**实测中定位并根修的真实缺陷**（前两轮 FAIL，不伪装通过）：
+1. **xinput 设备名不匹配**：Xorg 的 InputDevice `Identifier` 才是
+   `xinput list` 显示名；首轮门失败后把配置 Identifier 对齐内核设备名
+   （`wechat-gui virtual keyboard` / `pointer`），`xinput_visible` 才通过。
+2. **xclip 写路径挂起**：`xclip -in` fork 出常驻 selection owner 并继承
+   stdout/stderr 管道，`communicate` 等待到 30s 超时；写路径改为
+   stdout/stderr 接 `/dev/null`（不采集输出），读回路径保持采集。
+3. **设备节点缺失**：容器无 udev，uinput 设备只现于 sysfs；补
+   `_ensure_event_node` 按 sysfs `dev`（major:minor）`mknod`。
+4. **非 root Xorg 本地套接字目录**：`/tmp/.X11-unix` 由入口 root 预建
+   （`chmod 1777`），消除 `_XSERVTransmkdir` 告警。
+
+**设计取舍 / 偏离**：
+- **设备创建归属**：uinput 设备由 `uinputd` 在 Xorg 之前创建并长期持有
+  （Xorg 静态 InputDevice 在 PreInit 打开节点，晚创建不会被绑定）；门脚本
+  `uinput_create` 采用「校验看守进程创建的设备 + 节点可打开 + 控制面
+  ping」，而非在门内再建一对（再建会得到 4 个设备，与「两虚拟设备」判据
+  冲突，且门内 fd 生命周期无法覆盖 Xorg 启动）。注入仍经同一控制面完成。
+- **绝对指针**：evdev 将仅 ABS 的设备归类为 touchscreen 类型 slave
+  pointer；坐标点击 / 拖拽语义等价，`xinput` 中非漂浮。需要鼠标相对
+  语义时可补 REL 轴，门断言不变。
+- **特权只在 PoC**：宿主运行器用 `--privileged` 仅为同时打通 uinput 与
+  事件节点命名空间；生产 compose 用 `--device /dev/uinput` +
+  `device_cgroup_rules: c 13:* rwm` + MKNOD/CHOWN/SETUID/SETGID/KILL +
+  no-new-privileges，已写进 compose 与 README 双重约束。非特权实测中
+  仅映射 /dev/uinput 会因 device cgroup 对 13:* 的默认拒绝出现 EPERM，
+  该规则是必需项（已在 compose / README 固化）。
+- **VNC 密码缺省文件**：compose 允许 `WECHAT_GUI_VNC_PASSWORD_FILE`
+  指向真实密码文件；未设置时用仓库内 `vnc.pass.default`（`changeme`）
+  保证既有 compose 命令不因新增 secret 报错，生产必须覆盖。
+- **散列根**：`_HASH_ROOTS` 只纳 `docker/wechat-gui/src`（与
+  tool-sandbox / browser-sidecar 的「src + server.py」口径一致；本树无
+  server.py）；Dockerfile / pixi 等部署面与其余沙盒树一样不入哈希。
+- **无 wire 契约**：本阶段不接后端，故不纳入 sandbox-drift 门；过门后
+  的通道实现再评估契约镜像。
+- 无后端 / 前端 / 迁移改动；未跑 SeekDB 真引擎套件（不涉数据库）。
+
+**最终树复跑（命令 + 退出码）**：`cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-6a` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 / lint / typecheck=216 / gates / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build=3.04）；canonical 证据 `docs/evidence/r4-6a-874e54e1.json`（sha8=`874e54e1`，源码树哈希含 `docker/wechat-gui/src` 9 文件）。后端零逻辑改动；SeekDB 真引擎套件经本机 seekdb-smoke 容器通过；新树的注释门 / noqa 冻结 / 同步测试棘轮经根 gates 链通过（无 wire 契约，sandbox-drift 不涉）。
+
 ### 已完成切片：G1 审计非根修项根修（§20 修正必须根修——本分支工作区）
 
 **背景**：G1 审计判定 7 项此前的修复止于症状面（补白名单 / 补测试 / 补分支推断 / 补文档），未消除再发机制。按新硬约束 §20 逐条根修——范围由元数据派生、裁决收敛为单一入口、状态显式化、语义字段化、判据由默认可忽略码点集定义、并发路径共用同一插入函数。
@@ -2010,7 +2124,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 | 流式 ASR 起始边界 | 流式通道从 SPEECH_START 帧起喂，VAD 防抖候选帧（默认 3 帧）仅入批量缓冲，流式最终稿可能缺句首约 200ms；`test_realtime_session_streaming.py` 的 `frames[1:]` 已固化该行为 | 候选帧在起说确认前不进流式缓冲，避免误触发占用连接；改起点需重排候选帧与握手时序 | 把 VAD 候选帧纳入流式起点（起说确认后回放候选帧）并更新固化用例；目标 R5-1 |
 | 梦境 `stats` / `decisions` JSON 动态键 | `ff_dream_runs.stats` / `decisions` 为 JSON 列，写入 `DreamRunStatsModel` / `DreamDecisionModel` 的 dump 形态，列类型仍是 `dict` / `list` | 无当前缺陷；转 Pydantic 列需 TypeDecorator + 迁移，成本高于本批收益 | **已记录例外**（不排期）；随 memory 域 schema 批次转模型时一并迁移 |
 
-- Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门（Xorg+uinput 栈验证；不通过则整轨推迟）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
+- Clevo 部署窗口：模型 lfs 拉取（~8-10GB）、compose 起 llama-server×2/CosyVoice/Qwen3-ASR 包装面、TTS/ASR 服务端点配置、GUI 微信 PoC 门：本机栈 PoC PASS（证据 `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-20261126T025721Z.json`，7/7 步、483ms）；部署机复跑 + 微信客户端 Live 随统一阶段（Xorg+uinput 栈验证已过）、抖音 web 真网一次性验证（sidecar profile 登录抖音 + allowlist 加 douyin.com + 采集/发送脚本命中确认——单元测试覆盖选择器之外的全部语义）、B站真网复测（hdslb 字幕后缀已修；评论端点已切 /x/v2/reply）、SeekDB 生产实例、QQ NapCat 部署与令牌、ADMIN_AUTH_TOKEN 必设。
 - SmsForwarder 短信 / 通知转发通道已交付（默认关闭、仅入站；部署侧配置 `SMS_FORWARDER_*` 并在手机端配置 Webhook 与 token）；WhatsApp Cloud API 通道已交付（`WHATSAPP_ENABLED` 默认关闭；Meta 应用侧配置 webhook / 订阅 messages + 四项凭据；出站仅自由格式文本并受 24h 客户服务窗约束——窗外主动消息需模板发送（未实现）或属主先发消息；窗口状态与 wamid 去重均为进程内单实例语义）。
 - 声纹（PIPL 合规）与表情包素材法律边界提示义务已随 R2d-2 交付（默认关闭，部署侧按需配置 `VOICEPRINT_*` / `STICKER_*` 并起说话人向量服务）。
 - 预算边界（R3-2 → R4-2 已分面）：LLM 日预算只计 LLM 用途行；ASR / TTS / voiceprint 各自独立预算（按 purpose 计数，见 [usage.md](backend/usage.md#分面日预算asr--tts--voiceprint)）。

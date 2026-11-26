@@ -1,0 +1,115 @@
+# GUI 微信实验轨沙盒 — Python 项目元数据 + 运行时依赖 + 工具链配置。
+#
+# 本树独立约定（与其余沙盒树同范式：源码、依赖、任务全量隔离）：
+#   - pixi 仅管理 Python 解释器 + 系统工具（见本目录 pixi.toml）；
+#   - 全部 Python 包依赖（运行时 + dev extras）在此声明；
+#   - 运行时依赖刻意最小：纯 stdlib + Pillow（仅截图字节校验需要；
+#     容器内经 Debian python3-pil 提供，不经 pip 安装）。
+#
+# 布局约定：
+#   - ``wechat_gui_poc`` 为常规包（含 ``__init__.py``）：本树是独立分发单元；
+#   - 容器入口在 ``entrypoint.sh``（Xorg / x11vnc / noVNC 编排）；
+#   - 测试位于 ``src/tests/unit/``（全部 async def test_）。
+
+[project]
+name = "wechat-gui"
+version = "0.1.0"
+description = "GUI 微信实验轨沙盒——Xorg + uinput 容器化 PoC 门（与后端零代码共享）"
+requires-python = ">=3.12"
+dependencies = [
+    "Pillow>=10.0",
+]
+
+# dev 工具：pixi default 环境（feature.dev）经 editable install extras=["dev"] 读取。
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=4.0",
+    "ruff>=0.15",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["wechat_gui_poc*"]
+# 常规包（wechat_gui_poc/__init__.py 存在）；src/tests 不入分发面。
+
+# ---------------------------------------------------------------------------
+# Ruff: 静态检查 + 格式化（规则集与其余沙盒子项目同约定）
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM"]
+ignore = [
+    "E501",   # 行长度由 formatter 统一控制
+    "N818",   # 异常命名沿用 Error 后缀约定
+    "UP046",  # PEP 695 type params 是风格偏好
+    "UP047",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ---------------------------------------------------------------------------
+# Pytest: asyncio auto mode（全量原生异步——与其余沙盒子项目同约定）
+# ---------------------------------------------------------------------------
+# 覆盖率阈值（--cov-fail-under=80）由 pixi tests-unit 任务携带；逐模块 ≥80
+# 由 pixi coverage-gates 任务机器门禁。
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_test_loop_scope = "function"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = [
+    "src/tests",
+]
+pythonpath = ["src"]
+
+# ---------------------------------------------------------------------------
+# Coverage: 运行时面（wechat_gui_poc）全覆盖；阈值 80（镜像其余树约定）
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["wechat_gui_poc"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+
+# ---------------------------------------------------------------------------
+# Mypy: 静态类型检查（严格模式——与其余沙盒子项目同约定）
+# ---------------------------------------------------------------------------
+# 测试代码不纳入 mypy 严格门：类型门聚焦生产面（src/wechat_gui_poc）。
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+show_error_codes = true
+explicit_package_bases = true
+mypy_path = "src"
+exclude = [
+    'src/tests/',
+]
+
+# Pillow 的类型标注覆盖面有限：仅放宽缺失 stub 的导入面，不抑制真实类型错误。
+[[tool.mypy.overrides]]
+module = ["PIL.*"]
+ignore_missing_imports = true
