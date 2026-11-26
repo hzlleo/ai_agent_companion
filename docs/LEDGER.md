@@ -1979,7 +1979,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 逐条（根修 / 守卫位置 → 变异实证）：
 
 1. **三处过期清理 `.catch` 红守卫（P2-1）**：`startInternal` 三条过期清理（`realtimeVoiceClient.ts:456/471/490`）各配一条无真实等待的 deferred 门闩用例：
-   - worklet addModule 窗口 + `context.close()` reject：`start()` / `stop()` 均 resolve、`onError` 0、停轨 1、close 1、不建节点；删 `:490` 的 `.catch` → 1 failed / 19 passed（该用例断言 `closeCalls` 由 1→2）。
+   - worklet addModule 窗口 + `context.close()` reject：`start()` / `stop()` 均 resolve、`onError` 0、停轨 1、close 1、不建节点；删 `:490` 的 `.catch` → 1 failed / 19 passed（首红断言 `stopped()` 由 1→2，`test.ts:602`；`closeCalls` 同为 2，断言在 `:603` 未执行到）。
    - resume 窗口 + `context.close()` reject：同上断言（停轨 1 / close 1 / 不提交能力 / 无暂停误置）；删 `:471` 的 `.catch` → 1 failed / 19 passed（二次释放）。
    - getUserMedia 窗口 + 过期清理停轨抛出：`start()` / `stop()` 均 resolve、停轨调用 1、`onError` 0、不建上下文；删 `:456` 的 `.catch` → 1 failed / 19 passed（停轨由 1→2）。
 2. **门禁「抛出并清空」断言（P2-2）**：`actWarningGate.test.ts` 单测 1 在 `finishAttempt` 抛出后追加 `finishRun()` 不抛出（证明 `warnings` 已清空）；删除 `reportOrClear` 的 `this.warnings = []` → 1 failed / 1 passed（残留告警 1 条）。
