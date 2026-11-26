@@ -9,6 +9,7 @@ describe('ActWarningGate', () => {
     expect(() => gate.finishAttempt('用例 A')).toThrow(
       /React act\(\.\.\.\) 告警 1 条（用例：用例 A）/,
     )
+    expect(() => gate.finishRun()).not.toThrow()
     gate.beginAttempt()
     expect(() => gate.finishAttempt('用例 A')).not.toThrow()
   })

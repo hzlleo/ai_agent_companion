@@ -1958,8 +1958,8 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
    - 「stop 等待在途启动的迟到清理」——addModule 放行后 context.close 挂起，断言 stop 在 close 放行前未 settle；删除 `stop()` 的 `await inflight.task` → 1 failed / 16 skipped。
 2. **页面会话身份守卫（P1-2）**：`RealtimeVoicePage.capabilities.test.tsx` 的 FakeCapture 支持挂起 start / resume，并在 `stop()` 清空 capabilities（与真实采集一致）。两条用例覆盖「停止→重开→旧 ready 的 start 迟到」与「停止→重开→旧 resume 迟到」：旧会话回读不得覆盖新会话能力 / 暂停提示。删除 ready / AEC 公告 / resume 三处身份守卫 → 2 failed / 7 skipped；复原后 9 passed（`src/pages/realtime` 现 23 条 = 9 + 14）。
 3. **清理异常不掩盖启动失败（P2-1）**：`startInternal` 的业务失败出口与三处过期清理统一改为 `await this.releaseResources(...).catch(() => undefined)` 后再 `onError`（过期路径同样吞清理异常，避免二次释放）。新增「启动失败 + context.close reject」用例：`start()` resolve、`onError` 一次、关上下文 1 次、停轨 1 次；回退该 `.catch` → 1 failed / 16 skipped。
-4. **死字段与不可达复核（P2-2）**：删除 `pendingStop` 字段及全部读写（`isStale` 仅保留世代比较），删除 `createWorkletNode` 后的同步复核（建节点为同步调用，世代不可能在该区间变化）。`stop()` 的世代自增是过期判定的唯一来源，删后语义不变；全量 713 用例保持绿。
-5. **act 门禁宏任务归属（P2-3）**：门禁逻辑抽到 `src/test/actWarningGate.ts`；`onTestFinished` 先排空一个宏任务（真实计时 `setTimeout(0)`；`vi.isFakeTimers()` 为真时 `vi.advanceTimersByTime(0)`），再按条数 / 用例名判错并清空归属；`afterAll` 经 `finishRun` 对尝试收尾后的残留按无归属判错，覆盖文件末条 / afterAll 告警。新增两条门禁单测（收尾抛错并清空、afterAll 残留判错）。
+4. **死字段与不可达复核（P2-2）**：删除 `pendingStop` 字段及全部读写（`isStale` 仅保留世代比较），删除 `createWorkletNode` 后的同步复核（建节点为同步调用，世代不可能在该区间变化）。`stop()` / `pause()` 的世代自增是过期判定的唯一来源，删后语义不变；全量 713 用例保持绿。
+5. **act 门禁宏任务归属（P2-3）**：门禁逻辑抽到 `src/test/actWarningGate.ts`；`onTestFinished` 先排空一个宏任务（真实计时 `setTimeout(0)`；`vi.isFakeTimers()` 为真时 `vi.advanceTimersByTime(0)`），再按条数 / 用例名判错并清空归属；`afterAll` 经 `finishRun` 对尝试收尾后的残留按无归属判错，覆盖一个宏任务窗口内与文件收尾 hooks 内的告警；迟到 ≥2 个宏任务的合成告警可能漏记 / 归属到下一条用例（React act 告警在 setState 时同步发出，本套件内够不到）。新增两条门禁单测（收尾抛错并清空、afterAll 残留判错）。
    - 临时探针实测：迟到宏任务告警在有排空时归属到该用例（1 failed / 1 passed）；删除排空后 2 passed（漏记）。afterAll 告警 → `残留告警 1 条（无归属...）` 文件级失败；retry 首轮告警后次轮干净 → 1 passed（首轮告警不记到次轮）。
 6. **说明与台账（P2-4）**：`setup.ts` 注释更正为「onTestFinished 在 afterEach（含 RTL cleanup）之后执行，见 vitest 4 生命周期」；上文两处 `src/pages/realtime` 实数按实测改为 21（7+14）。
 
@@ -1967,10 +1967,33 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
 - `cd frontend && pixi run npx vitest run` → 0（713 passed；新增 8 条：采集承载性 3 + 清理 1 + 页面身份 2 + 门禁 2；全量 act 门禁 0 告警）。
 - `cd frontend && pixi run npx vitest run --coverage` → 0（statements 95.98% / branches 92.12% / functions 95.5% / lines 96.18%，perFile ≥80% 通过）。
 - `cd frontend && pixi run lint` → 0；`pixi run build` → 0（3.24s，初始 chunk 389.80 kB / gzip 123.62 kB）。
-- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=713 / frontend-coverage=95.98 / frontend-lint / frontend-build=2.94s；证据 `docs/evidence/r4-5-whatsapp-5eb8fd3b.json`，canonical sha8=`5eb8fd3b`（745 文件级证据；`--hash-only` 复算一致）；`f8403536` 与更早证据均为历史）。
+- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 组 ≥80% / lint / typecheck=216 源文件 / gates / tests-seekdb=15 / frontend-test=713 / frontend-coverage=95.98 / frontend-lint / frontend-build=2.94s；证据 `docs/evidence/r4-5-whatsapp-5eb8fd3b.json`，canonical sha8=`5eb8fd3b`（745 文件级证据；`--hash-only` 复算一致）；`f8403536` 与更早证据均为历史；本批 `5eb8fd3b` 自「收尾复审修复」起亦为历史，见下条）。
 - 根 `pixi run gates` → 0（comment-gates files=380 violations=0 hints=23 / red-probe 29 探针覆盖 28 文件 / assertion-freeze asserts=9570 raises=708 / prose-pin 75≤75 / 其余门禁同链）。
 - 变异清单见逐条第 1-3、5 项；复原后 `git status` 仅本批预期改动。
 - 无后端改动 / 无新增依赖 / 无新增 env 键 / 无迁移；前端改动文件：`src/lib/realtimeVoiceClient.ts`、`src/lib/realtimeVoiceClient.test.ts`、`src/pages/realtime/RealtimeVoicePage.capabilities.test.tsx`、`src/test/setup.ts`、`src/test/actWarningGate.ts`、`src/test/actWarningGate.test.ts`、`docs/LEDGER.md`。
+
+### 已完成切片：收尾复审修复（P2-1..P2-4，本分支工作区）
+
+**背景**：对 `8ae5206` 的收尾复审给出 4×P2（无 P0/P1）：三处过期清理 `.catch` 无红守卫；act 门禁「抛出并清空」未被断言；台账 `stop()` 世代自增漏写 `pause()`；门禁覆盖面措辞过宽。本批逐条闭环，旧 canonical `5eb8fd3b` 自本条起为历史。
+
+逐条（根修 / 守卫位置 → 变异实证）：
+
+1. **三处过期清理 `.catch` 红守卫（P2-1）**：`startInternal` 三条过期清理（`realtimeVoiceClient.ts:456/471/490`）各配一条无真实等待的 deferred 门闩用例：
+   - worklet addModule 窗口 + `context.close()` reject：`start()` / `stop()` 均 resolve、`onError` 0、停轨 1、close 1、不建节点；删 `:490` 的 `.catch` → 1 failed / 19 passed（该用例断言 `closeCalls` 由 1→2）。
+   - resume 窗口 + `context.close()` reject：同上断言（停轨 1 / close 1 / 不提交能力 / 无暂停误置）；删 `:471` 的 `.catch` → 1 failed / 19 passed（二次释放）。
+   - getUserMedia 窗口 + 过期清理停轨抛出：`start()` / `stop()` 均 resolve、停轨调用 1、`onError` 0、不建上下文；删 `:456` 的 `.catch` → 1 failed / 19 passed（停轨由 1→2）。
+2. **门禁「抛出并清空」断言（P2-2）**：`actWarningGate.test.ts` 单测 1 在 `finishAttempt` 抛出后追加 `finishRun()` 不抛出（证明 `warnings` 已清空）；删除 `reportOrClear` 的 `this.warnings = []` → 1 failed / 1 passed（残留告警 1 条）。
+3. **台账措辞（P2-3）**：`stop()` 的世代自增表述补为 `stop()` / `pause()`。
+4. **门禁覆盖面措辞收窄（P2-4）**：`actWarningGate.ts` 头注与台账同步改为「覆盖一个宏任务窗口内与文件收尾 hooks 内的告警；更迟的告警不保证归属」，并注明「迟到 ≥2 个宏任务的合成告警可能漏记 / 归属到下一条用例（React act 告警在 setState 时同步发出，本套件内够不到）」。
+
+**实测（命令 + 退出码；最终树）**：
+- 定向：`cd frontend && pixi run npx vitest run src/lib/realtimeVoiceClient.test.ts src/test/actWarningGate.test.ts` → 0（22 passed）。
+- 变异：删 `realtimeVoiceClient.ts` 的 `:456` / `:471` / `:490` 任一 `.catch` → 各 1 failed / 19 passed（恢复后 20 passed）；删 `actWarningGate.ts` 的 `this.warnings = []` → 1 failed / 1 passed（恢复后 2 passed）。
+- `cd frontend && pixi run npx vitest run` → 0（716 passed；相对 713 增加 3 条过期清理变体；全量 act 门禁 0 告警）。
+- `cd frontend && pixi run npx vitest run --coverage` → 0（statements 96.15% / branches 92.18% / functions 95.76% / lines 96.35%，perFile ≥80% 通过）。
+- `cd frontend && pixi run lint` → 0；`pixi run build` → 0（3.83s，初始 chunk 389.80 kB / gzip 123.62 kB）。
+- `cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-5-whatsapp` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 / typecheck=216 / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build=3.08s；证据 `docs/evidence/r4-5-whatsapp-01f95d4e.json`，canonical sha8=`01f95d4e`（745 文件级证据）；`5eb8fd3b` 与更早证据均为历史）。
+- 无后端改动 / 无新增依赖 / 无新增 env 键 / 无迁移；前端改动文件：`src/lib/realtimeVoiceClient.test.ts`、`src/test/actWarningGate.ts`、`src/test/actWarningGate.test.ts`、`docs/LEDGER.md`、`docs/evidence/r4-5-whatsapp-01f95d4e.json`、`docs/evidence/logs/r4-5-whatsapp-01f95d4e-*.log`（10 份）。
 
 ## 6. 遗留与部署台账（非阻塞）
 

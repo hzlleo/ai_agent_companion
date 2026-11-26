@@ -244,8 +244,10 @@ class FakeCaptureContext implements RealtimeCaptureContextLike {
   addModuleCalls = 0
   onAddModule: (() => void) | null = null
   onClose: (() => void) | null = null
+  onResume: (() => void) | null = null
   addModuleGate: Promise<void> | null = null
   closeGate: Promise<void> | null = null
+  resumeGate: Promise<void> | null = null
   audioWorklet: { addModule(url: string): Promise<void> } | undefined = undefined
   /** 打开 worklet 面（默认关闭，既有用例继续走 ScriptProcessor 路径）。 */
   enableWorklet(): void {
@@ -271,7 +273,8 @@ class FakeCaptureContext implements RealtimeCaptureContextLike {
   }
   resume(): Promise<void> {
     this.resumed = true
-    return Promise.resolve()
+    this.onResume?.()
+    return this.resumeGate ?? Promise.resolve()
   }
   close(): Promise<void> {
     this.closed = true
@@ -443,6 +446,43 @@ describe('MicrophoneCapture', () => {
     expect(capture.isPaused()).toBe(false)
   })
 
+  it('getUserMedia 窗口的过期清理抛出：start / stop 均 resolve、停轨不二次执行', async () => {
+    const errors: string[] = []
+    const media = deferred<RealtimeMediaStreamLike>()
+    const contexts: FakeCaptureContext[] = []
+    let stopCalls = 0
+    const stream: RealtimeMediaStreamLike = {
+      getTracks: () => [
+        {
+          stop: () => {
+            stopCalls += 1
+            throw new Error('停轨失败')
+          },
+          getSettings: () => ({}),
+        },
+      ],
+    }
+    const capture = new MicrophoneCapture({
+      onFrameBase64: () => undefined,
+      onError: (message) => errors.push(message),
+      audioContextFactory: () => {
+        const context = new FakeCaptureContext()
+        contexts.push(context)
+        return context
+      },
+      getUserMedia: () => media.promise,
+    })
+    const starting = capture.start()
+    const stopping = capture.stop()
+    media.resolve(stream)
+    await expect(starting).resolves.toBeUndefined()
+    await expect(stopping).resolves.toBeUndefined()
+    expect(stopCalls).toBe(1)
+    expect(contexts).toHaveLength(0)
+    expect(errors).toHaveLength(0)
+    expect(capture.getCapabilities()).toBeNull()
+  })
+
   it('stop 后立即重开：旧 start 迟到结果不覆盖新会话能力与暂停态', async () => {
     const firstMedia = deferred<RealtimeMediaStreamLike>()
     const first = fakeStream({ echoCancellation: false })
@@ -531,6 +571,40 @@ describe('MicrophoneCapture', () => {
     expect(capture.isPaused()).toBe(false)
   })
 
+  it('stop 落在 worklet addModule 窗口且过期清理关闭拒绝：start / stop 均 resolve、无二次释放', async () => {
+    const errors: string[] = []
+    const moduleGate = deferredSignal()
+    const entered = deferredSignal()
+    const context = new FakeCaptureContext()
+    context.enableWorklet()
+    context.addModuleGate = moduleGate.promise
+    context.onAddModule = () => entered.resolve()
+    context.closeRejects = true
+    const { stream, stopped } = fakeStream({ echoCancellation: true })
+    let nodeCalls = 0
+    const capture = new MicrophoneCapture({
+      onFrameBase64: () => undefined,
+      onError: (message) => errors.push(message),
+      audioContextFactory: () => context,
+      getUserMedia: () => Promise.resolve(stream),
+      workletNodeFactory: () => {
+        nodeCalls += 1
+        return new FakeWorkletNode()
+      },
+    })
+    const starting = capture.start()
+    await entered.promise
+    const stopping = capture.stop()
+    moduleGate.resolve()
+    await expect(starting).resolves.toBeUndefined()
+    await expect(stopping).resolves.toBeUndefined()
+    expect(errors).toHaveLength(0)
+    expect(stopped()).toBe(1)
+    expect(context.closeCalls).toBe(1)
+    expect(nodeCalls).toBe(0)
+    expect(capture.getCapabilities()).toBeNull()
+  })
+
   it('pause 落在 getUserMedia 窗口：迟到媒体流停轨且不建上下文，暂停态保持', async () => {
     const media = deferred<RealtimeMediaStreamLike>()
     const { stream, stopped } = fakeStream({ echoCancellation: true })
@@ -553,6 +627,34 @@ describe('MicrophoneCapture', () => {
     expect(stopped()).toBe(1)
     expect(contexts).toHaveLength(0)
     expect(capture.getCapabilities()).toBeNull()
+  })
+
+  it('stop 落在 resume 窗口且过期清理关闭拒绝：start / stop 均 resolve、无二次释放', async () => {
+    const errors: string[] = []
+    const resumeGate = deferredSignal()
+    const resumeEntered = deferredSignal()
+    const context = new FakeCaptureContext()
+    context.resumeGate = resumeGate.promise
+    context.onResume = () => resumeEntered.resolve()
+    context.closeRejects = true
+    const { stream, stopped } = fakeStream({ echoCancellation: true })
+    const capture = new MicrophoneCapture({
+      onFrameBase64: () => undefined,
+      onError: (message) => errors.push(message),
+      audioContextFactory: () => context,
+      getUserMedia: () => Promise.resolve(stream),
+    })
+    const starting = capture.start()
+    await resumeEntered.promise
+    const stopping = capture.stop()
+    resumeGate.resolve()
+    await expect(starting).resolves.toBeUndefined()
+    await expect(stopping).resolves.toBeUndefined()
+    expect(errors).toHaveLength(0)
+    expect(stopped()).toBe(1)
+    expect(context.closeCalls).toBe(1)
+    expect(capture.getCapabilities()).toBeNull()
+    expect(capture.isPaused()).toBe(false)
   })
 
   it('stop 等待在途启动的迟到清理：close 挂起期间 stop 不提前 settle', async () => {

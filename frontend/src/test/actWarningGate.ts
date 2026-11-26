@@ -4,7 +4,8 @@
  * 归属：`beginAttempt` 之后记录的告警归当前尝试；`finishAttempt` 在
  * `onTestFinished`（晚于 afterEach cleanup）排空宏任务后判定并清空，retry
  * 首轮告警不会带入干净次轮。`finishRun` 为 afterAll 兜底：尝试收尾后到达
- * 的残留（文件末条 / afterAll 期间）按无归属判错，不漏告警。
+ * 的残留（文件末条 / afterAll 期间）按无归属判错，覆盖一个宏任务窗口内与
+ * 文件收尾 hooks 内的告警；更迟的告警不保证归属。
  */
 export class ActWarningGate {
   private warnings: string[] = []
