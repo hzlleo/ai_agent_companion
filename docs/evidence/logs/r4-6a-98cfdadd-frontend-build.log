@@ -1,0 +1,42 @@
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/frontend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (build): npm run build: (构建前端生产包)
+
+> ai-agent-companion-frontend@0.1.0 build
+> tsc && vite build
+
+vite v6.4.6 building for production...
+transforming...
+✓ 1842 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                        0.42 kB │ gzip:   0.31 kB
+dist/assets/realtimeCaptureWorklet-fBrz89Ud.js         0.74 kB
+dist/.vite/manifest.json                               7.79 kB │ gzip:   1.12 kB
+dist/assets/index-CKfDQEcn.css                        23.34 kB │ gzip:   5.31 kB
+dist/assets/plus-Di-j6qIx.js                           0.32 kB │ gzip:   0.25 kB
+dist/assets/datetime-BkCRdq40.js                       0.33 kB │ gzip:   0.23 kB
+dist/assets/arrow-left-CpFJTZlZ.js                     0.33 kB │ gzip:   0.27 kB
+dist/assets/Textarea-NNvu4IFx.js                       0.52 kB │ gzip:   0.33 kB
+dist/assets/trash-2-DLho2Qjx.js                        0.53 kB │ gzip:   0.34 kB
+dist/assets/errorDetails-D1_rld8S.js                   0.63 kB │ gzip:   0.36 kB
+dist/assets/Checkbox-Cql-nvJB.js                       0.80 kB │ gzip:   0.47 kB
+dist/assets/ConfirmDialog-dmvRLJMI.js                  0.92 kB │ gzip:   0.51 kB
+dist/assets/Table-Bjcij_E8.js                          1.11 kB │ gzip:   0.44 kB
+dist/assets/PersonaPicker-DYEmuVT0.js                  1.15 kB │ gzip:   0.67 kB
+dist/assets/BatchDeleteResultDialog-BpbXH07l.js        1.70 kB │ gzip:   0.71 kB
+dist/assets/PersonaImportConflictDialog-C_j_j1H5.js    1.78 kB │ gzip:   0.97 kB
+dist/assets/usePersonasApi-eM3GaHpO.js                 5.75 kB │ gzip:   1.94 kB
+dist/assets/PersonaPresetGallery-Di6jHd-f.js           7.92 kB │ gzip:   3.50 kB
+dist/assets/CanvasPage-DTGmyQGn.js                    10.08 kB │ gzip:   3.78 kB
+dist/assets/UsagePage-9LNG76tg.js                     10.62 kB │ gzip:   3.09 kB
+dist/assets/StickersPage-Cwna2fFV.js                  10.72 kB │ gzip:   4.12 kB
+dist/assets/useMutation-DnHM2kRh.js                   12.24 kB │ gzip:   4.09 kB
+dist/assets/PersonaListPage-D_4p5pOS.js               13.98 kB │ gzip:   4.80 kB
+dist/assets/ModelsPage-DIfpkmU3.js                    14.98 kB │ gzip:   4.91 kB
+dist/assets/RealtimeVoicePage-ZoICibBq.js             19.19 kB │ gzip:   7.22 kB
+dist/assets/useToast-BDVjO0Rx.js                      41.60 kB │ gzip:  14.19 kB
+dist/assets/PersonaFormPage-sTp-ELJj.js               53.81 kB │ gzip:  13.69 kB
+dist/assets/client-BktjHM10.js                        62.80 kB │ gzip:  23.89 kB
+dist/assets/MemoriesPage-ClR7FwCF.js                  68.10 kB │ gzip:  16.41 kB
+dist/assets/index-Br1dh93D.js                        389.80 kB │ gzip: 123.62 kB
+✓ built in 2.81s

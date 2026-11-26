@@ -312,9 +312,13 @@ docker run -d --name wechat-gui \
      `xinput` 接宿主显示（`DISPLAY` 指向宿主会话，`XAUTHORITY` 可读时挂载）：
      ```bash
      docker run --rm -e DISPLAY="${DISPLAY:-:0}" \
+       -v "${XAUTHORITY}":/xauth:ro -e XAUTHORITY=/xauth \
        -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
        --entrypoint xinput wechat-gui:0.1.0 list
      ```
+     `XAUTHORITY` 不可读时省略 `-v` / `-e` 两个参数。**连接报错不等于
+     已验证**：本机实测原文（无这两个参数）rc=1，补参数后 rc=0；只有
+     rc=0 且列表里确实没有 `wechat-gui virtual *` 才算通过。
 
 本机（X11 + Xorg libinput）已验证：`event24` / `event25` 均
 `LIBINPUT_IGNORE_DEVICE=1`、无 `ID_INPUT*`、宿主 `xinput` 无该设备；部署机
@@ -363,7 +367,8 @@ docker run -d --name wechat-gui \
 - **镜像**：debian:bookworm-slim（digest 固定）；无微信客户端、无
   编译工具链；`tini` 作 PID 1；HEALTHCHECK 同时探测 X 与 noVNC。
 - **运行期**：生产不 privileged；只映射 `/dev/uinput`（可选 `/dev/dri`）；
-  `cap_drop ALL` + MKNOD/CHOWN；`no-new-privileges`；端口仅宿主回环。
+  `cap_drop ALL` + MKNOD/CHOWN/SETUID/SETGID/KILL；`no-new-privileges`；
+  端口仅宿主回环。
 - **凭据**：VNC 密码走文件（compose secret），且必须对**运行用户**
   （`wechat`）可读——推荐 `wechat:wechat 0400`；root 持有（如部署机生成的
   0400 root 文件）时由入口在运行期复制为 `/run/wechat-gui/vnc.pass`
@@ -373,8 +378,10 @@ docker run -d --name wechat-gui \
 - **输入面**：uinput 设备名固定（`wechat-gui virtual *`），设备随 uinputd
   退出而销毁；但设备是**内核全局**对象——宿主图形会话（或同机其它 X 会话）
   会接入这两个设备并接收注入。本机复跑前必须在宿主 `xinput float` 该
-  设备（`poc/run_stack_poc.sh` 在有宿主会话时默认拒绝运行，放行后自动浮动
-  并在浮动完成后才放行容器启动 Xorg，记录 `float_wait` / `float_sync_ms`）；
+  设备（`poc/run_stack_poc.sh` 在有宿主会话时默认拒绝运行；起容器前若仍有
+  同名残留设备直接拒绝；放行后遍历全部 X 会话浮动，每个同名行均 floating
+  且连续两轮才放行容器启动 Xorg，`xinput` 看不到的设备须由 `udevadm` 正证据
+  确认已忽略，记录 `float_wait` / `float_sync_ms` / `ignored_basis`）；
   生产形态用仓库内 `udev/90-wechat-gui-ignore.rules`（开发机已验证，
   部署机待复验）；Wayland 会话或无法配置 udev 的机器按 VM 隔离评估。
 - **可信边界**：本树不解析平台业务数据；截图与注入是唯一对外原语。
@@ -388,7 +395,7 @@ docker run -d --name wechat-gui \
 | `src/tests/unit/test_uinputd.py` | 控制面五命令解码为具体模型 / 非法载荷矩阵 / 设备信息落盘与读取 / 属主调整 / Unix socket 服务与客户端 / 探测字段不完整与类型非法 / CLI 接线 |
 | `src/tests/unit/test_poc_gate.py` | xdpyinfo / xinput / xev 解析 / 截图校验 / 命令执行与超时 / 步骤编排与跳过 / 报告与退出码 / 七个门步骤（临时 PATH 假命令）/ 单轮注入与 Motion·ButtonRelease 断言 / 注入失败 / 剪贴板回读不一致 / noVNC 非 200 |
 | `src/tests/unit/test_entrypoint_password.py` | 入口密码解析：运行用户可读直接使用 / 明文密码回退（0400）/ 明文优先于文件 / 两者不可读即失败 / 探针注入区分 setpriv 与调用方口径 |
-| `src/tests/unit/test_run_stack_poc.py` | 宿主会话探测 fail-closed：无套接字 / 仅 X11 套接字 / Wayland 套接字（临时 socket 根） |
+| `src/tests/unit/test_run_stack_poc.py` | 宿主会话探测 fail-closed：无套接字 / 仅 X11 套接字 / 多 X 会话 / Wayland 套接字与 `/run/user` 回落（临时 socket 根）；3 条 float 用例：同名残留 floating+新设备 attached 不判 SAFE 且不 touch / 首轮 ABSENT 次轮 RETRY 不结算 / 部分 SAFE+恒 RETRY 不结算；全部同名行 floating 连续两轮才 SAFE / xinput 列举失败不冒充 ABSENT / udev 正证据与无 udevadm 回落 / 起容器前残留设备拒绝 |
 | `src/tests/unit/test_xorg.py` | 静态 evdev 段 / dummy 屏幕 / 配置落盘 |
 
 `.dockerignore` 刻意排除 `udev/`：规则文件是**宿主侧**部署制品，镜像内不

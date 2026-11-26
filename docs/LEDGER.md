@@ -1790,7 +1790,7 @@ R4-2 计量口径；既有 `test_voice_service` 一条用例同步断言）；�
   的通道实现再评估契约镜像。
 - 无后端 / 前端 / 迁移改动；未跑 SeekDB 真引擎套件（不涉数据库）。
 
-**最终树复跑（命令 + 退出码）**：`cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-6a` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 / lint / typecheck=216 / gates / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build=3.04）；canonical 证据 `docs/evidence/r4-6a-5446cb25.json`（sha8=`5446cb25`，756 文件级证据；`--hash-only` 复算一致；`874e54e1` 为首轮树，`5446cb25` 为二轮复审修复前的树，二者现均为历史；当前 canonical 为 `9971f110`，见下一小节）。后端零逻辑改动；SeekDB 真引擎套件经本机 seekdb-smoke 容器通过；新树的注释门 / noqa 冻结 / 同步测试棘轮经根 gates 链通过（无 wire 契约，sandbox-drift 不涉）。
+**最终树复跑（命令 + 退出码）**：`cd backend && pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-6a` → 0（10 步全 PASS：tests-all=3472 / coverage-gates=24 / lint / typecheck=216 / gates / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build=3.04）；canonical 证据 `docs/evidence/r4-6a-5446cb25.json`（sha8=`5446cb25`，756 文件级证据；`--hash-only` 复算一致；`874e54e1` 为首轮树，`5446cb25` 为二轮复审修复前的树，二者现均为历史；二轮复审后的 canonical `9971f110` 亦由 `98cfdadd` 取代，见「三轮复审修复」小节）。后端零逻辑改动；SeekDB 真引擎套件经本机 seekdb-smoke 容器通过；新树的注释门 / noqa 冻结 / 同步测试棘轮经根 gates 链通过（无 wire 契约，sandbox-drift 不涉）。
 
 **复审修复（Oracle R4-6a 深审 3×P1 + 6×P2 逐条根修；canonical 证据
 `docs/evidence/r4-6a-5446cb25.json`）**：
@@ -2020,7 +2020,8 @@ tests-all=3472 / coverage-gates=24 / lint / typecheck=216 / gates /
 tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 /
 frontend-lint / frontend-build=2.07）；canonical 证据
 `docs/evidence/r4-6a-9971f110.json`（sha8=`9971f110`；`5446cb25` 标历史，
-`874e54e1` 更早为历史）。后端零逻辑改动；SeekDB 真引擎套件经本机
+`874e54e1` 更早为历史；**三轮复审修复后由 `98cfdadd` 取代，本行与证据为
+历史**）。后端零逻辑改动；SeekDB 真引擎套件经本机
 seekdb-smoke 容器通过；根 gates 链（注释 / 同步测试棘轮 / noqa 冻结 /
 沙盒漂移 / 红探针 / 文档真相 / 文档数字 / 断言棘轮 / 导出面 / bench /
 api-smoke / prose-pin）全绿。
@@ -2031,6 +2032,94 @@ api-smoke / prose-pin）全绿。
   （03:47，规则安装前）与 hermetic 用例覆盖。
 - 本机无 Wayland 会话，Wayland 拒绝逻辑只经临时 socket 根单测，未在真实
   Wayland 桌面复跑。
+- 部署机 udev 复验与微信客户端 Live 仍随统一阶段。
+
+### 已完成切片：R4-6a 三轮复审修复（4×P2 + 3 P3 逐条根修——本分支工作区）
+
+**背景**：Oracle 对 `5a79144` 的三轮复审无 P0/P1，给 4×P2 + 3 条 P3。
+本批逐条根修并留可红守卫；旧 canonical `9971f110` 自本条起为历史。
+不写「复审通过」——结论由命令 / 退出码 / 变异支撑。
+
+1. **F1 SAFE 按名字「任一行 floating」即放行**（`poc/run_stack_poc.sh`）：
+   a) 新增 `reject_residual_host_devices`，起容器前 `host_devices_present`
+   为真即 exit 1，删除「先浮动残留」分支；
+   b) `host_float_probe_script` 改为先取 `xinput list --name-only`，要求
+   同名**全部行**均含 `floating`；SAFE 与 ABSENT 同口径连续两轮
+   （`safe_streak` / `absent_streak`），float 成功后强制重新列举复核，
+   复核不通过即 RETRY，删除「float 返回 0 即结算」路径；
+   c) 用例：`test_float_probe_requires_all_rows_floating`（残留 floating +
+   新设备 attached → 不 SAFE、rc=1、不 touch）、
+   `..._accepts_all_rows_floating_two_rounds`（同名两行均 floating 两轮 →
+   SAFE）、`test_reject_residual_devices_exits_before_create`。
+2. **F2 「已忽略」为负证据推断**（同文件）：
+   a) 列举失败不再记 ABSENT：`listing="$(xinput list --name-only)"` 退出码
+   非零即 exit 3；用例 `test_float_probe_listing_failure_is_not_absence`
+   （首列举成功、后续 `list` 失败 → rc=3、无 ABSENT、ignored=0）；
+   b) 新增 `host_device_ignored_evidence`：按 name→eventN 取宿主节点，
+   `udevadm info -q property` 须含 `LIBINPUT_IGNORE_DEVICE=1` 且无
+   `^ID_INPUT` 行；无 `udevadm` 返回 2 回落启发式并在证据
+   `ignored_basis` 记 `heuristic`（正证据记 `udev_positive`），两轮口径
+   保留。用例：`test_udev_positive_evidence_marks_ignored` /
+   `..._rejects_residual_id_input` /
+   `test_float_until_settled_falls_back_without_udevadm`。首轮复跑暴露真实
+   回归：宿主 `/dev/input/eventN` 是 `root:input 0660`、运行用户不在
+   `input` 组，原先 `[[ -r ]]` 前置把有效 udev 证据判失败（rc=1，安全态
+   未达成）；改为只依据 `udevadm` 退出码，测试节点置 `chmod 000` 留守卫。
+   c) `detect_host_session` 收集全部 X* 会话（`HOST_DISPLAYS`），探测 /
+   浮动逐会话执行；Wayland 先取 `XDG_RUNTIME_DIR`，缺省扫描
+   `/run/user/*/wayland-*`。用例：`test_detect_enumerates_every_x11_socket`
+   / `..._falls_back_to_run_user_scan` / `..._probes_every_display`。
+3. **F3 两条子性质无守卫**：新增
+   `test_float_until_settled_fails_with_partial_safe_and_retry`（SAFE
+   keyboard + 恒 RETRY pointer → rc=1、floated=0、ignored=0）与
+   `test_float_until_settled_requires_two_absent_rounds`（首轮 ABSENT、次轮
+   起 RETRY → rc=1；计数器用文件）。变异：ABSENT `-ge 2`→`-ge 1` 仅红
+   后者；结算计数 `-eq 数量`→`-ge 1` 仅红前者（实测各 1 failed /
+   17 passed）。
+4. **F4 README udev 验证第三步**：镜像内 xinput 命令补
+   `-v "${XAUTHORITY}":/xauth:ro -e XAUTHORITY=/xauth`，并注明连接报错
+   不等于已验证；本机实测无参数 rc=1、补参数 rc=0。
+5. **P3**：README 安全边界能力清单补 SETUID/SETGID/KILL；测试表补 3 条
+   float 用例及多会话 / udev 正证据 / 回落；`.dockerignore` 改
+   `**/__pycache__` / `**/*.egg-info`，重建镜像内
+   `find /app -name '*.pyc' -o -name '*.egg-info' -o -name '__pycache__'`
+   无输出。
+
+**命令 + 退出码（最终树）**：
+- `cd docker/wechat-gui && pixi run tests-unit` → 0（114 passed；总覆盖率
+  93.80%）；`pixi run coverage-gates` → 0（6 组 ≥80：poc_gate 89.2 /
+  uinput_devices 96.1 / uinputd 96.4 / 其余 100）；`pixi run lint` → 0；
+  `pixi run typecheck` → 0（6 源文件）。
+- `WECHAT_GUI_POC_ALLOW_HOST_SESSION=1 bash
+  docker/wechat-gui/poc/run_stack_poc.sh` → 0（privileged PASS 7/7；
+  `ignored_devices` 两台、`ignored_basis=udev_positive`、
+  `floated_devices=[]`、`residual_devices=[]`、`host_displays=[":0"]`、
+  `float_sync_ms=1321`；证据
+  `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-privileged-20261126T054924Z.json`）。
+- `WECHAT_GUI_POC_RUN_MODE=unprivileged WECHAT_GUI_POC_ALLOW_HOST_SESSION=1
+  bash docker/wechat-gui/poc/run_stack_poc.sh` → 0（PASS 7/7；同
+  `ignored_basis` / 空 floated / 空 residual、`float_sync_ms=1316`；证据
+  `...-unprivileged-20261126T054931Z.json`）。
+- 首轮（`[[ -r ]]` 回归未修时）同命令 → 1：安全态未达成，容器移除、未
+  启动 Xorg、无注入、无证据文件；修复后重跑 PASS。
+- `cd backend && VITEST_MAX_WORKERS=6 pixi run verify-slice --
+  --with-seekdb --with-frontend --slice r4-6a` → 0（10 步全 PASS：
+  tests-all=3472 / coverage-gates=24 / lint / typecheck=216 / gates /
+  tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 /
+  frontend-lint / frontend-build=2.81；canonical
+  `docs/evidence/r4-6a-98cfdadd.json`，sha8=`98cfdadd`，758 文件级证据；
+  `7c673863` 为补 Pyright `returncode` 断言前的中间树，与 `9971f110`
+  及更早证据同为历史）。首次未限 worker 的同一命令 → 1：
+  frontend-test 5 条加载态等待超时（当时负载 54），单跑 3 条关注用例与
+  全量 716 均 PASS；`VITEST_MAX_WORKERS=6` 复跑全链 PASS。
+
+**偏离与未验证**：
+- 前端 5 条加载态超时是宿主机负载下的 Testing Library 等待抖动（改动面不涉
+  前端）；最终取证用 `VITEST_MAX_WORKERS=6` 限流，未改测试代码 / 断言。
+- 多 X 会话遍历只经临时 socket 根单测（本机仅 `:0`）；真实多会话桌面未复跑。
+- Wayland `/run/user/*` 回落只经临时扫描根单测；本机无 Wayland 会话。
+- 宿主已装 udev 规则，本轮 PoC `floated_devices=[]`（设备在 xinput 不可见），
+  真实 float 路径仍以历史证据（规则安装前）与 hermetic 用例覆盖。
 - 部署机 udev 复验与微信客户端 Live 仍随统一阶段。
 
 ### 已完成切片：G1 审计非根修项根修（§20 修正必须根修——本分支工作区）
