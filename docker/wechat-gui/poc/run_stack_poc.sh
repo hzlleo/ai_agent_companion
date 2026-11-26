@@ -141,19 +141,24 @@ host_devices_present() {
 
 # 起容器前宿主不得已有同名设备：旧设备（仍在运行的 serve 容器或上次异常
 # 退出残留）与新设备同名并存时，xinput 按名字浮动 / 判定无法区分二者，
-# 「任一行 floating」会把仍接在宿主上的新设备误判为安全。
+# 「任一行 floating」会把仍接在宿主上的新设备误判为安全。逐名字判定：
+# 两台中的**任一**残留即拒绝——只残留一台同样会让该名字的浮动结果含混。
 reject_residual_host_devices() {
-    if ! host_devices_present; then
-        return 0
-    fi
-    cat >&2 <<EOF
+    local name
+    for name in "${DEVICE_NAMES[@]}"; do
+        if ! host_device_present "${name}"; then
+            continue
+        fi
+        cat >&2 <<EOF
 [wechat-gui-poc] 拒绝运行：宿主已存在 wechat-gui virtual keyboard/pointer。
 [wechat-gui-poc] 常见来源：仍在运行的 serve 容器，或上次异常退出后的内核残留。
 [wechat-gui-poc] 同名旧设备与本次新建设备并存时无法按名字区分浮动结果；
 [wechat-gui-poc] 请先停掉 serve 容器 / 持有进程，确认
 [wechat-gui-poc] /sys/class/input/event*/device/name 中这两个名字消失后再复跑。
 EOF
-    exit 1
+        exit 1
+    done
+    return 0
 }
 
 # 同名设备在 sysfs 中的 event 节点目录（/sys/class/input/eventN）。

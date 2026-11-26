@@ -109,7 +109,7 @@ input-event-codes 数值（`30` = `KEY_A`）。
 | `run_mode` | string | 宿主运行器追加：`privileged` / `unprivileged` |
 | `build_attempts` | integer | 宿主运行器追加：镜像构建实际尝试次数（1-3） |
 | `container_exit_code` | integer | 宿主运行器追加：PoC 容器退出码 |
-| `host_session_guard` | object | 宿主运行器追加：`host_session_active`（bool）/ `host_display`（string\|null）/ `allow_host_session`（bool）/ `floated_devices`（array）/ `ignored_devices`（array，xinput 不可见、由宿主 udev 规则忽略）/ `residual_devices`（array）/ `float_wait`（bool，容器等待安全态完成）/ `float_sync_ms`（integer，安全态同步耗时） |
+| `host_session_guard` | object | 宿主运行器追加：`host_session_active`（bool）/ `host_display`（string\|null）/ `host_displays`（array，全部宿主 X 会话）/ `allow_host_session`（bool）/ `floated_devices`（array）/ `ignored_devices`（array，xinput 不可见、由宿主 udev 规则忽略）/ `ignored_basis`（string\|null：`udev_positive` 正证据 / `heuristic` 无 udevadm 回落）/ `residual_devices`（array）/ `float_wait`（bool，容器等待安全态完成）/ `float_sync_ms`（integer，安全态同步耗时） |
 
 ## 构建与 PoC 门（本机）
 
@@ -136,8 +136,9 @@ SETUID/SETGID/KILL + `no-new-privileges`），运行 `poc_gate`，把单行 JSON
 弱口令）。
 
 **宿主图形会话守卫（uinput 是内核全局设备）**：运行器在构建 / 运行前探测
-宿主活动图形会话——任何 `/tmp/.X11-unix/X*` 或
-`${XDG_RUNTIME_DIR:-/run/user/<uid>}/wayland-*` 套接字存在即视为活动（不要求
+宿主活动图形会话——任何 `/tmp/.X11-unix/X*` 套接字，或 Wayland 套接字（先查
+`XDG_RUNTIME_DIR`，再扫 `/run/user/*/wayland-*`；非 root 调用者看不到其他用户
+的 0700 目录）存在即视为活动（不要求
 `xdpyinfo` 可连，连接失败也可能是会话存在但授权受限）。检测到即默认拒绝
 运行并打印说明——容器内创建的 `wechat-gui virtual keyboard/pointer` 会被宿主
 X 会话接入并接收注入的按键与点击。存在 Wayland 套接字时**直接拒绝**：合成器
@@ -146,13 +147,15 @@ udev 规则或 VM 隔离。
 
 显式 `WECHAT_GUI_POC_ALLOW_HOST_SESSION=1` 才放行，且放行有前置条件与同步：
 
-- 先用镜像内 `xinput list` 连一次宿主显示（`Authorization required` 等连接
-  失败直接拒绝，不留到浮动阶段才发现）；
+- 先对每个宿主显示会话逐一用镜像内 `xinput list` 连接（`Authorization
+  required` 等连接失败直接拒绝，不留到浮动阶段才发现）；
 - 运行器以 `WECHAT_GUI_HOST_FLOAT_WAIT=1` 启动 PoC 容器；入口在启动 Xorg
   **之前**有界等待 `/run/wechat-gui/host-float.done`（超时 exit 1 并说明）；
 - 运行器在设备出现后判定安全态：`xinput` 可见的设备必须逐一 `float`；
-  sysfs 已存在但 `xinput` 看不到的设备视为被宿主 udev 规则忽略（连续两轮
-  确认）；两台都安全后 `docker exec` 在容器内落 done 文件，容器才继续
+  sysfs 已存在但 `xinput` 看不到的设备须取正证据（`udevadm info` 的
+  `LIBINPUT_IGNORE_DEVICE=1` 且无 `ID_INPUT*`）且连续两轮确认；宿主无
+  `udevadm` 才回落启发式（`ignored_basis=heuristic`）；两台都安全后
+  `docker exec` 在容器内落 done 文件，容器才继续
   启动 Xorg；截止内不满足即 `docker rm -f` 并 exit 1（注入不发生）；
 - 证据 `host_session_guard` 记录 `floated_devices` / `ignored_devices` /
   `float_wait` / `float_sync_ms`；运行结束 `residual_devices` 非空即
@@ -189,9 +192,12 @@ Xorg 前等待安全态完成标记。两种宿主状态都实测过：
 
 - **无 udev 规则时（历史证据 11:47）**：设备出现在宿主 `xinput`，运行器
   逐一 `float` 两台，证据 `floated_devices` 两项；
-- **装 udev 规则后（12:39 起，本轮证据）**：设备在 `xinput` 不可见，运行器
-  判定为已被忽略（`ignored_devices` 两项），安全态同步完成
-  （`float_wait=true` / `float_sync_ms≈1.2s`）后容器才启动 Xorg。
+- **装 udev 规则后（本轮证据 `...-20261126T070135Z.json` /
+  `...-20261126T070141Z.json`；三轮最终树同判定路径见
+  `...-20261126T054924Z.json` / `...-20261126T054931Z.json`）**：设备在
+  `xinput` 不可见，运行器以 `udevadm` 正证据判定已被忽略
+  （`ignored_devices` 两项、`ignored_basis=udev_positive`），安全态同步完成
+  （`float_wait=true` / `float_sync_ms≈1.3s`）后容器才启动 Xorg。
 
 两轮结束后宿主 `/sys/class/input` 均无该设备、无残留容器；未设置放行变量
 时运行器直接拒绝（退出码 1），`XAUTHORITY` 不可达时在启动容器前拒绝
@@ -199,16 +205,17 @@ Xorg 前等待安全态完成标记。两种宿主状态都实测过：
 
 | 形态 | 结果 | 证据 | 总耗时 |
 |---|---|---|---|
-| 特权 PoC（`--privileged`，仅本门兼容性） | **PASS**（7/7） | `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-privileged-20261126T045413Z.json` | 193 ms |
-| 非特权（`--device /dev/uinput` + `c 13:* rwm` + 最小能力集 + `no-new-privileges`） | **PASS**（7/7） | `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-unprivileged-20261126T045418Z.json` | 174 ms |
+| 特权 PoC（`--privileged`，仅本门兼容性） | **PASS**（7/7） | `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-privileged-20261126T070135Z.json` | 216 ms |
+| 非特权（`--device /dev/uinput` + `c 13:* rwm` + 最小能力集 + `no-new-privileges`） | **PASS**（7/7） | `docs/evidence/poc/wechat-gui-stack-LeoWorkLaptop-unprivileged-20261126T070141Z.json` | 204 ms |
+| 历史（三轮最终树，udev 正证据路径） | PASS 7/7 | `...-privileged-20261126T054924Z.json` / `...-unprivileged-20261126T054931Z.json` | 262 / 178 ms |
 | 历史（udev 规则前，真实 float 路径） | PASS 7/7 | `...-privileged-20261126T034706Z.json` / `...-unprivileged-20261126T034711Z.json` | 221 / 240 ms |
 
-- 各步耗时（perf_counter ms，本轮非特权形态）：`x_up` 2、`uinput_create` 62、
-  `xinput_visible` 2、`event_roundtrip` 54（单轮注入，五类事件各 1）、
-  `screenshot` 41、`clipboard` 5、`vnc_up` 4；`build_attempts=1`、
+- 各步耗时（perf_counter ms，本轮非特权形态）：`x_up` 3、`uinput_create` 69、
+  `xinput_visible` 3、`event_roundtrip` 55（单轮注入，五类事件各 1）、
+  `screenshot` 59、`clipboard` 6、`vnc_up` 6；`build_attempts=1`、
   `container_exit_code=0`。
 - 单轮注入把事件回环从「每读一行注入一批」（旧证据 284 ms / 20 轮）收敛
-  到 54 ms；`stdbuf -oL` 行缓冲是「注入一次即可采到完整回环」的前提。
+  到 55 ms；`stdbuf -oL` 行缓冲是「注入一次即可采到完整回环」的前提。
 - 非特权形态曾因仅映射 `/dev/uinput` 而被容器 device cgroup 以 EPERM
   拒绝打开 13:* 事件节点；补 `c 13:* rwm` 规则后通过（compose 已固化）。
 - 证据经容器内路径写出后 `docker cp` 取回（不把仓库目录 bind mount 进

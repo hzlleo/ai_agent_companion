@@ -264,23 +264,31 @@ async def _float_driver(
     return stdout.strip()
 
 
-async def test_reject_residual_devices_exits_before_create() -> None:
-    """起容器前同名设备存在即 exit 1；不存在则继续。"""
-    present = (
-        "host_device_present() { return 0; }; "
-        "reject_residual_host_devices; "
-        'printf "reached\\n"'
+async def test_reject_residual_devices_exits_before_create(tmp_path: Path) -> None:
+    """起容器前只要有任一保留名残留即 exit 1；两台都缺席才继续。"""
+    partial = tmp_path / "partial"
+    partial.mkdir()
+    sysfs, devinput = _make_sysfs(partial, [KEYBOARD])
+    env = {
+        "WECHAT_GUI_POC_SYSFS_INPUT_DIR": str(sysfs),
+        "WECHAT_GUI_POC_HOST_INPUT_DIR": str(devinput),
+    }
+    rc, stdout, _ = await _run_sourced(
+        "reject_residual_host_devices; printf 'reached\\n'", env_extra=env
     )
-    rc, stdout, _ = await _run_sourced(present)
     assert rc == 1
     assert stdout == ""
 
-    absent = (
-        "host_device_present() { return 1; }; "
-        "reject_residual_host_devices; "
-        'printf "reached\\n"'
+    absent = tmp_path / "absent"
+    absent.mkdir()
+    sysfs, devinput = _make_sysfs(absent, [])
+    env = {
+        "WECHAT_GUI_POC_SYSFS_INPUT_DIR": str(sysfs),
+        "WECHAT_GUI_POC_HOST_INPUT_DIR": str(devinput),
+    }
+    rc, stdout, stderr = await _run_sourced(
+        "reject_residual_host_devices; printf 'reached\\n'", env_extra=env
     )
-    rc, stdout, stderr = await _run_sourced(absent)
     assert rc == 0, stderr
     assert stdout == "reached\n"
 
@@ -374,12 +382,36 @@ async def test_float_probe_listing_failure_is_not_absence(tmp_path: Path) -> Non
     assert await _float_driver(body) == "rc=1 floated=0 ignored=0 basis="
 
 
-async def _ignored_evidence_rc(tmp_path: Path, *, id_input: bool) -> str:
+async def test_float_probe_first_listing_failure_is_not_absence(
+    tmp_path: Path,
+) -> None:
+    """首个列举（--name-only）失败即 exit 3，且不得输出任何 ABSENT。"""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_fake_xinput(
+        bin_dir,
+        name_only=None,
+        list_lines=[f"~ {KEYBOARD}\tid=11\t[floating slave]"],
+    )
+    env = {"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    probe = (
+        'probe="$(host_float_probe_script)"; '
+        'bash -c "$probe" runner "${DEVICE_NAMES[@]}"'
+    )
+    rc, stdout, _ = await _run_sourced(probe, env_extra=env)
+    assert rc == 3
+    assert stdout == ""
+
+
+async def _ignored_evidence_rc(
+    tmp_path: Path, *, id_input: bool, udev_exit: int = 0
+) -> str:
     """以假 udevadm 调用正证据判定。
 
     Args:
         tmp_path: 临时根。
         id_input: 假 udevadm 是否额外输出 ID_INPUT 行。
+        udev_exit: 假 udevadm 的退出码（非 0 表示属性查询失败）。
 
     Returns:
         ``rc=<n>``。
@@ -391,7 +423,7 @@ async def _ignored_evidence_rc(tmp_path: Path, *, id_input: bool) -> str:
     _write_executable(
         bin_dir / "udevadm",
         'printf "%s\\n" "DEVPATH=/devices/virtual/input/input42/event42" '
-        '"LIBINPUT_IGNORE_DEVICE=1"\n' + extra + '\nexit 0\n',
+        '"LIBINPUT_IGNORE_DEVICE=1"\n' + extra + f"\nexit {udev_exit}\n",
     )
     env = {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -417,6 +449,39 @@ async def test_udev_evidence_rejects_residual_id_input(tmp_path: Path) -> None:
     assert await _ignored_evidence_rc(tmp_path, id_input=True) == "rc=1"
 
 
+async def test_udev_property_query_failure_is_not_positive_evidence(
+    tmp_path: Path,
+) -> None:
+    """udevadm 属性查询非零退出时不得当作正证据。"""
+    assert await _ignored_evidence_rc(tmp_path, id_input=False, udev_exit=1) == "rc=1"
+
+
+async def test_udev_evidence_checks_every_same_name_node(tmp_path: Path) -> None:
+    """同名多个 event 节点逐个取证据：第二个带 ID_INPUT 时不成立。"""
+    sysfs, devinput = _make_sysfs(tmp_path, [KEYBOARD, KEYBOARD])
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "udevadm",
+        'node="${@: -1}"; '
+        'printf "%s\\n" "LIBINPUT_IGNORE_DEVICE=1"; '
+        'if [[ "${node}" == *event43 ]]; then printf "%s\\n" "ID_INPUT=1"; fi; '
+        "exit 0",
+    )
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "WECHAT_GUI_POC_SYSFS_INPUT_DIR": str(sysfs),
+        "WECHAT_GUI_POC_HOST_INPUT_DIR": str(devinput),
+    }
+    body = (
+        f'if host_device_ignored_evidence "{KEYBOARD}"; then rc=0; else rc=$?; fi; '
+        'printf "rc=%s\\n" "$rc"'
+    )
+    rc, stdout, stderr = await _run_sourced(body, env_extra=env)
+    assert rc == 0, stderr
+    assert stdout.strip() == "rc=1"
+
+
 async def test_float_until_settled_accepts_udev_ignored_devices() -> None:
     """sysfs 有设备但 xinput 看不到（udev 正证据）连续两轮即安全。"""
     body = (
@@ -426,6 +491,16 @@ async def test_float_until_settled_accepts_udev_ignored_devices() -> None:
     assert await _float_driver(body) == (
         "rc=0 floated=0 ignored=2 basis=udev_positive"
     )
+
+
+async def test_float_until_settled_rejects_insufficient_udev_evidence() -> None:
+    """xinput 看不到但 udev 证据不足（rc=1）时不得判 ignored 或结算。"""
+    body = (
+        "host_device_ignored_evidence() { return 1; }; "
+        "float_host_devices() { "
+        'printf "ABSENT %s\\n" "${DEVICE_NAMES[@]}"; return 0; }'
+    )
+    assert await _float_driver(body) == "rc=1 floated=0 ignored=0 basis="
 
 
 async def test_float_until_settled_falls_back_without_udevadm() -> None:
@@ -471,6 +546,23 @@ async def test_float_until_settled_requires_two_absent_rounds(
         'n=$((n + 1)); printf "%s" "$n" > "$_counter"; '
         'if [[ "$n" -eq 1 ]]; then '
         'printf "ABSENT %s\\n" "${DEVICE_NAMES[@]}"; '
+        'else printf "RETRY %s\\n" "${DEVICE_NAMES[@]}"; fi; return 0; }'
+    )
+    assert await _float_driver(body) == "rc=1 floated=0 ignored=0 basis="
+
+
+async def test_float_until_settled_requires_two_safe_rounds(
+    tmp_path: Path,
+) -> None:
+    """首轮 SAFE、次轮起 RETRY 时必须失败（一轮 SAFE 不足以结算）。"""
+    counter = tmp_path / "round"
+    body = (
+        f'_counter="{counter}"; '
+        "float_host_devices() { n=0; "
+        'if [[ -f "$_counter" ]]; then n="$(cat "$_counter")"; fi; '
+        'n=$((n + 1)); printf "%s" "$n" > "$_counter"; '
+        'if [[ "$n" -eq 1 ]]; then '
+        'printf "SAFE %s\\n" "${DEVICE_NAMES[@]}"; '
         'else printf "RETRY %s\\n" "${DEVICE_NAMES[@]}"; fi; return 0; }'
     )
     assert await _float_driver(body) == "rc=1 floated=0 ignored=0 basis="

@@ -1301,7 +1301,7 @@ README「本机实测结果」与 `docs/evidence/poc/`；字段含
 | `started_at_ms` | integer | 启动时刻，Unix Epoch 毫秒 |
 | `duration_perf_counter_ms` | integer | 总耗时毫秒 |
 | `run_mode` / `build_attempts` / `container_exit_code` | string / integer / integer | 宿主运行器追加 |
-| `host_session_guard` | object | 宿主运行器追加：`host_session_active` / `host_display` / `allow_host_session` / `floated_devices` / `ignored_devices` / `residual_devices` / `float_wait` / `float_sync_ms` |
+| `host_session_guard` | object | 宿主运行器追加：`host_session_active` / `host_display` / `host_displays` / `allow_host_session` / `floated_devices` / `ignored_devices` / `ignored_basis`（`udev_positive` / `heuristic`） / `residual_devices` / `float_wait` / `float_sync_ms` |
 
 字段级说明与样例以沙盒树 README「设备制品 / 门报告字段」为准，
 `docs/evidence/poc/` 下的入库证据即完整样例。
