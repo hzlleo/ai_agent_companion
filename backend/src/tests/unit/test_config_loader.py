@@ -56,6 +56,8 @@ def _write_config(
                             "required": ["a"],
                             "additionalProperties": False,
                         },
+                        "kind": "http",
+                        "http": {"url": "http://127.0.0.1:8091/t1"},
                     }
                 ]
             }
@@ -173,6 +175,49 @@ async def test_load_config_yaml_invalid_role_binding_raises(tmp_path: Path) -> N
     with pytest.raises(BusinessException) as exc_info:
         load_config_yaml(config_dir=tmp_path)
     assert exc_info.value.code == ErrorCode.CONFIG_INVALID
+
+
+async def test_load_config_yaml_warns_dangling_route_role_binding(tmp_path: Path) -> None:
+    """策略角色的显式绑定指向不存在条目：重建时一条 warning（角色 + 条目名）。"""
+    from loguru import logger
+
+    captured: list[str] = []
+    handler_id = logger.add(lambda message: captured.append(str(message)), level="WARNING")
+    try:
+        _write_config(
+            tmp_path,
+            yaml_payload={
+                "llm": {
+                    "models": [
+                        {
+                            "name": "main",
+                            "base_url": "http://h/v1",
+                            "model": "m1",
+                            "roles": ["chat"],
+                        }
+                    ],
+                    "role_bindings": {"chat_night": "missing-night"},
+                    "route_policies": [
+                        {
+                            "name": "night-chat",
+                            "source_role": "chat",
+                            "target_role": "chat_night",
+                            "condition": {"time_window": {"start_hour": 22, "end_hour": 6}},
+                        }
+                    ],
+                }
+            },
+        )
+        config = load_config_yaml(config_dir=tmp_path)
+    finally:
+        logger.remove(handler_id)
+    assert config.role_bindings == {"chat_night": "missing-night"}
+    matching = [
+        message
+        for message in captured
+        if "chat_night" in message and "missing-night" in message
+    ]
+    assert len(matching) == 1
 
 
 async def test_load_config_yaml_unknown_top_keys_warned_not_fatal(tmp_path: Path) -> None:

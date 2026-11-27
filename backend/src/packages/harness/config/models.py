@@ -52,7 +52,7 @@
       harness/intent/intent_models（config → intent 单向聚合）
     - ``Settings``           —— 聚合器（全局单例 ``settings``）
     - ``LlmConfig``          —— config.yaml 的 ``llm`` 段（模型注册表 / 角色绑定 /
-      多模态回退链）
+      条件路由策略 / 多模态回退链）
     - ``SearchProviderEntry`` / ``SearchConfig`` —— config.yaml 的
       ``search`` 段（搜索 provider 注册表 + web_search 子块）
     - ``MultimodalFallbackConfig`` —— look_at 角色非多模态时的回退链配置
@@ -65,9 +65,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any, Literal
-from urllib.parse import quote_plus
+from urllib.parse import parse_qsl, quote_plus, urlparse
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -78,6 +79,7 @@ from packages.harness.chat.persona_rotation_models import GroupPersonaSettings
 from packages.harness.config.model_entry import LlmModelEntry, ModelRole
 from packages.harness.core.logging_models import LoggingConfig
 from packages.harness.intent.intent_models import IntentSettings
+from packages.harness.llm.route_policy_models import RoutePolicyModel
 from packages.harness.multimodal.sticker_models import StickerSettings
 from packages.harness.rhythm.rhythm_models import RhythmSettings
 from packages.harness.usage.budget_limits import DAILY_BUDGET_MAX
@@ -1679,7 +1681,7 @@ class MultimodalFallbackConfig(BaseModel):
 
 
 class LlmConfig(BaseModel):
-    """config.yaml ``llm`` 段——模型注册表 + 角色绑定 + 多模态回退链。
+    """config.yaml ``llm`` 段——模型注册表 + 角色绑定 + 回退链 + 条件路由策略。
 
     config.yaml 示例::
 
@@ -1694,6 +1696,16 @@ class LlmConfig(BaseModel):
               concurrency: 4
           role_bindings:
             chat: "main-chat"
+          route_policies:
+            - name: "night-chat"
+              source_role: "chat"
+              target_role: "chat_night"
+              priority: 100
+              condition:
+                time_window:
+                  start_hour: 22
+                  end_hour: 6
+                  timezone: "Asia/Shanghai"
           multimodal_fallback:
             local:
               name: "local-vision"
@@ -1709,8 +1721,11 @@ class LlmConfig(BaseModel):
 
     Attributes:
         models: LLM 模型条目列表（多 provider OpenAI 兼容注册表）。
-        role_bindings: 显式角色绑定（角色 → 条目名；优先于条目自身 roles 声明）。
+        role_bindings: 显式角色绑定（角色 → 条目名；优先于条目自身 roles
+            声明；角色名可为注册表五角色或条件路由策略声明的源 / 目标角色）。
         multimodal_fallback: look_at 角色非多模态时的回退链配置。
+        route_policies: 条件路由策略列表（命中条件时原角色改由目标角色承接；
+            默认空 = 零行为变更）。
     """
 
     models: list[LlmModelEntry] = Field(
@@ -1724,26 +1739,29 @@ class LlmConfig(BaseModel):
         default_factory=MultimodalFallbackConfig,
         description="多模态回退链配置（本地视觉 → 远程多模态）",
     )
+    route_policies: list[RoutePolicyModel] = Field(
+        default_factory=list,
+        description="条件路由策略（原角色在条件命中时改由目标角色承接；默认空）",
+    )
 
-    @field_validator("role_bindings")
-    @classmethod
-    def _validate_role_bindings(cls, value: dict[str, str]) -> dict[str, str]:
-        """校验角色绑定的角色名合法（chat/duty/dream/look_at/embed）。
-
-        Args:
-            value: 原始角色绑定映射。
+    @model_validator(mode="after")
+    def _validate_role_bindings(self) -> LlmConfig:
+        """校验角色绑定键为注册表角色或策略声明的源 / 目标角色。
 
         Returns:
-            通过校验的映射。
+            自身（校验通过）。
 
         Raises:
             ValueError: 含未知角色名。
         """
         valid_roles = {member.value for member in ModelRole}
-        invalid = [role for role in value if role not in valid_roles]
+        for policy in self.route_policies:
+            valid_roles.add(policy.source_role)
+            valid_roles.add(policy.target_role)
+        invalid = [role for role in self.role_bindings if role not in valid_roles]
         if invalid:
             raise ValueError(f"未知角色名: {invalid}（合法值: {sorted(valid_roles)}）")
-        return value
+        return self
 
     @classmethod
     def default_models(cls) -> list[dict[str, Any]]:
@@ -1795,16 +1813,56 @@ class LlmConfig(BaseModel):
                 "roles": ["embed"],
                 "concurrency": 4,
             },
+            {
+                "name": "chat-night",
+                "provider": "openai_compatible",
+                "base_url": "https://api.example.com/v1",
+                "api_key_env": "CHAT_NIGHT_API_KEY",
+                "model": "glm-5.3-night",
+                "roles": [],
+                "concurrency": 2,
+            },
         ]
 
     @classmethod
     def default_role_bindings(cls) -> dict[str, str]:
-        """返回示例角色绑定（空映射——条目自身 roles 声明已覆盖）。
+        """返回示例角色绑定（条目自身 roles 声明已覆盖注册表五角色）。
+
+        示例仅绑定条件路由策略的目标角色 ``chat_night``——注册表五角色由
+        条目 ``roles`` 声明承接，无需显式绑定。
 
         Returns:
-            空角色绑定映射（文档性展示用）。
+            角色绑定映射（策略目标角色 → 示例条目名）。
         """
-        return {}
+        return {"chat_night": "chat-night"}
+
+    @classmethod
+    def default_route_policies(cls) -> list[dict[str, Any]]:
+        """返回 config.example.yaml 中 ``llm.route_policies`` 的示例条目列表。
+
+        示例数据的单一真相源——根 ``scripts/generate_examples_yaml.py``
+        调用此方法生成模板的 ``route_policies`` 段，保证示例永不与模型契约
+        漂移。示例为「夜间 chat 路由到 chat_night」的时段策略。
+
+        Returns:
+            示例策略 dict 列表（config.yaml 输入格式）。
+        """
+        return [
+            {
+                "name": "night-chat",
+                "source_role": "chat",
+                "target_role": "chat_night",
+                "priority": 100,
+                "condition": {
+                    "time_window": {
+                        "start_hour": 22,
+                        "end_hour": 6,
+                        "timezone": "Asia/Shanghai",
+                    }
+                },
+                "fallback_to_source": True,
+            }
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -1974,60 +2032,284 @@ class JsonSchema(BaseModel):
     )
 
 
-class ExtensionTool(BaseModel):
-    """单个 LLM 工具配置（function calling schema）。
+#: 请求头名称合法字符集（RFC 7230 token）。
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+#: 请求头值中的环境变量占位（``{env:VAR_NAME}``）。
+_ENV_PLACEHOLDER_RE = re.compile(r"\{env:[A-Za-z_][A-Za-z0-9_]*\}")
+#: 请求头字面值长度上限（超过即视为内联密钥——改用 ``{env:}`` 占位）。
+_HEADER_LITERAL_MAX_LENGTH: int = 32
+#: URL 查询串中的常见密钥参数名（小写匹配——值过长即视为内联密钥）。
+_SECRET_QUERY_KEYS: frozenset[str] = frozenset(
+    {
+        "key",
+        "token",
+        "apikey",
+        "api_key",
+        "api-key",
+        "secret",
+        "access_token",
+        "auth_token",
+    }
+)
+#: URL 查询串密钥参数的字面值长度阈值（达到即拒绝——改走 header 占位）。
+_SECRET_QUERY_MIN_LENGTH: int = 16
+#: URL 查询串参数值中的 ``{参数名}`` 占位（与 :data:`_ARG_PLACEHOLDER_RE`
+#: 同语法——只剔合法参数名，``{sk-...}`` 等含非法字符的原样计入字面长度）。
+_QUERY_VALUE_PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
+#: 结果点路径形态（``a`` / ``a.b`` / ``a.b.c``——段非空且不含点）。
+_RESULT_PATH_RE = re.compile(r"^[^.]+(\.[^.]+)*$")
+
+
+class HttpToolTargetModel(BaseModel):
+    """外部 HTTP 扩展工具的目标端点（管理员在本地配置文件中声明）。
+
+    信任边界：端点由管理员在 ``extensions_config.json`` 中定义，不做私网
+    拦截（允许 ``127.0.0.1`` 等本地服务）；重定向被显式禁用，防止端点把
+    请求带到配置之外的地址。
 
     Attributes:
-        name: 工具名称（唯一标识）。
-        description: 工具描述（告诉 LLM 何时调用此工具）。
-        parameters: 工具参数 schema（JSON Schema 格式）。
+        url: 目标地址（http/https；可含 ``{参数名}`` 占位，执行期按参数值
+            做 URL 编码替换）。
+        method: HTTP 方法（GET / POST，默认 POST）。
+        headers: 请求头固定键值面（值可含 ``{env:VAR_NAME}`` 占位——密钥
+            只存环境变量名，不存明文）。
+        timeout_ms: 单次请求超时毫秒数（默认 5000，上限 30000）。
+        response_max_bytes: 响应体字节上限（默认 65536；超限受控失败）。
+        result_path: 从响应 JSON 提取结果的点路径（空 = 整个 JSON 文档）。
     """
 
-    name: str = Field(default="", description="工具名称（唯一标识）")
+    model_config = {"extra": "forbid"}
+
+    url: str = Field(description="目标地址（http/https，可含参数占位）")
+    method: Literal["GET", "POST"] = Field(default="POST", description="HTTP 方法")
+    headers: Mapping[str, str] = Field(
+        default_factory=dict,
+        description="请求头（值可含 {env:VAR_NAME} 占位——不存明文密钥）",
+    )
+    timeout_ms: int = Field(
+        default=5000, ge=1, le=30000, description="单次请求超时毫秒数（上限 30000）"
+    )
+    response_max_bytes: int = Field(
+        default=65536, ge=1, description="响应体字节上限（默认 65536）"
+    )
+    result_path: str = Field(
+        default="", description="响应 JSON 结果点路径（空 = 整个文档）"
+    )
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url_scheme(cls, value: str) -> str:
+        """校验 URL 协议 / 主机名 / userinfo / 密钥查询参数。
+
+        Args:
+            value: 原始 URL 字符串（可含 ``{参数名}`` 占位）。
+
+        Returns:
+            校验通过的原值。
+
+        Raises:
+            ValueError: 协议非法 / 主机名缺失 / 含 userinfo / 查询串含
+                长字面密钥参数。
+        """
+        parsed = urlparse(value)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError("扩展工具 url 必须是 http/https 协议且包含主机名")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError(
+                "扩展工具 url 不支持 userinfo（密钥请改用 header 的 {env:} 占位）"
+            )
+        for key, query_value in parse_qsl(parsed.query, keep_blank_values=True):
+            literal_value = _QUERY_VALUE_PLACEHOLDER_RE.sub("", query_value)
+            if (
+                key.lower() in _SECRET_QUERY_KEYS
+                and len(literal_value) >= _SECRET_QUERY_MIN_LENGTH
+            ):
+                raise ValueError(
+                    f"扩展工具 url 查询参数 {key} 疑似内联密钥；"
+                    "请改用 header 的 {env:VAR_NAME} 占位"
+                )
+        return value
+
+    @field_validator("method", mode="before")
+    @classmethod
+    def _normalize_method(cls, value: object) -> object:
+        """归一 HTTP 方法大小写（GET / post → GET / POST）。
+
+        Args:
+            value: 原始字段值。
+
+        Returns:
+            字符串值统一大写；非字符串原样交给后续校验。
+        """
+        if isinstance(value, str):
+            return value.upper()
+        return value
+
+    @field_validator("headers")
+    @classmethod
+    def _validate_headers(cls, value: Mapping[str, str]) -> Mapping[str, str]:
+        """校验请求头名称与字面值（密钥只经环境变量占位引用）。
+
+        ``{env:}`` 占位剔除后的剩余字面仍按同一组检查判定（大小写不敏感）
+        ——占位存在不再豁免内联密钥。
+
+        Args:
+            value: 请求头映射。
+
+        Returns:
+            校验通过的映射。
+
+        Raises:
+            ValueError: 头名非法 / 字面值像密钥（``Bearer `` / ``Basic `` /
+                ``sk-`` / 长度超过 32） / ``{env:}`` 占位语法非法。
+        """
+        for name, header_value in value.items():
+            if _HEADER_NAME_RE.fullmatch(name) is None:
+                raise ValueError(f"扩展工具请求头名称非法: {name!r}")
+            if "{env:" in header_value:
+                literal = _ENV_PLACEHOLDER_RE.sub("", header_value)
+                if "{env:" in literal:
+                    raise ValueError(
+                        f"扩展工具请求头 {name} 的 {{env:}} 占位语法非法: {header_value!r}"
+                    )
+            else:
+                literal = header_value
+            stripped = literal.strip()
+            lowered = stripped.lower()
+            has_scheme_secret = (
+                lowered.startswith("bearer ") and bool(stripped[len("bearer ") :].strip())
+            ) or (
+                lowered.startswith("basic ") and bool(stripped[len("basic ") :].strip())
+            ) or (lowered.startswith("sk-") and bool(stripped[len("sk-") :].strip()))
+            if has_scheme_secret or len(stripped) > _HEADER_LITERAL_MAX_LENGTH:
+                raise ValueError(
+                    f"扩展工具请求头 {name} 疑似直接写入密钥；请改用 "
+                    f"{{env:VAR_NAME}} 占位（值长度上限 {_HEADER_LITERAL_MAX_LENGTH}）"
+                )
+        return value
+
+    @field_validator("result_path")
+    @classmethod
+    def _validate_result_path(cls, value: str) -> str:
+        """校验结果点路径形态（空 = 整个 JSON 文档）。
+
+        Args:
+            value: 点路径字符串。
+
+        Returns:
+            校验通过的原值。
+
+        Raises:
+            ValueError: 路径非空且不符合 ``a`` / ``a.b`` 形态。
+        """
+        if not value:
+            return value
+        if _RESULT_PATH_RE.fullmatch(value) is None:
+            raise ValueError("扩展工具 result_path 必须是 a 或 a.b 形态的点路径")
+        return value
+
+
+class ExtensionTool(BaseModel):
+    """单个外部工具配置（LLM function calling schema + HTTP 执行面）。
+
+    Attributes:
+        name: 工具名称（唯一标识；与已注册工具同名时按
+            ``ExtensionsConfig.allow_override_builtin`` 决定是否覆盖）。
+        description: 工具描述（告诉 LLM 何时调用此工具）。
+        parameters: 工具参数 schema（JSON Schema 格式；执行前按此 schema
+            校验参数）。
+        kind: 执行面类型（当前仅 ``http``）。
+        http: HTTP 目标端点（``kind=http`` 时必填）。
+        expose_to_peer: 是否对非 owner 回合（群聊 peer / 平台 untrusted）
+            暴露本工具（默认 False——仅主人交互可触发外部副作用）。
+    """
+
+    name: str = Field(
+        default="",
+        pattern=r"^[A-Za-z0-9_-]{1,64}$",
+        description="工具名称（唯一标识）",
+    )
     description: str = Field(default="", description="工具描述（LLM 调用时机说明）")
     parameters: JsonSchema = Field(
         default_factory=JsonSchema, description="工具参数 schema（JSON Schema）"
     )
+    kind: Literal["http"] = Field(default="http", description="执行面类型（http）")
+    http: HttpToolTargetModel | None = Field(
+        default=None, description="HTTP 目标端点（kind=http 时必填）"
+    )
+    expose_to_peer: bool = Field(
+        default=False, description="是否对非 owner 回合暴露（默认仅 owner）"
+    )
+
+    @model_validator(mode="after")
+    def _require_http_target(self) -> ExtensionTool:
+        """校验 ``kind=http`` 时执行目标已声明。
+
+        Returns:
+            校验通过的实例。
+
+        Raises:
+            ValueError: ``kind=http`` 但缺少 ``http`` 目标。
+        """
+        if self.kind == "http" and self.http is None:
+            raise ValueError("扩展工具 kind=http 时必须声明 http 目标")
+        return self
 
 
 class ExtensionsConfig(BaseModel):
     """extensions_config.json 的运行时表示。
 
     Attributes:
-        tools: LLM 工具列表（每个工具定义一个 function calling schema）。
+        enabled: 外部工具扩展总开关（默认关闭；关闭时零注册）。
+        allow_override_builtin: 是否允许扩展工具覆盖已注册工具（默认
+            关闭——防止误覆盖 ``search_memory`` / ``get_current_time``）。
+        tools: 外部工具列表（每个工具定义 function calling schema + HTTP
+            执行目标）。
     """
 
+    enabled: bool = Field(default=False, description="外部工具扩展总开关")
+    allow_override_builtin: bool = Field(
+        default=False, description="是否允许扩展工具覆盖已注册工具"
+    )
     tools: list[ExtensionTool] = Field(
-        default_factory=list, description="LLM 工具列表（function calling schema）"
+        default_factory=list, description="外部工具列表（function calling schema + HTTP 目标）"
     )
 
     @classmethod
     def default_tools(cls) -> list[dict[str, Any]]:
-        """返回 extensions_config.example.json 中的示例工具定义列表。
+        """返回 extensions_config.example.json 中的真实可执行示例工具列表。
 
         示例数据的单一真相源——根 scripts/generate_examples_json.py 调用
-        此方法生成示例 JSON，保证示例永不与模型契约漂移。
+        此方法生成示例 JSON，保证示例永不与模型契约漂移。示例经
+        :class:`ExtensionTool` 校验后序列化，模型收紧时示例同步失败。
 
         Returns:
             示例工具定义 dict 列表。
         """
-        return [
+        example = ExtensionTool.model_validate(
             {
-                "name": "look_at_image",
-                "description": (
-                    "查看用户发送的图像并描述内容（多模态 look_at 链路的"
-                    "工具面示例；实际视觉调用由 look_at 角色模型承担）。"
-                ),
+                "name": "query_local_calendar",
+                "description": "查询本地日历服务在指定日期的日程事件。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "image_path": {
+                        "date": {
                             "type": "string",
-                            "description": "图像文件路径（会话媒体目录内相对路径）",
+                            "description": "日期（YYYY-MM-DD）",
                         }
                     },
-                    "required": ["image_path"],
+                    "required": ["date"],
                     "additionalProperties": False,
                 },
-            },
-        ]
+                "kind": "http",
+                "http": {
+                    "url": "http://127.0.0.1:8091/calendar/query",
+                    "method": "POST",
+                    "headers": {"X-Auth-Token": "{env:CALENDAR_API_TOKEN}"},
+                    "timeout_ms": 5000,
+                    "response_max_bytes": 65536,
+                    "result_path": "events",
+                },
+            }
+        )
+        return [example.model_dump(exclude_none=True, by_alias=True)]

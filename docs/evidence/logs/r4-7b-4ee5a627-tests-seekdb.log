@@ -1,0 +1,51 @@
+✨ Pixi task (tests-seekdb in default): pytest $PIXI_PROJECT_ROOT/src/tests/integration_seekdb -v --asyncio-mode=auto: (SeekDB 真引擎强制套件（前置：本地 seekdb 容器已启动——docker 命令见上方注释；测试 env 由任务注入）)
+============================= test session starts ==============================
+platform linux -- Python 3.12.16, pytest-9.2.0, pluggy-1.7.0 -- /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/.pixi/envs/default/bin/python3.12
+cachedir: .pytest_cache
+rootdir: /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend
+configfile: pyproject.toml
+plugins: anyio-4.16.0, cov-7.1.0, asyncio-1.4.1.post1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 15 items
+
+src/tests/integration_seekdb/test_authority_engine.py::test_authority_engine_runs_on_seekdb PASSED [  6%]
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_persona_primary_marker_unique PASSED [ 13%]
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_curated_active_marker_composite_unique PASSED [ 20%]
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_chat_message_variant_unique PASSED [ 26%]
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_persona_facts_supersede_takeover_unique PASSED [ 33%]
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_persona_skill_slug_unique PASSED [ 40%]
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_core_memory_block_key_unique PASSED [ 46%]
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_sticker_persona_sha_unique PASSED [ 53%]
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_voiceprint_sample_persona_sender_sha_unique PASSED [ 60%]
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_sticker_conflict_stale_snapshot_retries_to_winner PASSED [ 66%]
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_sticker_conflict_fresh_transaction_resolves_shared_lock_winner PASSED [ 73%]
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_dream_run_single_flight_marker_unique PASSED [ 80%]
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_with_for_update_cross_connection_lock PASSED [ 86%]
+src/tests/integration_seekdb/test_hybrid_search_round_trip.py::test_hybrid_search_round_trip PASSED [ 93%]
+src/tests/integration_seekdb/test_migration_chain.py::test_migration_chain_round_trip PASSED [100%]
+
+=============================== warnings summary ===============================
+src/tests/integration_seekdb/test_authority_engine.py::test_authority_engine_runs_on_seekdb
+  /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/.pixi/envs/default/lib/python3.12/site-packages/aiomysql/cursors.py:239: Warning: Can't drop database 'aac_authority_verify'; database doesn't exist
+    await self._query(query)
+
+src/tests/integration_seekdb/test_authority_engine.py::test_authority_engine_runs_on_seekdb
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_persona_primary_marker_unique
+src/tests/integration_seekdb/test_migration_chain.py::test_migration_chain_round_trip
+src/tests/integration_seekdb/test_migration_chain.py::test_migration_chain_round_trip
+src/tests/integration_seekdb/test_migration_chain.py::test_migration_chain_round_trip
+  /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/.pixi/envs/default/lib/python3.12/site-packages/alembic/config.py:604: DeprecationWarning: No path_separator found in configuration; falling back to legacy splitting on spaces, commas, and colons for prepend_sys_path.  Consider adding path_separator=os to Alembic config.
+    util.warn_deprecated(
+
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_persona_primary_marker_unique
+src/tests/integration_seekdb/test_hybrid_search_round_trip.py::test_hybrid_search_round_trip
+src/tests/integration_seekdb/test_migration_chain.py::test_migration_chain_round_trip
+  /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/.pixi/envs/default/lib/python3.12/site-packages/aiomysql/cursors.py:239: Warning: Can't drop database 'aac_ci_verify'; database doesn't exist
+    await self._query(query)
+
+src/tests/integration_seekdb/test_concurrency_invariants.py::test_with_for_update_cross_connection_lock
+  /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/.pixi/envs/default/lib/python3.12/site-packages/aiomysql/cursors.py:239: Warning: This system variable now is mock not supported
+    await self._query(query)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 15 passed, 10 warnings in 17.99s =======================

@@ -292,3 +292,8 @@ async def test_daily_budget_limit_is_single_source_across_config_and_counters() 
             assert le_values == [DAILY_BUDGET_MAX], (model.__name__, name, le_values)
             checked += 1
     assert checked == 8
+
+
+async def test_llm_endpoint_env_has_no_route_policies_surface() -> None:
+    """env 面不解析 route_policies（结构化路由只在 config.yaml llm 段）。"""
+    assert "route_policies" not in LlmEndpointConfig.model_fields

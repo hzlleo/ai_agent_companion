@@ -1010,6 +1010,7 @@ class ChatService:
         compliance_settings: ComplianceGuardSettings | None = None,
         relationship_thresholds: RelationshipThresholdsModel | None = None,
         episode_sink: EpisodeSinkFace | None = None,
+        owner_only_tools: frozenset[str] | None = None,
     ) -> None:
         """初始化服务。
 
@@ -1060,6 +1061,11 @@ class ChatService:
                 未装配记忆服务的形态行为与既有完全一致；注入后每回合
                 消息落库即写入 kind=chat 情景事件——fire-and-forget 语义
                 与失败吞没见 ``_record_episode``）。
+            owner_only_tools: 仅 owner 回合可见的工具名集合（None = 仅
+                内置自编辑工具；装配层把 ``expose_to_peer=false`` 的扩展
+                工具并入——非 owner 回合按名结构性剔除，且执行面按本轮
+                可执行名集拦截，模型回传面外名也不进执行器）。内置自编辑
+                工具恒在集合内（写入闸不可关闭）。
 
         Raises:
             BusinessException: ``tools`` 与 ``tool_executor`` 未成对注入
@@ -1096,6 +1102,11 @@ class ChatService:
         )
         #: 情景落库面绑定（None = 零情景写入——记忆管道未接线形态）。
         self._episode_sink = episode_sink
+        #: 仅 owner 回合可见的工具名集合（自编辑工具恒在内——扩展工具的
+        #: owner-only 声明由装配层并入；非 owner 回合按名剔除）。
+        self._owner_only_tools = frozenset({CORE_MEMORY_TOOL_NAME}) | (
+            owner_only_tools or frozenset()
+        )
         bound_tools = list(tools) if tools else []
         if bound_tools and tool_executor is None:
             raise BusinessException(
@@ -1614,9 +1625,14 @@ class ChatService:
 
         工具列表按本轮发送者来源分级（**结构性写入闸**）：仅 ``owner``
         回合携带完整工具面；``peer`` / ``untrusted`` 回合从列表里剔除
-        ``edit_core_memory``——群成员的插话不能改写人格的自我模型（模型
-        看不到该工具，无从「忘记不调用」）。剔除后若列表为空，网关请求
-        不携带工具面（与零工具形态同 wire 语义）。
+        ``edit_core_memory``——群成员的插话不能改写人格的自我模型。剔除
+        后若列表为空，网关请求不携带工具面（与零工具形态同 wire 语义）。
+
+        可见面之外还有**执行面拦截**：模型并不保证只回传列表内的工具名
+        （prompt 注入 / 网关补全都可能带回面外名）。非 ``owner`` 回合按
+        ``active_definitions`` 求可执行名集，面外调用不进入执行器，直接
+        归一为与「未注册工具」相同的受控失败——不区分「存在但本轮不可见」
+        与「根本不存在」，隐藏工具名不进入模型上下文。
 
         工具执行期把会话主键绑定到 ``core_memory_session_id_var``（修订行
         的会话归属面），循环结束（含异常路径）复位。
@@ -1644,6 +1660,13 @@ class ChatService:
         active_definitions = self._definitions_for_provenance(
             definitions, sender_provenance
         )
+        # 非 owner 回合的可执行名集（owner 回合 None = 不限制——完整面即
+        # 全部定义；可见面裁剪与本集合同源，执行面不依赖模型自肃）。
+        executable_names: frozenset[str] | None = (
+            None
+            if sender_provenance == MemoryProvenance.OWNER
+            else frozenset(definition.name for definition in active_definitions)
+        )
         loop_messages: list[ChatMessageModel] = list(messages)
         tool_tail: list[ChatMessageModel] = []
         persona_id = str(state.persona_id)
@@ -1670,9 +1693,20 @@ class ChatService:
                 loop_messages.append(assistant_round)
                 tool_tail.append(assistant_round)
                 for call in response.tool_calls:
-                    result = await executor.execute_call(
-                        ToolCallRequestModel(name=call.name, arguments=call.arguments)
-                    )
+                    if executable_names is not None and call.name not in executable_names:
+                        logger.debug(
+                            "工具调用不在本轮可执行面（已拦截，未进执行器）: tool={}",
+                            call.name,
+                        )
+                        result = ToolResultModel(
+                            tool=call.name,
+                            ok=False,
+                            error=f"未注册工具: {call.name}",
+                        )
+                    else:
+                        result = await executor.execute_call(
+                            ToolCallRequestModel(name=call.name, arguments=call.arguments)
+                        )
                     tool_round = ChatMessageModel(
                         role=ChatMessageRole.TOOL,
                         content=_render_tool_result_content(
@@ -1699,26 +1733,31 @@ class ChatService:
         finally:
             core_memory_session_id_var.reset(session_token)
 
-    @staticmethod
     def _definitions_for_provenance(
-        definitions: Sequence[ToolDefinitionModel], sender_provenance: MemoryProvenance
+        self, definitions: Sequence[ToolDefinitionModel], sender_provenance: MemoryProvenance
     ) -> list[ToolDefinitionModel]:
-        """按发送者来源分级裁剪工具列表（自编辑工具的结构性写入闸）。
+        """按发送者来源分级裁剪工具列表（owner-only 工具的结构性写入闸）。
 
         语义（锁定）：``owner`` 回合原样返回；其余分级（群聊 ``peer`` /
-        平台 ``untrusted``）剔除 ``edit_core_memory``——自我模型只能由
-        主人交互触发改写，群成员 / 平台内容只用不能改。
+        平台 ``untrusted``）剔除 :attr:`_owner_only_tools` 中的工具名——
+        内置自编辑工具恒在集合内（自我模型只能由主人交互触发改写），
+        扩展工具的 ``expose_to_peer=false`` 声明由装配层并入同一集合。
 
         Args:
             definitions: 装配期绑定的工具定义列表。
             sender_provenance: 本轮发送者来源分级。
 
         Returns:
-            本轮实际进入 LLM 工具面的定义列表（可能为空）。
+            本轮实际进入 LLM 工具面的定义列表（可能为空）。裁剪只作用于
+            可见面；执行面由 :meth:`_tool_loop` 按同一列表求可执行名集兜底。
         """
         if sender_provenance == MemoryProvenance.OWNER:
             return list(definitions)
-        return [definition for definition in definitions if definition.name != CORE_MEMORY_TOOL_NAME]
+        return [
+            definition
+            for definition in definitions
+            if definition.name not in self._owner_only_tools
+        ]
 
     async def _reply_via_shortcut(
         self,

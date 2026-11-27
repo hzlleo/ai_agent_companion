@@ -41,6 +41,8 @@ __all__ = [
     "GetCurrentTimeArgsModel",
     "SearchMemoryArgsModel",
     "MemorySearchFace",
+    "ExtensionSkippedToolModel",
+    "ExtensionRegistrationReportModel",
 ]
 
 #: 工具执行器契约——参数 dict → 结果 dict（异步；异常由 registry 隔离）。
@@ -62,7 +64,10 @@ class ToolSpecModel(BaseModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    name: str = Field(min_length=1, max_length=64, description="工具名（唯一标识）")
+    name: str = Field(
+        pattern=r"^[A-Za-z0-9_-]{1,64}$",
+        description="工具名（唯一标识）",
+    )
     description: str = Field(default="", description="工具描述（模型调用时机说明）")
     args_schema: ToolParametersSchema = Field(
         default_factory=ToolParametersSchema, description="参数 JSON Schema"
@@ -147,3 +152,39 @@ class MemorySearchFace(Protocol):
             结果 DTO 列表。
         """
         ...
+
+
+class ExtensionSkippedToolModel(BaseModel):
+    """被跳过的外部扩展工具（装配报告条目）。
+
+    Attributes:
+        name: 工具名。
+        reason: 跳过原因（环境变量缺失 / 同名冲突等人读文本）。
+    """
+
+    name: str = Field(description="工具名")
+    reason: str = Field(description="跳过原因（人读文本）")
+
+
+class ExtensionRegistrationReportModel(BaseModel):
+    """外部工具扩展装配报告（注册 / 跳过计数与明细）。
+
+    Attributes:
+        registered: 成功注册的工具名列表（注册序）。
+        skipped: 被跳过的工具与原因列表。
+    """
+
+    registered: list[str] = Field(default_factory=list, description="成功注册的工具名")
+    skipped: list[ExtensionSkippedToolModel] = Field(
+        default_factory=list, description="被跳过的工具与原因"
+    )
+
+    @property
+    def registered_count(self) -> int:
+        """成功注册的工具数。"""
+        return len(self.registered)
+
+    @property
+    def skipped_count(self) -> int:
+        """被跳过的工具数。"""
+        return len(self.skipped)

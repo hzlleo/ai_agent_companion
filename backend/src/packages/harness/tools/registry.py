@@ -200,7 +200,8 @@ class ToolRegistry:
         started_ms = now_ms()
         entry = self._entries.get(name)
         if entry is None:
-            return self._failure(name, started_ms, f"未注册工具: {name}（可用: {self.tool_names}）")
+            logger.debug("未注册工具（可用清单仅排障面，不进模型上下文）: name={}, available={}", name, self.tool_names)
+            return self._failure(name, started_ms, f"未注册工具: {name}")
         args = arguments if arguments is not None else {}
         validated_args = self._validate_args(entry, args)
         if validated_args is None:
@@ -250,7 +251,10 @@ class ToolRegistry:
             return args
         try:
             validated: BaseModel = args_model.model_validate(args)
-        except ValidationError as exc:
+        except (ValidationError, TypeError) as exc:
+            # 约束与值类型不相容（如混合类型 Literal + pattern）时 pydantic
+            # 抛裸 TypeError；args 已由调用方保证是 dict，故此处只可能来自
+            # 约束不兼容——与校验失败同一受控路径。
             logger.warning("工具参数校验失败: tool={}, errors={}", entry.spec.name, str(exc)[:300])
             return None
         return validated.model_dump()

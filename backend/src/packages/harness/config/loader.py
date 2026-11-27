@@ -1,7 +1,8 @@
 """config.yaml + extensions_config.json 运行时加载器（分层加载 + 热重载地基）。
 
 在 app lifespan 启动序列（见 ``app/main.py``）最先调用 ``load_all_config()``，将
-config.yaml 的 ``llm`` 段（模型注册表 / 角色绑定 / 多模态回退链）与
+config.yaml 的 ``llm`` 段（模型注册表 / 角色绑定 / 条件路由策略 /
+多模态回退链）与
 extensions_config.json 的 ``tools`` 加载到进程内运行时状态：
 
     - ``runtime_llm_config``   —— :class:`LlmConfig`（llm 段解析结果）
@@ -39,7 +40,7 @@ import yaml
 from loguru import logger
 from pydantic import ValidationError
 
-from packages.harness.config.model_entry import parse_model_entry
+from packages.harness.config.model_entry import SUPPORTED_MODEL_ROLES, parse_model_entry
 from packages.harness.config.model_resolver import rebuild_model_resolver
 from packages.harness.config.models import (
     ExtensionsConfig,
@@ -50,6 +51,7 @@ from packages.harness.config.models import (
 from packages.harness.config.multimodal_fallback_loader import record_multimodal_fallback
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.logging import setup_logging
+from packages.harness.llm.route_policy_models import RoutePolicyModel
 
 __all__ = [
     "KNOWN_TOP_LEVEL_SECTIONS",
@@ -213,16 +215,56 @@ def load_config_yaml(path: Path | None = None, *, config_dir: Path | None = None
 
     runtime_llm_config = config
     _loaded_config_yaml_path = yaml_path
-    rebuild_model_resolver(config.models, config.role_bindings)
+    _rebuild_runtime_resolver(config)
     record_multimodal_fallback(config.multimodal_fallback)
     logger.info(
-        "config.yaml 已加载: {} 个模型条目, 已绑定角色={}, 回退链(local={}, remote={})",
+        "config.yaml 已加载: {} 个模型条目, 已绑定角色={}, 条件路由策略={}, "
+        "回退链(local={}, remote={})",
         len(config.models),
         sorted(config.role_bindings) or "(按条目声明)",
+        len(config.route_policies),
         config.multimodal_fallback.local.name if config.multimodal_fallback.local else "(无)",
         config.multimodal_fallback.remote.name if config.multimodal_fallback.remote else "(无)",
     )
     return config
+
+
+def _rebuild_runtime_resolver(config: LlmConfig) -> None:
+    """重建全局解析器并把策略角色的显式绑定登记为路由别名。
+
+    注册表五角色经 ``role_bindings`` 正常进入索引；条件路由策略声明的
+    源 / 目标角色不属于五角色面，重建后再按绑定条目登记为路由别名
+    （未知角色告警语义保持——未在策略中声明且未绑定的角色仍被忽略）。
+
+    Args:
+        config: llm 段配置。
+    """
+    supported = {
+        role: entry_name
+        for role, entry_name in config.role_bindings.items()
+        if role in SUPPORTED_MODEL_ROLES
+    }
+    resolver = rebuild_model_resolver(config.models, supported)
+    known_entries = {entry.name for entry in config.models}
+    for role, entry_name in config.role_bindings.items():
+        if role in SUPPORTED_MODEL_ROLES:
+            continue
+        if entry_name not in known_entries:
+            logger.warning(
+                "显式角色绑定指向不存在的条目名，按未绑定处理: role={}, entry={}",
+                role,
+                entry_name,
+            )
+    for policy in config.route_policies:
+        for role in (policy.source_role, policy.target_role):
+            if role in SUPPORTED_MODEL_ROLES:
+                continue
+            bound_entry_name = config.role_bindings.get(role)
+            if bound_entry_name is None:
+                continue
+            entry = resolver.get(bound_entry_name)
+            if entry is not None:
+                resolver.register_route_target(role, entry)
 
 
 def _parse_llm_section(llm_section: dict[str, object]) -> LlmConfig:
@@ -268,10 +310,21 @@ def _parse_llm_section(llm_section: dict[str, object]) -> LlmConfig:
         )
     fallback = MultimodalFallbackConfig.model_validate(raw_fallback)
 
+    raw_policies = llm_section.get("route_policies", [])
+    if raw_policies is None:
+        raw_policies = []
+    if not isinstance(raw_policies, list):
+        raise BusinessException(
+            code=ErrorCode.CONFIG_INVALID,
+            details={"reason": "llm.route_policies 必须是列表"},
+        )
+    policies = [RoutePolicyModel.model_validate(item) for item in raw_policies]
+
     return LlmConfig(
         models=models,
         role_bindings=bindings,
         multimodal_fallback=fallback,
+        route_policies=policies,
     )
 
 
@@ -318,7 +371,14 @@ def load_extensions_config(
         raise _wrap_config_invalid(str(json_path), exc) from exc
 
     extensions_config = config
-    logger.info("extensions_config.json 已加载: {} 个工具配置", len(config.tools))
+    if config.enabled and config.tools:
+        logger.info("extensions_config.json 已加载: {} 个工具配置", len(config.tools))
+    else:
+        logger.debug(
+            "extensions_config.json 已加载（未启用外部工具）: enabled={}, tools={}",
+            config.enabled,
+            len(config.tools),
+        )
     return config
 
 
@@ -385,7 +445,7 @@ def apply_llm_config_to_runtime(config: LlmConfig) -> None:
     """
     global runtime_llm_config
     runtime_llm_config = config
-    rebuild_model_resolver(config.models, config.role_bindings)
+    _rebuild_runtime_resolver(config)
     record_multimodal_fallback(config.multimodal_fallback)
 
 

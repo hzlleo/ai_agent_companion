@@ -466,3 +466,31 @@ symbol = "packages.harness.channels.wechat_gui.wechat_gui_adapter:WechatGuiChann
 tests = [
     "tests/unit/test_wechat_gui_adapter.py::test_send_after_title_verification",
 ]
+
+[[probes]]
+name = "extension-tools-build-removal"
+symbol = "packages.harness.tools.extension_tools:build_extension_tool"
+tests = [
+    "tests/unit/test_extension_tools.py::test_post_success_extracts_result_path_and_wires_timeout",
+]
+
+[[probes]]
+name = "extension-registry-removal"
+symbol = "packages.harness.tools.extension_registry:register_extension_tools"
+tests = [
+    "tests/unit/test_extension_registry.py::test_normal_registration_and_execution",
+]
+
+[[probes]]
+name = "route-policy-evaluation-removal"
+symbol = "packages.harness.llm.route_policy:evaluate_route"
+tests = [
+    "tests/unit/test_llm_route_policy.py::test_no_policy_and_source_mismatch_are_direct",
+]
+
+[[probes]]
+name = "route-policy-model-removal"
+symbol = "packages.harness.llm.route_policy_models:INTIMATE_BUILTIN_POLICY_NAME"
+tests = [
+    "tests/unit/test_llm_route_policy.py::test_builtin_translation_attributes",
+]

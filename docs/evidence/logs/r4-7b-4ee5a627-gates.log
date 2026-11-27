@@ -1,0 +1,268 @@
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (gates): cd backend && pixi run comment-gates && pixi run sync-test-ratchet && pixi run noqa-freeze && pixi run conftest-env && pixi run sandbox-drift && pixi run red-probe-gate && pixi run docs-truth && pixi run doc-counts && pixi run assertion-freeze && pixi run surface-check && pixi run bench-core --self-check && pixi run bench-core --gate && pixi run api-smoke --self-check && pixi run prose-pin: (工程门禁集（注释门 / 同步测试棘轮 / noqa 冻结 / conftest env 硬覆盖 / 沙盒契约漂移 / 红探针（含冻结数量棘轮） / 文档真相 / 文档数字真相 / 断言棘轮 / 导出面 / 性能基线自检与门禁 / prose-pin 棘轮）)
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (comment-gates in default): python ../scripts/check_chinese_comments.py: (中文注释门禁（docstring 存在性 + 中文；Google 段落缺口以 hints 报告）)
+
+[check_chinese_comments] files=399 modules=288 classes=772 functions=1255 violations=0 hints=24 skips=139
+[check_chinese_comments] skips（启发式未强制，不计违规）:
+  backend/src/app/main.py: `lifespan` 生成器函数，Returns 检查跳过（应记 Yields）
+  backend/src/packages/harness/channels/channel_service.py: `active_channels` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/channel_service.py: `session_count` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/channel_service.py: `flow_state_count` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/channel_service.py: `synthetic_skip_count` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/channel_service.py: `no_user_text_skip_count` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/douyin/douyin_client.py: `chat_url` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/douyin/douyin_runner.py: `ids` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/douyin/douyin_runner.py: `size` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/douyin/douyin_runner.py: `dedup_size` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/douyin/douyin_runner.py: `consecutive_failures` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/qq/qq_adapter.py: `client` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/qq/qq_client.py: `has_token` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/qq/qq_models.py: `is_success` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/qq/qq_runner.py: `dropped_inbound` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/qq/qq_runner.py: `pending_inbound` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/qq/qq_runner.py: `stopping` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/sms_forwarder/sms_adapter.py: `dropped_outbound` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/sms_forwarder/sms_runner.py: `dropped_inbound` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/sms_forwarder/sms_runner.py: `pending_inbound` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/sms_forwarder/sms_runner.py: `stopping` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/telegram/tg_runner.py: `stop_requested` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/telegram/tg_runner.py: `offset` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_client.py: `has_token` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_client.py: `base_url` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_models.py: `chat_id` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_models.py: `contacts` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_runner.py: `watermark_targets` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_runner.py: `consecutive_failures` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_runner.py: `title_mismatch_count` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_runner.py: `disabled_targets` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_runner.py: `vlm_skipped_count` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_runner.py: `delivery_failure_count` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_runner.py: `poll_count` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_runner.py: `targets` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_watermark.py: `retention` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_watermark.py: `tracked_targets` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wecom/wecom_client.py: `state` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wecom/wecom_client.py: `secret_env` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wecom/wecom_client.py: `bot_id` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wecom/wecom_client.py: `endpoint` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wecom/wecom_client.py: `reconnect_attempt` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wecom/wecom_client.py: `stop_requested` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wecom/wecom_models.py: `is_success` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wecom/wecom_runner.py: `client` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wecom/wecom_runner.py: `dropped_inbound` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wecom/wecom_runner.py: `pending_inbound` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/wecom/wecom_runner.py: `stop_requested` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/whatsapp/whatsapp_adapter.py: `client` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/whatsapp/whatsapp_adapter.py: `service_window` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/whatsapp/whatsapp_client.py: `has_access_token` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/whatsapp/whatsapp_client.py: `http_client` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/whatsapp/whatsapp_runner.py: `service_window` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/whatsapp/whatsapp_runner.py: `dropped_inbound` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/whatsapp/whatsapp_runner.py: `status_events_ignored` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/whatsapp/whatsapp_runner.py: `pending_inbound` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/channels/whatsapp/whatsapp_runner.py: `stopping` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/chat/service.py: `stream_reply` 生成器函数，Returns 检查跳过（应记 Yields）
+  backend/src/packages/harness/config/model_resolver.py: `models` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/config/model_resolver.py: `bound_roles` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/config/models.py: `async_sqlalchemy_url` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/config/wizard_fields.py: `is_sensitive` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/config/wizard_fields.py: `field_type` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/config/wizard_fields.py: `label` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/core/background_tasks.py: `tasks` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/core/background_tasks.py: `is_shutting_down` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/core/background_tasks.py: `started` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/core/background_tasks.py: `is_shutting_down` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/core/cache.py: `max_entries` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/core/context.py: `bind_context` 生成器函数，Returns 检查跳过（应记 Yields）
+  backend/src/packages/harness/core/errors.py: `http_status` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/database/session.py: `session_scope` 生成器函数，Returns 检查跳过（应记 Yields）
+  backend/src/packages/harness/database/session.py: `get_async_db` 生成器函数，Returns 检查跳过（应记 Yields）
+  backend/src/packages/harness/emotion/service.py: `enabled` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/emotion/service.py: `config` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/emotion/service.py: `dimension_labels` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/llm/client.py: `model` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/llm/client.py: `stream` 生成器函数，Returns 检查跳过（应记 Yields）
+  backend/src/packages/harness/llm/gateway.py: `route_policies` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/llm/gateway.py: `stream_by_role` 生成器函数，Returns 检查跳过（应记 Yields）
+  backend/src/packages/harness/llm/intimate_models.py: `is_configured` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/llm/intimate_models.py: `missing_env_keys` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/memory/seekdb_store.py: `supports_vectors` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/memory/sqlite_store.py: `supports_vectors` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/memory/store.py: `supports_vectors` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/persona/orm.py: `is_primary` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/persona/service.py: `bind_persona_context` 生成器函数，Returns 检查跳过（应记 Yields）
+  backend/src/packages/harness/pools/llm_pool.py: `state` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/pools/llm_pool.py: `is_open` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/pools/llm_pool.py: `cooldown_remaining_ms` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/pools/llm_pool.py: `consecutive_failures` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/pools/llm_pool.py: `entry_gate` 生成器函数，Returns 检查跳过（应记 Yields）
+  backend/src/packages/harness/pools/manager.py: `started` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/pools/seekdb_compat.py: `description` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/rhythm/service.py: `effective` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/scheduler.py: `started` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/scheduler.py: `job_names` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/tools/browser.py: `has_token` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/tools/browser.py: `base_url` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/tools/browser_models.py: `has_token` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/tools/registry.py: `tool_names` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/tools/sandbox.py: `has_token` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/tools/sandbox.py: `base_url` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/tools/sandbox_models.py: `has_token` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/tools/tool_models.py: `registered_count` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/tools/tool_models.py: `skipped_count` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/asr_stream_client.py: `frames_dropped` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/asr_stream_client.py: `frames_dropped` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/realtime_audio.py: `iter_byte_chunks` 生成器函数，Returns 检查跳过（应记 Yields）
+  backend/src/packages/harness/voice/realtime_sentence.py: `state` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/realtime_session.py: `session_id` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/realtime_session.py: `phase` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/realtime_session.py: `metrics` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/realtime_session.py: `active_task_count` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/realtime_session.py: `task_failure_count` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/realtime_state.py: `phase` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/realtime_vad.py: `speaking` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/realtime_vad.py: `voiced_ms` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/stream_models.py: `last_close_code` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/stream_transport.py: `last_close_code` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/tts_stream_client.py: `sample_rate_hz` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/tts_stream_client.py: `sample_rate_hz` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/tts_stream_client.py: `synthesize_stream` 生成器函数，Returns 检查跳过（应记 Yields）
+  backend/src/packages/harness/voice/voice_service.py: `streaming_asr_available` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/voice_service.py: `streaming_tts_available` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/voice_service.py: `streaming_tts_sample_rate_hz` property/overload 装饰器，段落检查跳过
+  backend/src/packages/harness/voice/voice_service.py: `synthesize_stream` 生成器函数，Returns 检查跳过（应记 Yields）
+  backend/src/packages/harness/voice/voiceprint_models.py: `active` property/overload 装饰器，段落检查跳过
+  docker/browser-sidecar/src/browser_sidecar/browser.py: `url` property/overload 装饰器，段落检查跳过
+  docker/browser-sidecar/src/browser_sidecar/browser.py: `url` property/overload 装饰器，段落检查跳过
+  docker/browser-sidecar/src/browser_sidecar/browser.py: `profile` property/overload 装饰器，段落检查跳过
+  docker/browser-sidecar/src/browser_sidecar/runtime.py: `tool_names` property/overload 装饰器，段落检查跳过
+  docker/browser-sidecar/server.py: `create_app` 生成器函数，Returns 检查跳过（应记 Yields）
+  scripts/red_probe.py: `symbol` property/overload 装饰器，段落检查跳过
+  scripts/red_probe.py: `went_red` property/overload 装饰器，段落检查跳过
+  docker/tool-sandbox-agent/src/tool_sandbox/runtime.py: `tool_names` property/overload 装饰器，段落检查跳过
+  docker/wechat-gui/src/wechat_gui_poc/uinputd.py: `pair_info` property/overload 装饰器，段落检查跳过
+  docker/wechat-gui/src/wechat_gui_poc/wire_models.py: `stdout_text` property/overload 装饰器，段落检查跳过
+  docker/wechat-gui/src/wechat_gui_poc/wire_models.py: `stderr_text` property/overload 装饰器，段落检查跳过
+[check_chinese_comments] hints（Google 段落缺口，报告不拦截）:
+  backend/src/packages/harness/channels/douyin/douyin_runner.py:212: `run` 函数体含 raise 但缺 Raises 段
+  backend/src/packages/harness/channels/wechat_gui/wechat_gui_runner.py:211: `run` 函数体含 raise 但缺 Raises 段
+  backend/src/packages/harness/chat/cli.py:272: `run_chat_cli` 函数体含 raise 但缺 Raises 段
+  backend/src/packages/harness/chat/cli.py:493: `main` 函数体含 raise 但缺 Raises 段
+  backend/src/packages/harness/duty/duty_service.py:153: `run_duty_round` 函数体含 raise 但缺 Raises 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:398: `title` 返回注解非 None 但缺 Returns 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:402: `inner_text` 返回注解非 None 但缺 Returns 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:423: `content_size` 返回注解非 None 但缺 Returns 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:427: `viewport_size` 返回注解非 None 但缺 Returns 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:431: `screenshot` 返回注解非 None 但缺 Returns 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:459: `pages` 返回注解非 None 但缺 Returns 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:463: `new_page` 返回注解非 None 但缺 Returns 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:497: `goto` 参数 2 个但缺 Args 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:501: `title` 返回注解非 None 但缺 Returns 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:505: `inner_text` 返回注解非 None 但缺 Returns 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:513: `fill` 参数 2 个但缺 Args 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:517: `content_size` 返回注解非 None 但缺 Returns 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:525: `viewport_size` 返回注解非 None 但缺 Returns 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:532: `screenshot` 参数 2 个但缺 Args 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:532: `screenshot` 返回注解非 None 但缺 Returns 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:593: `pages` 返回注解非 None 但缺 Returns 段
+  docker/browser-sidecar/src/browser_sidecar/browser.py:597: `new_page` 返回注解非 None 但缺 Returns 段
+  docker/browser-sidecar/server.py:111: `resolve_bind_address` 函数体含 raise 但缺 Raises 段
+  docker/tool-sandbox-agent/server.py:104: `resolve_bind_address` 函数体含 raise 但缺 Raises 段
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (sync-test-ratchet in default): python ../scripts/count_sync_tests.py --enforce: (同步测试只降不升棘轮校验（对照 .sync_test_baseline.json，零容忍）)
+tree                       sync-tests  delta-vs-baseline
+--------------------------------------------------------
+backend                             0  +0
+docker/browser-sidecar              0  +0
+docker/tool-sandbox-agent           0  +0
+docker/wechat-gui                   0  +0
+[count_sync_tests] 棘轮通过（无回升）
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (noqa-freeze in default): python ../scripts/noqa_freeze_check.py: (noqa / type:ignore 增量冻结门禁（backend 基线 0，只减不增）)
+== noqa / type:ignore 冻结门禁 ==
+ok   backend: 0 ≤ 基线 0
+ok   tool-sandbox: 0 ≤ 基线 0
+ok   browser-sidecar: 0 ≤ 基线 0
+ok   wechat-gui: 0 ≤ 基线 0
+ok   scripts: 7 ≤ 基线 7
+ok   frontend-eslint-disable: 0 ≤ 基线 0
+
+结果：PASS（全部不超基线）
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (conftest-env in default): python ../scripts/conftest_env_check.py: (conftest env 硬覆盖完整性门（生成器登记表全量键 vs conftest 硬赋值）)
+[conftest_env_check] 登记表 env 键 239；conftest 硬覆盖 239；允许豁免 0（清单 0 条）
+[conftest_env_check] 门禁通过（登记表 env 键均被 conftest 硬覆盖或豁免）
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (sandbox-drift in default): python ../scripts/check_sandbox_dtos_drift.py: (沙盒 wire 契约漂移门禁（backend ↔ 沙盒树定义块文本比对）)
+[check_sandbox_dtos_drift] 全部 53 项契约一致（backend ↔ 沙盒 / 浏览器 sidecar 树）
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (red-probe-gate in default): python ../scripts/red_probe.py --gate: (红探针门禁（backend/src 新源文件必须被 probe 覆盖或在冻结基线）)
+[red_probe] 源文件 227 个；冻结基线 190 个；探针 41 条（覆盖 40 个文件）
+[red_probe] grandfathered 棘轮: 190 条 <= 基线 190
+[red_probe] 门禁通过（全部源文件在冻结基线或探针覆盖内）
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (docs-truth in default): python ../scripts/generate_examples_env.py --check-docs && python ../scripts/todo_freeze_check.py --enforce: (文档真相门（env 分节表漂移 + TODO 类标记回升）)
+[generate_examples_env] env 分节表与配置模型一致
+[todo_freeze_check] 文档 33 份；命中文件 4 份；总数 7
+[todo_freeze_check] 基线总数 7
+[todo_freeze_check] 棘轮通过（无回升）
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (doc-counts in default): python ../scripts/check_doc_counts.py: (文档数字真相门（规则 / 红队 / 配置分节计数对照文档字面）)
+2026-11-27 12:57:42.244 | DEBUG    | packages.harness.database.units.engine_holder:__setattr__:69 - EngineHolder 写入: async_engine=None
+2026-11-27 12:57:42.245 | DEBUG    | packages.harness.database.units.engine_holder:__setattr__:69 - EngineHolder 写入: session_factory=None
+2026-11-27 12:57:42.245 | DEBUG    | packages.harness.database.units.engine_holder:__setattr__:69 - EngineHolder 写入: owner_token=None
+2026-11-27 12:57:42.358 | INFO     | packages.harness.config.model_resolver:rebuild:121 - 模型解析器索引已重建: models=0, roles=[]
+[check_doc_counts] 文档数字与措辞一致：13 项（规则 29 条 / 红队 55 条 / 配置分节 32 项 / 措辞扫描 879 文件）
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (assertion-freeze in default): python ../scripts/assertion_freeze.py --enforce: (单元测试断言侵蚀棘轮（计数下降即红）)
+[assertion_freeze] 文件 240 份；asserts=10049；raises=776
+[assertion_freeze] 棘轮通过（无计数下降、无基线内外文件缺口）
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (surface-check in default): python ../scripts/surface_check.py --enforce: (HTTP wire 模型导出面完整性门（含豁免规模棘轮与 .env.example 键面复核）)
+[surface_check] app/api 引用模型 104 个；已登记 62 个；允许豁免 42 个（清单 42 条 / max_entries=42）
+[surface_check] env 键面一致（827 行）
+[surface_check] 门禁通过（导出面、豁免规模与 env 键面完整）
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (bench-core in default): python ../scripts/bench_core.py --self-check: (纯本地微基准（默认报告；--gate 门禁 / --update 重建基线 / --self-check 键集自检）)
+[bench_core] 自检通过：注册表 6 项与基线键集一致（max_ratio=10）
+[bench_core] 完成模式=self-check 用例=6
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (bench-core in default): python ../scripts/bench_core.py --gate: (纯本地微基准（默认报告；--gate 门禁 / --update 重建基线 / --self-check 键集自检）)
+[bench_core] 本机实测（同机复跑为准，跨机绝对耗时不可比）
+用例                                                      median µs       p95 µs     基线 median µs       比值
+--------------------------------------------------------------------------------------------------------
+flow_gate.evaluate_flow_gate                                0.975        1.000            1.659     0.59
+persona.build_relationship_summary.200_facts              262.791      400.385          356.228     0.74
+persona.build_relationship_summary.empty_facts              2.282        2.510            2.943     0.78
+voice.split_assistant_sentences.long_text                 162.630      225.127          221.407     0.73
+voice.energy_vad.feed_60_frames                           544.206      776.127          720.510     0.76
+chat.render_relationship_block.synthetic                    2.654        2.721            3.482     0.76
+[bench_core] 门禁通过（6 项均在 median × 10 内）
+[bench_core] 完成模式=gate 用例=6 结果=PASS
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (api-smoke in default): python ../scripts/api_smoke.py --self-check: (ASGI 进程内只读端点冒烟（默认报告；--gate 门禁 / --update 重建基线 / --self-check 键集自检）)
+[api_smoke] 自检通过：端点注册表 4 项与基线键集一致（max_ratio=10）
+[api_smoke] 冒烟完成 端点=4 模式=self-check
+ WARN Using local manifest /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/backend/pixi.toml rather than /home/hzlleo/Documents/WorkRelated/Projects/rsi_report/ai_agent_companion/pixi.toml from environment variable `PIXI_WORKSPACE_MANIFEST`
+✨ Pixi task (prose-pin in default): python ../scripts/prose_pin_check.py --gate: (prose-pin 报告 + prose 计数棘轮门禁（只降不升）)
+[prose_pin_check] 测试文件 245 份；含断言用例 3096 个；命中实现源字面量 569 个
+[prose_pin_check] 疑似 prose pin（prose 桶）76 个；分桶 prose=76, field_or_code=493
+[prose_pin_check] 纯结构断言用例 220 个（占比 7.1%——越高越不依赖文案）
+  - [prose] x8 '以后都用简体中文' @ backend/src/tests/unit/test_directives_api.py:88
+  - [prose] x7 '不是合法 JSON' @ backend/src/tests/unit/test_dream_api.py:233
+  - [prose] x6 'prompt 模板' @ backend/src/tests/unit/test_chat_prompts.py:137
+  - [prose] x4 '【回复格式协议】' @ backend/src/tests/unit/test_chat_compliance.py:172
+  - [prose] x4 '必须是 JSON 数组' @ backend/src/tests/unit/test_dreaming.py:393
+  - [prose] x3 'QQ 入站队列观测' @ backend/src/tests/unit/test_qq_runner.py:237
+  - [prose] x3 'SmsForwarder 入站队列观测' @ backend/src/tests/unit/test_sms_forwarder_runner.py:292
+  - [prose] x3 'WhatsApp 入站队列已满' @ backend/src/tests/unit/test_whatsapp_runner.py:166
+  - [prose] x3 'wire 契约破坏' @ backend/src/tests/unit/test_tools_browser_sidecar_client.py:194
+  - [prose] x3 '【人物事实提取任务】' @ backend/src/tests/unit/test_dreaming_prompts.py:310
+  - [prose] x3 '【技能挖矿任务】' @ backend/src/tests/unit/test_dreaming_prompts.py:338
+  - [prose] x2 'LLM 传输失败' @ backend/src/tests/unit/test_llm_client.py:486
+  - [prose] x2 'ON DELETE CASCADE' @ backend/src/tests/unit/test_migration_chat_message_variants.py:76
+  - [prose] x2 "SELECT DBMS_HYBRID_SEARCH.SEARCH('ff_memory_index', %s)" @ backend/src/tests/unit/test_memory_retrieval_sql.py:271
+  - [prose] x2 'WhatsApp 入站队列观测' @ backend/src/tests/unit/test_whatsapp_runner.py:391
+[prose_pin_check] 棘轮通过: prose 计数 76 <= 基线 76
+[prose_pin_check] 报告完成（模式=gate；exit 0）

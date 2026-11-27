@@ -2,9 +2,9 @@
   "version": 1,
   "note": "单元测试断言基线——计数只降不升；再生成: python scripts/assertion_freeze.py --update",
   "totals": {
-    "asserts": 9832,
-    "raises": 754,
-    "files": 235
+    "asserts": 10155,
+    "raises": 782,
+    "files": 240
   },
   "files": {
     "backend/src/tests/unit/test_admin_auth.py": {
@@ -198,9 +198,9 @@
       "digest": "b32b45c87af2bd2250269c0518a89492925640f34a027dc4e3f8cc47fbc9f222"
     },
     "backend/src/tests/unit/test_chat_core_memory.py": {
-      "asserts": 27,
+      "asserts": 49,
       "raises": 0,
-      "digest": "d6655268dcba929ad1600695a941bdbe0c2318393100a323d452f727f8b66f2a"
+      "digest": "e9c901d83680358007801d3dcee0857e511586e67eeff5cbc6de16594d17e086"
     },
     "backend/src/tests/unit/test_chat_directives.py": {
       "asserts": 20,
@@ -278,9 +278,9 @@
       "digest": "3a36ece6799e4e934e9300d6d47eea324e2744e5a089a5362f0a7633254f8e92"
     },
     "backend/src/tests/unit/test_config_examples_generation.py": {
-      "asserts": 16,
+      "asserts": 18,
       "raises": 0,
-      "digest": "8e776f98825c8154b09f4d697e6295a574817f45d033b1cd4eb6d987fe2bbc38"
+      "digest": "0d6c7c3199d2775e1ce74e9e0e33e1e2696382ae6d92f0544414e65ac1f08ce7"
     },
     "backend/src/tests/unit/test_config_llm_wire.py": {
       "asserts": 14,
@@ -288,9 +288,9 @@
       "digest": "613fbb0755cc9043a843c6d7769cbca3f9eaf47541a4f432c6f3f1d35e81533f"
     },
     "backend/src/tests/unit/test_config_loader.py": {
-      "asserts": 39,
+      "asserts": 41,
       "raises": 8,
-      "digest": "8c8d4127c26b7376cd591c4e7cba32830cdc5de0d47c3d73c7d505c6d900368d"
+      "digest": "23f6ec4010fe99b2d8735e3eca640c54a6dfaa766f1b858fd8170be41727f037"
     },
     "backend/src/tests/unit/test_config_model_entry.py": {
       "asserts": 31,
@@ -313,9 +313,9 @@
       "digest": "96c51f30e3a15373bb64aefcc7089d4b788b58d00e0f3929feb959f161449f21"
     },
     "backend/src/tests/unit/test_config_settings.py": {
-      "asserts": 86,
+      "asserts": 87,
       "raises": 6,
-      "digest": "4e93061979b5a02272b0f923405f24190f6c559bf86a2bd5c716d50b6fbca551"
+      "digest": "d23bedb4a5c111be908f5aa8a5b4069aba0c85830c329fd7718e6065e28ba0b0"
     },
     "backend/src/tests/unit/test_config_wizard.py": {
       "asserts": 134,
@@ -482,6 +482,26 @@
       "raises": 2,
       "digest": "4d419b9702786b6964c80a6e6d7a263024d65d6391b847ba68c74e51f6acf592"
     },
+    "backend/src/tests/unit/test_extension_app_lifespan.py": {
+      "asserts": 19,
+      "raises": 0,
+      "digest": "3bb4bb0f518d0cc829836624b8a109be5b15df1fb9a0c865e3aff04cbc02687e"
+    },
+    "backend/src/tests/unit/test_extension_models.py": {
+      "asserts": 30,
+      "raises": 15,
+      "digest": "5cb2dee8bbfda4c02616cfbb939036318157a048d94c3df6ace36e2835c410fd"
+    },
+    "backend/src/tests/unit/test_extension_registry.py": {
+      "asserts": 36,
+      "raises": 0,
+      "digest": "6c1dbdc07a59bbf8c81554ba32ff8c4ee70d37d8d31634b00dc3b2c1b7f10093"
+    },
+    "backend/src/tests/unit/test_extension_tools.py": {
+      "asserts": 67,
+      "raises": 2,
+      "digest": "217700d840d25dc9dd70eb80c5c5f9205e807f676e457b5133e6d2a11e21de6e"
+    },
     "backend/src/tests/unit/test_facts_api.py": {
       "asserts": 37,
       "raises": 0,
@@ -548,9 +568,9 @@
       "digest": "6df6ae2212cf6b785f63948a8e8109cbba0fdd33e4752f25e29c8ec8126c62c6"
     },
     "backend/src/tests/unit/test_llm_intimate_channel.py": {
-      "asserts": 75,
+      "asserts": 84,
       "raises": 6,
-      "digest": "a7b0aeba1ce5ac1ea60b72da134b9803541928a757c8751957f0614e3cd51242"
+      "digest": "91dea2742dd93cd22ed2fbd8008c551d59d9fed111d452da17520fb1b46df1d6"
     },
     "backend/src/tests/unit/test_llm_logprobs.py": {
       "asserts": 74,
@@ -561,6 +581,11 @@
       "asserts": 25,
       "raises": 4,
       "digest": "f35a4042edd6ae169a20703e15497413fbf74009dd84f8830641e3718356c76d"
+    },
+    "backend/src/tests/unit/test_llm_route_policy.py": {
+      "asserts": 107,
+      "raises": 10,
+      "digest": "2689643c8483ac69d69a7a0ab1f9fc15dded166c775351a3f81fcc459057c589"
     },
     "backend/src/tests/unit/test_llm_tool_calling.py": {
       "asserts": 38,
@@ -703,9 +728,9 @@
       "digest": "5e8f2a21835fa50656e3bf54af6889610c4f4cd0533359c8943a3744b62a713b"
     },
     "backend/src/tests/unit/test_models_api.py": {
-      "asserts": 122,
-      "raises": 0,
-      "digest": "bf0d62cde557daf91ddf3523eea3d58f11b34365c42c8efd07ff8da8a97252eb"
+      "asserts": 128,
+      "raises": 1,
+      "digest": "f2fa2b6874c20667569068d00030aed320259ca5f85072c4553dd793c8cc7142"
     },
     "backend/src/tests/unit/test_outbound_guard.py": {
       "asserts": 25,
@@ -1003,9 +1028,9 @@
       "digest": "b372fae5c69e01c95d42f9117e731bb75a418e14931581e8fa6ab065975533a4"
     },
     "backend/src/tests/unit/test_tools_registry.py": {
-      "asserts": 59,
+      "asserts": 60,
       "raises": 0,
-      "digest": "a8a5db989b321785ff9686fae3d9f45078d60c2bff781212d3d0a054d21d98d9"
+      "digest": "aff3688683c4b4aa909c9aba24ea6694effcd9c3e8d526fabab5fad3a222c731"
     },
     "backend/src/tests/unit/test_tools_sandbox_bili.py": {
       "asserts": 41,
@@ -1123,14 +1148,14 @@
       "digest": "26d131f48d5f27645337dacd20a021f7d928df8d0386ed52ea26923c527ef236"
     },
     "backend/src/tests/unit/test_wechat_gui_runner.py": {
-      "asserts": 38,
+      "asserts": 56,
       "raises": 3,
-      "digest": "3062186c27f99db8b078ab08408ab12afa30ae3b7ccfc1c0e80ada1438bfcdf4"
+      "digest": "8ef670cdebe763de7cc42bb2fd0f31b275f60f7ef225ef4538febc35fdd3da96"
     },
     "backend/src/tests/unit/test_wechat_gui_watermark.py": {
-      "asserts": 20,
+      "asserts": 23,
       "raises": 1,
-      "digest": "63e8799c9fd92d9569e1c77b17dbc69f791e7f14673537ac4c15eb420aa6e514"
+      "digest": "73dedfb91de5c76dcd9eec2413afcb071afd86ba5d6a262dac64bcf475514e70"
     },
     "backend/src/tests/unit/test_wechat_gui_window_mutex.py": {
       "asserts": 6,

@@ -96,12 +96,12 @@
 | R3-2 限流与背压 | QQ 入站有界 / 实时语音 TTS 队列与会话帽 / LLM 日预算闸 / 多 worker 语义 / 最小观测面 / 前端 Node 护栏与构建体积基线（P1×1 + P2×7；复审 6×P2 闭环） | ✅ merged（PR #36；证据 `fe261c9a`；PR body 引用的 `0276c1a5` 为首提交树证据，终态以 `fe261c9a` 为准） |
 | R3-3 性能基线 | `bench_core.py` 6 项纯函数微基准 + `api_smoke.py` 4 端点进程内冒烟 + 门禁链落位（复审 4×P2 闭环；终局复核 7×P2 闭环） | ✅ merged（PR #37 → main `3f313a6`；评审 head `66b14b3`，终态含 `ecb7714`/`ee9381a`；canonical 证据 `16b07c7c`，历史 `bc71f261`） |
 
-| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（R4-6a PoC 门制品 + 本机栈实测，已合并 PR #45 → `b065bf4`；R4-6b 通道本体本分支实现态；Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 已合并（PR #44 → main `215317c`）；R4-6a 已合并（PR #45 → main `b065bf4`）；R4-6b 本分支（`feat/r4-6b-wechat-gui-channel`）工作区（沙盒 agent + 后端通道实现态；Live 待统一阶段）；R4-1 / R4-2 / R4-3 已合并；R4-7 / R4-8 待开工 |
+| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（R4-6a PoC 门制品 + 本机栈实测，已合并 PR #45 → `b065bf4`；R4-6b 通道本体，已合并 PR #46 → `232e38e`；Live 推迟）；R4-7 平台化扩展（R4-7a 外部 HTTP 工具扩展注册；R4-7b 条件路由策略 + 内置亲密策略）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 已合并（PR #44 → main `215317c`）；R4-6a 已合并（PR #45 → main `b065bf4`）；R4-6b 已合并（PR #46 → main `232e38e`）；R4-7a 本分支（`feat/r4-7-platform`）工作区（外部 HTTP 工具扩展注册）；R4-7b 本分支工作区（条件路由策略 + 内置亲密策略）；R4-1 / R4-2 / R4-3 已合并；R4-8 待开工 |
 
 **当前分支状态**：
-- main：`b065bf4`（PR#34–#45 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
+- main：`232e38e`（PR#34–#46 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
 - `feat/r3-perf`：R3-3 性能基线，已合并（PR #37），可删除。
-- R4：R4-4 已合并（PR #43 → `f8eb398`）；R4-5 已合并（PR #44 → `215317c`）；R4-6a 已合并（PR #45 → `b065bf4`）；R4-6b（通道本体）在当前分支 `feat/r4-6b-wechat-gui-channel` 工作区；R4-1 / R4-2 / R4-3 已合并；R4-7 / R4-8 待排期。
+- R4：R4-4 已合并（PR #43 → `f8eb398`）；R4-5 已合并（PR #44 → `215317c`）；R4-6a 已合并（PR #45 → `b065bf4`）；R4-6b 已合并（PR #46 → `232e38e`）；R4-7a（外部 HTTP 工具扩展注册）与 R4-7b（条件路由策略 + 内置亲密策略）在当前分支 `feat/r4-7-platform` 工作区；R4-1 / R4-2 / R4-3 已合并；R4-8 待排期。
 - 历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入 main，可删除；工作区 clean。
 
 ## 4. 全部拍板记录（原文语义）
@@ -2746,6 +2746,389 @@ Live 前风险（Live 阶段验证）：`open_chat` 在 Ctrl+F 后立即粘贴�
 **修复 C 最终树验证（`162f863c` 树，提交 `e1db542`）**：`cd backend && VITEST_MAX_WORKERS=6 pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-6b-fix` → 0，10/10 PASS：tests-all=3555 / coverage-gates=24 组 / lint / typecheck=224 / gates / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build；证据 `docs/evidence/r4-6b-fix-162f863c.json`（sha8=`162f863c`，779 文件）；沙盒 151 passed / 92.74%；同步测试棘轮通过；断言基线未变（新增断言不拦截）。上一行「最终树验证」记录的是修复 C 之前的 `36e3449d` 树，现为历史。
 
 **修复 D 最终树验证（`9f45be4d` 树）**：同上命令 → 0，10/10 PASS：tests-all=3557 / coverage-gates=24 组 / lint / typecheck=224 / gates / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build；证据 `docs/evidence/r4-6b-fix-9f45be4d.json`（sha8=`9f45be4d`，779 文件）。修复 D = Oracle 三审的 2×P2：水位代价文档按只读探针实测改写（仅整段同指纹才吞；上滚后滚回仍有重叠时屏底已投递消息会再次入站）并补用例 `test_scroll_up_then_down_redelivers_scrolled_off_tail`；「修复 C」改动面条目与 `fail` 语义变更入台账；停机汇总日志加 `disabled_targets`；补用例 `test_title_mismatch_fail_disables_target_after_threshold`。水位算法与停采行为未改。上一行 `162f863c` 树现为历史。
+
+### 已完成切片：R4-7a 外部 HTTP 工具扩展注册（本分支工作区）
+
+**背景**：R4-6b 已合并 PR #46 → `232e38e`。本片交付「管理员经
+`extensions_config.json` 声明 HTTP 工具 → 装配进 `ToolRegistry` → LLM
+经 function calling 调用」的可执行外部工具扩展；R4-7b 多角色模型路由
+不在本片范围。
+
+**改动面（文件）**：
+- 配置模型：`packages/harness/config/models.py`——`HttpToolTargetModel`
+  （url / method / headers / timeout_ms / response_max_bytes / result_path；
+  协议白名单、超时上限、密钥字面值拒绝、结果路径形态校验）；
+  `ExtensionTool` 增 `kind` / `http`（`kind=http` 时必填）；
+  `ExtensionsConfig` 增 `enabled` / `allow_override_builtin`；
+  `default_tools()` 改为真实可执行的 `query_local_calendar` 示例；
+  `config/loader.py` 在外部工具未启用 / 空列表时把加载日志降为 debug
+  （默认部署零 info 噪声）。
+- 执行器：`packages/harness/tools/extension_tools.py`——参数 JSON Schema
+  编译为 pydantic 校验模型（复用 registry 校验面）；`{env:VAR}` 构造期
+  解析；URL / header 参数占位替换（URL 编码、header 禁换行）；共享 httpx
+  池发送（超时 / 响应字节帽 / `follow_redirects=False`）；状态码 / JSON /
+  `result_path` 受控失败；成功返回文本结果。
+- 装配：`packages/harness/tools/extension_registry.py`——总开关 / 同名
+  保护 / 构造失败逐工具隔离 / 注册报告；`packages/harness/tools/tool_models.py`
+  增报告模型；`app/main.py` 在全部平台工具之后消费 loader 运行时
+  `extensions_config` 并调用装配函数（app 层只调用）。
+- 示例：`scripts/generate_examples_json.py` 增命令行入口与
+  `enabled` / `allow_override_builtin` 字段；重生成
+  `backend/extensions_config.example.json`；`test_config_loader.py`  fixture
+  同步新必填面。
+- 测试：`test_extension_models.py` / `test_extension_tools.py` /
+  `test_extension_registry.py` / `test_extension_app_lifespan.py`。
+- 门禁：`backend/red_manifest.toml` 增两条探针（执行器 / 装配）；
+  `scripts/.assertion_baseline.json` 并入四个新测试文件。
+- 文档：`docs/backend/tools.md`（字段表 / 完整示例 / 占位与密钥规则 /
+  信任边界 / 错误语义 / 优先级）；`docs/backend/config.md` 分节；
+  `docs/backend/README.md` 索引；根 `README.md` 工具层一行。
+
+**安全决策**：
+- 重定向恒禁用（请求级 `follow_redirects=False`；3xx 即非 2xx 受控失败）——
+  防止端点把请求带向配置之外的地址；
+- header 值只存 `{env:VAR_NAME}` 占位，模型拒绝 `Bearer …` / `sk-…` /
+  长度超过 32 的字面值；env 缺失 → 装配期跳过该工具并 warning；
+- 同名默认拒绝覆盖任何已注册工具（含 `search_memory` / `get_current_time`）；
+  `allow_override_builtin=true` 才放行；
+- 信任边界是管理员本地配置文件本身——装配层不做私网拦截；运行时仍保证
+  协议白名单、超时上限、响应字节帽与占位编码。
+
+**命令 + 退出码（本分支工作区）**：
+- `cd backend && pixi run pytest src/tests/unit/test_extension_models.py
+  src/tests/unit/test_extension_tools.py
+  src/tests/unit/test_extension_registry.py
+  src/tests/unit/test_extension_app_lifespan.py
+  src/tests/unit/test_tools_registry.py --asyncio-mode=auto` → 0（57 passed）。
+- 同批追加 `test_config_loader.py` / `test_config_examples_generation.py`
+  → 0（81 passed，模板加载与生成闭环）。
+- 改动源文件 `pixi run mypy`（config/models.py / tool_models.py /
+  extension_tools.py / extension_registry.py / app/main.py）→ 0
+  （5 source files）；改动文件 `pixi run ruff check` → 0。
+- `pixi run python ../scripts/generate_examples_json.py` 连跑两次
+  sha256 一致 → 0（幂等）。
+- `pixi run python ../scripts/assertion_freeze.py --update` → 0
+  （基线 239 文件 / asserts=9970 / raises=766）；随后 `--enforce` → 0。
+- `pixi run red-probe --gate` → 0（39 条探针 / 190 <= 基线 190）；
+  `--symbol ...extension_tools:build_extension_tool` →
+  RED（failed=1）、`--symbol ...extension_registry:register_extension_tools`
+  → RED（failed=1）。
+- `pixi run comment-gates` → 0（新增源文件零违规、零 hint）。
+
+**偏离与未验证**：
+- 未跑 `verify-slice` / 全量 tests-all / coverage-gates（按任务纪律由主
+  Agent 执行）；`check_sandbox_dtos_drift.py` 不涉及（非沙盒契约）。
+- `app/main.py` 消费 `config/loader.py` 的运行时 `extensions_config`（启动
+  早期由 `load_all_config(config_dir=...)` 解析）——仓库无独立 extensions
+  路径 Settings 键，故沿用既有加载器的实际路径，不重复读盘。
+- 示例文件默认 `enabled=false`（真实可执行形态，但需管理员显式开启；
+  避免默认部署因 `CALENDAR_API_TOKEN` 缺失产生跳过告警）。
+- 全部执行器测试经 `httpx.MockTransport` 零真实网络；未接真实日历服务
+  做端到端联调（端点契约由 JSON 示例与 MockTransport 守卫）。
+- R4-7b 多角色模型路由未开工。
+
+### 已完成切片：R4-7b 条件路由策略 + 内置亲密策略（本分支工作区）
+
+**背景**：R4-7a 外部 HTTP 工具扩展注册已在本分支工作区。本片把角色路由从
+「固定角色 → 条目」扩展为「条件命中时原角色改由目标角色条目承接」，并把
+既有亲密通道从网关特判转译为内置策略（env 面与语义不变）。
+
+**改动面（文件）**：
+- 模型（Unit 文件）：`packages/harness/llm/route_policy_models.py`——
+  `RoutePolicyModel` / `RouteConditionModel` / `TimeWindowModel` /
+  `RouteDecisionModel`（含 `RouteDecisionReason`；内置策略名 / 最低优先级 /
+  目标角色常量）。
+- 求值（纯函数）：`packages/harness/llm/route_policy.py`——源角色过滤 →
+  优先级降序（同优先级声明序）→ 条件 AND（亲密度区间 / 摘要三态 / 时段 /
+  用途）→ 目标绑定检查（`routed` / `fallback_unbound` / `MODEL_NOT_FOUND`；
+  无命中 `direct`）。时段以注入 `now_ms` + `zoneinfo` 换算，跨午夜窗口按
+  两段并集。
+- 配置面：`config/models.py` 增 `llm.route_policies`（与 `role_bindings`
+  同级）+ `role_bindings` 允许策略源 / 目标角色；`config/loader.py` 解析
+  策略并在重建解析器后登记路由别名；`config/registry_admin.py` 读改写保留
+  策略与条目 `default_params`；`LlmModelEntry` 增可选 `default_params`。
+- 网关：`chat_by_role` / `stream_by_role` 删除亲密特判，统一经
+  `_evaluate_route`（注入策略 / 时钟 / 解析器）；`effective_role` 用于条目
+  解析，`resolved_purpose` 仍按原角色。内置亲密策略在装配期由
+  `intimate_config` 转译（`__intimate_builtin`，priority=-999，
+  requires_summary=true，fallback=true），条目登记为 `intimate` 路由别名；
+  通道凭据经路由目标凭据覆盖注入（条目 `api_key_env` 保持既有空值契约），
+  通道默认温度挂 `default_params`。热重建后网关在下次调用前补登记别名。
+- 示例 / 装配：`scripts/generate_examples_yaml.py` 增 `route_policies` /
+  目标角色绑定 / `chat-night` 示例与字段 schema 注释；`app/main.py` 装配
+  传入 `runtime_llm_config.route_policies`；`config.example.yaml` 已重生成。
+- 测试：`tests/unit/test_llm_route_policy.py`（条件矩阵 / 优先级 / 回落
+  两态 / 直连 / 模型校验 / 网关时段与用途 / 热重建补登记 / 与内置亲密策略
+  的逐场景等价性）。
+- 门禁：`backend/red_manifest.toml` 增两条探针；断言基线并入新测试文件。
+
+**向后兼容转译规则**：`LLM_INTIMATE_ENABLED=true` 且 base_url / api_key /
+model 齐备 → 内置策略（源 chat → 目标 intimate，最低优先级，摘要可用 +
+等级 ≥ `min_intimacy_level`，允许回落）+ 条目注册；开关关闭 / 半配置 →
+不生成策略（等价直连），半配置装配期记一条 warning。既有
+`test_llm_intimate_channel.py` 全部用例零改动通过。
+
+**等价性证据（用例清单）**：`test_equivalence_builtin_vs_generic_route_decision`
+（等级 None/0/1/2/3 双路径请求字节 / 凭据头 / 用量签名一致）、
+`test_equivalence_disabled_and_incomplete_config`（关闭 / 半配置直连字节一致
++ 单条 warning）、`test_equivalence_temperature_and_independent_credential`
+（默认温度只补空缺 / 显式温度优先 / 目标凭据独立）、
+`test_equivalence_failure_does_not_switch`（失败上抛、两侧均不改走默认）、
+`test_equivalence_stream_routing`（流式增量块与请求字节一致）。
+
+**命令 + 退出码（本分支工作区）**：
+- `cd backend && pixi run pytest src/tests/unit/test_llm_gateway.py
+  src/tests/unit/test_llm_intimate_channel.py
+  src/tests/unit/test_llm_route_policy.py --asyncio-mode=auto` → 0
+  （82 passed；其中既有亲密通道用例零改动通过）。
+- 同批追加 `test_config_loader.py` / `test_config_examples_generation.py` /
+  `test_config_model_resolver.py` / `test_config_model_entry.py` /
+  `test_models_api.py` → 0（68 passed）。
+- 改动源文件 `pixi run mypy ...` → 0（9 source files）；改动文件
+  `pixi run ruff check ...` → 0。
+- `cd backend && pixi run gen-examples` 连跑两次 `config.example.yaml`
+  sha256 一致 → 0（幂等）；`pixi run python ../scripts/generate_examples_yaml.py`
+  → 0。
+- `pixi run python ../scripts/assertion_freeze.py --update` → 0；随后
+  `--enforce` → 0。
+- `pixi run red-probe --gate` → 0；新增两条探针（`route-policy-evaluation-removal` / `route-policy-model-removal`，定义见 `backend/red_manifest.toml`）。
+- `pixi run comment-gates` → 0。
+
+**偏离与未验证**：
+- 未跑 `verify-slice` / 全量 tests-all / coverage-gates（按任务纪律由主
+  Agent 执行）。
+- `build_intimate_entry` 的 `api_key_env` 保持既有空串契约（既有断言要求），
+  通道凭据由网关的路由目标凭据覆盖注入；通用策略目标的凭据仍走条目
+  `api_key_env` 解析链。
+- 仓库无时区配置键；时段时区来自策略 `time_window.timezone`（IANA 名校验），
+  未新增 env 键——`route_policies` 为结构化 YAML 面。
+- Setup Wizard 只管理 env 步骤（llm 结构化面经 `config.example.yaml` 模板
+  复制），无 env 键变更，故未改 wizard 步骤定义。
+- 策略集装配期快照：`route_policies` 与内置亲密策略在网关构造期固定；
+  运行中重载 config.yaml 只刷新条目与 `intimate` 别名绑定，策略增删改须
+  重启进程生效（已写入 llm.md「热重载边界」与 config.md 热重建语义段）。
+
+**修复 E（Oracle 深审 R4-7a+b 不通过项的根修）**：
+- **P1-2 模板夜间路由**：`scripts/generate_examples_yaml.py` 把 `chat-night`
+  条目、`role_bindings` 与 `route_policies` 段全部输出为注释示例，生效值
+  写 `route_policies: []` / `role_bindings: {}`；重生成
+  `backend/config.example.yaml`；`test_config_examples_generation.py` 新增
+  「提交模板经真实 loader → `route_policies == []` 且 `chat_night` 未绑定」
+  守卫，字节锁用例同步（三件套 hash 稳定）。
+- **P1-1 扩展工具接入 chat**：`app/main.py` 抽共用 `_register_extensions`
+  （公共池前置 + 报告返回），duty 与 `_startup_channels` 的 chat 工具面均
+  调用；chat 规格并入 `chat_tool_specs`，`owner_only_tools` 按
+  `ExtensionTool.expose_to_peer`（默认 false）注入 `ChatService`；
+  `ChatService._definitions_for_provenance` 改为按工具名集合裁剪（内置
+  `edit_core_memory` 恒在集合内）。duty 关闭时 chat 仍装配扩展。docstring
+  `extension_registry.py:6` 的「duty / chat 工具面」已核对成立。
+- **P2-7 prose-pin**：`test_extension_tools.py` 的 `result_path` 用例改为
+  机器值断言（`ok is False` / `result == {}` / `error` 以
+  `f"{ErrorCode.INTERNAL_ERROR}: "` 开头）；`prose_pin_check.py --update` 后
+  基线回 **75**，`--gate` 通过。
+- **P2-6 死配置**：删除 `LlmEndpointConfig.route_policies` 字段与 docstring
+  两行说明（`LLM_ROUTE_POLICIES` env 面零消费）；`test_config_settings.py`
+  增「字段不在 env 面」守卫；`gen-examples` 幂等。
+- **P2-4 路由凭据**：`gateway._route_wire_api_key` 仅在解析条目
+  `name == INTIMATE_CHANNEL_ENTRY_NAME` 时施加通道密钥；`intimate` 别名
+  改绑到 yaml 条目时走该条目 `api_key_env`，通道密钥不再发往错误端点。
+- 命令 + 退出码：`pixi run pytest <扩展/路由/配置 10 文件> --asyncio-mode=auto`
+  → 0（160 passed）；改动源文件 `pixi run mypy` → 0（4 source files）+
+  `../scripts/generate_examples_yaml.py` → 0；改动文件 `pixi run ruff check`
+  → 0；`gen-examples` 连跑两次三件套 sha256 一致 → 0；`prose_pin_check.py
+  --update` → 0（基线 75）/ `--gate` → 0；`red_probe.py --gate` → 0
+  （41 探针 / 190 <= 基线 190）；`assertion_freeze.py --update` → 0
+  （240 文件 / asserts=10071 / raises=776）/ `--enforce` → 0。
+- 变异实证（临时改动后还原）：模板 `route_policies` 改回生效态 → 新守卫
+  failed；去掉 chat 扩展装配 → duty 关闭 lifespan 用例 failed；去掉 provenance
+  裁剪 → peer 隐藏用例 failed（owner-only 可见用例仍 passed）；忽略
+  `expose_to_peer` → peer 可见用例 failed；prose-pin 还原文案断言 →
+  `--gate` exit 1（76 > 75）；重新加回 `LlmEndpointConfig.route_policies` →
+  env 面守卫 failed；凭据按角色名施加 → 别名冲突用例 failed。
+
+**修复 F（Oracle 深审 R4-7a 执行器与配置面 4×P2 的根修）**：
+- **P2-5 删除守卫 / 解析状态只认五角色**：`registry_admin._roles_bound_to`
+  并入 `role_bindings` 中值等于条目名的全部角色键（含 `route_policies`
+  声明的 source/target 角色），`_mask_entry.resolved_roles` 同口径；
+  `loader._rebuild_runtime_resolver` 对非五角色的悬空绑定记一条 warning
+  （角色名 + 条目名）。删除策略目标角色绑定条目现为 409 且落盘保留绑定；
+- **P2-2 执行器运行时缺口**：`extension_tools._execute_http_call` 的异常
+  映射增补 `UnicodeError`（中文 header 值 → 受控中文错误，不再逃逸到
+  registry 泛异常）；响应改 `client.stream(...)` + `aiter_bytes` 累计，
+  `response_max_bytes` 超限即 `aclose()` 并受控失败（未超时拼回完整 body
+  走既有 JSON 解析；`follow_redirects=False` 保留）；
+- **P2-1 密钥明文拒绝绕过 / URL 面**：`_validate_headers` 对剔除
+  `{env:}` 后的剩余字面做大小写不敏感检查（`bearer ` / `basic ` / `sk-`
+  前缀 + 剩余字面 > 32），`Bearer {env:TOKEN}` 仍合法；`_validate_url_scheme`
+  拒绝 userinfo 与查询串常见密钥参数（`key` / `token` / `apikey` /
+  `api_key` / `api-key` / `secret` / `access_token` / `auth_token` 的 ≥16
+  字面值）；`tools.md` 同步密钥规则（URL 不支持 `{env:}`）；
+- **P2-3 schema 执行面 / 工具名**：`_field_constraints` 增 `pattern`、
+  `minItems` / `maxItems`，`_annotation_for` 增 `enum`（`Literal`）与
+  `items`（元素类型），基础类型改 `StrictStr` / `StrictInt` /
+  `StrictFloat|StrictInt` / `StrictBool`（拒绝 `"2"` / `true` 强转）；
+  `ExtensionTool.name` 与 `ToolSpecModel.name` 加
+  `^[A-Za-z0-9_-]{1,64}$`；`tools.md` / `docs/backend/README.md` 改为实际
+  执行面清单（不支持嵌套 object 内部约束 / `format` / `oneOf`·`anyOf`）；
+- 命令 + 退出码：`cd backend && pixi run pytest
+  src/tests/unit/test_extension_*.py src/tests/unit/test_models_api.py
+  src/tests/unit/test_config_loader.py src/tests/unit/test_config_settings.py
+  src/tests/unit/test_config_examples_generation.py --asyncio-mode=auto`
+  → 0（127 passed）；`test_tools_registry.py` → 0（17 passed）；改动源文件
+  `pixi run mypy` → 0（5 source files）；
+  改动源 / 测试文件 `pixi run ruff check` → 0；
+  `pixi run python ../scripts/generate_examples_json.py` 连跑两次
+  `extensions_config.example.json` sha256 一致（`16c2cb2c…`）→ 0；
+  `pixi run red-probe --gate` → 0（41 探针 / 190 <= 基线 190）；
+  `assertion_freeze.py --update` → 0（240 文件 / asserts=10096 /
+  raises=781）/ `--enforce` → 0。
+- 变异实证（临时改动后还原）：`_roles_bound_to` 还原为仅解析器五角色 →
+  路由绑定删除守卫 failed；去掉 loader 悬空绑定 warning → 告警守卫
+  failed；去掉 `UnicodeError` 映射 → 中文 header 用例以原始
+  `UnicodeEncodeError` failed；`aiter_bytes` 换成整包 `aread()` →
+  流式计数用例 `bytes_read < 100` failed；header 占位分支加回
+  `continue` → 占位内联密钥用例 failed；去掉 URL userinfo 检查 → URL
+  拒绝用例 failed；`integer` 还原为 `int` → `"2"` / `true` 严格类型用例
+  failed；去掉 `ExtensionTool.name` pattern → 工具名用例 failed；去掉
+  enum 分支 / pattern 约束 / array 分支 → 对应 enum / pattern /
+  items·minItems·maxItems 用例 failed。
+- 偏离：`test_extension_registry.py::test_invalid_tool_spec_skipped` 改用
+  `model_copy(update={"name": ""})` 绕过新的模型层 pattern，继续覆盖
+  registry 的 `ValidationError` 跳过分支（空名现在在 `ExtensionsConfig`
+  校验即拒绝）；未跑 tests-all / coverage-gates / verify-slice（按纪律由
+  主 Agent 执行）。
+
+**修复 G（Oracle 深审剩余 P2-8 / P2-9 / P2-10 的根修；只记事实，不复审结论）**：
+- **P2-8 死代码 + 排障轨迹**：删除 `intimate_router.evaluate_intimate_route` /
+  `build_intimate_request_params` 与 `intimate_models.IntimateRouteReason` /
+  `IntimateRouteDecisionModel`（`__all__` 同步；过期「首个裁决时」warning
+  注释改为「网关构造期」）；`test_llm_intimate_channel.py` 的 5 处直调改经
+  `evaluate_route`（网关装配快照 + 解析器别名，断言生效角色 / 原因），温度
+  合并用例改经网关请求体；`route_policy_models` 新增 `ConditionResultModel` /
+  `PolicyEvalTraceModel` 与 `RouteDecisionModel.trace`，`route_policy.evaluate_route`
+  对每条源匹配策略记录逐维结果（首个命中即返回语义不变）；网关回落 info /
+  未命中 direct debug 附 `policy→[dimension:matched,...]` 轨迹摘要。
+- **P2-9 快照边界**：llm.md 增「热重载边界」、config.md 热重建语义段同句、
+  llm.md 构造注入注释加限定、本段「偏离」补记。
+- **P2-10 文档小项**：`router.resolve_optional` → `resolver.resolve_optional`；
+  测试索引补 `test_llm_route_policy.py` / `test_llm_intimate_channel.py`；
+  模块表删除已移除符号；本段红探针悬空「（见下）」改为具体探针名。
+- 命令 + 退出码（本分支工作区）：
+  `cd backend && pixi run pytest src/tests/unit/test_llm_intimate_channel.py
+  src/tests/unit/test_llm_route_policy.py src/tests/unit/test_llm_gateway.py
+  --asyncio-mode=auto` → 0（87 passed）；改动源 / 测试文件 `pixi run mypy ...`
+  → 0（7 source files）；`pixi run ruff check ...` → 0；
+  `pixi run red-probe --gate` → 0（41 探针 / 227 源文件 <= 冻结基线 190）；
+  `pixi run comment-gates` → 0；`assertion_freeze.py --update` → 0（240 文件 /
+  asserts=10119 / raises=781）/ `--enforce` → 0。
+- 变异实证（临时改动后还原）：`evaluate_route` 返回空 trace → 两条逐维轨迹
+  守卫与网关日志守卫 failed（空轨迹守卫仍 passed）；`_condition_matches`
+  退回整条 bool（单条 aggregate 结果）→ 两条逐维轨迹守卫 failed；网关不转译
+  内置策略（`enabled` 分支恒返回）→ 路由矩阵命中格 / 阈值覆盖 / 命中端点
+  用例 failed（4 failed）。
+- 偏离：零改动硬验收已达成并留档（25 条通过于 `435790f`），本次为清理死代码
+  触及该测试文件；未跑 tests-all / coverage-gates / verify-slice（按纪律由
+  主 Agent 执行）。
+
+**修复 H（Oracle 深审 R4-7a+b 剩余项根修；只记事实，不复审结论）**：
+- **F1 执行面拦截（P1，`edit_core_memory` 既有洞的继承）**：此前 owner-only
+  只裁剪工具可见面（`_definitions_for_provenance`），`_tool_loop` 对模型
+  回传的任何 `call.name` 都直接进执行器——该缺口在引入 owner-only 自编辑
+  工具时即存在，扩展工具只是让「隐藏工具仍可执行」可被外部端点观测。
+  `chat/service.py::_tool_loop` 现按 `active_definitions` 求非 owner 回合
+  可执行名集（owner 为 `None` 不限制），面外调用不进执行器，直接归一为
+  `ToolResultModel(ok=False, error="未注册工具: <name>")`——与「不存在」
+  同一受控路径，不区分「存在但本轮不可见」。`tools/registry.py::execute`
+  的未注册错误文本去掉可用工具清单（仅 `未注册工具: <name>`，清单走
+  debug 日志，不进模型上下文）。收尾路径核对：chat 无 `_force_tool_call`
+  式强制工具调用，步数上限后是**无工具面**最终调用（final-report
+  forcing）；合规重试也不携带 tools 且不派发执行器——两路径均不会把
+  面外名送进执行器，无需额外判定，已由收尾用例锁定。
+- **F2 通道凭据对象身份（P2）**：`gateway._route_wire_api_key` 由
+  `entry.name == INTIMATE_CHANNEL_ENTRY_NAME` 改为
+  `entry is self._builtin_intimate_entry`（装配期持有
+  `build_intimate_entry` 返回实例）；admin 在 config.yaml 建同名条目绑
+  `intimate` 别名时走该条目 `api_key_env`，不再套通道密钥。
+- **F3 `items` 元素级约束（P2）**：`extension_tools._annotation_for` 的
+  array 分支对带 `type` 的 `items` 提取 `_field_constraints`（去掉
+  description）并包成 `Annotated[元素注解, Field(...)]`，
+  `items.minimum` / `maximum` / `minLength` / `maxLength` / `pattern`
+  在元素级生效；`enum` 仍由既有 `Literal` 分支拦截。`tools.md` 的
+  「实际执行面」清单与实现一致。
+- **小项 a 路由轨迹上下沿**：`gateway._format_route_condition` 把亲密度
+  上下沿写成 `intimacy.min` / `intimacy.max`（按 `detail` 的 `min=` /
+  `max=` 标记区分；模型面 `ConditionResultModel` 未改）。
+- **小项 b URL 占位误拒**：`config/models.py::_validate_url_scheme` 先
+  剔除查询值中的 `{...}` 占位再判长度，
+  `?access_token={user_access_token}` 通过；`?token=abcdefghijklmnop`
+  （真字面 16 字符）仍拒绝；`tools.md` 密钥规则同步。
+- 命令 + 退出码（本分支工作区）：`cd backend && pixi run pytest
+  src/tests/unit/test_chat_core_memory.py src/tests/unit/test_chat_tool_loop.py
+  src/tests/unit/test_chat_service.py src/tests/unit/test_tools_registry.py
+  src/tests/unit/test_extension_tools.py src/tests/unit/test_extension_models.py
+  src/tests/unit/test_extension_app_lifespan.py
+  src/tests/unit/test_llm_intimate_channel.py
+  src/tests/unit/test_llm_route_policy.py src/tests/unit/test_llm_gateway.py
+  src/tests/unit/test_models_api.py --asyncio-mode=auto` → 0（248 passed）；
+  改动源文件 `pixi run mypy` → 0（5 source files）；改动源 / 测试文件
+  `pixi run ruff check` → 0；`prose_pin_check.py --gate` → 0（prose 75 <=
+  基线 75，未新增文案钉）；`red-probe --gate` → 0（41 探针 / 227 源文件 <=
+  冻结基线 190）；`assertion_freeze.py --update` → 0（240 文件 /
+  asserts=10145 / raises=782）/ `--enforce` → 0。
+- 变异实证（临时改动后还原，`cmp` 确认源文件复原）：去掉
+  `executable_names` 判定（改 `if False`）→ peer 面外调用 / 未注册名 /
+  收尾步数上限 3 条用例 failed；registry 错误恢复可用清单 → 未注册工具
+  用例 failed；凭据判定改回按条目名 → 同名 admin 条目用例 failed；去掉
+  `items` 元素约束包装 → `items-minimum` / `items-pattern` 2 条 failed
+  （`items-enum` 由 `Literal` 分支拦截，仍 passed）；轨迹格式化退回仅
+  `dimension` → 轨迹日志 2 条用例 failed；URL 长度判断改回未剔除占位的
+  原值 → 占位参数用例 failed。
+- 偏离：`items.enum` 的元素级拒绝来自既有 `Literal` 注解而非新的
+  `Field` 包装，故「去掉元素约束」变异下该守卫不红（其余两条红）；
+  未跑 tests-all / coverage-gates / verify-slice（按纪律由主 Agent 执行）。
+
+**修复 I（Oracle 三审剩余 1×P2 + 3×P3 的根修；只记事实，不复审结论）**：
+- **P2-1 空可执行面无守卫**：`chat/service.py::_tool_loop` 的
+  `executable_names is not None` 判定本身正确（空 `frozenset` 仍拦截），
+  既有用例只覆盖「工具面为空」而未覆盖「模型仍回传面外名」；新增
+  `test_chat_core_memory.py::test_empty_executable_face_still_blocks_out_of_face_call`
+  锁定 peer 回合仅 `edit_core_memory` 时可执行名集为空、首请求
+  `tools is None`、回传仍不进执行器、反馈为
+  `未注册工具: edit_core_memory`。
+- **P3-1 URL 占位剔除过宽**：`config/models.py::_QUERY_VALUE_PLACEHOLDER_RE`
+  由 `\{[^{}]*\}` 收窄为与 `_ARG_PLACEHOLDER_RE` 同语法
+  `\{[A-Za-z_][A-Za-z0-9_]*\}`——仅剔合法参数名占位；
+  `?token={sk-abcdefghijklmnop}` 与百分号编码形态 `%7Bsk-...%7D`
+  （`parse_qsl` 已解码）按字面长度拒绝，`{user_access_token}` 仍通过。
+- **P3-2 混合类型 `Literal` × `Field` 约束裸 `TypeError`**：
+  `tools/registry.py::_validate_args` 捕获面改为
+  `except (ValidationError, TypeError)`——矛盾 schema（如
+  `{"type":"string","enum":[1,"a"],"pattern":"^a$"}`）校验 `[1]` 时
+  pydantic 抛裸 `TypeError`，现走既有受控失败路径（`ok=False`），
+  `registry.execute` 恒不抛。
+- **P3-3 路由轨迹 `detail` 契约半覆盖**：
+  `test_llm_route_policy.py::test_gateway_logs_intimacy_bounds_distinctly`
+  追加 `intimacy_level=None` 调用，断言未命中日志同时含
+  `intimacy.min:False` 与 `intimacy.max:False`（覆盖
+  `level unavailable < min=` / `level unavailable > max=` 两个变体）。
+- 命令 + 退出码（本分支工作区）：`cd backend && pixi run pytest
+  src/tests/unit/test_chat_core_memory.py src/tests/unit/test_chat_tool_loop.py
+  src/tests/unit/test_extension_tools.py src/tests/unit/test_tools_registry.py
+  src/tests/unit/test_llm_intimate_channel.py src/tests/unit/test_llm_route_policy.py
+  src/tests/unit/test_llm_gateway.py src/tests/unit/test_extension_models.py
+  --asyncio-mode=auto` → 0（187 passed）；改动源文件 `pixi run mypy
+  src/packages/harness/config/models.py src/packages/harness/tools/registry.py`
+  → 0（2 source files；测试目录按 `pyproject.toml` 既有配置不入严格门）；
+  `pixi run ruff check <改动 2 源文件 + 4 测试文件>` → 0；
+  `prose_pin_check.py --gate` → 0（prose 75 <= 基线 75）；
+  `red-probe --gate` → 0（41 探针 / 227 源文件 <= 冻结基线 190）；
+  `assertion_freeze.py --update` → 0（240 文件 / asserts=10155 /
+  raises=782）/ `--enforce` → 0。
+- 变异实证（临时改动后还原，`cmp` 确认源文件复原）：`executable_names
+  is not None` 改真值判断 → 空面拦截用例 failed；`_QUERY_VALUE_PLACEHOLDER_RE`
+  还原 `\{[^{}]*\}` → URL 占位用例 failed；去掉 `TypeError` 捕获 → 混合
+  schema 用例以裸 `TypeError` failed；`route_policy.py:256` 的 `max=` 改
+  `上限` → 上下沿区分用例 failed。
 
 ## 6. 遗留与部署台账（非阻塞）
 

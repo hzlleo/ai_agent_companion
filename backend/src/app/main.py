@@ -156,6 +156,7 @@ from packages.harness.channels.whatsapp.whatsapp_client import WhatsAppCloudClie
 from packages.harness.channels.whatsapp.whatsapp_models import WhatsAppServiceWindow
 from packages.harness.channels.whatsapp.whatsapp_runner import WhatsAppWebhookRunner
 from packages.harness.chat.service import ChatService
+from packages.harness.config import loader as config_loader
 from packages.harness.config import search_registry
 from packages.harness.config.auth_policy import ensure_auth_policy
 from packages.harness.config.loader import load_all_config, setup_logging_from_settings
@@ -165,6 +166,7 @@ from packages.harness.config.search_registry import load_search_config
 from packages.harness.core.background_tasks import background_task_manager
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.thread_pool import shutdown_shared_thread_pool
+from packages.harness.core.time_utils import now_ms
 from packages.harness.database.engine import close_database, init_database
 from packages.harness.database.session import session_scope
 from packages.harness.duty.duty_models import DutyRunConfigModel
@@ -195,6 +197,7 @@ from packages.harness.persona.core_memory import (
     core_memory_session_id_var,
     register_core_memory_tools,
 )
+from packages.harness.persona.core_memory_models import CORE_MEMORY_TOOL_NAME
 from packages.harness.persona.directives import DirectivesService
 from packages.harness.persona.directives_models import DirectiveCreateDTO
 from packages.harness.persona.facts import FactsService
@@ -208,7 +211,7 @@ from packages.harness.persona.relationship_models import (
 from packages.harness.persona.service import PersonaService, bind_persona_context
 from packages.harness.persona.skills import SkillsService
 from packages.harness.persona.trait_library import preload_official_trait_library
-from packages.harness.pools.manager import get_pool_manager, init_pool_manager
+from packages.harness.pools.manager import PoolManager, get_pool_manager, init_pool_manager
 from packages.harness.reminders.job import (
     REMINDER_SCAN_INTERVAL_SECONDS,
     build_reminder_scan_job,
@@ -225,6 +228,7 @@ from packages.harness.tools.browser import (
     register_browser_sidecar_tools,
 )
 from packages.harness.tools.browser_models import BROWSER_LLM_TOOL_NAMES
+from packages.harness.tools.extension_registry import register_extension_tools
 from packages.harness.tools.registry import ToolRegistry, register_builtin_tools
 from packages.harness.tools.sandbox import (
     build_sandbox_client,
@@ -235,6 +239,10 @@ from packages.harness.tools.sandbox_models import (
     BILI_TOOL_NAMES,
     HTTP_FETCH_TOOL_NAME,
     build_http_fetch_spec,
+)
+from packages.harness.tools.tool_models import (
+    ExtensionRegistrationReportModel,
+    ToolSpecModel,
 )
 from packages.harness.usage.service import UsageService
 
@@ -299,6 +307,7 @@ async def startup_app_state(
         usage_counter=wire_default_usage_counter(),
         top_logprobs=settings.llm.top_logprobs,
         prompt_logprobs=settings.llm.prompt_logprobs,
+        route_policies=config_loader.runtime_llm_config.route_policies,
     )
     app.state.memory_store = build_memory_store(settings)
     _assemble_memory_services(app)
@@ -732,9 +741,36 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
             chat_tool_registry, core_memory_service, _core_memory_session_id
         )
     )
+    # 外部工具扩展同样装配进 chat 工具面（不依赖 duty 开关）：注册报告
+    # 的成功名单用于把规格并入工具列表，并导出 owner-only 工具名集合
+    # （默认仅 owner 回合可见——peer / untrusted 回合结构性剔除）。
+    extension_report = _register_extensions(chat_tool_registry, manager)
+    registered_extensions = set(extension_report.registered)
+    owner_only_extensions = frozenset(
+        tool.name
+        for tool in config_loader.extensions_config.tools
+        if tool.name in registered_extensions and not tool.expose_to_peer
+    )
+    if registered_extensions:
+        chat_tool_specs[:] = [
+            spec for spec in chat_tool_specs if spec.name not in registered_extensions
+        ]
+        chat_tool_specs.extend(
+            ToolSpecModel(
+                name=spec.name,
+                description=spec.description,
+                args_schema=spec.parameters,
+            )
+            for spec in chat_tool_registry.list_specs()
+            if spec.name in registered_extensions
+        )
+    owner_only_tools = frozenset({CORE_MEMORY_TOOL_NAME}) | owner_only_extensions
     logger.info(
-        "通道路径聊天工具面已装配: tools=[{}]（核心记忆自编辑工具仅聊天注册表——duty 不自编辑）",
+        "通道路径聊天工具面已装配: tools=[{}]（核心记忆自编辑工具仅聊天注册表——"
+        "duty 不自编辑；外部工具扩展={}；owner-only={}）",
         ", ".join(spec.name for spec in chat_tool_specs),
+        sorted(registered_extensions) or "(无)",
+        sorted(owner_only_tools),
     )
 
     def _chat_service_factory() -> ChatService:
@@ -751,6 +787,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
             core_memory_reader=core_memory_service,
             skills_reader=skills_service,
             episode_sink=episode_sink,
+            owner_only_tools=owner_only_tools,
         )
 
     persona_service = PersonaService()
@@ -1291,6 +1328,39 @@ def _log_channel_task_termination(task: asyncio.Task[None]) -> None:
         logger.error("{} 异常终止: {}", task.get_name(), exc)
 
 
+def _register_extensions(
+    registry: ToolRegistry, pool_manager: PoolManager | None
+) -> ExtensionRegistrationReportModel:
+    """把外部工具扩展装配进目标工具注册表（chat / duty 工具面共用入口）。
+
+    装配前置：公共池已启动（共享 HTTP 客户端工厂来源）。配置取启动期
+    已加载的 ``extensions_config``——总开关关闭 / 空列表时零注册（装配
+    函数自身返回空报告）。
+
+    Args:
+        registry: 装配目标注册表（chat 或 duty 工具面）。
+        pool_manager: 公共池管理器（None / 未启动 = 装配顺序契约破坏）。
+
+    Returns:
+        装配报告（成功注册与跳过明细）。
+
+    Raises:
+        BusinessException: 公共池未启动（``INTERNAL_ERROR``——lifespan
+            装配顺序破坏）。
+    """
+    if pool_manager is None or not pool_manager.started:
+        raise BusinessException(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="外部工具扩展装配前置失败：公共池未启动（lifespan 装配顺序破坏）",
+        )
+    return register_extension_tools(
+        registry,
+        config_loader.extensions_config,
+        http_client_factory=pool_manager.get_http_client,
+        clock=now_ms,
+    )
+
+
 async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
     """装配中央调度器（duty / dream / 提醒投递面任一可用时注册作业并启动后台任务）。
 
@@ -1369,6 +1439,10 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
             and search_registry.runtime_search_config.web_search.tool_enabled
         ):
             register_web_search_tool(registry, search_service)
+        # 外部工具扩展（管理员在 extensions_config.json 声明的 HTTP 工具）：
+        # 在所有平台工具之后注册——同名冲突检查以实际注册表为准；端点
+        # 由管理员本地文件定义，装配层不做私网拦截。
+        _register_extensions(registry, get_pool_manager())
         duty_service = DutyService(
             gateway=app.state.gateway,
             registry=registry,

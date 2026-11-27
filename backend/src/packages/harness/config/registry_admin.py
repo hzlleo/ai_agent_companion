@@ -120,6 +120,8 @@ def _entry_to_section(entry: LlmModelEntry) -> dict[str, Any]:
     }
     if entry.concurrency is not None:
         payload["concurrency"] = entry.concurrency
+    if entry.default_params is not None:
+        payload["default_params"] = entry.default_params.model_dump(exclude_none=True)
     return payload
 
 
@@ -140,7 +142,7 @@ def _fallback_to_section(fallback: MultimodalFallbackConfig) -> dict[str, Any]:
 
 
 def _llm_section(config: LlmConfig) -> dict[str, Any]:
-    """LlmConfig → ``llm`` 段 dict（注册表 / 显式绑定 / 回退链全量）。
+    """LlmConfig → ``llm`` 段 dict（注册表 / 显式绑定 / 回退链 / 策略全量）。
 
     Args:
         config: 待序列化的 LlmConfig。
@@ -152,6 +154,10 @@ def _llm_section(config: LlmConfig) -> dict[str, Any]:
         "models": [_entry_to_section(entry) for entry in config.models],
         "role_bindings": dict(config.role_bindings),
         "multimodal_fallback": _fallback_to_section(config.multimodal_fallback),
+        "route_policies": [
+            policy.model_dump(mode="json", exclude_none=True)
+            for policy in config.route_policies
+        ],
     }
 
 
@@ -224,11 +230,7 @@ class RegistryAdminService(ConfigSectionAdmin[LlmConfig]):
         Returns:
             脱敏条目 DTO（只携带 api_key_env 变量名，永不携带密钥值）。
         """
-        resolved_roles = sorted(
-            role
-            for role in SUPPORTED_MODEL_ROLES
-            if (bound := resolver.resolve_optional(role)) is not None and bound.name == entry.name
-        )
+        resolved_roles = sorted(self._roles_bound_to(entry.name, resolver))
         return ModelEntryMaskedDTO(
             name=entry.name,
             provider=entry.provider,
@@ -278,21 +280,37 @@ class RegistryAdminService(ConfigSectionAdmin[LlmConfig]):
     # 写入面（原子持久化 + 热重建 + 失败回滚——机械在基座）
     # ------------------------------------------------------------------
 
-    def _roles_bound_to(self, name: str) -> set[str]:
-        """解析当前绑定到指定条目的角色集（显式绑定 + 条目声明合并）。
+    def _roles_bound_to(self, name: str, resolver: ModelResolver | None = None) -> set[str]:
+        """解析当前绑定到指定条目的角色集（显式绑定 + 条目声明 + 策略角色）。
+
+        判据面与 loader 重建后的解析器一致：五角色经解析器裁决（条目声明
+        与显式绑定合并），策略声明的源 / 目标角色只经 ``role_bindings``
+        显式绑定承接——因此额外并入 ``role_bindings`` 中值等于该条目名的
+        全部角色键（含非五角色）。删除守卫与 ``resolved_roles`` 同口径，
+        避免删除后落盘保留悬空绑定。
 
         Args:
             name: 条目名。
+            resolver: 全局模型解析器（None = 当前全局解析器）。
 
         Returns:
             角色名集合（删除守卫的判据真源——与解析器裁决一致）。
         """
-        resolver = get_model_resolver()
-        return {
+        active = resolver if resolver is not None else get_model_resolver()
+        current = self._current_section()
+        roles = {
             role
             for role in SUPPORTED_MODEL_ROLES
-            if (bound := resolver.resolve_optional(role)) is not None and bound.name == name
+            if (bound := active.resolve_optional(role)) is not None and bound.name == name
         }
+        roles.update(
+            role for role, entry_name in current.role_bindings.items() if entry_name == name
+        )
+        for policy in current.route_policies:
+            for role in (policy.source_role, policy.target_role):
+                if current.role_bindings.get(role) == name:
+                    roles.add(role)
+        return roles
 
     async def create_entry(
         self, req: ModelEntryCreateDTO, *, yaml_path: Path | None = None
@@ -334,6 +352,7 @@ class RegistryAdminService(ConfigSectionAdmin[LlmConfig]):
                 models=[*current.models, entry],
                 role_bindings=dict(current.role_bindings),
                 multimodal_fallback=current.multimodal_fallback.model_copy(deep=True),
+                route_policies=list(current.route_policies),
             )
             logger.info("注册表新增条目: name={}, path={}", req.name, path)
             await self._persist_and_rebuild(
@@ -393,6 +412,7 @@ class RegistryAdminService(ConfigSectionAdmin[LlmConfig]):
                 models=[updated if item.name == name else item for item in current.models],
                 role_bindings=dict(current.role_bindings),
                 multimodal_fallback=current.multimodal_fallback.model_copy(deep=True),
+                route_policies=list(current.route_policies),
             )
             logger.info("注册表更新条目: name={}, path={}", name, path)
             await self._persist_and_rebuild(
@@ -452,6 +472,7 @@ class RegistryAdminService(ConfigSectionAdmin[LlmConfig]):
                 models=[item for item in current.models if item.name != name],
                 role_bindings=dict(current.role_bindings),
                 multimodal_fallback=current.multimodal_fallback.model_copy(deep=True),
+                route_policies=list(current.route_policies),
             )
             logger.info("注册表删除条目: name={}, path={}", name, path)
             await self._persist_and_rebuild(
