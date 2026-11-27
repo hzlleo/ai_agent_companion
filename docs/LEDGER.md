@@ -2541,8 +2541,9 @@ lifespan 装配。
 **改动面（文件）**：
 - 沙盒树：`docker/wechat-gui/src/wechat_gui_poc/wire_models.py`（新增 agent
   HTTP 契约 + 五工具参数模型，三 wire 模型与后端文本镜像）、`agent.py`
-  （stdlib `ThreadingHTTPServer`；`/health` 无鉴权；`/invoke` Bearer 恒时
-  比较；五工具；open_chat 有界等待；恒 200 `ok=false` 归一）、`uinputd.py`
+  （stdlib `ThreadingHTTPServer`；修复 B 已改 asyncio；`/health` 无鉴权；
+  `/invoke` Bearer 恒时比较；五工具；open_chat 有界等待；恒 200 `ok=false`
+  归一）、`uinputd.py`
   （同步控制面客户端 + 共用响应解码）、`entrypoint.sh`（Xorg 就绪后以运行
   用户启动 agent、token 文件解析）、`Dockerfile`（HEALTHCHECK 改查
   `/health`）、`docker/docker-compose.wechat-gui.yml`（8090 回环映射 +
@@ -2574,7 +2575,7 @@ uinputd 控制面；`type_text{text}` = `xclip -selection clipboard -in` +
 一律 `LLM_CALL_FAILED`；客户端把恒 200 `ok=false` / 401 / 超时 / wire 破坏
 归一 `CHANNEL_API_ERROR`；token 缺失时装配跳过且 invoke 短路失败。
 
-**命令 + 退出码（最终树）**：
+**命令 + 退出码（`128821d` 树）**：
 - `cd docker/wechat-gui && pixi run tests-unit` → 0（141 passed；总覆盖率
   94.08%；agent 95%、wire_models 100%）；`pixi run lint` → 0；
   `pixi run typecheck` → 0（7 源文件）。
@@ -2718,6 +2719,18 @@ Live 前风险（Live 阶段验证）：`open_chat` 在 Ctrl+F 后立即粘贴�
 - 未动修复 A 的后端文件：`wechat_gui_runner.py` / `wechat_gui_adapter.py` /
   `wechat_gui_models.py` / `wechat_gui_prompts.py` / `wechat_gui_reader.py` /
   `wechat_gui_watermark.py` / `app/main.py`。
+
+**最终树验证（`36e3449d` 树）**
+
+- 命令 + 退出码：`cd backend && VITEST_MAX_WORKERS=6 pixi run verify-slice
+  -- --with-seekdb --with-frontend --slice r4-6b-fix` → 0，10/10 PASS：
+  tests-all=3551 / coverage-gates=24 组 / lint / typecheck=224 / gates /
+  tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 /
+  frontend-lint / frontend-build；证据
+  `docs/evidence/r4-6b-fix-36e3449d.json`（sha8=`36e3449d`，779 文件）。
+- 沙盒 150 passed / 92.72%；漂移门 53 项一致；红探针 36→37（新增
+  `wechat-gui-watermark-removal`）；断言基线 233/9763/744 → 235/9832/754
+  （并入 `test_wechat_gui_watermark.py` 与 `test_wechat_gui_window_mutex.py`）。
 
 
 ## 6. 遗留与部署台账（非阻塞）

@@ -387,6 +387,7 @@ async def test_parse_http_request_matrix() -> None:
         b"GET /health HTTP/1.1\r\nBroken\r\n\r\n",
         b"POST /invoke HTTP/1.1\r\n\r\n",
         b"POST /invoke HTTP/1.1\r\nContent-Length: x\r\n\r\n",
+        b"POST /invoke HTTP/1.1\r\nContent-Length: \xc2\xb2\r\n\r\n",
         b"POST /invoke HTTP/1.1\r\nContent-Length: 3\r\n\r\n{}",
         b"POST /invoke HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\n{}",
         b"POST /invoke HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n",
@@ -402,6 +403,12 @@ async def test_parse_http_request_matrix() -> None:
     )
     with pytest.raises(agent.HttpRequestError) as error:
         parse_http_request(oversized)
+    assert error.value.status == 413
+    huge_digits = (
+        b"POST /invoke HTTP/1.1\r\nContent-Length: " + b"9" * 5_000 + b"\r\n\r\n"
+    )
+    with pytest.raises(agent.HttpRequestError) as error:
+        parse_http_request(huge_digits)
     assert error.value.status == 413
     huge_head = b"GET /health HTTP/1.1\r\nX-Pad: " + b"a" * 70_000 + b"\r\n\r\n"
     with pytest.raises(agent.HttpRequestError) as error:
@@ -487,6 +494,19 @@ async def test_oversized_body_is_413_before_read() -> None:
         )
         assert status == 413
         assert "上限" in payload["detail"]
+
+
+async def test_non_ascii_content_length_is_422_not_500() -> None:
+    """Content-Length 非 ASCII 数字（²）→ 422（不落 int() 的 ValueError → 500）。"""
+    runtime = _runtime(FakeControl(), FakeScreenshots(), FakeClipboard())
+    async with _serve(runtime) as port:
+        raw = (
+            "POST /invoke HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+            "Content-Length: ²\r\nConnection: close\r\n\r\n"
+        ).encode()
+        status, payload, _ = await _raw_request(port, raw)
+        assert status == 422
+        assert payload["detail"]
 
 
 async def test_tool_failure_is_200_with_ok_false() -> None:

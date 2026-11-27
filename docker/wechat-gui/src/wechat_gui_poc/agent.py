@@ -803,8 +803,14 @@ def _parse_head(head_text: str) -> tuple[str, str, dict[str, str], int]:
         if method == "POST":
             raise HttpRequestError(422, "缺少合法的 Content-Length")
         return method, target, headers, 0
-    if not raw_length.isdigit():
+    if not raw_length.isascii() or not raw_length.isdigit():
+        # ``str.isdigit`` 对非 ASCII 数字字符（如上标 ``²``）同样为真，但
+        # ``int()`` 只接受 ASCII 数字——不拦会落 ValueError → 受控 500。
         raise HttpRequestError(422, "缺少合法的 Content-Length")
+    if len(raw_length) > 10:
+        # 10 位十进制已远超 1 MiB 上限；先判长度同时规避 int() 的 4300 位
+        # 位数上限（超限同样抛 ValueError）。
+        raise HttpRequestError(413, "请求体超过大小上限")
     length = int(raw_length)
     if length > MAX_AGENT_REQUEST_BYTES:
         raise HttpRequestError(413, "请求体超过大小上限")

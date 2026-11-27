@@ -22,10 +22,12 @@
         ChatService.reply / 兜底回发——与其余通道完全同一套语义）
         ↓ 投递尝试全部结束之后按当前帧落水位基线（失败不回退）
 
-失败语义：轮询失败（沙盒不可达 / 视觉链失败 / 结构非法）按指数退避重试
-（``backoff_base`` × 2^(n-1)、``backoff_max`` 封顶）；逐联系人隔离——一个
-联系人失败不阻断同轮其余联系人；``handle_inbound`` 自身恒不抛，runner 侧
-仅防万一的兜底日志。
+失败语义：轮询失败（沙盒不可达 / 视觉链失败 / 结构非法 / 标题不一致）按
+指数退避重试（``backoff_base`` × 2^(n-1)、``backoff_max`` 封顶）——标题不
+一致无论 ``skip`` 还是 ``fail`` 都计入当轮失败，持续不一致时 ``open_chat``
+与视觉解析节奏有界；连续 ``_TITLE_MISMATCH_DISABLE_AFTER`` 轮不一致的目标
+停采（进程生命周期内，重启恢复）。逐联系人隔离——一个联系人失败不阻断同
+轮其余联系人；``handle_inbound`` 自身恒不抛，runner 侧仅防万一的兜底日志。
 
 单窗口互斥：截图、视觉解析与出站「校验 → 输入 → 回车」共享一把
 ``asyncio.Lock``（装配处与出站适配器同实例注入），避免轮询切走会话后
@@ -65,6 +67,9 @@ from packages.harness.core.errors import BusinessException, ErrorCode
 __all__ = [
     "WechatGuiChannelRunner",
 ]
+
+#: 连续多少轮标题不一致后停采该目标（模块常量——不引入新 env 键）。
+_TITLE_MISMATCH_DISABLE_AFTER = 3
 
 
 class WechatGuiChannelRunner:
@@ -141,6 +146,7 @@ class WechatGuiChannelRunner:
         self._last_screenshot_sha: dict[str, str] = {}
         self._consecutive_failures = 0
         self._title_mismatch_count = 0
+        self._title_mismatch_streak: dict[str, int] = {}
         self._vlm_skipped_count = 0
         self._delivery_failure_count = 0
         self._poll_count = 0
@@ -163,6 +169,15 @@ class WechatGuiChannelRunner:
     def title_mismatch_count(self) -> int:
         """标题与目标备注名不一致的累计次数（观测面）。"""
         return self._title_mismatch_count
+
+    @property
+    def disabled_targets(self) -> tuple[str, ...]:
+        """连续标题不一致达到阈值而被停采的目标（观测面——重启恢复）。"""
+        return tuple(
+            target
+            for target, streak in self._title_mismatch_streak.items()
+            if streak >= _TITLE_MISMATCH_DISABLE_AFTER
+        )
 
     @property
     def vlm_skipped_count(self) -> int:
@@ -244,8 +259,18 @@ class WechatGuiChannelRunner:
         if not self._contacts:
             logger.debug("GUI 微信通道无启用联系人——本轮跳过采集")
             return
+        mismatch_before = self._title_mismatch_count
         round_failures: list[Exception] = []
         for remark_name, contact in self._contacts.items():
+            if (
+                self._title_mismatch_streak.get(remark_name, 0)
+                >= _TITLE_MISMATCH_DISABLE_AFTER
+            ):
+                logger.debug(
+                    "GUI 微信目标连续标题不一致已停采（重启恢复）: remark_name={!r}",
+                    remark_name,
+                )
+                continue
             try:
                 await self._poll_target(remark_name, contact)
             except asyncio.CancelledError:
@@ -256,6 +281,16 @@ class WechatGuiChannelRunner:
                     "GUI 微信联系人轮询失败（继续同轮其余联系人）: remark_name={!r}",
                     remark_name,
                 )
+        if self._title_mismatch_count > mismatch_before:
+            round_failures.append(
+                BusinessException(
+                    code=ErrorCode.CHANNEL_API_ERROR,
+                    message=(
+                        "GUI 微信本轮标题校验不一致（计入轮询退避）: "
+                        f"count={self._title_mismatch_count - mismatch_before}"
+                    ),
+                )
+            )
         if round_failures:
             raise round_failures[0]
 
@@ -340,6 +375,15 @@ class WechatGuiChannelRunner:
             )
             if snapshot.title.strip() != remark_name:
                 self._title_mismatch_count += 1
+                streak = self._title_mismatch_streak.get(remark_name, 0) + 1
+                self._title_mismatch_streak[remark_name] = streak
+                if streak == _TITLE_MISMATCH_DISABLE_AFTER:
+                    logger.warning(
+                        "GUI 微信目标连续标题不一致达到阈值——停采该目标"
+                        "（重启恢复）: 目标={!r}, streak={}",
+                        remark_name,
+                        streak,
+                    )
                 # 未接受的画面不登记 sha：下一轮必须重新解析同一画面。
                 self._last_screenshot_sha.pop(remark_name, None)
                 self._window_state.mark_unknown()
@@ -359,6 +403,7 @@ class WechatGuiChannelRunner:
                     self._title_mismatch_count,
                 )
                 return None
+            self._title_mismatch_streak.pop(remark_name, None)
             # 仅在解析成功且标题校验通过之后登记截图：瞬时失败不吞画面。
             self._last_screenshot_sha[remark_name] = screenshot.sha256
             advance = self._watermark.diff(remark_name, snapshot.messages)

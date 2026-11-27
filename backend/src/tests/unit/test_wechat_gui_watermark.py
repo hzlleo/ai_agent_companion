@@ -83,6 +83,16 @@ async def test_last_occurrence_prevents_false_new_messages() -> None:
     assert advance.new_messages == ()
 
 
+async def test_identical_fingerprint_tail_is_swallowed() -> None:
+    """同指纹尾随代价：prev=[好]、cur=[好,好] 零投递（末次已落在屏上）。"""
+    watermark = WechatGuiWatermark(retention=10)
+    watermark.commit(watermark.diff("小林", [make_message(text="好")]))
+    advance = watermark.diff(
+        "小林", [make_message(text="好"), make_message(text="好")]
+    )
+    assert advance.new_messages == ()
+
+
 async def test_target_first_frame_delivers_nothing() -> None:
     """目标切换后的首帧：新目标无基线——只建基线、零投递。"""
     watermark = WechatGuiWatermark(retention=10)

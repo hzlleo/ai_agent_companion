@@ -197,6 +197,61 @@ async def test_title_mismatch_fail_triggers_backoff_and_reopens() -> None:
     assert router.inbound == []
 
 
+async def test_persistent_title_mismatch_skip_uses_backoff_sequence() -> None:
+    """默认 skip 下持续不一致：每轮计入退避（2→4→8s），不再是裸轮询间隔。"""
+    client = _client(hashes=["sha-1", "sha-2", "sha-3"])
+    reader = FakeWechatGuiReader(
+        [make_read_result(title="别人", messages=[make_message()]) for _ in range(3)]
+    )
+    router = FakeWechatGuiRouter()
+    gate = SleepGate(stop_after=3)
+    runner = _runner(client=client, reader=reader, router=router, sleep=gate)
+    gate.runner = runner
+    await runner.run()
+    assert gate.delays == [2.0, 4.0, 8.0]
+    assert runner.consecutive_failures == 3
+    assert runner.title_mismatch_count == 3
+
+
+async def test_title_mismatch_backoff_resets_after_success() -> None:
+    """一轮标题恢复一致：退避复位为正常轮询间隔。"""
+    client = _client(hashes=["sha-1", "sha-2", "sha-3"])
+    reader = FakeWechatGuiReader(
+        [
+            make_read_result(title="别人", messages=[make_message()]),
+            make_read_result(title="别人", messages=[make_message()]),
+            make_read_result(title="小林", messages=[make_message()]),
+        ]
+    )
+    router = FakeWechatGuiRouter()
+    gate = SleepGate(stop_after=3)
+    runner = _runner(client=client, reader=reader, router=router, sleep=gate)
+    gate.runner = runner
+    await runner.run()
+    assert gate.delays == [2.0, 4.0, 0.5]
+    assert runner.consecutive_failures == 0
+    assert runner.disabled_targets == ()
+
+
+async def test_title_mismatch_streak_disables_target_after_threshold() -> None:
+    """连续 3 轮不一致后停采该目标：不再 open_chat / 截图 / 解析。"""
+    client = _client(hashes=["sha-1", "sha-2", "sha-3", "sha-4"])
+    reader = FakeWechatGuiReader(
+        [make_read_result(title="别人", messages=[make_message()]) for _ in range(4)]
+    )
+    router = FakeWechatGuiRouter()
+    gate = SleepGate(stop_after=4)
+    runner = _runner(client=client, reader=reader, router=router, sleep=gate)
+    gate.runner = runner
+    await runner.run()
+    assert gate.delays == [2.0, 4.0, 8.0, 0.5]
+    assert runner.disabled_targets == ("小林",)
+    assert client.open_calls == ["小林", "小林", "小林"]
+    assert client.screenshot_calls == 3
+    assert len(reader.calls) == 3
+    assert router.inbound == []
+
+
 async def test_shared_window_state_from_outbound_forces_reopen() -> None:
     """出站已切换过窗口：runner 不得按旧记忆跳过 open_chat。"""
     client = _client(hashes=["sha-1", "sha-2"])
