@@ -14,6 +14,7 @@ from packages.harness.channels.wechat_gui.wechat_gui_adapter import (
     WECHAT_GUI_ATTACHMENT_UNSUPPORTED_ERROR,
     WechatGuiChannelAdapter,
 )
+from packages.harness.channels.wechat_gui.wechat_gui_models import WechatGuiWindowState
 from packages.harness.core.errors import BusinessException, ErrorCode
 from tests.wechat_gui_fakes import (
     FakeWechatGuiClient,
@@ -26,11 +27,13 @@ def _adapter(
     *,
     client: FakeWechatGuiClient | None = None,
     reader: FakeWechatGuiReader | None = None,
+    window_state: WechatGuiWindowState | None = None,
 ) -> WechatGuiChannelAdapter:
     """构造注入 fake 的适配器。"""
     return WechatGuiChannelAdapter(
         client=client or FakeWechatGuiClient(),
         reader=reader or FakeWechatGuiReader([make_read_result(title="小林")]),
+        window_state=window_state,
     )
 
 
@@ -127,3 +130,22 @@ async def test_type_text_failure_propagates() -> None:
         )
     assert error.value.code is ErrorCode.CHANNEL_API_ERROR
     assert client.key_calls == []
+
+
+async def test_title_mismatch_resets_shared_window_state() -> None:
+    """出站标题不一致：拒绝发送并复位共享窗口目标（runner 下一轮重开）。"""
+    window_state = WechatGuiWindowState()
+    window_state.mark_open("阿青")
+    client = FakeWechatGuiClient()
+    adapter = _adapter(
+        client=client,
+        reader=FakeWechatGuiReader([make_read_result(title="别人")]),
+        window_state=window_state,
+    )
+    with pytest.raises(BusinessException) as error:
+        await adapter.send_message(
+            OutboundMessageModel(chat_id="wechat_gui:小林", text="晚安")
+        )
+    assert error.value.code is ErrorCode.CHANNEL_API_ERROR
+    assert window_state.current_target is None
+    assert client.type_calls == []

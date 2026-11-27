@@ -1,4 +1,4 @@
-"""GUI 微信通道 Model Classes 测试——会话键 / 设置 / 去重键 / 归一映射。
+"""GUI 微信通道 Model Classes 测试——会话键 / 设置 / 追踪 ID / 归一映射。
 
 零真实配置：全局单例读取根 conftest 硬覆盖值；隔离实例经显式字段构造。
 """
@@ -10,15 +10,16 @@ from pydantic import ValidationError
 
 from packages.harness.channels.channel_models import ChannelType
 from packages.harness.channels.wechat_gui.wechat_gui_models import (
-    WECHAT_GUI_DEDUP_WINDOW_MS,
+    VlmReadResultModel,
     WechatGuiContactModel,
     WechatGuiMessageModel,
     WechatGuiSettings,
     WechatGuiSnapshotModel,
+    WechatGuiWindowState,
     build_wechat_gui_chat_id,
-    map_wechat_gui_snapshot_to_inbound,
+    map_wechat_gui_messages_to_inbound,
     parse_wechat_gui_chat_id,
-    wechat_gui_message_dedup_key,
+    wechat_gui_message_id,
 )
 from packages.harness.config.models import ChannelsSettings, Settings, settings
 from packages.harness.config.settings import build_isolated_settings
@@ -148,50 +149,54 @@ async def test_chat_id_grammar_round_trip_and_rejection() -> None:
     assert empty_suffix.value.code is ErrorCode.VALIDATION_ERROR
 
 
-async def test_dedup_key_uses_text_and_time_window() -> None:
-    """去重键：同文本同窗口一致；跨窗口 / 跨文本不同。"""
-    message = WechatGuiMessageModel(text="你好", ts_ms=1_000_000)
-    key_a = wechat_gui_message_dedup_key("小林", message, captured_at_ms=1_000_000)
-    key_b = wechat_gui_message_dedup_key(
-        "小林", message.model_copy(), captured_at_ms=1_200_000
-    )
-    assert key_a == key_b
-    key_later = wechat_gui_message_dedup_key(
-        "小林",
-        message.model_copy(update={"ts_ms": 1_000_000 + WECHAT_GUI_DEDUP_WINDOW_MS}),
-        captured_at_ms=1_000_000,
-    )
-    assert key_later != key_a
-    key_other_text = wechat_gui_message_dedup_key(
-        "小林", message.model_copy(update={"text": "再见"}), captured_at_ms=1_000_000
-    )
-    assert key_other_text != key_a
-    assert len(key_a) == 64
+async def test_message_fields_are_required() -> None:
+    """解析消息字段必填：任缺一律 ValidationError（与「缺字段即失败」对齐）。"""
+    with pytest.raises(ValidationError):
+        WechatGuiMessageModel(text="你好", is_self=False, ts_ms=0)
+    with pytest.raises(ValidationError):
+        WechatGuiMessageModel(sender="小林", is_self=False, ts_ms=0)
+    with pytest.raises(ValidationError):
+        WechatGuiMessageModel(sender="小林", text="你好", ts_ms=0)
+    with pytest.raises(ValidationError):
+        WechatGuiMessageModel(sender="小林", text="你好", is_self=False)
+    with pytest.raises(ValidationError):
+        VlmReadResultModel(title="小林", confidence=0.9)
+    assert WechatGuiMessageModel(
+        sender="小林", text="你好", is_self=False, ts_ms=0
+    ).ts_ms == 0
 
 
-async def test_map_snapshot_filters_and_maps_fields() -> None:
-    """归一映射：自身回声 / 空文本 / 已处理键过滤；来源与通道字段正确。"""
-    snapshot = WechatGuiSnapshotModel(
-        title="小林",
-        messages=[
-            WechatGuiMessageModel(sender="我", text="自己发的", is_self=True),
-            WechatGuiMessageModel(sender="小林", text=""),
-            WechatGuiMessageModel(sender="小林", text="第一条", ts_ms=1_000_000),
-            WechatGuiMessageModel(sender="小林", text="第二条", ts_ms=1_100_000),
-            WechatGuiMessageModel(sender="小林", text="第二条", ts_ms=1_100_500),
-        ],
-        screenshot_sha256="sha-1",
-        captured_at_ms=1_200_000,
+async def test_message_id_distinguishes_positions_and_content() -> None:
+    """追踪 ID：同批同文本按位置区分；内容相同同位一致。"""
+    message = WechatGuiMessageModel(
+        sender="小林", text="你好", is_self=False, ts_ms=0
     )
+    first = wechat_gui_message_id("小林", position=0, message=message)
+    second = wechat_gui_message_id("小林", position=1, message=message)
+    assert first != second
+    assert first == wechat_gui_message_id("小林", position=0, message=message)
+    assert len(first) == 64
+    other = message.model_copy(update={"text": "再见"})
+    assert first != wechat_gui_message_id("小林", position=0, message=other)
+
+
+async def test_map_messages_filters_and_maps_fields() -> None:
+    """归一映射：自身回声 / 空文本过滤；来源与通道字段正确。"""
+    messages = [
+        WechatGuiMessageModel(sender="我", text="自己发的", is_self=True, ts_ms=0),
+        WechatGuiMessageModel(sender="小林", text="", is_self=False, ts_ms=0),
+        WechatGuiMessageModel(sender="小林", text="第一条", is_self=False, ts_ms=1_000_000),
+        WechatGuiMessageModel(sender="小林", text="第二条", is_self=False, ts_ms=1_100_000),
+        WechatGuiMessageModel(sender="小林", text="第二条", is_self=False, ts_ms=1_100_500),
+    ]
     contact = WechatGuiContactModel(remark_name="小林", is_owner=True)
-    inbound = map_wechat_gui_snapshot_to_inbound(
-        snapshot,
+    inbound = map_wechat_gui_messages_to_inbound(
+        messages,
         contact=contact,
-        known_message_ids=frozenset(),
         max_messages=20,
         now_ms=1_200_000,
     )
-    assert [message.text for message in inbound] == ["第一条", "第二条"]
+    assert [message.text for message in inbound] == ["第一条", "第二条", "第二条"]
     first = inbound[0]
     assert first.channel is ChannelType.WECHAT_GUI
     assert first.chat_id == "wechat_gui:小林"
@@ -200,34 +205,21 @@ async def test_map_snapshot_filters_and_maps_fields() -> None:
     assert first.is_group_chat is False
     assert first.synthetic is False
     assert first.sender_id == "小林"
-    assert first.message_id == wechat_gui_message_dedup_key(
-        "小林", snapshot.messages[2], captured_at_ms=1_200_000
-    )
+    assert len({message.message_id for message in inbound}) == 3
 
 
-async def test_map_snapshot_skips_known_and_bounds_tail() -> None:
-    """归一映射：已处理键跳过；上限只保留时间序末尾。"""
+async def test_map_messages_skips_self_and_bounds_tail() -> None:
+    """归一映射：自身回声跳过；上限只保留时间序末尾。"""
     messages = [
-        WechatGuiMessageModel(sender="小林", text=f"消息{i}", ts_ms=1_000_000 + i)
+        WechatGuiMessageModel(
+            sender="小林", text=f"消息{i}", is_self=False, ts_ms=1_000_000 + i
+        )
         for i in range(5)
     ]
-    snapshot = WechatGuiSnapshotModel(
-        title="小林",
-        messages=messages,
-        screenshot_sha256="sha",
-        captured_at_ms=2_000_000,
-    )
     contact = WechatGuiContactModel(remark_name="小林")
-    known = frozenset(
-        {
-            wechat_gui_message_dedup_key("小林", messages[0], captured_at_ms=2_000_000),
-            wechat_gui_message_dedup_key("小林", messages[1], captured_at_ms=2_000_000),
-        }
-    )
-    inbound = map_wechat_gui_snapshot_to_inbound(
-        snapshot,
+    inbound = map_wechat_gui_messages_to_inbound(
+        messages,
         contact=contact,
-        known_message_ids=known,
         max_messages=2,
         now_ms=2_000_000,
     )
@@ -243,3 +235,15 @@ async def test_snapshot_and_result_models_validate() -> None:
         )
     with pytest.raises(ValidationError):
         WechatGuiSettings(title_mismatch_action="explode")
+
+
+async def test_window_state_shared_target_lifecycle() -> None:
+    """单窗口共享状态：登记 / 匹配 / 复位。"""
+    state = WechatGuiWindowState()
+    assert state.matches("小林") is False
+    state.mark_open("小林")
+    assert state.matches("小林") is True
+    assert state.matches("阿青") is False
+    state.mark_unknown()
+    assert state.current_target is None
+    assert state.matches("小林") is False

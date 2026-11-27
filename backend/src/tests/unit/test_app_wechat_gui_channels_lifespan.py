@@ -1,7 +1,7 @@
-"""app 通道装配测试——GUI 微信实验轨 lifespan（默认关闭 / 装配 / 缺 token 跳过）。
+"""app 通道装配测试——GUI 微信实验轨 lifespan（默认关闭 / 装配 / 跳过）。
 
-零真实网络：沙盒客户端虽然构造真实类，但 runner 由 fake 替换（run 等待停机
-事件），装配期不发请求；视觉解析同样只在 runner 内被调用。
+零真实网络：装配期 ``/health`` 探测经 monkeypatch 固定（健康 / 不可达两态），
+runner 由 fake 替换（run 等待停机事件）；视觉解析同样只在 runner 内被调用。
 """
 
 from __future__ import annotations
@@ -75,11 +75,15 @@ class FakeWechatGuiRunner:
         backoff_max_seconds: float,
         max_messages_per_poll: int,
         title_mismatch_action: Any,
+        gui_lock: Any,
+        window_state: Any,
     ) -> None:
         self.client = client
         self.reader = reader
         self.router = router
         self.contacts = contacts
+        self.gui_lock = gui_lock
+        self.window_state = window_state
         self.poll_interval_seconds = poll_interval_seconds
         self.backoff_base_seconds = backoff_base_seconds
         self.backoff_max_seconds = backoff_max_seconds
@@ -113,9 +117,14 @@ class FakeWechatGuiRunner:
 
 
 @pytest.fixture(autouse=True)
-def _reset_fakes() -> None:
-    """每测试清理 fake runner 类级实例登记。"""
+def _reset_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """每测试清理 fake runner 登记，并把装配期健康探测固定为健康。"""
     FakeWechatGuiRunner.instances = []
+
+    async def _healthy(self: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(app_main.WechatGuiSandboxClient, "probe_health", _healthy)
 
 
 class TestDisabledByDefault:
@@ -158,9 +167,13 @@ class TestEnabledWiring:
             assert runner.client.base_url == "http://127.0.0.1:8091"
             assert runner.client.has_token is True
             assert runner.router is app.state.channels_router
+            assert runner.gui_lock is not None
             router = app.state.channels_router
             assert ChannelType.WECHAT_GUI in router.active_channels
-            assert router.get_adapter(ChannelType.WECHAT_GUI) is not None
+            adapter = router.get_adapter(ChannelType.WECHAT_GUI)
+            assert adapter is not None
+            assert adapter._gui_lock is runner.gui_lock
+            assert adapter._window_state is runner.window_state
         finally:
             await shutdown_app_state(app)
         assert getattr(app.state, "channels_wechat_gui_runner", None) is None
@@ -201,3 +214,30 @@ class TestEnabledWiring:
             assert runner.targets == ()
         finally:
             await shutdown_app_state(app)
+
+
+class TestProbeFailure:
+    async def test_unreachable_health_skips_only_wechat_gui(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """装配期 /health 不可达：记录并跳过本通道（不抛出，其余通道照常）。"""
+        monkeypatch.setattr(app_main, "WechatGuiChannelRunner", FakeWechatGuiRunner)
+
+        async def _unreachable(self: Any) -> bool:
+            return False
+
+        monkeypatch.setattr(
+            app_main.WechatGuiSandboxClient, "probe_health", _unreachable
+        )
+        app = create_app()
+        settings = _settings(tmp_path, enabled=True)
+        await startup_app_state(app, settings, config_dir=tmp_path)
+        try:
+            assert app.state.channels_wechat_gui_runner is None
+            assert app.state.channels_wechat_gui_task is None
+            router = app.state.channels_router
+            assert router is not None
+            assert ChannelType.WECHAT_GUI not in router.active_channels
+        finally:
+            await shutdown_app_state(app)
+        assert FakeWechatGuiRunner.instances == []

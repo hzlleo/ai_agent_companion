@@ -65,7 +65,7 @@ async def test_screenshot_success_wire_shape() -> None:
 
 
 async def test_tool_methods_argument_mapping() -> None:
-    """click / type_text / press_key / open_chat 的参数与结果映射。"""
+    """type_text / press_key / open_chat 的参数与结果映射。"""
     bodies: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -80,25 +80,42 @@ async def test_tool_methods_argument_mapping() -> None:
                     "result": {
                         "remark_name": "小林",
                         "title_image_base64": _PNG,
-                        "title_sha256": "t",
                         "full_image_base64": _PNG,
+                        "title_sha256": "t",
                         "full_sha256": "f",
+                        "title_changed": True,
                     },
+                    "latency_ms": 1,
+                },
+            )
+        if tool == "type_text":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {"chars": len(body["arguments"]["text"])},
+                    "latency_ms": 1,
+                },
+            )
+        if tool == "press_key":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {"key": body["arguments"]["key"]},
                     "latency_ms": 1,
                 },
             )
         return httpx.Response(200, json={"ok": True, "result": {}, "latency_ms": 1})
 
     client = _client(handler)
-    await client.click(3, 4)
     await client.type_text("晚安")
     await client.press_key("enter")
     opened = await client.open_chat("小林")
     assert opened.remark_name == "小林" and opened.title_sha256 == "t"
-    assert bodies[0] == {"tool": "click", "arguments": {"x": 3, "y": 4}}
-    assert bodies[1] == {"tool": "type_text", "arguments": {"text": "晚安"}}
-    assert bodies[2] == {"tool": "press_key", "arguments": {"key": "enter"}}
-    assert bodies[3] == {"tool": "open_chat", "arguments": {"remark_name": "小林"}}
+    assert bodies[0] == {"tool": "type_text", "arguments": {"text": "晚安"}}
+    assert bodies[1] == {"tool": "press_key", "arguments": {"key": "enter"}}
+    assert bodies[2] == {"tool": "open_chat", "arguments": {"remark_name": "小林"}}
 
 
 async def test_invoke_ok_false_maps_to_channel_api_error() -> None:
@@ -197,6 +214,79 @@ async def test_open_chat_result_missing_field_is_controlled_error() -> None:
     with pytest.raises(BusinessException) as error:
         await client.open_chat("小林")
     assert error.value.code is ErrorCode.CHANNEL_API_ERROR
+
+
+async def test_open_chat_requires_title_changed_wire_field() -> None:
+    """镜像 Result Model 强制 title_changed 字段（缺失即 wire 契约破坏）。"""
+    client = _client(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "remark_name": "小林",
+                    "title_image_base64": _PNG,
+                    "full_image_base64": _PNG,
+                    "title_sha256": "t",
+                    "full_sha256": "f",
+                },
+                "latency_ms": 1,
+            },
+        )
+    )
+    with pytest.raises(BusinessException) as error:
+        await client.open_chat("小林")
+    assert error.value.code is ErrorCode.CHANNEL_API_ERROR
+    assert "title_changed" in error.value.message
+
+
+async def test_open_chat_accepts_title_unchanged_with_warning() -> None:
+    """title_changed=false 仍返回结果（后端视觉标题校验继续 fail-closed）。"""
+    client = _client(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "remark_name": "小林",
+                    "title_image_base64": _PNG,
+                    "full_image_base64": _PNG,
+                    "title_sha256": "t",
+                    "full_sha256": "f",
+                    "title_changed": False,
+                },
+                "latency_ms": 1,
+            },
+        )
+    )
+    opened = await client.open_chat("小林")
+    assert opened.remark_name == "小林" and opened.title_sha256 == "t"
+
+
+async def test_type_text_and_press_key_require_result_fields() -> None:
+    """type_text / press_key 结果字段缺失 → 受控业务错误。"""
+    for tool, method, bad_result in (
+        ("type_text", "type_text", {}),
+        ("press_key", "press_key", {"wrong": "enter"}),
+    ):
+        client = _client(
+            lambda request, tool=tool, bad_result=bad_result: httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": bad_result
+                    if json.loads(request.content)["tool"] == tool
+                    else {},
+                    "latency_ms": 1,
+                },
+            )
+        )
+        with pytest.raises(BusinessException) as error:
+            if method == "type_text":
+                await client.type_text("晚安")
+            else:
+                await client.press_key("enter")
+        assert error.value.code is ErrorCode.CHANNEL_API_ERROR
 
 
 async def test_probe_health_matrix() -> None:

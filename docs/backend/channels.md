@@ -25,13 +25,14 @@
 | `douyin/douyin_scripts.py` | 页面 JS 表达式（会话 DOM 采集 / 输入框写入并发送——参数 JSON 嵌入，零浏览器依赖） | `build_douyin_collect_script` / `build_douyin_send_script` / `DOUYIN_MESSAGE_NODE_SELECTORS` |
 | `douyin/douyin_client.py` | 浏览器底座客户端（经注入的 `evaluate` / `navigate` 调用面读写会话；失败归一可重试错误） | `DouyinWebClient` / `DouyinBrowserInvoker` |
 | `douyin/douyin_runner.py` | 抖音 runner（轮询采集 / 去重窗口 / 逐消息路由隔离 / 指数退避 / 出站文本发送与附件逐条不支持承载） | `DouyinChannelRunner` / `DouyinMessageDedupWindow` |
-| `wechat_gui/wechat_gui_wire_models.py` | GUI 微信 agent wire 契约（Unit 文件；与沙盒树文本镜像）：健康 / 调用请求 / 调用响应 | `HealthResponseModel` / `InvokeRequestModel` / `InvokeResponseModel` |
-| `wechat_gui/wechat_gui_models.py` | GUI 微信通道模型（Unit 文件）：解析结果 / 快照 / 联系人 / 会话键 / 去重键 / 归一映射 / 设置 | `WechatGuiSettings` / `WechatGuiSnapshotModel` / `WechatGuiSessionKey` / `build_wechat_gui_chat_id` / `map_wechat_gui_snapshot_to_inbound` |
+| `wechat_gui/wechat_gui_wire_models.py` | GUI 微信 agent wire 契约（Unit 文件；与沙盒树文本镜像）：健康 / 调用请求 / 调用响应 / 五工具结果 / 端点与工具名常量 | `HealthResponseModel` / `InvokeRequestModel` / `InvokeResponseModel` / `ScreenshotResultModel` / `ClickResultModel` / `TypeTextResultModel` / `PressKeyResultModel` / `OpenChatResultModel` / `WECHAT_GUI_TOOL_*` |
+| `wechat_gui/wechat_gui_models.py` | GUI 微信通道模型（Unit 文件）：解析结果 / 快照 / 联系人 / 会话键 / 单窗口共享状态 / 入站映射 / 设置 | `WechatGuiSettings` / `WechatGuiSnapshotModel` / `WechatGuiSessionKey` / `WechatGuiWindowState` / `build_wechat_gui_chat_id` / `map_wechat_gui_messages_to_inbound` |
 | `wechat_gui/wechat_gui_prompts.py` | 截图解析提示词 Unit（任务书 / 指令 + byte-lock 版本） | `render_wechat_gui_reader_charter` / `render_wechat_gui_reader_instruction` |
-| `wechat_gui/wechat_gui_client.py` | 沙盒 agent 客户端（共享 httpx + Bearer；五工具；失败归一可重试错误） | `WechatGuiSandboxClient` |
+| `wechat_gui/wechat_gui_client.py` | 沙盒 agent 客户端（共享 httpx + Bearer；后端四工具——click 仅沙盒侧保留；引用镜像常量并用镜像 Result Model 解码结果；失败归一可重试错误） | `WechatGuiSandboxClient` |
 | `wechat_gui/wechat_gui_reader.py` | 截图 → 视觉解析（look_at 回退链 + 严格 JSON + 低置信度 fail-closed） | `WechatGuiReader` / `extract_json_object` |
-| `wechat_gui/wechat_gui_runner.py` | GUI 微信 runner（轮询 / 截图变化检测 / P4 标题校验 / 去重 / 逐消息路由隔离 / 退避） | `WechatGuiChannelRunner` / `WechatGuiMessageDedupWindow` |
-| `wechat_gui/wechat_gui_adapter.py` | GUI 微信出站适配器（标题校验后输入并回车；附件不支持） | `WechatGuiChannelAdapter` |
+| `wechat_gui/wechat_gui_watermark.py` | GUI 微信会话水位（尾部重叠比对 / 末次出现定位 / 视图重置 / 保留长度；两相 diff-commit） | `WechatGuiWatermark` / `WechatGuiWatermarkAdvance` |
+| `wechat_gui/wechat_gui_runner.py` | GUI 微信 runner（轮询 / 截图变化检测 / P4 标题校验 / 会话水位 / 单窗口锁 / 逐消息路由隔离 / 退避） | `WechatGuiChannelRunner` |
+| `wechat_gui/wechat_gui_adapter.py` | GUI 微信出站适配器（单窗口锁内标题校验后输入并回车；附件不支持） | `WechatGuiChannelAdapter` |
 | `sms_forwarder/sms_models.py` | SmsForwarder 转发载荷归一（Unit 文件）：字段别名 / kind 过滤 / 正文与发送者归一 / 时间戳解析 / 属主清单 / msgid 与内容时间窗去重 / 直调路径 | `SmsForwarderPayloadModel` / `parse_sms_forwarder_payload` / `SmsForwarderDedupWindow` / `parse_owner_numbers` / `process_sms_forwarder_payload` |
 | `sms_forwarder/sms_runner.py` | SmsForwarder webhook 入站 runner（有界队列 + 固定 worker / 去重 / 过载丢弃计数 / 周期观测 / 生命周期收尾） | `SmsForwarderWebhookRunner` / `SMS_FORWARDER_INBOUND_QUEUE_SIZE` / `SMS_FORWARDER_INBOUND_WORKER_COUNT` |
 | `sms_forwarder/sms_adapter.py` | SmsForwarder 仅入站适配器（出站恒丢弃——空投递结果，不发起平台调用） | `SmsForwarderAdapter` |
@@ -105,12 +106,20 @@ DOUYIN_ENABLED=true 时（同一 ChannelRouter）：
     → asyncio.create_task(runner.run()) + background_task_manager.register
     （底座未就绪 → 记 ERROR 并只跳过该通道）
     （app.state.channels_douyin_runner / channels_douyin_task 槽位）
+WECHAT_GUI_ENABLED=true 时（同一 ChannelRouter——共享单窗口锁与目标状态）：
+    WechatGuiSandboxClient（Bearer token 缺失即跳过该通道）
+    → 装配期 GET /health（不可达即记录并跳过装配，不抛出）
+    → WechatGuiReader + 共享 asyncio.Lock / WechatGuiWindowState
+    → WechatGuiChannelRunner + WechatGuiChannelAdapter（同一锁与目标状态）
+    → router.register_adapter(WECHAT_GUI, adapter)
+    → asyncio.create_task(runner.run()) + background_task_manager.register
+    （app.state.channels_wechat_gui_runner / channels_wechat_gui_task 槽位）
 TELEGRAM_ENABLED / QQ_ENABLED / WECOM_ENABLED / DOUYIN_ENABLED /
-SMS_FORWARDER_ENABLED / WHATSAPP_ENABLED 全为 false（缺省）：
+WECHAT_GUI_ENABLED / SMS_FORWARDER_ENABLED / WHATSAPP_ENABLED 全为 false（缺省）：
     no-op——零通道对象构造
 ```
 
-停机 LIFO（`shutdown_app_state` 六步）：`_shutdown_channels`（先于公共池——runner 消费共享 HTTP client）→ 后台任务 drain（`background_task_manager.shutdown`——fire-and-forget 在途任务先于池关闭排空）→ `pool_manager.stop()` → `close_database()` → `shutdown_shared_thread_pool()`。通道停机链（telegram / QQ / 企微 / 抖音 / SmsForwarder / WhatsApp 逐通道一致）：`request_stop()`（优雅——轮询态在途长轮询最多再等一个窗口；退避态的退避睡眠最长 `backoff_max_seconds`（默认 60s）不可被 request_stop 中断；抖音的长轮询休眠可被停机即时打断）→ bounded 等待（5s）→ 超时 `cancel` 兜底（cancel 语义覆盖两种形态——优雅等待不保证收口，5s 上限后强制终止；offset 已逐批持久化，重启安全）。
+停机 LIFO（`shutdown_app_state` 六步）：`_shutdown_channels`（先于公共池——runner 消费共享 HTTP client）→ 后台任务 drain（`background_task_manager.shutdown`——fire-and-forget 在途任务先于池关闭排空）→ `pool_manager.stop()` → `close_database()` → `shutdown_shared_thread_pool()`。通道停机链（telegram / QQ / 企微 / 抖音 / GUI 微信 / SmsForwarder / WhatsApp 逐通道一致）：`request_stop()`（优雅——轮询态在途长轮询最多再等一个窗口；退避态的退避睡眠最长 `backoff_max_seconds`（默认 60s）不可被 request_stop 中断；抖音的长轮询休眠可被停机即时打断）→ bounded 等待（5s）→ 超时 `cancel` 兜底（cancel 语义覆盖两种形态——优雅等待不保证收口，5s 上限后强制终止；offset 已逐批持久化，重启安全）。
 
 ## 人格语义（锁定决策）
 
@@ -1242,7 +1251,7 @@ backend（本仓库）
       ↓ POST /invoke（Bearer token；恒 200 携带成败终态）
       ↓ GET /health（无鉴权存活面）
 docker/wechat-gui 沙盒容器（独立 pixi 工程 / 镜像 / CI job，零代码共享）
-  agent（仅回环 127.0.0.1:8090，stdlib HTTP）
+  agent（仅回环 127.0.0.1:8090，asyncio HTTP；每连接一请求）
       ↓ Unix socket JSON 行（uinputd 控制面：key / move / click）
       ↓ ImageMagick（import -window root png:-）/ xclip（剪贴板）
   uinputd（root 创建并持有虚拟键盘 + 绝对指针）
@@ -1252,7 +1261,7 @@ docker/wechat-gui 沙盒容器（独立 pixi 工程 / 镜像 / CI job，零代�
 
 视觉解析在**后端**侧完成：沙盒只返回截图字节，后端经 ``look_at`` 角色
 回退链调用视觉模型（``gateway.chat_for_entry(purpose="look_at")``），
-因此截图永不进入第三方业务链路之外的处理。
+因此截图只在后端与视觉模型之间流转，不进入其他业务链路。
 
 ### wire 契约（恒 200 语义）
 
@@ -1271,9 +1280,21 @@ docker/wechat-gui 沙盒容器（独立 pixi 工程 / 镜像 / CI job，零代�
 
 五工具：``screenshot`` / ``click{x,y}`` / ``type_text{text}`` /
 ``press_key{key}`` / ``open_chat{remark_name}``。``type_text`` 经剪贴板
-粘贴（覆盖中文；虚拟键盘只注册 ASCII 子集）；``open_chat`` 为
+粘贴（覆盖中文；虚拟键盘只注册 ASCII 子集；粘贴后不清空剪贴板，
+x11vnc 的 clipboard 同步面透传同一 X selection）；``open_chat`` 为
 Ctrl+F → 输入备注名 → Enter → 有界等待标题区域变化，返回标题区域与全屏
-截图（后端据此做视觉校验）。
+截图（后端据此做视觉校验），结果携带 ``title_changed``——截止内未变化时
+为 false，后端仍以视觉标题校验为 fail-closed 落定前提。
+
+工具结果字段与工具名 / 路径常量同属 wire 契约：沙盒
+``wire_models.py`` 定义 ``ScreenshotResultModel`` / ``ClickResultModel`` /
+``TypeTextResultModel`` / ``PressKeyResultModel`` / ``OpenChatResultModel``
+与 ``WECHAT_GUI_HEALTH_PATH`` / ``WECHAT_GUI_INVOKE_PATH`` /
+``WECHAT_GUI_TOOL_*``；后端 ``wechat_gui_wire_models.py`` 逐字镜像并由
+``scripts/check_sandbox_dtos_drift.py`` 纳入漂移门禁（不只三 wire 模型）。
+agent 的 HTTP 面为 asyncio 实现：401 / 404 / 413（请求体超限）/ 422（形态
+非法，含深层嵌套 JSON）属传输层失败，工具内未预期异常恒 200 ``ok=false``，
+handler 顶层异常回受控 500；``/invoke`` 工具执行在进程内锁内串行化。
 
 ### P4 会话键与视觉校验（fail-closed）
 
@@ -1285,15 +1306,28 @@ Ctrl+F → 输入备注名 → Enter → 有界等待标题区域变化，返回
 - 出站：``open_chat`` 后先对标题区域截图做视觉校验；标题不一致**拒绝
   发送**（``CHANNEL_API_ERROR``，路由器逐消息兜底隔离）。
 - 解析失败 / 非 JSON / 缺字段 / 置信度低于阈值：``LLM_CALL_FAILED``
-  （fail-closed），不产生入站消息、不发送出站文本。
+  （fail-closed），不产生入站消息、不发送出站文本。缺字段口径为严格
+  必填：``title`` / ``messages`` / ``confidence`` 与每条消息的 ``sender`` /
+  ``text`` / ``is_self`` / ``ts_ms`` 任一缺失即解析失败（``ts_ms`` 可为 0
+  表示界面时间不可读，但字段必须存在）。
 
-### 轮询 / 变化检测 / 去重
+### 轮询 / 变化检测 / 会话水位
 
 - 轮询默认 5 秒（``WECHAT_GUI_POLL_INTERVAL_SECONDS``）；逐启用联系人
   串行切换（单窗口 UI 的固有约束）。
-- 截图 sha256 与上次相同 → 跳过视觉解析（省调用 + 防重复）。
-- 消息去重键 = ``备注名 + 文本 + 时间窗`` 的 sha256（GUI 侧没有平台
-  消息 ID）；进程内有界 FIFO（容量 1024，重启清零，文档化边界）。
+- 截图 sha256 只在「视觉解析成功且标题校验通过」之后登记；瞬时解析失败
+  不登记，下一轮同一画面会重新解析（走既有指数退避），避免永久吞消息。
+- 新消息判定 = **会话水位**（``wechat_gui_watermark``）：以上一帧可见消息
+  序列为基线，按尾部重叠求最大 k，在最大 k 下取**最后一次出现**的结束
+  位置 e，新消息 = ``cur[e+1:]``；指纹为 ``(sender, is_self, text)``，
+  ``ts_ms`` 不参与（仅作观测字段）。
+- 视图重置：首帧 / 目标首次出现 / 无任何 k 匹配（含用户滚动超出可见
+  范围）/ 新增条数超过保留长度，一律只更新基线、**不投递**。
+- 基线保留长度 = ``WECHAT_GUI_MAX_MESSAGES_PER_POLL``；水位在**本轮全部
+  投递尝试之后**按当前帧落基线——投递失败走逐消息隔离与计数，不回退水位
+  （失败消息不重投）。
+- 标题不一致时目标复位：下一轮重新 ``open_chat``；被拒绝的画面不登记
+  截图 sha。
 - 归一为 ``InboundMessageModel``：``channel=wechat_gui``、
   ``chat_id=wechat_gui:<备注名>``、``is_group_chat=False``、
   ``has_user_text=True``、``synthetic=False``；来源默认 ``peer``，联系人
@@ -1345,14 +1379,32 @@ OutboundMessageModel（chat_id=wechat_gui:<备注名>）
 | ``WECHAT_GUI_VLM_ENTRY`` | 空 | 指定视觉条目名（空 = 走 look_at 回退链） |
 | ``WECHAT_GUI_TITLE_MISMATCH_ACTION`` | ``skip`` | 标题不一致处置（``skip`` / ``fail``） |
 
-``enabled=true`` 而 ``WECHAT_GUI_TOKEN`` 为空时只跳过本通道（其余通道
-照常）；沙盒暂不可达由 runner 退避消化。
+``enabled=true`` 而 ``WECHAT_GUI_TOKEN`` 为空、或装配期 ``GET /health``
+不可达时只跳过本通道（其余通道照常）；运行期瞬时不可达由 runner 退避消化。
+
+``WECHAT_GUI_CONTACTS_JSON`` 是联系人 JSON 数组，示例：
+
+```json
+[
+  {"remark_name": "小林", "persona_id": "p-main", "enabled": true, "is_owner": true}
+]
+```
+
+| 字段 | 必填 | 语义 |
+|---|---|---|
+| ``remark_name`` | 是 | 联系人备注名（会话键 ``wechat_gui:<备注名>`` 与 ``open_chat`` 搜索输入；可改名 / 重名，落定靠视觉标题校验） |
+| ``enabled`` | 否（默认 ``true``） | 是否参与轮询（``false`` = 不打开、不采集） |
+| ``is_owner`` | 否（默认 ``false``） | 消息来源落档：``true`` = ``owner``（主人），``false`` = ``peer`` |
+| ``persona_id`` | 否（默认空） | 配置面登记的人格标识；**当前不参与路由**——会话人格仍由会话服务按主持久化人格解析，本字段供观测与后续按联系人路由扩展 |
+
 
 ### 已实现 / 未验证（诚实边界）
 
-- 已实现并单测覆盖：wire 契约镜像、Bearer 鉴权矩阵、五工具参数校验与
-  uinputd 命令映射、``open_chat`` 有界等待、截图变化检测、P4 标题校验、
-  去重窗口、归一映射、退避 / 停机 / 单实例、出站标题校验与失败隔离。
+- 已实现并单测覆盖：wire 契约镜像（含五工具结果模型与常量行漂移门禁）、
+  Bearer 鉴权矩阵（含非 ASCII token）、HTTP 纯函数解析 413 / 422 边界、
+  工具执行串行化、五工具参数校验与 uinputd 命令映射、``open_chat`` 有界
+  等待与 ``title_changed``、截图变化检测、P4 标题校验、会话水位、单窗口
+  互斥、归一映射、退避 / 停机 / 单实例、出站标题校验与失败隔离。
 - **未验证（待 Live）**：微信客户端安装 / 登录 / 真实消息；真实截图上的
   视觉解析准确率与 ``open_chat`` 命中率；中文输入法 / 字体 / 窗口管理器
   的实际表现；部署机宿主 udev 规则复验。
@@ -1959,13 +2011,15 @@ settings = build_isolated_settings(
 | `tests/unit/test_whatsapp_settings.py` | WHATSAPP_ env 面对齐 / 默认值 / SecretStr 不回显 / 聚合面 / 生产 fail-closed（四项凭据任一缺失） |
 | `tests/unit/test_app_whatsapp_lifespan.py` | WhatsApp enabled / disabled 装配 / 适配器与 runner 共享服务窗 / 属主清单接线 / 停机复位 / 窗口外受控拒绝且零 HTTP 请求（事件钩子记录） |
 | `tests/unit/test_wechat_gui_wire_models.py` | 两树 wire 类定义块逐字一致 / 序列化出口形状 |
-| `tests/unit/test_wechat_gui_models.py` | 会话键 grammar / 设置默认与 env 覆写 / SecretStr / 联系人 JSON fail fast / 去重键时间窗 / 归一映射过滤与来源 |
+| `tests/unit/test_wechat_gui_models.py` | 会话键 grammar / 设置默认与 env 覆写 / SecretStr / 联系人 JSON fail fast / 消息字段必填 / 追踪 ID / 单窗口状态 / 归一映射过滤与来源 |
 | `tests/unit/test_wechat_gui_prompts.py` | 提示词 byte-lock / 版本常量 / 渲染契约 |
-| `tests/unit/test_wechat_gui_client.py` | MockTransport：成功 wire 形状 / 五工具参数 / 恒 200 ok=false / 401 / 超时 / wire 破坏 / token 缺失短路 / 健康探测矩阵 |
+| `tests/unit/test_wechat_gui_client.py` | MockTransport：成功 wire 形状 / 后端四工具参数（click 仅沙盒侧）/ 镜像 Result Model 解码（含 title_changed 缺失与 false）/ 恒 200 ok=false / 401 / 超时 / wire 破坏 / token 缺失短路 / 健康探测矩阵 |
 | `tests/unit/test_wechat_gui_reader.py` | fake 网关：严格 JSON（含代码围栏）/ 非 JSON / 低置信度 / 缺字段 / 回退链失败 / vlm_entry 过滤 / base64 校验 |
-| `tests/unit/test_wechat_gui_runner.py` | 轮询路由 / 截图变化跳过视觉 / P4 skip 与 fail / 逐联系人隔离 / 退避封顶 / 路由异常隔离 / 停机 / 单实例 / 去重窗口 |
+| `tests/unit/test_wechat_gui_watermark.py` | 会话水位：首帧基线 / 追加 1 与 3 条 / 重复文本尾随 / 滚动看历史 / 末次出现 / 目标首帧 / 超出保留长度 / 无匹配重置 / 自身回声对齐 / ts_ms 不参与 / diff-commit 分离 |
+| `tests/unit/test_wechat_gui_runner.py` | 轮询路由 / 截图变化跳过视觉 / 视觉瞬时失败重解析 / P4 skip 与 fail 复位重开 / 逐联系人隔离 / 退避封顶 / 路由异常隔离且水位前进 / 共享窗口目标 / 停机 / 单实例 |
+| `tests/unit/test_wechat_gui_window_mutex.py` | 单窗口互斥：出站持锁挡住轮询切会话 / 出站进行中轮询等待且新增消息不丢 |
 | `tests/unit/test_wechat_gui_adapter.py` | 标题校验后发送 / 标题不一致拒绝 / 视觉失败拒绝 / grammar / 空文本 / 失败上抛 / 附件不支持 |
-| `tests/unit/test_app_wechat_gui_channels_lifespan.py` | GUI 微信 enabled / disabled 装配 / token 缺失仅跳过 / 适配器注册 / 参数接线 / 停机传导 |
-| `tests/wechat_gui_fakes.py` | 共享 fake 基建：沙盒客户端（截图脚本化 + 失败注入）/ 视觉解析器 / fake 路由器 / 记录式休眠闸门 |
+| `tests/unit/test_app_wechat_gui_channels_lifespan.py` | GUI 微信 enabled / disabled 装配 / token 缺失仅跳过 / /health 不可达仅跳过 / 适配器注册与共享锁/目标状态接线 / 参数接线 / 停机传导 |
+| `tests/wechat_gui_fakes.py` | 共享 fake 基建：沙盒客户端（截图脚本化 + 逐次失败注入）/ 视觉解析器 / 单窗口 fake 客户端与解析器 / fake 路由器 / 记录式休眠闸门 |
 
 零真实网络（MockTransport / fake）；零真实配置（隔离 Settings + conftest 硬覆盖；测试 token 为专用假值）；全部 `async def test_*`。

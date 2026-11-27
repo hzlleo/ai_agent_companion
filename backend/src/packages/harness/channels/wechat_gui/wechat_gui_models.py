@@ -2,8 +2,8 @@
 
 定位：个人微信没有稳定的官方个人号消息 API，本通道以「沙盒内 GUI 微信 +
 截图解析 + 键鼠注入」作为实验轨执行面（生产主轨仍是企业微信长连接）。
-本模块只承载通道层语义（视觉解析结果 / 会话键 / 去重键 / 归一映射 /
-配置面），HTTP 调用在 ``wechat_gui_client``，视觉解析在
+本模块只承载通道层语义（视觉解析结果 / 会话键 / 单窗口共享状态 / 归一
+映射 / 配置面），HTTP 调用在 ``wechat_gui_client``，视觉解析在
 ``wechat_gui_reader``，轮询与出站在 ``wechat_gui_runner`` /
 ``wechat_gui_adapter``。
 
@@ -13,15 +13,18 @@
 因此入站与出站都以视觉模型对当前聊天窗口标题的校验为落定前提：标题与
 目标备注名不一致即拒绝（fail-closed，见 reader / adapter）。
 
-去重键（锁定）：``备注名 + 消息文本 + 时间窗`` 的 sha256——GUI 侧没有平台
-消息 ID，同一画面会在每次截图重复出现，去重是正确性硬前提；时间窗把
-「同一条消息跨多次轮询」收敛到同一键，同时允许同一文本在窗口外再次出现。
+新消息判定（锁定）：**会话水位**（``wechat_gui_watermark``）——按当前可见
+消息序列相对上一帧的尾部重叠比对得出新增消息；首帧 / 目标首次出现 / 滚动
+超出可见范围一律按视图重置处理（只建基线、不投递）。``ts_ms`` 不参与判定，
+仅作观测字段。GUI 侧没有平台消息 ID，入站追踪 ID 由会话水位保证的一次性
+投递语义承载（不承担跨轮去重职责）。
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any, Final, Self
 
@@ -40,8 +43,6 @@ from packages.harness.core.errors import BusinessException, ErrorCode
 
 __all__ = [
     "WECHAT_GUI_CHAT_ID_PREFIX",
-    "WECHAT_GUI_DEDUP_WINDOW_MS",
-    "WECHAT_GUI_DEDUP_WINDOW_SIZE",
     "WECHAT_GUI_MIN_CONFIDENCE",
     "WechatGuiContactModel",
     "WechatGuiMessageModel",
@@ -50,22 +51,17 @@ __all__ = [
     "WechatGuiSessionKey",
     "WechatGuiSettings",
     "WechatGuiSnapshotModel",
+    "WechatGuiWindowState",
     "TitleMismatchAction",
     "VlmReadResultModel",
     "build_wechat_gui_chat_id",
-    "map_wechat_gui_snapshot_to_inbound",
+    "map_wechat_gui_messages_to_inbound",
     "parse_wechat_gui_chat_id",
-    "wechat_gui_message_dedup_key",
+    "wechat_gui_message_id",
 ]
 
 #: 会话键前缀（出站 chat_id 的 grammar 段——与 ``parse_wechat_gui_chat_id`` 对称）。
 WECHAT_GUI_CHAT_ID_PREFIX: Final[str] = "wechat_gui:"
-
-#: 消息去重时间窗（毫秒；同一文本 + 同一窗口视为同一条消息）。
-WECHAT_GUI_DEDUP_WINDOW_MS: Final[int] = 5 * 60 * 1000
-
-#: 进程内去重窗口容量（有界 FIFO——重启清零）。
-WECHAT_GUI_DEDUP_WINDOW_SIZE: Final[int] = 1024
 
 #: 视觉解析最低置信度（低于阈值按解析失败处理——fail-closed）。
 WECHAT_GUI_MIN_CONFIDENCE: Final[float] = 0.5
@@ -78,22 +74,64 @@ class TitleMismatchAction(StrEnum):
     FAIL = "fail"
 
 
+class WechatGuiWindowState(BaseModel):
+    """单窗口共享状态（runner 与出站适配器持有同一实例）。
+
+    单窗口语义：输入框与截图都属于「当前打开的会话」，因此「当前目标是
+    谁」必须是跨组件共享的一份状态——出站 ``open_chat`` 之后 runner 不能
+    再按自己记忆的旧目标跳过打开，否则会截到别人的窗口。
+
+    Attributes:
+        current_target: 当前已确认打开的会话备注名（None = 未确认 / 需重开）。
+    """
+
+    model_config = {"extra": "forbid"}
+
+    current_target: str | None = Field(
+        default=None, description="当前已确认打开的会话备注名（None = 未确认）"
+    )
+
+    def matches(self, remark_name: str) -> bool:
+        """判断当前窗口是否已确认打开指定会话。
+
+        Args:
+            remark_name: 目标会话备注名。
+
+        Returns:
+            True = 可直接截图 / 输入；False = 必须先 open_chat。
+        """
+        return self.current_target == remark_name
+
+    def mark_open(self, remark_name: str) -> None:
+        """登记已确认打开的会话目标。
+
+        Args:
+            remark_name: 目标会话备注名。
+        """
+        self.current_target = remark_name
+
+    def mark_unknown(self) -> None:
+        """登记窗口目标不可信（下一次读写前必须重新 open_chat）。"""
+        self.current_target = None
+
+
 class WechatGuiMessageModel(BaseModel):
     """视觉模型解析出的单条聊天消息。
 
     Attributes:
-        sender: 消息发送者显示名（截图可见文本；缺失为空串）。
-        text: 消息正文（纯文本；图片 / 表情 / 语音等非文本消息为占位文本）。
-        is_self: 是否本账号发出（True 的消息不进入路由）。
-        ts_ms: 消息时间（epoch 毫秒；截图不可读时为 0——归一按采集时刻兜底）。
+        sender: 消息发送者显示名（截图可见文本；必填，缺失即解析失败）。
+        text: 消息正文（纯文本；图片 / 表情 / 语音等非文本消息为占位文本；
+            必填，缺失即解析失败）。
+        is_self: 是否本账号发出（必填；True 的消息不进入路由）。
+        ts_ms: 消息时间（毫秒；必填，界面读不出时为 0——仅作观测字段）。
     """
 
     model_config = {"extra": "ignore"}
 
-    sender: str = Field(default="", description="发送者显示名")
-    text: str = Field(default="", description="消息正文")
-    is_self: bool = Field(default=False, description="是否本账号发出")
-    ts_ms: int = Field(default=0, ge=0, description="消息时间（epoch 毫秒；0 = 未报告）")
+    sender: str = Field(description="发送者显示名")
+    text: str = Field(description="消息正文")
+    is_self: bool = Field(description="是否本账号发出")
+    ts_ms: int = Field(ge=0, description="消息时间（毫秒；0 = 界面不可读）")
 
 
 class VlmReadResultModel(BaseModel):
@@ -101,7 +139,7 @@ class VlmReadResultModel(BaseModel):
 
     Attributes:
         title: 当前聊天窗口标题（联系人备注名 / 群名）。
-        messages: 解析出的消息（时间序）。
+        messages: 解析出的消息（时间序；必填——缺失即解析失败）。
         confidence: 解析置信度（0.0-1.0；低于阈值按失败处理）。
         raw_json: 模型返回的原始 JSON 对象（审计面——已通过结构校验）。
     """
@@ -110,7 +148,7 @@ class VlmReadResultModel(BaseModel):
 
     title: str = Field(min_length=1, description="当前聊天窗口标题")
     messages: list[WechatGuiMessageModel] = Field(
-        default_factory=list, description="解析出的消息（时间序）"
+        description="解析出的消息（时间序；缺失即解析失败）"
     )
     confidence: float = Field(ge=0.0, le=1.0, description="解析置信度（0.0-1.0）")
     raw_json: dict[str, Any] = Field(default_factory=dict, description="原始 JSON 对象")
@@ -474,76 +512,65 @@ def parse_wechat_gui_chat_id(chat_id: str) -> str:
     return WechatGuiSessionKey.from_chat_id(chat_id).remark_name
 
 
-def wechat_gui_message_dedup_key(
-    remark_name: str,
-    message: WechatGuiMessageModel,
-    *,
-    captured_at_ms: int,
-    window_ms: int = WECHAT_GUI_DEDUP_WINDOW_MS,
+def wechat_gui_message_id(
+    remark_name: str, *, position: int, message: WechatGuiMessageModel
 ) -> str:
-    """计算消息去重键（备注名 + 文本 + 时间窗的 sha256）。
+    """计算入站消息追踪 ID（备注名 + 本轮位置 + 内容指纹的 sha256）。
 
-    GUI 侧没有平台消息 ID：同一画面在每次截图都会重复出现，去重键因此
-    由「备注名 + 文本 + 时间窗桶」派生。时间取消息自身时间（不可读时用
-    采集时刻兜底），桶宽由 ``window_ms`` 决定。
+    会话水位保证同一可见消息只投递一次，因此该 ID 不承担跨轮去重职责；
+    ``position`` 只用于同批相同文本的区分与观测排序。
 
     Args:
         remark_name: 会话备注名。
+        position: 消息在本轮新增序列中的位置（0 起）。
         message: 解析出的消息。
-        captured_at_ms: 采集时刻（消息时间缺失时的兜底）。
-        window_ms: 时间窗宽度（毫秒）。
 
     Returns:
-        十六进制 sha256 去重键（同时用作入站 message_id）。
+        十六进制 sha256 追踪 ID（同时用作入站 ``message_id``）。
     """
-    anchor_ms = message.ts_ms or captured_at_ms
-    bucket = anchor_ms // max(1, window_ms)
-    raw = f"{remark_name}\x1f{message.text}\x1f{bucket}".encode()
+    raw = (
+        f"{remark_name}\x1f{position}\x1f{message.sender}\x1f"
+        f"{message.text}\x1f{message.ts_ms}"
+    ).encode()
     return hashlib.sha256(raw).hexdigest()
 
 
-def map_wechat_gui_snapshot_to_inbound(
-    snapshot: WechatGuiSnapshotModel,
+def map_wechat_gui_messages_to_inbound(
+    messages: Sequence[WechatGuiMessageModel],
     *,
     contact: WechatGuiContactModel,
-    known_message_ids: frozenset[str],
     max_messages: int,
     now_ms: int,
 ) -> list[InboundMessageModel]:
-    """把会话快照归一为入站消息列表（自身回声 / 空文本 / 去重过滤）。
+    """把本轮新增消息归一为入站消息列表（自身回声 / 空文本过滤）。
 
-    过滤顺序：自身回声 → 空文本 → 已处理键 / 批内重复键；随后按时间序取
-    末尾 ``max_messages`` 条。发送者来源按联系人配置的 ``is_owner`` 落档
-    （私聊默认 peer——第三方联系人消息不由主人发出）。
+    输入是本轮新增序列（由会话水位给出，已保证不重复投递）；本函数只做
+    自身回声与空文本过滤，并按时间序取末尾 ``max_messages`` 条。发送者
+    来源按联系人配置的 ``is_owner`` 落档（私聊默认 peer——第三方联系人
+    消息不由主人发出）。
 
     Args:
-        snapshot: 采集快照（标题已通过目标校验）。
+        messages: 本轮新增消息（时间序）。
         contact: 联系人配置（会话目标与来源标注）。
-        known_message_ids: 已处理去重键集合。
         max_messages: 单次归一时间序末尾上限（1-100）。
-        now_ms: 采集时刻（消息时间缺失兜底）。
+        now_ms: 采集时刻（消息时间不可读时的兜底）。
 
     Returns:
         通道中立入站消息列表（时间序）。
     """
     chat_id = build_wechat_gui_chat_id(contact.remark_name)
     selected: list[InboundMessageModel] = []
-    seen: set[str] = set()
-    for message in snapshot.messages:
+    for position, message in enumerate(messages):
         text = message.text.strip()
         if message.is_self or not text:
             continue
-        key = wechat_gui_message_dedup_key(
-            contact.remark_name, message, captured_at_ms=now_ms
-        )
-        if key in seen or key in known_message_ids:
-            continue
-        seen.add(key)
         selected.append(
             InboundMessageModel(
                 channel=ChannelType.WECHAT_GUI,
                 chat_id=chat_id,
-                message_id=key,
+                message_id=wechat_gui_message_id(
+                    contact.remark_name, position=position, message=message
+                ),
                 sender_id=message.sender.strip() or "unknown",
                 text=text,
                 ts_ms=message.ts_ms or now_ms,

@@ -1,32 +1,36 @@
-"""agent HTTP 工具面与同步控制面客户端的 hermetic 单元测试。
+"""agent 异步 HTTP 工具面与 wire 模型的 hermetic 单元测试。
 
-真实 socket 仅落在 pytest 临时目录或 127.0.0.1 的临时端口（无外网、无真实
-X / uinput）；截图 / 剪贴板 / 键鼠注入全部经注入替身记录，断言按记录值与
-脚本化返回值进行，不做墙钟等待。
+真实 socket 仅落在 127.0.0.1 的临时端口（无外网、无真实 X / uinput）；截图 /
+剪贴板 / 键鼠注入全部经注入替身记录，断言按记录值与脚本化返回值进行，不做
+墙钟等待（有界等待用虚拟时钟推演）。
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
-import subprocess
-import threading
-import urllib.error
-import urllib.request
+import sys
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from wechat_gui_poc import agent
+from wechat_gui_poc import agent, wire_models
 from wechat_gui_poc.agent import (
     AgentRuntime,
     AgentToolError,
     ImagemagickScreenshot,
+    ParsedHttpRequest,
+    ProcessOutput,
     XclipClipboard,
-    build_server,
+    parse_http_request,
     parse_key_expression,
     resolve_agent_token,
+    run_process,
 )
 from wechat_gui_poc.uinput_devices import (
     KEY_ENTER,
@@ -34,9 +38,9 @@ from wechat_gui_poc.uinput_devices import (
     KEY_LEFTSHIFT,
     KEY_SPACE,
 )
-from wechat_gui_poc.uinputd import UinputError
 from wechat_gui_poc.wire_models import (
     ClickRequest,
+    ClickResultModel,
     ClickToolArgs,
     CommandOutcome,
     HealthResponseModel,
@@ -44,39 +48,53 @@ from wechat_gui_poc.wire_models import (
     InvokeResponseModel,
     KeyRequest,
     MoveRequest,
+    OpenChatResultModel,
     OpenChatToolArgs,
+    PressKeyResultModel,
     PressKeyToolArgs,
+    ScreenshotResultModel,
     ScreenshotToolArgs,
+    TypeTextResultModel,
     TypeTextToolArgs,
 )
 
 
 class FakeControl:
-    """记录式控制面（可注入失败）。"""
+    """记录式异步控制面（可注入失败与未预期异常）。"""
 
     def __init__(self) -> None:
         self.calls: list[Any] = []
         self.fail_types: set[type[object]] = set()
+        self.error: Exception | None = None
 
-    def send(self, request: Any) -> CommandOutcome:
-        """记录请求并按注入类型返回失败。"""
+    async def send(self, request: Any) -> CommandOutcome:
+        """记录请求并按注入类型返回失败或抛异常。"""
         self.calls.append(request)
+        if self.error is not None:
+            raise self.error
         if type(request) in self.fail_types:
             return CommandOutcome(command=request.command.value, ok=False, error="注入失败")
         return CommandOutcome(command=request.command.value, ok=True)
 
 
 class FakeScreenshots:
-    """脚本化截图替身（按调用顺序返回 PNG；可注入异常）。"""
+    """脚本化异步截图替身（可注入异常与等待闸门）。"""
 
-    def __init__(self, payloads: list[bytes] | None = None) -> None:
+    def __init__(
+        self, payloads: list[bytes] | None = None, gate: asyncio.Event | None = None
+    ) -> None:
         self.payloads = list(payloads or [b"png-default"])
         self.crops: list[tuple[int, int] | None] = []
         self.error: Exception | None = None
+        self.gate = gate
+        self.started = asyncio.Event()
 
-    def capture(self, *, crop: tuple[int, int] | None = None) -> bytes:
+    async def capture(self, *, crop: tuple[int, int] | None = None) -> bytes:
         """记录裁剪参数并返回脚本化字节。"""
         self.crops.append(crop)
+        if self.gate is not None:
+            self.started.set()
+            await self.gate.wait()
         if self.error is not None:
             raise self.error
         if len(self.payloads) > 1:
@@ -85,18 +103,18 @@ class FakeScreenshots:
 
 
 class FakeClipboard:
-    """记录式剪贴板替身。"""
+    """记录式异步剪贴板替身。"""
 
     def __init__(self) -> None:
         self.writes: list[str] = []
 
-    def write(self, text: str) -> None:
+    async def write(self, text: str) -> None:
         """记录写入文本。"""
         self.writes.append(text)
 
 
 class FakeClock:
-    """可控单调时钟与记录式休眠（有界等待按虚拟时间推演）。"""
+    """可控单调时钟与记录式异步休眠（有界等待按虚拟时间推演）。"""
 
     def __init__(self) -> None:
         self.now = 0.0
@@ -106,7 +124,7 @@ class FakeClock:
         """返回虚拟单调时间。"""
         return self.now
 
-    def sleep(self, seconds: float) -> None:
+    async def sleep(self, seconds: float) -> None:
         """记录并推进虚拟时间。"""
         self.delays.append(seconds)
         self.now += seconds
@@ -135,55 +153,97 @@ def _runtime(
     )
 
 
-def _http_request(
-    server: Any,
-    *,
-    method: str,
-    path: str,
-    body: bytes | None = None,
-    token: str | None = None,
-) -> tuple[int, dict[str, Any]]:
-    """对本地 agent 发起一次 HTTP 请求并解析 JSON 响应。"""
-    port = server.server_address[1]
-    request = urllib.request.Request(
-        f"http://127.0.0.1:{port}{path}", data=body, method=method
-    )
-    if body is not None:
-        request.add_header("Content-Type", "application/json")
-    if token is not None:
-        request.add_header("Authorization", f"Bearer {token}")
+@asynccontextmanager
+async def _serve(runtime: AgentRuntime, token: str = "secret") -> AsyncIterator[int]:
+    """在临时回环端口启动 agent 并在退出时关闭。"""
+    server = await agent.start_server(runtime, token, port=0)
+    sockets = server.sockets or ()
+    port = sockets[0].getsockname()[1]
     try:
-        with urllib.request.urlopen(request, timeout=5.0) as response:
-            return response.status, json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8")
-        return exc.code, json.loads(raw) if raw else {}
+        yield port
+    finally:
+        server.close()
+        await server.wait_closed()
 
 
-async def _start_server(
-    runtime: AgentRuntime, token: str
-) -> tuple[Any, threading.Thread]:
-    """在临时端口启动 agent 服务（后台线程）。"""
-    server = build_server(runtime, token, port=0)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    return server, thread
+async def _raw_request(port: int, raw: bytes) -> tuple[int, dict[str, Any], dict[str, str]]:
+    """发送原始报文并解析响应（连接由服务端关闭）。"""
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(raw)
+    await writer.drain()
+    response = await asyncio.wait_for(reader.read(), 5.0)
+    writer.close()
+    await writer.wait_closed()
+    head, separator, body = response.partition(b"\r\n\r\n")
+    assert separator
+    lines = head.decode("utf-8", errors="replace").split("\r\n")
+    status = int(lines[0].split(" ")[1])
+    headers = {
+        key.strip().lower(): value.strip()
+        for line in lines[1:]
+        if ":" in line
+        for key, _, value in [line.partition(":")]
+    }
+    payload = json.loads(body.decode("utf-8")) if body else {}
+    return status, payload, headers
 
 
-async def _stop_server(server: Any, thread: threading.Thread) -> None:
-    """停止 agent 服务并回收线程。"""
-    await asyncio.to_thread(server.shutdown)
-    await asyncio.to_thread(server.server_close)
-    await asyncio.to_thread(thread.join, 2.0)
+async def _request(
+    port: int,
+    *,
+    method: str = "GET",
+    path: str = "/health",
+    body: bytes = b"",
+    token: str | None = None,
+    content_length: int | None = None,
+    omit_content_length: bool = False,
+    extra_headers: Mapping[str, str] | None = None,
+) -> tuple[int, dict[str, Any], dict[str, str]]:
+    """发送一次 JSON 请求并解析响应。"""
+    lines = [f"{method} {path} HTTP/1.1", "Host: 127.0.0.1", "Connection: close"]
+    if not omit_content_length:
+        declared = len(body) if content_length is None else content_length
+        lines.append(f"Content-Length: {declared}")
+    if token is not None:
+        lines.append(f"Authorization: Bearer {token}")
+    for key, value in (extra_headers or {}).items():
+        lines.append(f"{key}: {value}")
+    raw = ("\r\n".join(lines) + "\r\n\r\n").encode("utf-8") + body
+    return await _raw_request(port, raw)
+
+
+async def _invoke(
+    port: int, tool: str, arguments: Mapping[str, object], *, token: str = "secret"
+) -> tuple[int, dict[str, Any], dict[str, str]]:
+    """发送一次 /invoke 工具调用。"""
+    body = json.dumps({"tool": tool, "arguments": dict(arguments)}).encode("utf-8")
+    return await _request(
+        port, method="POST", path="/invoke", body=body, token=token
+    )
+
+
+def _parsed_invoke(
+    tool: str, arguments: Mapping[str, object], *, token: str = "secret"
+) -> ParsedHttpRequest:
+    """构造一个已解析的 /invoke 请求（绕过网络——串行化用例直调）。"""
+    body = json.dumps({"tool": tool, "arguments": dict(arguments)}).encode("utf-8")
+    return ParsedHttpRequest(
+        method="POST",
+        target="/invoke",
+        headers={"authorization": f"Bearer {token}"},
+        body=body,
+    )
 
 
 async def test_wire_models_serialization_round_trip() -> None:
-    """wire 模型序列化形态（健康 / 请求 / 响应）。"""
+    """wire 模型序列化与解码形态（健康 / 请求 / 响应 / 五工具结果）。"""
     assert HealthResponseModel().to_wire() == {"status": "ok"}
     request = InvokeRequestModel(tool="screenshot", arguments={"a": 1})
     assert request.to_wire() == {"tool": "screenshot", "arguments": {"a": 1}}
+    assert InvokeRequestModel.from_wire(request.to_wire()) == request
     success = InvokeResponseModel(ok=True, result={"x": 1}, latency_ms=3)
     assert success.to_wire() == {"ok": True, "result": {"x": 1}, "latency_ms": 3}
+    assert InvokeResponseModel.from_wire(success.to_wire()) == success
     failure = InvokeResponseModel(ok=False, error="坏", latency_ms=4)
     assert failure.to_wire() == {
         "ok": False,
@@ -191,6 +251,63 @@ async def test_wire_models_serialization_round_trip() -> None:
         "error": "坏",
         "latency_ms": 4,
     }
+
+    assert ScreenshotResultModel.from_wire(
+        {"image_base64": "a", "sha256": "b", "width": 1, "height": 2}
+    ) == ScreenshotResultModel(image_base64="a", sha256="b", width=1, height=2)
+    assert ClickResultModel.from_wire({"x": 1, "y": 2}) == ClickResultModel(x=1, y=2)
+    assert TypeTextResultModel.from_wire({"chars": 3}) == TypeTextResultModel(chars=3)
+    assert PressKeyResultModel.from_wire({"key": "enter"}) == PressKeyResultModel(
+        key="enter"
+    )
+    open_chat = OpenChatResultModel(
+        remark_name="小林",
+        title_image_base64="t",
+        full_image_base64="f",
+        title_sha256="ts",
+        full_sha256="fs",
+        title_changed=True,
+    )
+    assert OpenChatResultModel.from_wire(open_chat.to_wire()) == open_chat
+
+
+async def test_wire_model_decoders_reject_invalid_shapes() -> None:
+    """wire 解码矩阵：根节点非对象 / 字段缺失 / 类型不符。"""
+    with pytest.raises(ValueError, match="根节点"):
+        InvokeRequestModel.from_wire([])
+    with pytest.raises(ValueError, match="未声明"):
+        InvokeRequestModel.from_wire({"tool": "a", "extra": 1})
+    with pytest.raises(ValueError, match="tool"):
+        InvokeRequestModel.from_wire({"tool": " "})
+    with pytest.raises(ValueError, match="arguments"):
+        InvokeRequestModel.from_wire({"tool": "a", "arguments": []})
+    with pytest.raises(ValueError, match="ok"):
+        InvokeResponseModel.from_wire({"ok": "yes"})
+    with pytest.raises(ValueError, match="latency_ms"):
+        InvokeResponseModel.from_wire({"ok": True, "latency_ms": -1})
+    with pytest.raises(ValueError, match="image_base64"):
+        ScreenshotResultModel.from_wire({"sha256": "b", "width": 1, "height": 1})
+    with pytest.raises(ValueError, match="width"):
+        ScreenshotResultModel.from_wire(
+            {"image_base64": "a", "sha256": "b", "width": 0, "height": 1}
+        )
+    with pytest.raises(ValueError, match="x"):
+        ClickResultModel.from_wire({"x": True, "y": 1})
+    with pytest.raises(ValueError, match="chars"):
+        TypeTextResultModel.from_wire({"chars": -1})
+    with pytest.raises(ValueError, match="key"):
+        PressKeyResultModel.from_wire({"key": ""})
+    with pytest.raises(ValueError, match="title_changed"):
+        OpenChatResultModel.from_wire(
+            {
+                "remark_name": "a",
+                "title_image_base64": "t",
+                "full_image_base64": "f",
+                "title_sha256": "ts",
+                "full_sha256": "fs",
+                "title_changed": "yes",
+            }
+        )
 
 
 async def test_tool_argument_models_validate_shapes() -> None:
@@ -251,129 +368,226 @@ async def test_resolve_agent_token_env_and_file(tmp_path: Path) -> None:
     assert resolve_agent_token(token_file=tmp_path / "absent", environ={}) == ""
 
 
-async def test_health_endpoint_is_open() -> None:
+async def test_parse_http_request_matrix() -> None:
+    """HTTP 解析纯函数：合法报文 + 413 / 422 边界。"""
+    parsed = parse_http_request(
+        b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+    )
+    assert parsed == ParsedHttpRequest(
+        method="GET", target="/health", headers={"host": "127.0.0.1"}, body=b""
+    )
+    parsed = parse_http_request(
+        b"POST /invoke HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}"
+    )
+    assert parsed.method == "POST" and parsed.body == b"{}"
+    cases = [
+        b"GET /health HTTP/1.1\r\nHost: x",
+        b"GET\r\n\r\n",
+        b"GET /health HTTP/2\r\n\r\n",
+        b"GET /health HTTP/1.1\r\nBroken\r\n\r\n",
+        b"POST /invoke HTTP/1.1\r\n\r\n",
+        b"POST /invoke HTTP/1.1\r\nContent-Length: x\r\n\r\n",
+        b"POST /invoke HTTP/1.1\r\nContent-Length: 3\r\n\r\n{}",
+        b"POST /invoke HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\n{}",
+        b"POST /invoke HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n",
+    ]
+    for raw in cases:
+        with pytest.raises(agent.HttpRequestError) as error:
+            parse_http_request(raw)
+        assert error.value.status == 422, raw
+    oversized = (
+        b"POST /invoke HTTP/1.1\r\nContent-Length: "
+        + str(wire_models.MAX_AGENT_REQUEST_BYTES + 1).encode()
+        + b"\r\n\r\n"
+    )
+    with pytest.raises(agent.HttpRequestError) as error:
+        parse_http_request(oversized)
+    assert error.value.status == 413
+    huge_head = b"GET /health HTTP/1.1\r\nX-Pad: " + b"a" * 70_000 + b"\r\n\r\n"
+    with pytest.raises(agent.HttpRequestError) as error:
+        parse_http_request(huge_head)
+    assert error.value.status == 413
+
+
+async def test_health_endpoint_is_open_and_unknown_path_is_404() -> None:
     """GET /health 无鉴权返回存活状态；未知路径 404。"""
-    server, thread = await _start_server(
-        _runtime(FakeControl(), FakeScreenshots(), FakeClipboard()), "secret"
-    )
-    try:
-        status, payload = await asyncio.to_thread(
-            _http_request, server, method="GET", path="/health"
-        )
+    runtime = _runtime(FakeControl(), FakeScreenshots(), FakeClipboard())
+    async with _serve(runtime) as port:
+        status, payload, headers = await _request(port, path="/health")
         assert status == 200 and payload == {"status": "ok"}
-        status, _ = await asyncio.to_thread(
-            _http_request, server, method="GET", path="/nope"
-        )
+        assert headers["connection"] == "close"
+        status, _, _ = await _request(port, path="/nope")
         assert status == 404
-    finally:
-        await _stop_server(server, thread)
+        status, _, _ = await _request(port, method="PUT", path="/health")
+        assert status == 405
 
 
-async def test_bearer_auth_matrix() -> None:
-    """鉴权矩阵：缺失 / 错误 / 正确。"""
-    server, thread = await _start_server(
-        _runtime(FakeControl(), FakeScreenshots(), FakeClipboard()), "secret"
-    )
-    body = json.dumps({"tool": "screenshot", "arguments": {}}).encode("utf-8")
-    try:
-        missing, _ = await asyncio.to_thread(
-            _http_request, server, method="POST", path="/invoke", body=body
+async def test_bearer_auth_matrix_including_non_ascii() -> None:
+    """鉴权矩阵：缺失 / 错误 / 非 ASCII / 正确；未知路径先 404。"""
+    runtime = _runtime(FakeControl(), FakeScreenshots(), FakeClipboard())
+    async with _serve(runtime, token="秘密") as port:
+        body = b'{"tool":"screenshot","arguments":{}}'
+        missing, _, _ = await _request(
+            port, method="POST", path="/invoke", body=body
         )
-        wrong, _ = await asyncio.to_thread(
-            _http_request,
-            server,
-            method="POST",
-            path="/invoke",
-            body=body,
-            token="nope",
+        wrong, _, _ = await _request(
+            port, method="POST", path="/invoke", body=body, token="错误"
         )
-        ok, payload = await asyncio.to_thread(
-            _http_request,
-            server,
-            method="POST",
-            path="/invoke",
-            body=body,
-            token="secret",
+        ok, payload, _ = await _request(
+            port, method="POST", path="/invoke", body=body, token="秘密"
         )
-        assert (missing, wrong, ok) == (401, 401, 200)
+        not_found, _, _ = await _request(
+            port, method="POST", path="/nope", body=body, token="错误"
+        )
+        assert (missing, wrong, ok, not_found) == (401, 401, 200, 404)
         assert payload["ok"] is True
-    finally:
-        await _stop_server(server, thread)
 
 
 async def test_request_shape_failures_are_422() -> None:
-    """请求形态非法（非对象 / 缺 tool / arguments 非对象 / JSON 损坏）→ 422。"""
-    server, thread = await _start_server(
-        _runtime(FakeControl(), FakeScreenshots(), FakeClipboard()), "secret"
-    )
-    cases = [
-        b"[1, 2]",
-        b'{"arguments": {}}',
-        b'{"tool": "screenshot", "arguments": []}',
-        b"not-json",
-        b'{"tool": "screenshot", "extra": 1}',
-    ]
-    try:
+    """请求形态非法（非对象 / 缺 tool / arguments 非对象 / JSON 损坏 / 多余字段）→ 422。"""
+    runtime = _runtime(FakeControl(), FakeScreenshots(), FakeClipboard())
+    async with _serve(runtime) as port:
+        cases = [
+            b"[1, 2]",
+            b'{"arguments": {}}',
+            b'{"tool": "screenshot", "arguments": []}',
+            b"not-json",
+            b'{"tool": "screenshot", "extra": 1}',
+        ]
         for body in cases:
-            status, _ = await asyncio.to_thread(
-                _http_request,
-                server,
-                method="POST",
-                path="/invoke",
-                body=body,
-                token="secret",
+            status, payload, _ = await _request(
+                port, method="POST", path="/invoke", body=body, token="secret"
             )
             assert status == 422, body
-    finally:
-        await _stop_server(server, thread)
+            assert payload["detail"]
 
 
-async def test_http_tool_failure_is_200_with_ok_false() -> None:
+async def test_deeply_nested_json_is_422() -> None:
+    """深层嵌套 JSON（RecursionError）→ 422，不断连。"""
+    runtime = _runtime(FakeControl(), FakeScreenshots(), FakeClipboard())
+    body = b"[" * 10_000 + b"0" + b"]" * 10_000
+    async with _serve(runtime) as port:
+        status, payload, _ = await _request(
+            port, method="POST", path="/invoke", body=body, token="secret"
+        )
+        assert status == 422
+        assert payload["detail"] == "请求体不是合法 JSON"
+
+
+async def test_oversized_body_is_413_before_read() -> None:
+    """Content-Length 超过上限 → 413（不读取请求体）。"""
+    runtime = _runtime(FakeControl(), FakeScreenshots(), FakeClipboard())
+    async with _serve(runtime) as port:
+        status, payload, _ = await _request(
+            port,
+            method="POST",
+            path="/invoke",
+            token="secret",
+            content_length=wire_models.MAX_AGENT_REQUEST_BYTES + 1,
+        )
+        assert status == 413
+        assert "上限" in payload["detail"]
+
+
+async def test_tool_failure_is_200_with_ok_false() -> None:
     """工具级失败恒 200 + ok=false（未知工具 / 参数非法 / 执行失败）。"""
     control = FakeControl()
     control.fail_types.add(MoveRequest)
     runtime = _runtime(control, FakeScreenshots(), FakeClipboard())
-    server, thread = await _start_server(runtime, "secret")
-    try:
+    async with _serve(runtime) as port:
         for tool, arguments in (
             ("nope", {}),
             ("click", {"x": "bad", "y": 1}),
             ("click", {"x": 1, "y": 1}),
         ):
-            body = json.dumps({"tool": tool, "arguments": arguments}).encode("utf-8")
-            status, payload = await asyncio.to_thread(
-                _http_request,
-                server,
-                method="POST",
-                path="/invoke",
-                body=body,
-                token="secret",
-            )
+            status, payload, _ = await _invoke(port, tool, arguments)
             assert status == 200
             assert payload["ok"] is False
             assert payload["result"] == {}
             assert payload["error"]
-    finally:
-        await _stop_server(server, thread)
+
+
+async def test_unexpected_tool_exception_is_200_with_ok_false() -> None:
+    """工具内未预期异常 → 恒 200 + ok=false（不冒到 500）。"""
+    control = FakeControl()
+    control.error = RuntimeError("控制面炸了")
+    runtime = _runtime(control, FakeScreenshots(), FakeClipboard())
+    async with _serve(runtime) as port:
+        status, payload, _ = await _invoke(port, "click", {"x": 1, "y": 2})
+        assert status == 200
+        assert payload["ok"] is False
+        assert payload["result"] == {}
+        assert "控制面炸了" in payload["error"]
+
+
+async def test_unexpected_handler_exception_is_controlled_500() -> None:
+    """handler 顶层未预期异常 → 受控 500 JSON（不断连）。"""
+
+    class BrokenClock:
+        """仅让健康 / 调用路径之外的时钟抛错。"""
+
+        def __call__(self) -> int:
+            raise RuntimeError("时钟坏了")
+
+    runtime = _runtime(FakeControl(), FakeScreenshots(), FakeClipboard())
+    runtime.now_ms = BrokenClock()
+    async with _serve(runtime) as port:
+        body = b'{"tool":"screenshot","arguments":{}}'
+        status, payload, _ = await _request(
+            port, method="POST", path="/invoke", body=body, token="secret"
+        )
+        assert status == 500
+        assert payload == {"detail": "agent 内部错误"}
+
+
+async def test_invoke_tools_are_serialized_while_health_stays_open() -> None:
+    """串行化：一个 /invoke 持锁执行时后续工具等待；/health 不占锁。"""
+    gate = asyncio.Event()
+    control = FakeControl()
+    screenshots = FakeScreenshots([b"png"], gate=gate)
+    runtime = _runtime(control, screenshots, FakeClipboard())
+    first = asyncio.create_task(
+        agent.dispatch_request(_parsed_invoke("screenshot", {}), runtime, "secret")
+    )
+    await asyncio.wait_for(screenshots.started.wait(), 1.0)
+    health = await agent.dispatch_request(
+        ParsedHttpRequest(method="GET", target="/health", headers={}, body=b""),
+        runtime,
+        "secret",
+    )
+    second = asyncio.create_task(
+        agent.dispatch_request(
+            _parsed_invoke("click", {"x": 1, "y": 2}), runtime, "secret"
+        )
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert health.status == 200
+    assert control.calls == []
+    gate.set()
+    first_response = await asyncio.wait_for(first, 2.0)
+    second_response = await asyncio.wait_for(second, 2.0)
+    assert first_response.status == 200 and first_response.payload["ok"] is True
+    assert second_response.status == 200 and second_response.payload["ok"] is True
+    assert [type(call) for call in control.calls] == [MoveRequest, ClickRequest]
 
 
 async def test_screenshot_tool_returns_base64_and_digest() -> None:
     """screenshot 工具：整屏抓取 + base64 + sha256 + 尺寸。"""
     runtime = _runtime(FakeControl(), FakeScreenshots([b"png-bytes"]), FakeClipboard())
-    result = runtime.execute("screenshot", {})
-    assert result["width"] == 1280 and result["height"] == 800
-    import base64
-    import hashlib
-
-    assert result["image_base64"] == base64.b64encode(b"png-bytes").decode("ascii")
-    assert result["sha256"] == hashlib.sha256(b"png-bytes").hexdigest()
+    result = await runtime.execute("screenshot", {})
+    assert isinstance(result, ScreenshotResultModel)
+    assert result.width == 1280 and result.height == 800
+    assert result.image_base64 == base64.b64encode(b"png-bytes").decode("ascii")
+    assert result.sha256 == hashlib.sha256(b"png-bytes").hexdigest()
 
 
 async def test_click_tool_maps_to_move_and_click() -> None:
     """click 工具：先绝对移动后左键点击；控制面失败即工具失败。"""
     control = FakeControl()
     runtime = _runtime(control, FakeScreenshots(), FakeClipboard())
-    assert runtime.execute("click", {"x": 10, "y": 20}) == {"x": 10, "y": 20}
+    result = await runtime.execute("click", {"x": 10, "y": 20})
+    assert result == ClickResultModel(x=10, y=20)
     assert [type(call) for call in control.calls] == [MoveRequest, ClickRequest]
     assert control.calls[0] == MoveRequest(x=10, y=20)
 
@@ -381,16 +595,17 @@ async def test_click_tool_maps_to_move_and_click() -> None:
     failing.fail_types.add(MoveRequest)
     failing_runtime = _runtime(failing, FakeScreenshots(), FakeClipboard())
     with pytest.raises(AgentToolError, match="指针移动失败"):
-        failing_runtime.execute("click", {"x": 1, "y": 2})
+        await failing_runtime.execute("click", {"x": 1, "y": 2})
 
 
 async def test_type_text_uses_clipboard_and_ctrl_v() -> None:
-    """type_text：剪贴板写入 + Ctrl+V 序列（中文可输入）。"""
+    """type_text：剪贴板写入 + Ctrl+V 序列（中文可输入；粘贴后不清空）。"""
     control = FakeControl()
     clipboard = FakeClipboard()
     clock = FakeClock()
     runtime = _runtime(control, FakeScreenshots(), clipboard, clock)
-    assert runtime.execute("type_text", {"text": "晚安，明天见"}) == {"chars": 6}
+    result = await runtime.execute("type_text", {"text": "晚安，明天见"})
+    assert result == TypeTextResultModel(chars=6)
     assert clipboard.writes == ["晚安，明天见"]
     assert control.calls == [
         KeyRequest(code=KEY_LEFTCTRL, pressed=True),
@@ -405,14 +620,22 @@ async def test_press_key_sequence_and_failure_isolation() -> None:
     """press_key：组合键按下 / 抬起顺序；控制面失败即工具失败。"""
     control = FakeControl()
     runtime = _runtime(control, FakeScreenshots(), FakeClipboard())
-    assert runtime.execute("press_key", {"key": "ctrl+shift+a"}) == {"key": "ctrl+shift+a"}
-    assert [call.pressed for call in control.calls] == [True, True, True, False, False, False]
+    result = await runtime.execute("press_key", {"key": "ctrl+shift+a"})
+    assert result == PressKeyResultModel(key="ctrl+shift+a")
+    assert [call.pressed for call in control.calls] == [
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+    ]
 
     failing = FakeControl()
     failing.fail_types.add(KeyRequest)
     failing_runtime = _runtime(failing, FakeScreenshots(), FakeClipboard())
     with pytest.raises(AgentToolError, match="按键按下失败"):
-        failing_runtime.execute("press_key", {"key": "enter"})
+        await failing_runtime.execute("press_key", {"key": "enter"})
 
 
 async def test_open_chat_waits_for_title_change_and_returns_two_shots() -> None:
@@ -422,33 +645,23 @@ async def test_open_chat_waits_for_title_change_and_returns_two_shots() -> None:
     clock = FakeClock()
     screenshots = FakeScreenshots([b"title-old", b"title-old", b"title-new", b"full"])
     runtime = _runtime(control, screenshots, clipboard, clock)
-    result = runtime.execute("open_chat", {"remark_name": "小林"})
+    result = await runtime.execute("open_chat", {"remark_name": "小林"})
     assert clipboard.writes == ["小林"]
-    assert result["remark_name"] == "小林"
-    assert result["title_sha256"] != result["full_sha256"]
+    assert result.remark_name == "小林"
+    assert result.title_changed is True
+    assert result.title_sha256 != result.full_sha256
     assert screenshots.crops == [
         (1280, 140),
         (1280, 140),
         (1280, 140),
         None,
     ]
-    assert [type(call) for call in control.calls] == [
-        KeyRequest,
-        KeyRequest,
-        KeyRequest,
-        KeyRequest,
-        KeyRequest,
-        KeyRequest,
-        KeyRequest,
-        KeyRequest,
-        KeyRequest,
-        KeyRequest,
-    ]
+    assert len(control.calls) == 10
     assert clock.now > 0
 
 
-async def test_open_chat_bounded_wait_gives_up_at_deadline() -> None:
-    """open_chat：标题始终不变时按截止收口（不无限等待）。"""
+async def test_open_chat_bounded_wait_reports_title_unchanged() -> None:
+    """open_chat：标题始终不变时按截止收口，title_changed=False（不假装成功变化）。"""
     clock = FakeClock()
     runtime = _runtime(
         FakeControl(),
@@ -456,8 +669,10 @@ async def test_open_chat_bounded_wait_gives_up_at_deadline() -> None:
         FakeClipboard(),
         clock,
     )
-    result = runtime.execute("open_chat", {"remark_name": "群聊"})
-    assert result["title_image_base64"]
+    result = await runtime.execute("open_chat", {"remark_name": "群聊"})
+    assert isinstance(result, OpenChatResultModel)
+    assert result.title_changed is False
+    assert result.title_image_base64
     assert clock.now >= 1.0
     assert clock.delays
 
@@ -468,138 +683,149 @@ async def test_screenshot_tool_propagates_capture_failure() -> None:
     screenshots.error = AgentToolError("截图命令失败")
     runtime = _runtime(FakeControl(), screenshots, FakeClipboard())
     with pytest.raises(AgentToolError, match="截图命令失败"):
-        runtime.execute("screenshot", {})
+        await runtime.execute("screenshot", {})
 
 
-async def test_imagemagick_screenshot_command_construction(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_imagemagick_screenshot_command_construction() -> None:
     """ImageMagick 实现：整屏 / 裁剪参数与成功 / 失败映射。"""
-    recorded: list[list[str]] = []
+    recorded: list[dict[str, Any]] = []
 
-    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        recorded.append(argv)
-        return subprocess.CompletedProcess(argv, 0, stdout=b"png", stderr=b"")
+    async def fake_runner(
+        argv: Sequence[str],
+        *,
+        timeout: float,
+        env: Mapping[str, str] | None = None,
+        input_bytes: bytes | None = None,
+        capture_output: bool = True,
+    ) -> ProcessOutput:
+        recorded.append({"argv": list(argv), "env": env, "timeout": timeout})
+        return ProcessOutput(returncode=0, stdout=b"png", stderr=b"")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    capturer = ImagemagickScreenshot(":99", timeout=1.0)
-    assert capturer.capture() == b"png"
-    assert capturer.capture(crop=(1280, 140)) == b"png"
-    assert recorded[0][-1] == "png:-" and "-crop" not in recorded[0]
-    assert recorded[1][recorded[1].index("-crop") + 1] == "1280x140+0+0"
+    capturer = ImagemagickScreenshot(":99", timeout=1.0, runner=fake_runner)
+    assert await capturer.capture() == b"png"
+    assert await capturer.capture(crop=(1280, 140)) == b"png"
+    assert recorded[0]["argv"][-1] == "png:-" and "-crop" not in recorded[0]["argv"]
+    assert recorded[1]["argv"][recorded[1]["argv"].index("-crop") + 1] == "1280x140+0+0"
+    assert recorded[0]["env"]["DISPLAY"] == ":99"
 
-    def failing_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        return subprocess.CompletedProcess(argv, 1, stdout=b"", stderr="炸了".encode())
+    async def failing_runner(
+        argv: Sequence[str],
+        *,
+        timeout: float,
+        env: Mapping[str, str] | None = None,
+        input_bytes: bytes | None = None,
+        capture_output: bool = True,
+    ) -> ProcessOutput:
+        return ProcessOutput(returncode=1, stdout=b"", stderr="炸了".encode())
 
-    monkeypatch.setattr(subprocess, "run", failing_run)
     with pytest.raises(AgentToolError, match="非零退出"):
-        capturer.capture()
+        await ImagemagickScreenshot(":99", runner=failing_runner).capture()
 
-    def empty_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+    async def empty_runner(
+        argv: Sequence[str],
+        *,
+        timeout: float,
+        env: Mapping[str, str] | None = None,
+        input_bytes: bytes | None = None,
+        capture_output: bool = True,
+    ) -> ProcessOutput:
+        return ProcessOutput(returncode=0, stdout=b"", stderr=b"")
 
-    monkeypatch.setattr(subprocess, "run", empty_run)
     with pytest.raises(AgentToolError, match="输出为空"):
-        capturer.capture()
+        await ImagemagickScreenshot(":99", runner=empty_runner).capture()
 
 
-async def test_xclip_clipboard_command(monkeypatch: pytest.MonkeyPatch) -> None:
-    """xclip 实现：成功静默 / 非零退出映射 / 启动失败映射。"""
+async def test_xclip_clipboard_command() -> None:
+    """xclip 实现：argv / stdin 字节 / 非零退出映射。"""
     calls: list[dict[str, Any]] = []
 
-    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        calls.append({"argv": argv, **kwargs})
-        return subprocess.CompletedProcess(argv, 0, stdout=None, stderr=None)
+    async def fake_runner(
+        argv: Sequence[str],
+        *,
+        timeout: float,
+        env: Mapping[str, str] | None = None,
+        input_bytes: bytes | None = None,
+        capture_output: bool = True,
+    ) -> ProcessOutput:
+        calls.append(
+            {
+                "argv": list(argv),
+                "input_bytes": input_bytes,
+                "capture_output": capture_output,
+                "env": env,
+            }
+        )
+        return ProcessOutput(returncode=0, stdout=b"", stderr=b"")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    XclipClipboard(":99", timeout=1.0).write("你好")
+    await XclipClipboard(":99", timeout=1.0, runner=fake_runner).write("你好")
     assert calls[0]["argv"] == ["xclip", "-selection", "clipboard", "-in"]
-    assert calls[0]["input"] == "你好".encode()
+    assert calls[0]["input_bytes"] == "你好".encode()
+    assert calls[0]["capture_output"] is False
+    assert calls[0]["env"]["DISPLAY"] == ":99"
 
-    def failing(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        return subprocess.CompletedProcess(argv, 1, stdout=None, stderr=None)
+    async def failing_runner(
+        argv: Sequence[str],
+        *,
+        timeout: float,
+        env: Mapping[str, str] | None = None,
+        input_bytes: bytes | None = None,
+        capture_output: bool = True,
+    ) -> ProcessOutput:
+        return ProcessOutput(returncode=1, stdout=b"", stderr=b"")
 
-    monkeypatch.setattr(subprocess, "run", failing)
     with pytest.raises(AgentToolError, match="非零退出"):
-        XclipClipboard(":99").write("x")
-
-    def broken(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        raise OSError("no xclip")
-
-    monkeypatch.setattr(subprocess, "run", broken)
-    with pytest.raises(AgentToolError, match="剪贴板写入失败"):
-        XclipClipboard(":99").write("x")
+        await XclipClipboard(":99", runner=failing_runner).write("x")
 
 
-async def test_sync_control_client_round_trip(tmp_path: Path) -> None:
-    """同步控制面客户端：Unix socket 往返 / 缺 socket / 非法响应。"""
-    socket_path = tmp_path / "control.sock"
+async def test_run_process_success_failure_and_timeout() -> None:
+    """异步子进程执行面：成功 / 非零退出 / 启动失败 / 超时强杀。"""
+    output = await run_process(
+        [sys.executable, "-c", "print('ok')"], timeout=5.0
+    )
+    assert output.returncode == 0 and output.stdout.strip() == b"ok"
 
-    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        line = await reader.readline()
-        request = json.loads(line.decode("utf-8"))
-        outcome = CommandOutcome(command=str(request.get("command", "")), ok=True)
-        writer.write((json.dumps(outcome.to_wire(), ensure_ascii=False) + "\n").encode())
-        await writer.drain()
-        writer.close()
-        await writer.wait_closed()
+    output = await run_process([sys.executable, "-c", "raise SystemExit(3)"], timeout=5.0)
+    assert output.returncode == 3
 
-    server = await asyncio.start_unix_server(handle, path=str(socket_path))
-    try:
-        client = agent.SyncUinputControlClient(socket_path, timeout=2.0)
-        outcome = await asyncio.to_thread(client.ping)
-        assert outcome.ok is True and outcome.command == "ping"
-    finally:
-        server.close()
-        await server.wait_closed()
+    with pytest.raises(AgentToolError, match="无法启动命令"):
+        await run_process(["/nonexistent/agent-test-bin"], timeout=1.0)
 
-    missing = agent.SyncUinputControlClient(tmp_path / "missing.sock", timeout=0.2)
-    with pytest.raises(UinputError, match="无法连接控制面"):
-        await asyncio.to_thread(missing.ping)
+    with pytest.raises(AgentToolError, match="命令超时"):
+        await run_process(
+            [sys.executable, "-c", "import time; time.sleep(1)"], timeout=0.01
+        )
 
-    bad_socket = tmp_path / "bad.sock"
 
-    async def bad_handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        await reader.readline()
-        writer.write(b"<html>\n")
-        await writer.drain()
-        writer.close()
-        await writer.wait_closed()
-
-    bad_server = await asyncio.start_unix_server(bad_handle, path=str(bad_socket))
-    try:
-        bad_client = agent.SyncUinputControlClient(bad_socket, timeout=1.0)
-        with pytest.raises(UinputError, match="不是合法 JSON"):
-            await asyncio.to_thread(bad_client.ping)
-    finally:
-        bad_server.close()
-        await bad_server.wait_closed()
+async def test_dead_code_removed() -> None:
+    """死代码已删：同步控制面客户端与 WECHAT_GUI_AGENT_TOOLS 不再存在。"""
+    assert not hasattr(agent, "SyncUinputControlClient")
+    assert not hasattr(wire_models, "WECHAT_GUI_AGENT_TOOLS")
+    assert not hasattr(wire_models, "SCREENSHOT_TOOL")
 
 
 async def test_main_rejects_missing_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    """CLI：token 缺失即退出码 1（不启动服务）。"""
+    """CLI：token 缺失即退出码 1（不启动服务）。
+
+    同步入口内部调用 asyncio.run，须在独立线程执行，避免与测试事件循环冲突。
+    """
     monkeypatch.setattr(agent, "resolve_agent_token", lambda **_: "")
-    assert agent.main(["--port", "0"]) == 1
+    assert await asyncio.to_thread(agent.main, ["--port", "0"]) == 1
 
 
-async def test_main_serves_until_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
-    """CLI：token 就绪后启动服务，中断后收口返回 0。"""
+async def test_main_delegates_to_asyncio_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI：入口经 asyncio.run 执行 _run 并回传退出码。"""
+
+    async def fake_run(args: Any, *, stop_event: Any = None) -> int:
+        return 7
+
+    monkeypatch.setattr(agent, "_run", fake_run)
+    assert await asyncio.to_thread(agent.main, ["--port", "0"]) == 7
+
+
+async def test_run_serves_until_stop_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_run：停止事件置位后正常收口（真实临时端口，立即返回）。"""
     monkeypatch.setattr(agent, "resolve_agent_token", lambda **_: "token")
-    closed: list[bool] = []
-
-    class FakeServer:
-        """最小服务替身（serve_forever 抛中断，server_close 记录）。"""
-
-        def serve_forever(self) -> None:
-            raise KeyboardInterrupt
-
-        def server_close(self) -> None:
-            closed.append(True)
-
-        @property
-        def server_address(self) -> tuple[str, int]:
-            return ("127.0.0.1", 8090)
-
-    monkeypatch.setattr(agent, "build_server", lambda *a, **k: FakeServer())
-    assert agent.main(["--port", "0"]) == 0
-    assert closed == [True]
+    args = agent.build_parser().parse_args(["--port", "0"])
+    stop_event = asyncio.Event()
+    stop_event.set()
+    assert await asyncio.wait_for(agent._run(args, stop_event=stop_event), 5.0) == 0

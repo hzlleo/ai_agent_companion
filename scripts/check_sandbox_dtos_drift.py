@@ -4,7 +4,7 @@
 契约常量行）以文本镜像方式耦合——本脚本对两侧定义做文本比对：任一侧
 漂移即红（红灯输出首个差异的 unified diff 上下文）。
 
-比对项（22 模型块 + 19 常量行，共 41 项）：
+比对项（27 模型块 + 26 常量行，共 53 项）：
 
     - ``InvokeRequestModel`` / ``InvokeResponseModel`` /
       ``HealthResponseModel``（backend ``harness/tools/sandbox_models.py``
@@ -34,7 +34,14 @@
     - GUI 微信 agent wire 三模型 ``InvokeRequestModel`` /
       ``InvokeResponseModel`` / ``HealthResponseModel``（backend
       ``harness/channels/wechat_gui/wechat_gui_wire_models.py`` ↔ 沙盒树
-      ``wechat_gui_poc/wire_models.py``——REST 同构镜像，独立比对项）。
+      ``wechat_gui_poc/wire_models.py``——REST 同构镜像，独立比对项）；
+    - GUI 微信五工具结果模型 ``ScreenshotResultModel`` /
+      ``ClickResultModel`` / ``TypeTextResultModel`` /
+      ``PressKeyResultModel`` / ``OpenChatResultModel``（同上文件——结果字段
+      面不得只在逻辑代码里）；
+    - ``WECHAT_GUI_HEALTH_PATH`` / ``WECHAT_GUI_INVOKE_PATH`` 与五个
+      ``WECHAT_GUI_TOOL_*`` 工具名常量行（同上文件——端点与工具名构成两树
+      共享的部署 / 调用契约面）。
 
 块提取口径：从定义行（``class <名>(`` 顶层起点 / 常量赋值行）到下一个
 顶层定义行或文件尾，去除块尾空行——其余文本（含 docstring 与注释）
@@ -333,7 +340,32 @@ def main() -> int:
             _extract_class_block(wechat_gui_models_text, name),
             _extract_class_block(wechat_gui_wire_text, name),
         )
-        for name in ("InvokeRequestModel", "InvokeResponseModel", "HealthResponseModel")
+        for name in (
+            "InvokeRequestModel",
+            "InvokeResponseModel",
+            "HealthResponseModel",
+            "ScreenshotResultModel",
+            "ClickResultModel",
+            "TypeTextResultModel",
+            "PressKeyResultModel",
+            "OpenChatResultModel",
+        )
+    )
+    items.extend(
+        (
+            constant,
+            _extract_constant_line(wechat_gui_models_text, constant),
+            _extract_constant_line(wechat_gui_wire_text, constant),
+        )
+        for constant in (
+            "WECHAT_GUI_HEALTH_PATH",
+            "WECHAT_GUI_INVOKE_PATH",
+            "WECHAT_GUI_TOOL_SCREENSHOT",
+            "WECHAT_GUI_TOOL_CLICK",
+            "WECHAT_GUI_TOOL_TYPE_TEXT",
+            "WECHAT_GUI_TOOL_PRESS_KEY",
+            "WECHAT_GUI_TOOL_OPEN_CHAT",
+        )
     )
 
     drifted = False

@@ -135,7 +135,10 @@ async def test_reader_success_and_purpose() -> None:
 
 async def test_reader_caps_messages_to_limit() -> None:
     """解析成功：消息按时间序末尾裁剪到上限。"""
-    messages = [{"sender": "小林", "text": f"消息{i}"} for i in range(5)]
+    messages = [
+        {"sender": "小林", "text": f"消息{i}", "is_self": False, "ts_ms": 0}
+        for i in range(5)
+    ]
     gateway = FakeGateway([_json_content(messages=messages)])
     reader = _reader(gateway, max_messages=2)
     result = await reader.read(_PNG_BASE64)
@@ -149,6 +152,21 @@ async def test_reader_rejects_non_json_and_low_confidence() -> None:
         _json_content(confidence=0.1),
         json.dumps({"title": "", "messages": [], "confidence": 0.9}),
         json.dumps({"title": "小林", "messages": "oops", "confidence": 0.9}),
+        json.dumps({"title": "小林", "confidence": 0.9}),
+        json.dumps(
+            {
+                "title": "小林",
+                "messages": [{"sender": "小林", "text": "你好", "ts_ms": 0}],
+                "confidence": 0.9,
+            }
+        ),
+        json.dumps(
+            {
+                "title": "小林",
+                "messages": [{"sender": "小林", "text": "你好", "is_self": False}],
+                "confidence": 0.9,
+            }
+        ),
     ):
         gateway = FakeGateway([content])
         reader = _reader(gateway)

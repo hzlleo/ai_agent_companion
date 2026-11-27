@@ -4,9 +4,10 @@
 
     OutboundMessageModel（chat_id=wechat_gui:<备注名>）
         ↓ chat_id grammar 解析（备注名）
-        ↓ client.open_chat（沙盒搜索并打开会话）
+        ↓ 单窗口互斥锁（与 runner 共享；校验 → 输入 → 回车全程持锁）
+        ↓ client.open_chat（沙盒搜索并打开会话）+ 共享窗口目标同步
         ↓ reader 对标题区域截图做视觉解析
-        ↓ 标题校验：解析标题须与目标备注名一致——不一致即拒绝发送
+        ↓ 标题校验：解析标题须与目标备注名一致——不一致即拒绝发送并复位目标
         ↓ client.type_text（剪贴板粘贴，覆盖中文）+ client.press_key(enter)
         ↓ ChannelDeliveryResultModel（message_ids 恒空——GUI 侧无平台回执 ID）
 
@@ -14,12 +15,17 @@
 ``CHANNEL_API_ERROR``（可重试面），由路由器逐消息兜底隔离；**标题不一致
 绝不发送**——宁可漏发一条，也不把回复投进错误会话。
 
+单窗口互斥：出站与 runner 的页面读写共享同一把 ``asyncio.Lock`` 与同一份
+「当前目标」状态（装配处注入）——轮询在出站校验与输入之间无法切走会话；
+出站 ``open_chat`` 后同步目标状态，runner 不会再按旧记忆跳过打开。
+
 附件边界（文档化）：GUI 底座当前只支持文本出站；附件逐条标记不支持
 （``ok=False``），不阻断文本投递。
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Final
 
 from loguru import logger
@@ -31,7 +37,10 @@ from packages.harness.channels.channel_models import (
     OutboundMessageModel,
 )
 from packages.harness.channels.wechat_gui.wechat_gui_client import WechatGuiSandboxClient
-from packages.harness.channels.wechat_gui.wechat_gui_models import parse_wechat_gui_chat_id
+from packages.harness.channels.wechat_gui.wechat_gui_models import (
+    WechatGuiWindowState,
+    parse_wechat_gui_chat_id,
+)
 from packages.harness.channels.wechat_gui.wechat_gui_reader import WechatGuiReader
 from packages.harness.core.errors import BusinessException, ErrorCode
 
@@ -54,15 +63,24 @@ class WechatGuiChannelAdapter:
         *,
         client: WechatGuiSandboxClient,
         reader: WechatGuiReader,
+        gui_lock: asyncio.Lock | None = None,
+        window_state: WechatGuiWindowState | None = None,
     ) -> None:
         """初始化适配器。
 
         Args:
             client: 沙盒客户端（注入——测试用 fake）。
             reader: 截图解析器（标题校验输入——测试用 fake）。
+            gui_lock: 单窗口互斥锁（None = 自建；装配处与 runner 共享）。
+            window_state: 单窗口共享目标状态（None = 自建；装配处与 runner
+                共享同一实例）。
         """
         self._client = client
         self._reader = reader
+        self._gui_lock = gui_lock if gui_lock is not None else asyncio.Lock()
+        self._window_state = (
+            window_state if window_state is not None else WechatGuiWindowState()
+        )
 
     async def send_message(self, message: OutboundMessageModel) -> ChannelDeliveryResultModel:
         """发送出站文本（先打开并校验目标会话，再输入与回车发送）。
@@ -79,25 +97,29 @@ class WechatGuiChannelAdapter:
                 路由器兜底隔离。
         """
         remark_name = parse_wechat_gui_chat_id(message.chat_id)
-        opened = await self._client.open_chat(remark_name)
-        read = await self._reader.read(opened.title_image_base64)
-        actual_title = read.title.strip()
-        if actual_title != remark_name:
-            raise BusinessException(
-                code=ErrorCode.CHANNEL_API_ERROR,
-                message=(
-                    f"GUI 微信出站标题校验失败（拒绝发送）：目标 {remark_name!r}，"
-                    f"当前标题 {actual_title!r}"
-                ),
+        async with self._gui_lock:
+            self._window_state.mark_unknown()
+            opened = await self._client.open_chat(remark_name)
+            self._window_state.mark_open(remark_name)
+            read = await self._reader.read(opened.title_image_base64)
+            actual_title = read.title.strip()
+            if actual_title != remark_name:
+                self._window_state.mark_unknown()
+                raise BusinessException(
+                    code=ErrorCode.CHANNEL_API_ERROR,
+                    message=(
+                        f"GUI 微信出站标题校验失败（拒绝发送）：目标 {remark_name!r}，"
+                        f"当前标题 {actual_title!r}"
+                    ),
+                )
+            if message.text.strip():
+                await self._client.type_text(message.text)
+                await self._client.press_key("enter")
+            logger.debug(
+                "GUI 微信通道出站文本已提交: remark_name={!r}, chars={}",
+                remark_name,
+                len(message.text),
             )
-        if message.text.strip():
-            await self._client.type_text(message.text)
-            await self._client.press_key("enter")
-        logger.debug(
-            "GUI 微信通道出站文本已提交: remark_name={!r}, chars={}",
-            remark_name,
-            len(message.text),
-        )
         attachment_results = [
             AttachmentDeliveryResult(
                 index=index,

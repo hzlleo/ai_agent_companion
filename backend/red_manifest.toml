@@ -454,6 +454,13 @@ tests = [
 ]
 
 [[probes]]
+name = "wechat-gui-watermark-removal"
+symbol = "packages.harness.channels.wechat_gui.wechat_gui_watermark:WechatGuiWatermark"
+tests = [
+    "tests/unit/test_wechat_gui_watermark.py::test_append_one_and_three_messages",
+]
+
+[[probes]]
 name = "wechat-gui-adapter-removal"
 symbol = "packages.harness.channels.wechat_gui.wechat_gui_adapter:WechatGuiChannelAdapter"
 tests = [

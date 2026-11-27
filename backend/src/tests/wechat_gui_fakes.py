@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from packages.harness.channels.channel_models import (
@@ -25,9 +26,12 @@ from packages.harness.channels.wechat_gui.wechat_gui_models import (
 )
 
 __all__ = [
+    "FakeGuiWindow",
     "FakeWechatGuiClient",
     "FakeWechatGuiReader",
     "FakeWechatGuiRouter",
+    "FakeWechatGuiWindowClient",
+    "FakeWechatGuiWindowReader",
     "SleepGate",
     "make_message",
     "make_open_chat_result",
@@ -148,16 +152,26 @@ class FakeWechatGuiClient:
 
 
 class FakeWechatGuiReader:
-    """记录式视觉解析器（按队列返回结果 / 可注入异常）。"""
+    """记录式视觉解析器（按队列返回结果 / 可注入逐次异常）。"""
 
-    def __init__(self, results: list[VlmReadResultModel] | None = None) -> None:
+    def __init__(
+        self,
+        results: list[VlmReadResultModel] | None = None,
+        *,
+        errors: list[Exception | None] | None = None,
+    ) -> None:
         self.calls: list[str] = []
         self._results = list(results or [])
+        self._errors = list(errors or [])
         self.error: Exception | None = None
 
     async def read(self, image_base64: str, *, request_id: str | None = None) -> VlmReadResultModel:
-        """记录截图载荷并返回脚本化结果。"""
+        """记录截图载荷并返回脚本化结果（逐次异常优先命中）。"""
         self.calls.append(image_base64)
+        if self._errors:
+            failure = self._errors.pop(0)
+            if failure is not None:
+                raise failure
         if self.error is not None:
             raise self.error
         if self._results:
@@ -165,16 +179,119 @@ class FakeWechatGuiReader:
         return make_read_result()
 
 
+class FakeGuiWindow:
+    """单窗口 GUI 状态（当前会话 + 输入 / 发送落点——互斥用例断言面）。"""
+
+    def __init__(self, *, initial_chat: str = "小林") -> None:
+        self.current_chat = initial_chat
+        self.typed: list[tuple[str, str]] = []
+        self.sent_in: list[str] = []
+
+
+class FakeWechatGuiWindowClient:
+    """单窗口语义 fake 客户端（跟踪当前会话，记录输入与回车时的落点）。"""
+
+    def __init__(
+        self,
+        window: FakeGuiWindow,
+        *,
+        messages_by_chat: dict[str, list[WechatGuiMessageModel]] | None = None,
+    ) -> None:
+        self.has_token = True
+        self.window = window
+        self.open_calls: list[str] = []
+        self.screenshot_calls = 0
+        self.key_calls: list[str] = []
+        self._messages = messages_by_chat or {}
+        self._sha_seq = 0
+
+    def messages_for(self, chat_id: str) -> list[WechatGuiMessageModel]:
+        """读取指定会话的脚本化消息（默认空）。"""
+        return list(self._messages.get(chat_id, []))
+
+    async def open_chat(self, remark_name: str) -> WechatGuiOpenChatResultModel:
+        """打开会话（切换窗口当前会话并返回内嵌备注名的标题截图）。"""
+        self.open_calls.append(remark_name)
+        self.window.current_chat = remark_name
+        return WechatGuiOpenChatResultModel(
+            remark_name=remark_name,
+            title_image_base64=base64.b64encode(remark_name.encode()).decode("ascii"),
+            title_sha256=f"title-{remark_name}",
+            full_image_base64=base64.b64encode(remark_name.encode()).decode("ascii"),
+            full_sha256=f"full-{remark_name}",
+        )
+
+    async def screenshot(self) -> WechatGuiScreenshotModel:
+        """抓取当前会话（截图内嵌会话名；sha 逐次变化以触发解析）。"""
+        self.screenshot_calls += 1
+        self._sha_seq += 1
+        current = self.window.current_chat
+        return WechatGuiScreenshotModel(
+            image_base64=base64.b64encode(current.encode()).decode("ascii"),
+            sha256=f"sha-{current}-{self._sha_seq}",
+            width=1280,
+            height=800,
+        )
+
+    async def type_text(self, text: str) -> None:
+        """记录输入文本与输入时的当前会话。"""
+        self.window.typed.append((self.window.current_chat, text))
+
+    async def press_key(self, key: str) -> None:
+        """记录按键；回车落在按下时的当前会话。"""
+        self.key_calls.append(key)
+        if key == "enter":
+            self.window.sent_in.append(self.window.current_chat)
+
+
+class FakeWechatGuiWindowReader:
+    """按截图内嵌会话名返回标题的解析器（可注入下一次解析前的编排钩子）。"""
+
+    def __init__(
+        self,
+        client: FakeWechatGuiWindowClient,
+        *,
+        messages_by_chat: dict[str, list[WechatGuiMessageModel]] | None = None,
+        on_next_read: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
+        self.calls: list[str] = []
+        self._client = client
+        self._messages = messages_by_chat or {}
+        self._hook = on_next_read
+
+    def arm_hook(self, hook: Callable[[], Awaitable[None]] | None) -> None:
+        """布置下一次解析前的编排钩子（None = 取消）。
+
+        Args:
+            hook: 钩子协程工厂（在返回标题之前 await）。
+        """
+        self._hook = hook
+
+    async def read(self, image_base64: str, *, request_id: str | None = None) -> VlmReadResultModel:
+        """解析内嵌会话名；首次调用前执行编排钩子。"""
+        self.calls.append(image_base64)
+        title = base64.b64decode(image_base64).decode()
+        hook = self._hook
+        self._hook = None
+        if hook is not None:
+            await hook()
+        messages = self._messages.get(title, self._client.messages_for(title))
+        return make_read_result(title=title, messages=list(messages))
+
+
 class FakeWechatGuiRouter:
     """fake 通道路由器（记录入站消息 + 可注入逐消息异常）。"""
 
     def __init__(self) -> None:
         self.inbound: list[InboundMessageModel] = []
+        self.attempts: list[str] = []
         self.failing_message_ids: set[str] = set()
+        self.failing_texts: set[str] = set()
 
     async def handle_inbound(self, message: InboundMessageModel) -> ChannelDeliveryResultModel:
         """记录入站消息（可注入异常——runner 隔离面断言）。"""
-        if message.message_id in self.failing_message_ids:
+        self.attempts.append(message.text)
+        if message.message_id in self.failing_message_ids or message.text in self.failing_texts:
             raise RuntimeError(f"路由失败（注入）: {message.message_id}")
         self.inbound.append(message)
         return ChannelDeliveryResultModel(

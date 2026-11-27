@@ -146,6 +146,7 @@ from packages.harness.channels.telegram.tg_client import TelegramClient
 from packages.harness.channels.telegram.tg_runner import TelegramChannelRunner
 from packages.harness.channels.wechat_gui.wechat_gui_adapter import WechatGuiChannelAdapter
 from packages.harness.channels.wechat_gui.wechat_gui_client import WechatGuiSandboxClient
+from packages.harness.channels.wechat_gui.wechat_gui_models import WechatGuiWindowState
 from packages.harness.channels.wechat_gui.wechat_gui_reader import WechatGuiReader
 from packages.harness.channels.wechat_gui.wechat_gui_runner import WechatGuiChannelRunner
 from packages.harness.channels.wecom.wecom_client import WeComLongConnectionClient
@@ -1077,16 +1078,18 @@ async def _startup_wechat_gui_channel(
 ) -> None:
     """装配 GUI 微信实验轨通道（token 缺失 / 配置不变式失败即跳过该通道）。
 
-    装配链：``WechatGuiSandboxClient``（共享池 + Bearer token）→
-    ``WechatGuiReader``（look_at 角色回退链——视觉解析）→
-    ``WechatGuiChannelRunner``（轮询 / 变化检测 / 标题校验 / 去重 / 路由）
+    装配链：``WechatGuiSandboxClient``（共享池 + Bearer token）→ 装配期
+    ``/health`` 探测 → ``WechatGuiReader``（look_at 角色回退链——视觉解析）
+    → 单窗口共享 ``asyncio.Lock`` + ``WechatGuiWindowState`` →
+    ``WechatGuiChannelRunner``（轮询 / 变化检测 / 标题校验 / 会话水位 / 路由）
     + ``WechatGuiChannelAdapter``（出站：标题校验后输入并发送）→
     ``router.register_adapter(WECHAT_GUI, adapter)`` →
     ``create_task(runner.run())`` + ``background_task_manager`` 托管。
 
-    **失败语义（与企微 / 抖音同范式）**：token 为空或配置不变式失败时记
-    ERROR 并**跳过该通道**——GUI 微信是实验轨，其配置 / 沙盒时序瑕疵不应
-    连带杀掉已在工作的其他通道；沙盒暂不可达由 runner 的指数退避消化。
+    **失败语义（与企微 / 抖音同范式）**：token 为空 / 配置不变式失败 /
+    沙盒 ``/health`` 不可达时记 ERROR 并**跳过该通道**——GUI 微信是实验轨，
+    其配置 / 沙盒时序瑕疵不应连带杀掉已在工作的其他通道；装配期探测只做
+    一次，运行期瞬时不可达仍由 runner 的指数退避消化。
 
     Args:
         app: 待装配的 FastAPI 应用（``channels_wechat_gui_runner`` /
@@ -1109,10 +1112,19 @@ async def _startup_wechat_gui_channel(
             token=token,
             request_timeout_seconds=wechat_gui.request_timeout_seconds,
         )
+        if not await client.probe_health():
+            logger.error(
+                "GUI 微信通道未装配（sandbox /health 不可达——其余通道继续工作）: "
+                "sandbox_url={}",
+                wechat_gui.sandbox_url,
+            )
+            return
         reader = WechatGuiReader(
             vlm_entry=wechat_gui.vlm_entry,
             max_messages=wechat_gui.max_messages_per_poll,
         )
+        gui_lock = asyncio.Lock()
+        window_state = WechatGuiWindowState()
         runner = WechatGuiChannelRunner(
             client=client,
             reader=reader,
@@ -1123,8 +1135,15 @@ async def _startup_wechat_gui_channel(
             backoff_max_seconds=wechat_gui.backoff_max_seconds,
             max_messages_per_poll=wechat_gui.max_messages_per_poll,
             title_mismatch_action=wechat_gui.title_mismatch_action,
+            gui_lock=gui_lock,
+            window_state=window_state,
         )
-        adapter = WechatGuiChannelAdapter(client=client, reader=reader)
+        adapter = WechatGuiChannelAdapter(
+            client=client,
+            reader=reader,
+            gui_lock=gui_lock,
+            window_state=window_state,
+        )
     except ValueError as exc:
         logger.error(
             "GUI 微信通道未装配（配置不变式失败——其余通道继续工作）: {}", exc

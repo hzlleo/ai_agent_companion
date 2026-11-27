@@ -7,7 +7,7 @@
 调用链::
 
     通道 runner / adapter
-        ↓ screenshot / click / type_text / press_key / open_chat
+        ↓ screenshot / type_text / press_key / open_chat
     WechatGuiSandboxClient.invoke（POST /invoke——Bearer 鉴权）
         ↓ agent（docker/wechat-gui 树：stdlib HTTP + uinputd 控制面）
         ↓ 恒 200 携带 InvokeResponseModel（工具失败在载荷 ok=False 内表达）
@@ -20,7 +20,8 @@ wire 结构非法 / 工具 ok=False）统一归一 ``CHANNEL_API_ERROR``——ru
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 import httpx
 from loguru import logger
@@ -30,119 +31,50 @@ from packages.harness.channels.wechat_gui.wechat_gui_models import (
     WechatGuiScreenshotModel,
 )
 from packages.harness.channels.wechat_gui.wechat_gui_wire_models import (
+    WECHAT_GUI_HEALTH_PATH,
+    WECHAT_GUI_INVOKE_PATH,
+    WECHAT_GUI_TOOL_OPEN_CHAT,
+    WECHAT_GUI_TOOL_PRESS_KEY,
+    WECHAT_GUI_TOOL_SCREENSHOT,
+    WECHAT_GUI_TOOL_TYPE_TEXT,
     HealthResponseModel,
     InvokeRequestModel,
     InvokeResponseModel,
+    OpenChatResultModel,
+    PressKeyResultModel,
+    ScreenshotResultModel,
+    TypeTextResultModel,
 )
 from packages.harness.core.errors import BusinessException, ErrorCode
 
-__all__ = [
-    "WECHAT_GUI_HEALTH_PATH",
-    "WECHAT_GUI_INVOKE_PATH",
-    "WECHAT_GUI_TOOL_CLICK",
-    "WECHAT_GUI_TOOL_OPEN_CHAT",
-    "WECHAT_GUI_TOOL_PRESS_KEY",
-    "WECHAT_GUI_TOOL_SCREENSHOT",
-    "WECHAT_GUI_TOOL_TYPE_TEXT",
-    "WechatGuiSandboxClient",
-]
+__all__ = ["WechatGuiSandboxClient"]
 
-#: agent invoke 端点路径（沙盒树同名常量镜像——部署契约面）。
-WECHAT_GUI_INVOKE_PATH: str = "/invoke"
-
-#: agent health 端点路径（同上）。
-WECHAT_GUI_HEALTH_PATH: str = "/health"
-
-#: screenshot 工具名。
-WECHAT_GUI_TOOL_SCREENSHOT: str = "screenshot"
-#: click 工具名。
-WECHAT_GUI_TOOL_CLICK: str = "click"
-#: type_text 工具名。
-WECHAT_GUI_TOOL_TYPE_TEXT: str = "type_text"
-#: press_key 工具名。
-WECHAT_GUI_TOOL_PRESS_KEY: str = "press_key"
-#: open_chat 工具名。
-WECHAT_GUI_TOOL_OPEN_CHAT: str = "open_chat"
+_ResultT = TypeVar("_ResultT")
 
 
-def _decode_invoke_response(payload: object) -> InvokeResponseModel:
-    """校验并解码 agent invoke 响应载荷。
+def _decode_result(
+    tool: str, decoder: Callable[[object], _ResultT], payload: object
+) -> _ResultT:
+    """用镜像 Result Model 解码工具结果（字段缺失 / 类型错归一可重试错误）。
 
     Args:
-        payload: 已解析的 JSON 载荷。
-
-    Returns:
-        响应模型。
-
-    Raises:
-        ValueError: 根节点非对象 / 字段缺失或类型不符。
-    """
-    if not isinstance(payload, dict):
-        raise ValueError("响应根节点必须是对象")
-    ok = payload.get("ok")
-    result = payload.get("result", {})
-    error = payload.get("error")
-    latency_ms = payload.get("latency_ms", 0)
-    if not isinstance(ok, bool):
-        raise ValueError("字段 ok 必须是布尔值")
-    if not isinstance(result, dict):
-        raise ValueError("字段 result 必须是对象")
-    if error is not None and not isinstance(error, str):
-        raise ValueError("字段 error 必须是字符串或 null")
-    if isinstance(latency_ms, bool) or not isinstance(latency_ms, int) or latency_ms < 0:
-        raise ValueError("字段 latency_ms 必须是非负整数")
-    return InvokeResponseModel(
-        ok=ok,
-        result=dict(result),
-        error=error,
-        latency_ms=latency_ms,
-    )
-
-
-def _require_str(result: dict[str, Any], key: str, tool: str) -> str:
-    """读取工具结果中的必填字符串字段。
-
-    Args:
-        result: 工具结果对象。
-        key: 字段名。
         tool: 工具名（错误文案面）。
+        decoder: 镜像 Result Model 的 ``from_wire``。
+        payload: 工具结果对象。
 
     Returns:
-        字段值。
+        解码后的结果模型。
 
     Raises:
-        BusinessException: 字段缺失或类型不符（``CHANNEL_API_ERROR``）。
+        BusinessException: 结果字段非法（``CHANNEL_API_ERROR``）。
     """
-    value = result.get(key)
-    if not isinstance(value, str) or not value:
+    try:
+        return decoder(payload)
+    except ValueError as exc:
         raise BusinessException(
             code=ErrorCode.CHANNEL_API_ERROR,
-            message=f"GUI 微信工具 {tool} 结果缺少合法字段 {key}",
-        )
-    return value
-
-
-def _require_int(result: dict[str, Any], key: str, tool: str) -> int:
-    """读取工具结果中的必填正整数字段。
-
-    Args:
-        result: 工具结果对象。
-        key: 字段名。
-        tool: 工具名（错误文案面）。
-
-    Returns:
-        字段值。
-
-    Raises:
-        BusinessException: 字段缺失或类型不符（``CHANNEL_API_ERROR``）。
-    """
-    value = result.get(key)
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise BusinessException(
-            code=ErrorCode.CHANNEL_API_ERROR,
-            message=f"GUI 微信工具 {tool} 结果缺少合法字段 {key}",
-        )
-    return value
+            message=f"GUI 微信工具 {tool} 结果字段非法: {exc}",
+        ) from exc
 
 
 class WechatGuiSandboxClient:
@@ -263,7 +195,7 @@ class WechatGuiSandboxClient:
             )
         try:
             payload = response.json()
-            outcome = _decode_invoke_response(payload)
+            outcome = InvokeResponseModel.from_wire(payload)
         except ValueError as exc:
             logger.warning(
                 "GUI 微信 agent 响应非法（wire 契约破坏）: tool={}, error={}",
@@ -295,26 +227,15 @@ class WechatGuiSandboxClient:
             BusinessException: 工具失败或结果字段非法（``CHANNEL_API_ERROR``）。
         """
         outcome = await self.invoke(WECHAT_GUI_TOOL_SCREENSHOT, {})
-        return WechatGuiScreenshotModel(
-            image_base64=_require_str(
-                outcome.result, "image_base64", WECHAT_GUI_TOOL_SCREENSHOT
-            ),
-            sha256=_require_str(outcome.result, "sha256", WECHAT_GUI_TOOL_SCREENSHOT),
-            width=_require_int(outcome.result, "width", WECHAT_GUI_TOOL_SCREENSHOT),
-            height=_require_int(outcome.result, "height", WECHAT_GUI_TOOL_SCREENSHOT),
+        result = _decode_result(
+            WECHAT_GUI_TOOL_SCREENSHOT, ScreenshotResultModel.from_wire, outcome.result
         )
-
-    async def click(self, x: int, y: int) -> None:
-        """在绝对坐标点击（左键）。
-
-        Args:
-            x: X 坐标（像素）。
-            y: Y 坐标（像素）。
-
-        Raises:
-            BusinessException: 工具失败（``CHANNEL_API_ERROR``）。
-        """
-        await self.invoke(WECHAT_GUI_TOOL_CLICK, {"x": x, "y": y})
+        return WechatGuiScreenshotModel(
+            image_base64=result.image_base64,
+            sha256=result.sha256,
+            width=result.width,
+            height=result.height,
+        )
 
     async def type_text(self, text: str) -> None:
         """向当前焦点输入框输入文本（剪贴板粘贴）。
@@ -325,7 +246,10 @@ class WechatGuiSandboxClient:
         Raises:
             BusinessException: 工具失败（``CHANNEL_API_ERROR``）。
         """
-        await self.invoke(WECHAT_GUI_TOOL_TYPE_TEXT, {"text": text})
+        outcome = await self.invoke(WECHAT_GUI_TOOL_TYPE_TEXT, {"text": text})
+        _decode_result(
+            WECHAT_GUI_TOOL_TYPE_TEXT, TypeTextResultModel.from_wire, outcome.result
+        )
 
     async def press_key(self, key: str) -> None:
         """注入按键 / 组合键。
@@ -336,7 +260,10 @@ class WechatGuiSandboxClient:
         Raises:
             BusinessException: 工具失败（``CHANNEL_API_ERROR``）。
         """
-        await self.invoke(WECHAT_GUI_TOOL_PRESS_KEY, {"key": key})
+        outcome = await self.invoke(WECHAT_GUI_TOOL_PRESS_KEY, {"key": key})
+        _decode_result(
+            WECHAT_GUI_TOOL_PRESS_KEY, PressKeyResultModel.from_wire, outcome.result
+        )
 
     async def open_chat(self, remark_name: str) -> WechatGuiOpenChatResultModel:
         """搜索并打开联系人会话。
@@ -353,20 +280,19 @@ class WechatGuiSandboxClient:
         outcome = await self.invoke(
             WECHAT_GUI_TOOL_OPEN_CHAT, {"remark_name": remark_name}
         )
+        result = _decode_result(
+            WECHAT_GUI_TOOL_OPEN_CHAT, OpenChatResultModel.from_wire, outcome.result
+        )
+        if not result.title_changed:
+            logger.warning(
+                "GUI 微信 open_chat 标题区域在截止内未变化（仍以视觉标题校验落定）: "
+                "remark_name={!r}",
+                result.remark_name,
+            )
         return WechatGuiOpenChatResultModel(
-            remark_name=_require_str(
-                outcome.result, "remark_name", WECHAT_GUI_TOOL_OPEN_CHAT
-            ),
-            title_image_base64=_require_str(
-                outcome.result, "title_image_base64", WECHAT_GUI_TOOL_OPEN_CHAT
-            ),
-            title_sha256=_require_str(
-                outcome.result, "title_sha256", WECHAT_GUI_TOOL_OPEN_CHAT
-            ),
-            full_image_base64=_require_str(
-                outcome.result, "full_image_base64", WECHAT_GUI_TOOL_OPEN_CHAT
-            ),
-            full_sha256=_require_str(
-                outcome.result, "full_sha256", WECHAT_GUI_TOOL_OPEN_CHAT
-            ),
+            remark_name=result.remark_name,
+            title_image_base64=result.title_image_base64,
+            title_sha256=result.title_sha256,
+            full_image_base64=result.full_image_base64,
+            full_sha256=result.full_sha256,
         )

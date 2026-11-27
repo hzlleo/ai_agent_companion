@@ -1,4 +1,4 @@
-"""GUI 微信通道 runner 测试——轮询 / 变化检测 / P4 校验 / 去重 / 退避。
+"""GUI 微信通道 runner 测试——轮询 / 变化检测 / P4 校验 / 会话水位 / 退避。
 
 零真实网络 / 零真实等待：沙盒客户端与视觉解析器全部注入 fake；休眠经
 记录式闸门在有限轮次内触发停机。
@@ -13,16 +13,12 @@ import pytest
 
 from packages.harness.channels.channel_models import ChannelType
 from packages.harness.channels.wechat_gui.wechat_gui_models import (
-    WECHAT_GUI_DEDUP_WINDOW_MS,
     TitleMismatchAction,
     WechatGuiContactModel,
-    WechatGuiSnapshotModel,
-    wechat_gui_message_dedup_key,
+    WechatGuiWindowState,
 )
-from packages.harness.channels.wechat_gui.wechat_gui_runner import (
-    WechatGuiChannelRunner,
-    WechatGuiMessageDedupWindow,
-)
+from packages.harness.channels.wechat_gui.wechat_gui_runner import WechatGuiChannelRunner
+from packages.harness.core.errors import BusinessException, ErrorCode
 from tests.wechat_gui_fakes import (
     FakeWechatGuiClient,
     FakeWechatGuiReader,
@@ -50,6 +46,7 @@ def _runner(
     contacts: dict[str, WechatGuiContactModel] | None = None,
     title_mismatch_action: TitleMismatchAction = TitleMismatchAction.SKIP,
     backoff_max_seconds: float = 60.0,
+    window_state: WechatGuiWindowState | None = None,
 ) -> WechatGuiChannelRunner:
     """构造测试 runner（显式参数 + fake 路由器——不读全局 Settings）。"""
     return WechatGuiChannelRunner(
@@ -64,11 +61,12 @@ def _runner(
         title_mismatch_action=title_mismatch_action,
         clock=lambda: _NOW_MS,
         sleep=sleep,
+        window_state=window_state,
     )
 
 
 async def test_run_routes_messages_and_dedups_across_polls() -> None:
-    """轮询：第一轮投新消息；第二轮同一消息被去重，只投新增。"""
+    """轮询：首帧建水位基线；下一帧只投递新增消息。"""
     client = _client(hashes=["sha-1", "sha-2"])
     reader = FakeWechatGuiReader(
         [
@@ -83,10 +81,10 @@ async def test_run_routes_messages_and_dedups_across_polls() -> None:
     runner = _runner(client=client, reader=reader, router=router, sleep=gate)
     gate.runner = runner
     await runner.run()
-    assert [message.text for message in router.inbound] == ["你好", "第二条"]
+    assert [message.text for message in router.inbound] == ["第二条"]
     assert all(message.channel is ChannelType.WECHAT_GUI for message in router.inbound)
     assert client.open_calls == ["小林"]
-    assert runner.dedup_size == 2
+    assert runner.watermark_targets == ("小林",)
     assert runner.poll_count == 2
 
 
@@ -102,11 +100,58 @@ async def test_unchanged_screenshot_skips_vision_model() -> None:
     assert len(reader.calls) == 1
     assert runner.vlm_skipped_count == 1
     assert runner.poll_count == 1
-    assert len(router.inbound) == 1
+    assert router.inbound == []
 
 
-async def test_title_mismatch_default_skip_counts() -> None:
-    """P4 校验不一致：默认 skip——不路由并累计计数。"""
+async def test_vlm_transient_failure_reparses_same_screenshot() -> None:
+    """视觉解析瞬时失败不登记截图：同一画面下一轮重新解析（不增跳过计数）。"""
+    client = _client(hashes=["sha-same", "sha-same"])
+    reader = FakeWechatGuiReader(
+        [make_read_result(messages=[make_message(text="你好")])],
+        errors=[
+            BusinessException(code=ErrorCode.LLM_CALL_FAILED, message="视觉瞬时失败"),
+            None,
+        ],
+    )
+    router = FakeWechatGuiRouter()
+    gate = SleepGate(stop_after=2)
+    runner = _runner(client=client, reader=reader, router=router, sleep=gate)
+    gate.runner = runner
+    await runner.run()
+    assert len(reader.calls) == 2
+    assert reader.calls[0] == reader.calls[1]
+    assert runner.vlm_skipped_count == 0
+    assert runner.consecutive_failures == 0
+
+
+async def test_vlm_transient_failure_delivers_next_new_frame() -> None:
+    """瞬时失败后恢复：同画面重建基线，随后新增消息正常投递。"""
+    client = _client(hashes=["sha-1", "sha-1", "sha-2"])
+    reader = FakeWechatGuiReader(
+        [
+            make_read_result(messages=[make_message(text="你好")]),
+            make_read_result(
+                messages=[make_message(text="你好"), make_message(text="第二条")]
+            ),
+        ],
+        errors=[
+            BusinessException(code=ErrorCode.LLM_CALL_FAILED, message="视觉瞬时失败"),
+            None,
+            None,
+        ],
+    )
+    router = FakeWechatGuiRouter()
+    gate = SleepGate(stop_after=3)
+    runner = _runner(client=client, reader=reader, router=router, sleep=gate)
+    gate.runner = runner
+    await runner.run()
+    assert [message.text for message in router.inbound] == ["第二条"]
+    assert runner.vlm_skipped_count == 0
+    assert runner.poll_count == 3
+
+
+async def test_title_mismatch_default_skip_counts_and_reopens() -> None:
+    """P4 校验不一致：默认 skip 计数并复位目标——下一轮重新 open_chat 并解析。"""
     client = _client(hashes=["sha-1", "sha-2"])
     reader = FakeWechatGuiReader(
         [
@@ -120,17 +165,22 @@ async def test_title_mismatch_default_skip_counts() -> None:
     gate.runner = runner
     await runner.run()
     assert runner.title_mismatch_count == 1
-    assert [message.text for message in router.inbound] == ["你好"]
+    assert client.open_calls == ["小林", "小林"]
+    assert len(reader.calls) == 2
+    assert router.inbound == []
 
 
-async def test_title_mismatch_fail_triggers_backoff() -> None:
-    """P4 校验处置为 fail：本轮失败进入退避（不路由）。"""
-    client = _client(hashes=["sha-1", "sha-2", "sha-3"])
+async def test_title_mismatch_fail_triggers_backoff_and_reopens() -> None:
+    """P4 校验处置为 fail：退避 + 目标复位，下一轮重新 open_chat 并解析。"""
+    client = _client(hashes=["sha-1", "sha-2"])
     reader = FakeWechatGuiReader(
-        [make_read_result(title="别人", messages=[make_message()]) for _ in range(3)]
+        [
+            make_read_result(title="别人", messages=[make_message(text="你好")]),
+            make_read_result(title="小林", messages=[make_message(text="你好")]),
+        ]
     )
     router = FakeWechatGuiRouter()
-    gate = SleepGate(stop_after=1)
+    gate = SleepGate(stop_after=2)
     runner = _runner(
         client=client,
         reader=reader,
@@ -140,10 +190,33 @@ async def test_title_mismatch_fail_triggers_backoff() -> None:
     )
     gate.runner = runner
     await runner.run()
-    assert gate.delays == [2.0]
-    assert runner.consecutive_failures == 1
+    assert gate.delays == [2.0, 0.5]
     assert runner.title_mismatch_count == 1
+    assert client.open_calls == ["小林", "小林"]
+    assert len(reader.calls) == 2
     assert router.inbound == []
+
+
+async def test_shared_window_state_from_outbound_forces_reopen() -> None:
+    """出站已切换过窗口：runner 不得按旧记忆跳过 open_chat。"""
+    client = _client(hashes=["sha-1", "sha-2"])
+    reader = FakeWechatGuiReader(
+        [make_read_result(messages=[make_message()]) for _ in range(2)]
+    )
+    router = FakeWechatGuiRouter()
+    window_state = WechatGuiWindowState()
+    window_state.mark_open("阿青")
+    gate = SleepGate(stop_after=1)
+    runner = _runner(
+        client=client,
+        reader=reader,
+        router=router,
+        sleep=gate,
+        window_state=window_state,
+    )
+    gate.runner = runner
+    await runner.run()
+    assert client.open_calls == ["小林"]
 
 
 async def test_per_target_failure_is_isolated_within_round() -> None:
@@ -184,26 +257,29 @@ async def test_backoff_grows_and_caps_on_repeated_failures() -> None:
     assert runner.consecutive_failures == 3
 
 
-async def test_router_failure_is_isolated_and_message_retried() -> None:
-    """单条路由异常不击穿轮询；失败消息不登记去重（下轮重试）。"""
-    failing_text = "会失败"
-    message = make_message(text=failing_text)
-    expected_id = wechat_gui_message_dedup_key("小林", message, captured_at_ms=_NOW_MS)
+async def test_router_failure_is_isolated_without_replay() -> None:
+    """单条路由失败不击穿轮询；水位照常前进（失败消息不重投）。"""
+    baseline = make_message(text="基线")
+    failing = make_message(text="会失败")
+    healthy = make_message(text="正常")
     router = FakeWechatGuiRouter()
-    router.failing_message_ids = {expected_id}
-    client = _client(hashes=["sha-1", "sha-2"])
+    router.failing_texts = {"会失败"}
+    client = _client(hashes=["sha-1", "sha-2", "sha-3"])
     reader = FakeWechatGuiReader(
         [
-            make_read_result(messages=[message, make_message(text="正常")]),
-            make_read_result(messages=[message]),
+            make_read_result(messages=[baseline]),
+            make_read_result(messages=[baseline, failing, healthy]),
+            make_read_result(messages=[baseline, failing, healthy]),
         ]
     )
-    gate = SleepGate(stop_after=2)
+    gate = SleepGate(stop_after=3)
     runner = _runner(client=client, reader=reader, router=router, sleep=gate)
     gate.runner = runner
     await runner.run()
     assert [item.text for item in router.inbound] == ["正常"]
-    assert runner.dedup_size == 1
+    assert router.attempts == ["会失败", "正常"]
+    assert runner.delivery_failure_count == 1
+    assert runner.watermark_targets == ("小林",)
 
 
 async def test_no_contacts_round_is_noop() -> None:
@@ -284,32 +360,3 @@ async def test_runner_rejects_invalid_bounds() -> None:
             contacts=contacts,
             max_messages_per_poll=0,
         )
-
-
-async def test_dedup_window_evicts_oldest() -> None:
-    """去重窗口：超容按 FIFO 淘汰最旧键。"""
-    window = WechatGuiMessageDedupWindow(capacity=2)
-    window.remember("k-1")
-    window.remember("k-2")
-    window.remember("k-3")
-    assert window.size == 2
-    assert window.seen("k-1") is False
-    assert window.seen("k-2") is True
-    assert window.ids == frozenset({"k-2", "k-3"})
-
-
-async def test_snapshot_model_used_for_dedup_window_semantics() -> None:
-    """时间窗常量与快照字段协同（同文本跨窗产生不同去重键）。"""
-    message = make_message(text="你好", ts_ms=_NOW_MS)
-    snapshot = WechatGuiSnapshotModel(
-        title="小林",
-        messages=[message],
-        screenshot_sha256="sha",
-        captured_at_ms=_NOW_MS,
-    )
-    later = message.model_copy(update={"ts_ms": _NOW_MS + WECHAT_GUI_DEDUP_WINDOW_MS})
-    assert wechat_gui_message_dedup_key(
-        snapshot.title, message, captured_at_ms=snapshot.captured_at_ms
-    ) != wechat_gui_message_dedup_key(
-        snapshot.title, later, captured_at_ms=snapshot.captured_at_ms
-    )

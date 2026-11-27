@@ -27,10 +27,10 @@ __all__ = [
 ]
 
 #: GUI 微信提示词套件总版本（任一模板变更时同步上调）。
-WECHAT_GUI_PROMPTS_VERSION: str = "1.0.0"
+WECHAT_GUI_PROMPTS_VERSION: str = "1.1.0"
 
 #: 截图解析任务书版本。
-WECHAT_GUI_READER_CHARTER_VERSION: str = "1.0.0"
+WECHAT_GUI_READER_CHARTER_VERSION: str = "1.1.0"
 
 #: 截图解析任务书（system 首块；严格 JSON 输出契约）。
 WECHAT_GUI_READER_CHARTER_TEMPLATE: str = (
@@ -41,15 +41,17 @@ WECHAT_GUI_READER_CHARTER_TEMPLATE: str = (
     "1. 当前聊天窗口标题栏显示的联系人备注名或群名（只取标题文本本身，"
     "去掉未读计数、返回箭头等装饰字符）；\n"
     "2. 聊天区域内最新若干条消息，按从上到下的时间顺序输出；每条消息包含"
-    "发送者显示名、正文、是否由本账号发出、以及截图可见的时间（不可读时为 0）。\n"
+    "发送者显示名、正文、是否由本账号发出、以及截图可见的时间——尽力读取"
+    "界面上的相对时间，读不出时填 0。\n"
     "非文本消息（图片、表情、语音、文件、链接卡片等）以方括号占位文本表示，"
     "例如「[图片]」「[语音]」；不要把气泡装饰、时间分隔条或输入框内容当作消息。\n"
     "严格输出一个 UTF-8 JSON 对象，不要输出 Markdown 代码围栏或任何额外说明：\n"
     '{"title": "当前聊天窗口标题", "messages": [{"sender": "发送者显示名", '
     '"text": "消息正文", "is_self": false, "ts_ms": 0}], "confidence": 0.0}\n'
     "字段约束：title 非空字符串；messages 为数组（可为空）；sender 与 text 为"
-    "字符串；is_self 为布尔值；ts_ms 为整数（epoch 毫秒，不可读时 0）；"
-    "confidence 为 0.0 到 1.0 之间的小数，表示你对标题与消息识别的整体把握。"
+    "字符串；is_self 为布尔值；ts_ms 为整数（消息时间的毫秒表示；界面只显示"
+    "相对时间时尽力读取，读不出填 0）；confidence 为 0.0 到 1.0 之间的小数，"
+    "表示你对标题与消息识别的整体把握。"
 )
 
 #: user 文本分块指令模板（占位符 ``{max_messages}``——单次解析消息上限）。

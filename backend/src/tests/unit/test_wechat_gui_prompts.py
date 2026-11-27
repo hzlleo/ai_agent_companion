@@ -13,7 +13,7 @@ from packages.harness.channels.wechat_gui import wechat_gui_prompts as prompts
 #: 逐模板 sha256 摘要锁（UTF-8 字节）。
 _BYTE_LOCKS: dict[str, str] = {
     "WECHAT_GUI_READER_CHARTER_TEMPLATE": (
-        "9bb852970e96b5de55c8827f05702eedb32860f954610a44c843e8439b08562b"
+        "9fe965e31b68642efb09b24f9da3e22e8bc509bdc3d613accc6cb51d7597f98c"
     ),
     "WECHAT_GUI_READER_INSTRUCTION_TEMPLATE": (
         "36681baaa8e311a894577159d0f4a73eb48ac1d6bfa350107375c6eeb8f078ff"
@@ -53,6 +53,8 @@ async def test_render_charter_contract_keywords() -> None:
     assert text.rstrip().endswith("把握。")
     assert '"title"' in text and '"messages"' in text and '"confidence"' in text
     assert "is_self" in text and "ts_ms" in text
+    assert "相对时间" in text and "读不出" in text
+    assert "epoch" not in text
     assert "不臆测" in text
     assert "[图片]" in text
 
