@@ -174,6 +174,29 @@ class ModelResolver:
         """
         return self._by_name.get(name)
 
+    def register_route_target(self, role: str, entry: LlmModelEntry) -> None:
+        """登记非注册表角色的路由目标（程序化别名——不进入五角色注册面）。
+
+        条件路由策略的目标角色 / 内置通道别名不属于 ``ModelRole`` 注册表，
+        且不来自 config.yaml 的 ``role_bindings``；调用方（网关装配 / 测试）
+        经本方法把条目挂到角色别名上，使 :meth:`resolve_optional` 可命中。
+        与 ``rebuild`` 同为原子引用替换——在途已解析引用不受影响。
+
+        Args:
+            role: 路由角色别名（如内置通道的目标角色）。
+            entry: 承接该角色的模型条目（同时进入按名查表与注册表快照）。
+        """
+        by_name = dict(self._by_name)
+        by_name[entry.name] = entry
+        models = [item for item in self._models if item.name != entry.name]
+        models.append(entry)
+        by_role = dict(self._by_role)
+        by_role[role] = entry
+        self._models = models
+        self._by_name = by_name
+        self._by_role = by_role
+        logger.info("路由目标已登记: role={}, entry={}", role, entry.name)
+
     @property
     def models(self) -> list[LlmModelEntry]:
         """当前注册表快照（声明顺序）。"""

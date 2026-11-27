@@ -52,7 +52,7 @@
       harness/intent/intent_models（config → intent 单向聚合）
     - ``Settings``           —— 聚合器（全局单例 ``settings``）
     - ``LlmConfig``          —— config.yaml 的 ``llm`` 段（模型注册表 / 角色绑定 /
-      多模态回退链）
+      条件路由策略 / 多模态回退链）
     - ``SearchProviderEntry`` / ``SearchConfig`` —— config.yaml 的
       ``search`` 段（搜索 provider 注册表 + web_search 子块）
     - ``MultimodalFallbackConfig`` —— look_at 角色非多模态时的回退链配置
@@ -79,6 +79,7 @@ from packages.harness.chat.persona_rotation_models import GroupPersonaSettings
 from packages.harness.config.model_entry import LlmModelEntry, ModelRole
 from packages.harness.core.logging_models import LoggingConfig
 from packages.harness.intent.intent_models import IntentSettings
+from packages.harness.llm.route_policy_models import RoutePolicyModel
 from packages.harness.multimodal.sticker_models import StickerSettings
 from packages.harness.rhythm.rhythm_models import RhythmSettings
 from packages.harness.usage.budget_limits import DAILY_BUDGET_MAX
@@ -403,6 +404,9 @@ class LlmEndpointConfig(BaseSettings):
         daily_budget_persona: 单人格每日模型调用行数上限（0 = 不限；
             有效上限 10,000——计数页帽 50 页 × 每页 200 行；仅人格
             上下文调用受此档约束）。
+        route_policies: 条件路由策略列表（结构化配置面以 config.yaml
+            ``llm.route_policies`` 为权威——env 面字段默认空列表，仅作
+            声明面；非标量字段不进 ``.env.example``）。
     """
 
     base_url: str = Field(default="", description="默认端点 API 基础 URL")
@@ -435,6 +439,10 @@ class LlmEndpointConfig(BaseSettings):
             "单人格每日模型调用行数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"
             "仅人格上下文调用受约束）"
         ),
+    )
+    route_policies: list[RoutePolicyModel] = Field(
+        default_factory=list,
+        description="条件路由策略（结构化面以 config.yaml 为权威；env 面默认空列表）",
     )
 
     @field_validator("top_logprobs", "prompt_logprobs", mode="before")
@@ -1680,7 +1688,7 @@ class MultimodalFallbackConfig(BaseModel):
 
 
 class LlmConfig(BaseModel):
-    """config.yaml ``llm`` 段——模型注册表 + 角色绑定 + 多模态回退链。
+    """config.yaml ``llm`` 段——模型注册表 + 角色绑定 + 回退链 + 条件路由策略。
 
     config.yaml 示例::
 
@@ -1695,6 +1703,16 @@ class LlmConfig(BaseModel):
               concurrency: 4
           role_bindings:
             chat: "main-chat"
+          route_policies:
+            - name: "night-chat"
+              source_role: "chat"
+              target_role: "chat_night"
+              priority: 100
+              condition:
+                time_window:
+                  start_hour: 22
+                  end_hour: 6
+                  timezone: "Asia/Shanghai"
           multimodal_fallback:
             local:
               name: "local-vision"
@@ -1710,8 +1728,11 @@ class LlmConfig(BaseModel):
 
     Attributes:
         models: LLM 模型条目列表（多 provider OpenAI 兼容注册表）。
-        role_bindings: 显式角色绑定（角色 → 条目名；优先于条目自身 roles 声明）。
+        role_bindings: 显式角色绑定（角色 → 条目名；优先于条目自身 roles
+            声明；角色名可为注册表五角色或条件路由策略声明的源 / 目标角色）。
         multimodal_fallback: look_at 角色非多模态时的回退链配置。
+        route_policies: 条件路由策略列表（命中条件时原角色改由目标角色承接；
+            默认空 = 零行为变更）。
     """
 
     models: list[LlmModelEntry] = Field(
@@ -1725,26 +1746,29 @@ class LlmConfig(BaseModel):
         default_factory=MultimodalFallbackConfig,
         description="多模态回退链配置（本地视觉 → 远程多模态）",
     )
+    route_policies: list[RoutePolicyModel] = Field(
+        default_factory=list,
+        description="条件路由策略（原角色在条件命中时改由目标角色承接；默认空）",
+    )
 
-    @field_validator("role_bindings")
-    @classmethod
-    def _validate_role_bindings(cls, value: dict[str, str]) -> dict[str, str]:
-        """校验角色绑定的角色名合法（chat/duty/dream/look_at/embed）。
-
-        Args:
-            value: 原始角色绑定映射。
+    @model_validator(mode="after")
+    def _validate_role_bindings(self) -> LlmConfig:
+        """校验角色绑定键为注册表角色或策略声明的源 / 目标角色。
 
         Returns:
-            通过校验的映射。
+            自身（校验通过）。
 
         Raises:
             ValueError: 含未知角色名。
         """
         valid_roles = {member.value for member in ModelRole}
-        invalid = [role for role in value if role not in valid_roles]
+        for policy in self.route_policies:
+            valid_roles.add(policy.source_role)
+            valid_roles.add(policy.target_role)
+        invalid = [role for role in self.role_bindings if role not in valid_roles]
         if invalid:
             raise ValueError(f"未知角色名: {invalid}（合法值: {sorted(valid_roles)}）")
-        return value
+        return self
 
     @classmethod
     def default_models(cls) -> list[dict[str, Any]]:
@@ -1796,16 +1820,56 @@ class LlmConfig(BaseModel):
                 "roles": ["embed"],
                 "concurrency": 4,
             },
+            {
+                "name": "chat-night",
+                "provider": "openai_compatible",
+                "base_url": "https://api.example.com/v1",
+                "api_key_env": "CHAT_NIGHT_API_KEY",
+                "model": "glm-5.3-night",
+                "roles": [],
+                "concurrency": 2,
+            },
         ]
 
     @classmethod
     def default_role_bindings(cls) -> dict[str, str]:
-        """返回示例角色绑定（空映射——条目自身 roles 声明已覆盖）。
+        """返回示例角色绑定（条目自身 roles 声明已覆盖注册表五角色）。
+
+        示例仅绑定条件路由策略的目标角色 ``chat_night``——注册表五角色由
+        条目 ``roles`` 声明承接，无需显式绑定。
 
         Returns:
-            空角色绑定映射（文档性展示用）。
+            角色绑定映射（策略目标角色 → 示例条目名）。
         """
-        return {}
+        return {"chat_night": "chat-night"}
+
+    @classmethod
+    def default_route_policies(cls) -> list[dict[str, Any]]:
+        """返回 config.example.yaml 中 ``llm.route_policies`` 的示例条目列表。
+
+        示例数据的单一真相源——根 ``scripts/generate_examples_yaml.py``
+        调用此方法生成模板的 ``route_policies`` 段，保证示例永不与模型契约
+        漂移。示例为「夜间 chat 路由到 chat_night」的时段策略。
+
+        Returns:
+            示例策略 dict 列表（config.yaml 输入格式）。
+        """
+        return [
+            {
+                "name": "night-chat",
+                "source_role": "chat",
+                "target_role": "chat_night",
+                "priority": 100,
+                "condition": {
+                    "time_window": {
+                        "start_hour": 22,
+                        "end_hour": 6,
+                        "timezone": "Asia/Shanghai",
+                    }
+                },
+                "fallback_to_source": True,
+            }
+        ]
 
 
 # ---------------------------------------------------------------------------

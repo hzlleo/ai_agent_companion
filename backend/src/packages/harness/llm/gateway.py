@@ -26,21 +26,29 @@
     - **上下文轴**：persona_id / request_id 显式参数优先，缺省读
       core.context 上下文变量（请求中间件已绑定则自动携带）。
 
-亲密通道（``roles:intimate``——可选独立端点，默认关闭）：
+条件路由与内置亲密策略（``roles:intimate``——可选独立端点，默认关闭）：
 
-    - 配置面在 :mod:`packages.harness.llm.intimate_models`（``LLM_INTIMATE_*``
-      env），裁决纯函数在 :mod:`packages.harness.llm.intimate_router`；
-      调用方只传本轮关系摘要的 ``intimacy_level``（0-3），端点 / 模型 /
-      凭据选择全部在本网关完成；
+    - 配置面在 :mod:`packages.harness.llm.route_policy_models`（策略 / 条件 /
+      时段契约）与 :mod:`packages.harness.llm.intimate_models`
+      （``LLM_INTIMATE_*`` env），求值纯函数在
+      :mod:`packages.harness.llm.route_policy`；调用方只传本轮关系摘要的
+      ``intimacy_level``（0-3），端点 / 模型 / 凭据选择全部在本网关完成；
+    - 用户策略经 config.yaml ``llm.route_policies`` 装配；原角色在条件命中
+      时改由目标角色条目承接，``resolved_purpose`` 仍按原角色（预算 / 用量
+      归属不变）；
+    - 内置亲密策略由 ``intimate_config`` 在装配期自动转译（
+      ``name="__intimate_builtin"``、源角色 chat、目标角色 intimate、优先级
+      最低、``requires_summary=True``、允许回落）——既有 ``LLM_INTIMATE_*``
+      env 面与语义不变，用户策略可覆盖；
     - 命中判据：全局开关开启 + base_url / api_key / model 齐备 + 本轮
-      等级不低于配置阈值；摘要缺失（None）或读取降级（空摘要 = 0）时
-      回退默认通道——默认路径请求字节与未启用形态完全一致；
+      等级不低于配置阈值 + 关系摘要可用；摘要缺失（None）或读取降级
+      （空摘要 = 0）时回退默认通道——默认路径请求字节与未启用形态一致；
     - 命中路径复用公共 HTTP 池与条目池（专属条目名
       ``llm-intimate-channel``——信号量 / 熔断 / 用量归属独立）；
     - **不做静默换道**：已配置并被选中的通道调用失败按既有错误语义上抛
       （连接 / 状态 / 解析映射不变），不自动重试默认通道；
-    - 半配置（开关开启但必填项缺失）整通道视为未启用，本网关在首次裁决
-      时记一条 warning（不逐回合刷屏）。
+    - 半配置（开关开启但必填项缺失）整通道视为未启用，本网关在装配期记
+      一条 warning（不逐回合刷屏）。
 """
 
 from __future__ import annotations
@@ -59,16 +67,9 @@ from packages.harness.core.context import persona_id_var, request_id_var
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.time_utils import now_ms
 from packages.harness.llm.client import LlmHttpClient
-from packages.harness.llm.intimate_models import (
-    INTIMATE_CHANNEL_ENTRY_NAME,
-    IntimateChannelConfig,
-    IntimateRouteDecisionModel,
-    IntimateRouteReason,
-)
+from packages.harness.llm.intimate_models import IntimateChannelConfig
 from packages.harness.llm.intimate_router import (
     build_intimate_entry,
-    build_intimate_request_params,
-    evaluate_intimate_route,
     log_incomplete_intimate_config,
 )
 from packages.harness.llm.llm_models import (
@@ -83,6 +84,15 @@ from packages.harness.llm.llm_models import (
     TokenUsageModel,
     ToolDefinitionModel,
     messages_have_content_parts,
+)
+from packages.harness.llm.route_policy import evaluate_route
+from packages.harness.llm.route_policy_models import (
+    INTIMATE_BUILTIN_POLICY_NAME,
+    INTIMATE_BUILTIN_PRIORITY,
+    INTIMATE_TARGET_ROLE,
+    RouteConditionModel,
+    RouteDecisionModel,
+    RoutePolicyModel,
 )
 from packages.harness.pools.llm_pool import LlmEntryPool
 from packages.harness.pools.manager import PoolManager, get_pool_manager
@@ -139,6 +149,7 @@ class LlmGateway:
         top_logprobs: int | None = DEFAULT_TOP_LOGPROBS,
         prompt_logprobs: int | None = DEFAULT_PROMPT_LOGPROBS,
         intimate_config: IntimateChannelConfig | None = None,
+        route_policies: Sequence[RoutePolicyModel] | None = None,
     ) -> None:
         """初始化网关。
 
@@ -151,7 +162,8 @@ class LlmGateway:
                 装配时经 wire_default_usage_recorder 绑定）。
             usage_counter: 预算计数面（None = 零预算门禁——纯编排 /
                 测试形态；app 装配经 wire_default_usage_counter 绑定）。
-            clock: 时钟（epoch 毫秒——预算日桶 / 时延统计，测试注入）。
+            clock: 时钟（epoch 毫秒——预算日桶 / 时延统计 / 时段路由，
+                测试注入）。
             retry_attempts: 传输重试总次数上限（含首次）。
             retry_wait_seconds: 指数退避基数秒。
             retry_after_max_seconds: Retry-After 等待封顶秒数。
@@ -163,7 +175,10 @@ class LlmGateway:
                 ``LLM_PROMPT_LOGPROBS``；流式请求仍恒省该字段）。
             intimate_config: 亲密回复通道配置（None = 现场按
                 ``LLM_INTIMATE_`` env 构造——默认关闭形态；注入即替换
-                整个通道配置，见模块 docstring「亲密通道」）。
+                整个通道配置，见模块 docstring「条件路由与内置亲密策略」）。
+                通道开启且配置齐全时自动转译为一条内置路由策略。
+            route_policies: 条件路由策略（None / 空 = 无用户策略；app
+                装配从 config.yaml ``llm.route_policies`` 传入）。
         """
         self._resolver = resolver
         self._pool_manager = pool_manager
@@ -180,10 +195,17 @@ class LlmGateway:
         self._intimate_config = (
             intimate_config if intimate_config is not None else IntimateChannelConfig()
         )
-        #: 亲密通道条目缓存（配置不变即条目不变——池键稳定）。
-        self._intimate_entry_cache: LlmModelEntry | None = None
-        #: 半配置 warning 单次闩（首个裁决命中时记一条，不逐回合刷屏）。
-        self._intimate_partial_warned = False
+        #: 路由目标的独立凭据覆盖（目标角色 → 明文密钥；内置通道的凭据
+        #: 不来自条目 ``api_key_env``——通道配置已持有 SecretStr）。
+        self._route_api_keys: dict[str, str] = {}
+        #: 内置亲密策略的条目（配置齐全时构建——池键 / 熔断器稳定）。
+        self._builtin_intimate_entry: LlmModelEntry | None = None
+        self._policies = self._assemble_policies(route_policies)
+
+    @property
+    def route_policies(self) -> tuple[RoutePolicyModel, ...]:
+        """当前生效的策略集合（用户策略 + 内置策略；装配期快照）。"""
+        return self._policies
 
     # ------------------------------------------------------------------
     # 角色门面（chat / stream）
@@ -204,10 +226,11 @@ class LlmGateway:
     ) -> ChatResponseModel:
         """按角色非流式调用（角色解析 → 条目直连链；含原生工具调用面）。
 
-        亲密通道路由（``LLM_INTIMATE_ENABLED`` 开启且本轮关系摘要等级达到
-        阈值——见模块 docstring「亲密通道」）：命中时端点 / 模型 / 凭据换用
-        亲密通道配置，消息与工具面原样透传；未命中（含开关关闭、配置不
-        全、摘要缺失、等级不足）走既有角色通道，请求字节不变。
+        条件路由（用户策略 + 内置亲密策略——见模块 docstring「条件路由与
+        内置亲密策略」）：命中时端点 / 模型 / 凭据换用目标角色条目，消息与
+        工具面原样透传；未命中（含策略条件不满足、内置通道关闭 / 配置不
+        全 / 摘要缺失 / 等级不足）走原角色通道，请求字节不变。用量归属的
+        ``purpose`` 恒为原角色用途。
 
         Args:
             role: 模型角色（chat / duty / dream / look_at / embed）。
@@ -236,20 +259,9 @@ class LlmGateway:
                 JSON）；亲密通道调用失败同语义上抛，不静默改走默认通道。
         """
         resolved_purpose = purpose if purpose is not None else _role_value(role)
-        if self._route_intimate(intimacy_level).use_intimate:
-            return await self._chat_for_entry(
-                self._intimate_entry(),
-                messages,
-                build_intimate_request_params(self._intimate_config, params),
-                persona_id=persona_id,
-                purpose=resolved_purpose,
-                request_id=request_id,
-                tools=tools,
-                tool_choice=tool_choice,
-                wire_api_key=self._intimate_config.api_key.get_secret_value(),
-            )
-        entry = self._resolve_role(role)
-        return await self.chat_for_entry(
+        decision = self._evaluate_route(role, intimacy_level, resolved_purpose)
+        entry = self._resolve_role(decision.effective_role)
+        return await self._chat_for_entry(
             entry,
             messages,
             params,
@@ -258,6 +270,7 @@ class LlmGateway:
             request_id=request_id,
             tools=tools,
             tool_choice=tool_choice,
+            wire_api_key=self._route_api_keys.get(decision.effective_role),
         )
 
     async def stream_by_role(
@@ -273,8 +286,8 @@ class LlmGateway:
     ) -> AsyncIterator[ChatStreamChunkModel]:
         """按角色流式调用（异步生成器——角色解析在首个迭代步发生）。
 
-        亲密通道路由与非流式同判据（``intimacy_level`` 输入、通道选择在本
-        网关完成）；命中时流式端点换用亲密通道，增量块形态不变。
+        条件路由与非流式同判据（``intimacy_level`` 输入、通道选择在本网关
+        完成）；命中时流式端点换用目标角色条目，增量块形态不变。
 
         Args:
             role: 模型角色。
@@ -298,19 +311,8 @@ class LlmGateway:
                 调用失败同语义上抛，不静默改走默认通道。
         """
         resolved_purpose = purpose if purpose is not None else _role_value(role)
-        if self._route_intimate(intimacy_level).use_intimate:
-            async for chunk in self._stream_for_entry(
-                self._intimate_entry(),
-                messages,
-                build_intimate_request_params(self._intimate_config, params),
-                persona_id=persona_id,
-                purpose=resolved_purpose,
-                request_id=request_id,
-                wire_api_key=self._intimate_config.api_key.get_secret_value(),
-            ):
-                yield chunk
-            return
-        entry = self._resolve_role(role)
+        decision = self._evaluate_route(role, intimacy_level, resolved_purpose)
+        entry = self._resolve_role(decision.effective_role)
         async for chunk in self._stream_for_entry(
             entry,
             messages,
@@ -318,6 +320,7 @@ class LlmGateway:
             persona_id=persona_id,
             purpose=resolved_purpose,
             request_id=request_id,
+            wire_api_key=self._route_api_keys.get(decision.effective_role),
         ):
             yield chunk
 
@@ -471,11 +474,12 @@ class LlmGateway:
         tool_choice: str | None,
         wire_api_key: str | None,
     ) -> ChatResponseModel:
-        """条目级非流式调用实现（含可选 wire 密钥覆盖——亲密通道专用）。
+        """条目级非流式调用实现（含可选 wire 密钥覆盖——路由目标凭据）。
 
-        条目直连与亲密通道共用同一条传输链：wire 构建（密钥覆盖时直接用
-        通道配置的凭据，不回落全局密钥）→ entry_gate（熔断 + 信号量）→
-        client.chat → 用量发射。
+        条目直连与条件路由目标共用同一条传输链：wire 构建（密钥覆盖时直接
+        用路由目标凭据，不回落全局密钥）→ entry_gate（熔断 + 信号量）→
+        client.chat → 用量发射；条目 ``default_params`` 只补齐调用方未设置
+        的采样字段。
 
         Args:
             entry: 模型条目（池键 / 用量归属面）。
@@ -487,7 +491,7 @@ class LlmGateway:
             tools: 原生工具定义列表（None / 空 = 不携带工具面）。
             tool_choice: 工具选择策略（None = ``auto``）。
             wire_api_key: wire 密钥覆盖（None = 走条目 ``api_key_env`` →
-                全局兜底解析；非 None = 直接用该明文，亲密通道凭据面）。
+                全局兜底解析；非 None = 直接用该明文，路由目标的独立凭据面）。
 
         Returns:
             归一响应（content 与 tool_calls 可并存）。
@@ -498,6 +502,7 @@ class LlmGateway:
         """
         resolved_persona = persona_id if persona_id is not None else persona_id_var.get()
         resolved_request_id = request_id if request_id is not None else request_id_var.get()
+        effective_params = self._merge_entry_default_params(entry, params)
         await self._enforce_daily_budget(resolved_persona)
         client = self._build_client(entry, wire_api_key=wire_api_key)
         entry_pool = self._require_entry_pool()
@@ -507,7 +512,7 @@ class LlmGateway:
             async with entry_pool.entry_gate(entry):
                 try:
                     response = await client.chat(
-                        messages, params, tools=tools, tool_choice=tool_choice
+                        messages, effective_params, tools=tools, tool_choice=tool_choice
                     )
                 except BusinessException as exc:
                     if exc.code != ErrorCode.VALIDATION_ERROR:
@@ -571,47 +576,128 @@ class LlmGateway:
         """取 LLM 条目池（信号量 + 熔断器注册表）。"""
         return self._require_pool_manager().get_llm_entry_pool()
 
-    def _route_intimate(self, intimacy_level: int | None) -> IntimateRouteDecisionModel:
-        """裁决本轮亲密通道路由（半配置 warning 单次记录——不逐回合刷屏）。
+    def _assemble_policies(
+        self, route_policies: Sequence[RoutePolicyModel] | None
+    ) -> tuple[RoutePolicyModel, ...]:
+        """装配用户策略与内置亲密策略（后者优先级最低，用户策略可覆盖）。
 
         Args:
-            intimacy_level: 本轮关系摘要的亲密等级（0-3；None = 摘要不可用）。
+            route_policies: 用户策略（None / 空 = 无）。
 
         Returns:
-            裁决结果（``use_intimate`` 为唯一执行判据）。
+            求值用策略元组（内置策略存在时追加在末尾——其优先级恒低于
+            用户策略，排序后仍可被覆盖）。
         """
-        decision = evaluate_intimate_route(
-            self._intimate_config, intimacy_level=intimacy_level
+        policies = list(route_policies or ())
+        config = self._intimate_config
+        if not config.enabled:
+            return tuple(policies)
+        if not config.is_configured:
+            log_incomplete_intimate_config(config)
+            return tuple(policies)
+        entry = build_intimate_entry(config)
+        if config.temperature is not None:
+            entry = entry.model_copy(
+                update={"default_params": ChatRequestParams(temperature=config.temperature)}
+            )
+        self._builtin_intimate_entry = entry
+        self._route_api_keys[INTIMATE_TARGET_ROLE] = config.api_key.get_secret_value()
+        self._ensure_builtin_route_target()
+        policies.append(
+            RoutePolicyModel(
+                name=INTIMATE_BUILTIN_POLICY_NAME,
+                source_role=_role_value(ModelRole.CHAT),
+                target_role=INTIMATE_TARGET_ROLE,
+                priority=INTIMATE_BUILTIN_PRIORITY,
+                condition=RouteConditionModel(
+                    min_intimacy_level=config.min_intimacy_level,
+                    requires_summary=True,
+                ),
+                fallback_to_source=True,
+            )
         )
-        if (
-            decision.reason is IntimateRouteReason.INCOMPLETE_CONFIG
-            and not self._intimate_partial_warned
-        ):
-            log_incomplete_intimate_config(self._intimate_config)
-            self._intimate_partial_warned = True
-        elif decision.use_intimate:
-            logger.debug(
-                "亲密通道路由命中: entry={}, model={}, intimacy_level={}, threshold={}",
-                INTIMATE_CHANNEL_ENTRY_NAME,
-                self._intimate_config.model,
-                intimacy_level,
-                decision.min_intimacy_level,
+        return tuple(policies)
+
+    def _ensure_builtin_route_target(self) -> None:
+        """确保内置通道条目挂在解析器的路由别名上（热重建后自动补登记）。"""
+        entry = self._builtin_intimate_entry
+        if entry is None:
+            return
+        resolver = self._resolver if self._resolver is not None else get_model_resolver()
+        if resolver.resolve_optional(INTIMATE_TARGET_ROLE) is None:
+            resolver.register_route_target(INTIMATE_TARGET_ROLE, entry)
+
+    def _evaluate_route(
+        self, role: ModelRole | str, intimacy_level: int | None, purpose: str
+    ) -> RouteDecisionModel:
+        """裁决本轮生效角色（条件路由纯函数 + 内置策略装配面）。
+
+        Args:
+            role: 本轮原角色。
+            intimacy_level: 本轮关系摘要的亲密等级（0-3；None = 摘要不可用）。
+            purpose: 本轮调用用途（对话类型维度输入）。
+
+        Returns:
+            裁决结果（生效角色 / 策略名 / 原因）。
+        """
+        self._ensure_builtin_route_target()
+        resolver = self._resolver if self._resolver is not None else get_model_resolver()
+        decision = evaluate_route(
+            _role_value(role),
+            self._policies,
+            intimacy_level=intimacy_level,
+            now_ms=self._route_now_ms(),
+            has_summary=intimacy_level is not None,
+            purpose=purpose,
+            resolver=resolver,
+        )
+        if decision.policy_name is not None:
+            logger.info(
+                "条件路由: policy={}, source_role={}, effective_role={}, reason={}",
+                decision.policy_name,
+                _role_value(role),
+                decision.effective_role,
+                decision.reason.value,
             )
         return decision
 
-    def _intimate_entry(self) -> LlmModelEntry:
-        """取亲密通道模型条目（配置不变即复用——池键与熔断器稳定）。
+    def _route_now_ms(self) -> int:
+        """求值时刻（仅在存在时段条件时读时钟——无时段策略零时钟消耗）。
 
         Returns:
-            亲密通道路由的模型条目。
-
-        Raises:
-            BusinessException: 配置不完整（``INTERNAL_ERROR``——仅在裁决为
-                ``selected`` 之后调用，属装配一致性保护）。
+            epoch 毫秒；无时段条件时返回 0（时段判定不会被调用）。
         """
-        if self._intimate_entry_cache is None:
-            self._intimate_entry_cache = build_intimate_entry(self._intimate_config)
-        return self._intimate_entry_cache
+        if any(policy.condition.time_window is not None for policy in self._policies):
+            return self._clock()
+        return 0
+
+    @staticmethod
+    def _merge_entry_default_params(
+        entry: LlmModelEntry, params: ChatRequestParams | None
+    ) -> ChatRequestParams | None:
+        """合并条目缺省采样参数（调用方显式字段优先，只补齐空缺）。
+
+        Args:
+            entry: 模型条目（可携带通道默认参数）。
+            params: 调用方采样参数（None = 全默认）。
+
+        Returns:
+            合并后的参数（None = 条目与调用方均无默认——端点默认）。
+        """
+        defaults = entry.default_params
+        if defaults is None:
+            return params
+        if params is None:
+            return defaults
+        missing = {
+            name: value
+            for name in ChatRequestParams.model_fields
+            if getattr(params, name) is None
+            if (value := getattr(defaults, name)) is not None
+        }
+        if not missing:
+            return params
+        return params.model_copy(update=missing)
 
     def _build_client(
         self, entry: LlmModelEntry, *, wire_api_key: str | None = None
@@ -682,11 +768,12 @@ class LlmGateway:
             persona_id: 人格 ID（None = 读请求上下文）。
             purpose: 用量用途。
             request_id: 请求追踪 ID（None = 读请求上下文）。
-            wire_api_key: wire 密钥覆盖（None = 条目密钥解析链；亲密通道
-                传通道凭据）。
+            wire_api_key: wire 密钥覆盖（None = 条目密钥解析链；路由目标
+                传其独立凭据）。
         """
         resolved_persona = persona_id if persona_id is not None else persona_id_var.get()
         resolved_request_id = request_id if request_id is not None else request_id_var.get()
+        effective_params = self._merge_entry_default_params(entry, params)
         await self._enforce_daily_budget(resolved_persona)
         client = self._build_client(entry, wire_api_key=wire_api_key)
         entry_pool = self._require_entry_pool()
@@ -704,7 +791,7 @@ class LlmGateway:
                 )
             async with entry_pool.entry_gate(entry):
                 try:
-                    async for chunk in client.stream(messages, params):
+                    async for chunk in client.stream(messages, effective_params):
                         if chunk.usage is not None:
                             aggregated_usage = chunk.usage
                         yield chunk

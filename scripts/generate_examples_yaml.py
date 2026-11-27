@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """``.example`` 配置文件生成器——``backend/config.example.yaml`` 生成。
 
-从 ``LlmModelEntry`` / ``LlmConfig`` / ``MultimodalFallbackConfig`` /
+从 ``LlmModelEntry`` / ``LlmConfig`` / ``RoutePolicyModel`` /
+``RouteConditionModel`` / ``TimeWindowModel`` / ``MultimodalFallbackConfig`` /
 ``SearchConfig`` / ``SearchProviderEntry`` / ``WebSearchSettings`` 内省
 字段 schema（Field description）+ 代码默认值（单一真相源）生成
 ``config.example.yaml`` 内容。
@@ -22,6 +23,11 @@ from packages.harness.config.models import (
     SearchConfig,
     SearchProviderEntry,
     WebSearchSettings,
+)
+from packages.harness.llm.route_policy_models import (
+    RouteConditionModel,
+    RoutePolicyModel,
+    TimeWindowModel,
 )
 
 
@@ -72,6 +78,9 @@ def _type_display_name(annotation: object) -> str:
     origin = get_origin(annotation)
     if origin is not None:
         args = get_args(annotation)
+        if origin is tuple and args and args[-1] is Ellipsis:
+            inner = ", ".join(_type_display_name(arg) for arg in args[:-1])
+            return f"tuple[{inner}, ...]"
         if args:
             inner = ", ".join(_type_display_name(arg) for arg in args)
             return f"{_type_display_name(origin)}[{inner}]"
@@ -169,8 +178,8 @@ def generate_config_example_yaml() -> str:
         "# api_key_env 指向环境变量名）。",
         "#",
         "# 本文件由 `pixi run gen-examples` 从 LlmModelEntry / LlmConfig /",
-        "# MultimodalFallbackConfig / SearchConfig / SearchProviderEntry /",
-        "# WebSearchSettings 自动生成。",
+        "# RoutePolicyModel / MultimodalFallbackConfig / SearchConfig /",
+        "# SearchProviderEntry / WebSearchSettings 自动生成。",
         "# 不要手动编辑——请修改配置类的 Field(description=...) 后重新生成。",
         "",
         "# ===========================================================================",
@@ -211,14 +220,56 @@ def generate_config_example_yaml() -> str:
         if model.get("multimodal"):
             lines.append("      multimodal: true")
 
+    bindings = LlmConfig.default_role_bindings()
     lines.extend(
         [
             "",
             "  # 显式角色绑定（角色 → 条目名；优先于条目自身 roles 声明）。",
-            "  # 示例（当前示例条目的 roles 声明已覆盖全部角色，无需显式绑定）：",
+            "  # 注册表五角色由条目 roles 声明承接；此处仅绑定条件路由策略的",
+            "  # 目标角色（chat_night → 夜间条目）。",
+            '  # 示例：',
             '  # role_bindings:',
             '  #   chat: "main-chat"',
-            '  role_bindings: {}',
+        ]
+    )
+    if bindings:
+        lines.append("  role_bindings:")
+        for role, entry_name in bindings.items():
+            lines.append(f"    {role}: {_yaml_quote(entry_name)}")
+    else:
+        lines.append("  role_bindings: {}")
+
+    lines.extend(
+        [
+            "",
+            "  # ===========================================================================",
+            "  # route_policies — 条件路由策略（原角色在条件命中时改由目标角色条目",
+            "  # 承接；默认空列表 = 零行为变更）。条件维度：亲密度区间 / 关系摘要",
+            "  # 可用性 / 时段（IANA 时区，end<=start 视为跨午夜）/ 对话类型（用途名）。",
+            "  # 示例：夜间 chat → chat_night（Asia/Shanghai）。chat_night 须在",
+            "  # models 中有条目并经 role_bindings 绑定（示例已绑定到 chat-night）。",
+            "  # RoutePolicyModel 字段 schema:",
+        ]
+    )
+    lines.extend(generate_yaml_field_comments(RoutePolicyModel))
+    lines.extend(["  # RouteConditionModel 字段 schema:", *generate_yaml_field_comments(RouteConditionModel)])
+    lines.extend(["  # TimeWindowModel 字段 schema:", *generate_yaml_field_comments(TimeWindowModel)])
+    lines.extend(["  route_policies:"])
+    for policy in LlmConfig.default_route_policies():
+        lines.append(f"    - name: {_yaml_quote(policy['name'])}")
+        lines.append(f"      source_role: {_yaml_quote(policy['source_role'])}")
+        lines.append(f"      target_role: {_yaml_quote(policy['target_role'])}")
+        lines.append(f"      priority: {policy['priority']}")
+        lines.append("      condition:")
+        window = policy["condition"]["time_window"]
+        lines.append("        time_window:")
+        lines.append(f"          start_hour: {window['start_hour']}")
+        lines.append(f"          end_hour: {window['end_hour']}")
+        lines.append(f"          timezone: {_yaml_quote(window['timezone'])}")
+        fallback = "true" if policy["fallback_to_source"] else "false"
+        lines.append(f"      fallback_to_source: {fallback}")
+    lines.extend(
+        [
             "",
             "  # ===========================================================================",
             "  # multimodal_fallback — look_at 角色非多模态时的回退链",

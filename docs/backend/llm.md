@@ -8,9 +8,11 @@
 |---|---|---|
 | `llm_models.py` | 消息 / 参数 / 响应 / embeddings / wire DTO / 用量事件 Model Classes（含原生工具调用与多模态内容分块契约） | `ChatMessageModel` / `ChatRequestParams` / `ChatResponseModel` / `ChatStreamChunkModel` / `EmbeddingsResponseModel` / `LlmUsageEvent` / `ToolDefinitionModel` / `ToolCallModel` / `TextContentPart` / `ImageContentPart` / `ContentPartModel` / `build_chat_request_body` / `messages_have_content_parts` |
 | `client.py` | OpenAI 兼容客户端（非流式 + SSE 流式 + embeddings + tenacity 重试 + 错误映射） | `LlmHttpClient` / `LlmRetryableError` / `parse_retry_after_seconds` |
-| `gateway.py` | 角色路由门面（wire 构建 → entry_gate → client → 用量发射；chat 与 embed 双面；含亲密通道路由） | `LlmGateway` / `UsageRecorder` / `wire_default_usage_recorder` |
-| `intimate_models.py` | 亲密通道 Model Classes：`LLM_INTIMATE_*` 配置面 / 路由裁决契约（Unit 文件） | `IntimateChannelConfig` / `IntimateRouteReason` / `IntimateRouteDecisionModel` / `INTIMATE_CHANNEL_ENTRY_NAME` |
-| `intimate_router.py` | 亲密通道纯函数：配置裁决 / 条目构建 / 采样温度合并 / 半配置告警（Unit 文件） | `evaluate_intimate_route` / `build_intimate_entry` / `build_intimate_request_params` / `log_incomplete_intimate_config` |
+| `gateway.py` | 角色路由门面（wire 构建 → entry_gate → client → 用量发射；chat 与 embed 双面；条件路由 + 内置亲密策略装配） | `LlmGateway` / `UsageRecorder` / `wire_default_usage_recorder` |
+| `route_policy_models.py` | 条件路由 Model Classes：策略 / 条件 / 时段 / 裁决契约（Unit 文件） | `RoutePolicyModel` / `RouteConditionModel` / `TimeWindowModel` / `RouteDecisionModel` / `RouteDecisionReason` |
+| `route_policy.py` | 条件路由纯函数：优先级排序 / 条件矩阵 / 时段换算 / 目标绑定检查（Unit 文件） | `evaluate_route` / `time_window_matches` |
+| `intimate_models.py` | 内置亲密策略 Model Classes：`LLM_INTIMATE_*` 配置面 / 裁决对照契约（Unit 文件） | `IntimateChannelConfig` / `IntimateRouteReason` / `IntimateRouteDecisionModel` / `INTIMATE_CHANNEL_ENTRY_NAME` |
+| `intimate_router.py` | 内置亲密策略装配面：配置裁决对照 / 条目构建 / 半配置告警（Unit 文件） | `evaluate_intimate_route` / `build_intimate_entry` / `build_intimate_request_params` / `log_incomplete_intimate_config` |
 
 依赖方向：llm → config（model_resolver / llm_wire / Settings）+ pools（entry_gate / 共享 HTTP 池）+ core（errors / context / time_utils）；**不硬依赖 usage 域**（经注入式记录器 + 惰性接线，见下文）。
 
@@ -18,7 +20,8 @@
 
 ```
 chat_by_role(role, messages, params)
-    ↓ ① config.model_resolver.resolve(role)           角色解析（未绑定 → MODEL_NOT_FOUND）
+    ↓ ◇ 条件路由裁决（route_policies + 内置策略 → effective_role；见「条件路由策略」节）
+    ↓ ① config.model_resolver.resolve(effective_role)  角色解析（未绑定 → MODEL_NOT_FOUND）
     ↓ ⓪ LLM_DAILY_BUDGET_* 日预算闸                 超限 → RATE_LIMITED（不落用量）
     ↓ ② config.llm_wire.build_llm_wire_config(entry)  wire 构建（密钥解析收口：api_key_env → LLM_API_KEY 兜底 → 空串）
     ↓ ③ pools.entry_gate(entry)                        熔断预检（open → LLM_REQUEST_FAILED）+ per-entry 信号量
@@ -28,7 +31,7 @@ chat_by_role(role, messages, params)
 chat_for_entry(entry, ...)        条目直连（跳过 ①；look_at 回退链 / 显式条目调用面）
 stream_by_role / _stream_for_entry  流式同构（异步生成器；角色解析在首个迭代步发生）
 embed_by_role(texts, ...)         向量化（⓪预算闸在 ①角色解析之前 → ①角色解析恒 embed → ③门控 → POST /embeddings → ⑤purpose="embed" 用量发射）
-chat_by_role(..., intimacy_level=N)  亲密通道路由（裁决见「亲密通道」节；未命中走上面的角色链）
+chat_by_role(..., intimacy_level=N)  条件路由 / 内置亲密策略（见「条件路由策略」与「内置亲密策略」节；未命中走上面的角色链）
 ```
 
 预算闸位置（与实码一致）：chat / stream 在角色解析之后、条目门控 / 传输之前；
@@ -54,6 +57,7 @@ gateway = LlmGateway(
     top_logprobs=20,          # 每次生成位置回传前 N 候选（None = 省略；LLM_TOP_LOGPROBS）
     prompt_logprobs=20,       # 提示词 logprobs 数（None = 省略；LLM_PROMPT_LOGPROBS；流式恒省）
     intimate_config=None,     # None = 按 LLM_INTIMATE_* env 构造（默认关闭形态）
+    route_policies=None,      # None/空 = 无用户策略；app 装配读 config.yaml llm.route_policies
 )
 ```
 
@@ -62,16 +66,118 @@ app 装配从 `Settings.llm.top_logprobs` / `Settings.llm.prompt_logprobs`
 
 `wire_default_usage_recorder()` / `wire_default_usage_counter()` 是 llm → usage 的仅有两个接线点（函数体内惰性 import——llm 模块导入期零耦合；app 装配调用）。
 
-## 亲密通道（roles:intimate）
+## 条件路由策略
+
+`config.yaml` 的 `llm.route_policies` 声明条件路由：**原角色在条件命中时
+改由目标角色条目承接**。策略求值是纯函数
+（`packages.harness.llm.route_policy.evaluate_route`），网关在
+`chat_by_role` / `stream_by_role` 入口统一调用；命中后 `effective_role`
+决定解析的条目，`resolved_purpose` 仍按原角色（预算 / 用量归属不变）。
+
+```yaml
+llm:
+  models:
+    - name: "main-chat"
+      base_url: "https://api.example.com/v1"
+      api_key_env: "MAIN_CHAT_API_KEY"
+      model: "glm-5.3"
+      roles: ["chat"]
+    - name: "chat-night"
+      base_url: "https://api.example.com/v1"
+      api_key_env: "CHAT_NIGHT_API_KEY"
+      model: "glm-5.3-night"
+      roles: []                      # 目标角色经 role_bindings 绑定
+  role_bindings:
+    chat_night: "chat-night"         # 策略目标角色 → 条目名
+  route_policies:
+    - name: "night-chat"
+      source_role: "chat"
+      target_role: "chat_night"
+      priority: 100
+      condition:
+        time_window:
+          start_hour: 22
+          end_hour: 6
+          timezone: "Asia/Shanghai"
+      fallback_to_source: true
+```
+
+### 配置字段表
+
+`RoutePolicyModel`：
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `name` | `str (min_length=1)` | — | 策略名（日志与错误 details 引用；非空） |
+| `source_role` | `str (min_length=1)` | — | 原角色名（调用方声明的角色） |
+| `target_role` | `str (min_length=1)` | — | 目标角色名（不得等于 `source_role`） |
+| `priority` | `int` | `0` | 优先级（降序求值；同优先级按声明序） |
+| `condition` | `RouteConditionModel` | — | 命中条件（各维度 AND） |
+| `fallback_to_source` | `bool` | `true` | 目标角色未绑定条目时回落原角色；`false` 抛 `MODEL_NOT_FOUND` |
+
+`RouteConditionModel`：
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `min_intimacy_level` | `int \| None (0-3)` | `None` | 最低亲密度（None = 不约束下沿） |
+| `max_intimacy_level` | `int \| None (0-3)` | `None` | 最高亲密度（须不小于下沿；None = 不约束上沿） |
+| `time_window` | `TimeWindowModel \| None` | `None` | 时段窗口（None = 不约束） |
+| `requires_summary` | `bool \| None` | `None` | True = 仅摘要可用；False = 仅摘要不可用；None = 不约束 |
+| `purposes` | `tuple[str, ...]` | `()` | 对话类型白名单（本轮 `resolved_purpose`：`chat` / `duty` / `dream` 等既调用途名；空 = 不约束） |
+
+`TimeWindowModel`：
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `start_hour` | `int (0-23)` | — | 窗口起始小时（含） |
+| `end_hour` | `int (0-23)` | — | 窗口结束小时（不含）；`<= start_hour` 视为跨午夜（如 22→6） |
+| `timezone` | `str` | `"UTC"` | IANA 时区名；装配期经 `zoneinfo.ZoneInfo` 校验，非法名拒绝加载 |
+
+### 求值顺序
+
+```
+evaluate_route(role, policies, intimacy_level, now_ms, has_summary, purpose, resolver)
+    ↓ ① 仅保留 source_role == 原角色 的策略
+    ↓ ② priority 降序（同优先级按声明序）
+    ↓ ③ 逐条检查条件（亲密度区间 / 摘要可用性 / 时段 / 用途——AND）
+    ↓ 第一个全命中策略 → resolver.resolve_optional(target_role)
+        ├─ 已绑定 → routed（生效角色 = target_role）
+        ├─ 未绑定 + fallback_to_source=true → fallback_unbound（回落原角色）
+        └─ 未绑定 + fallback_to_source=false → MODEL_NOT_FOUND（details 含策略名）
+    ↓ 无策略命中 → direct（生效角色 = 原角色）
+```
+
+- **时段**：以调用方注入的 `now_ms`（epoch 毫秒）在策略声明时区换算小时；
+  网关时钟可注入（测试零真实等待）。跨午夜窗口按 `[start, 24) ∪ [0, end)`
+  处理，`end == start` 覆盖全天。
+- **用途维度**：条件比较的是 `resolved_purpose`（显式 `purpose` 覆盖，缺省
+  为原角色名）——即「对话类型」的配置面；命中改道不改变用途归属。
+- **与 `role_bindings` 的关系**：目标角色不是注册表五角色时必须经
+  `role_bindings`（条目声明 `roles` 仅限五角色）绑定到具体条目；loader
+  在重建解析器后把这些绑定登记为路由别名。未绑定条目按策略回落或抛错，
+  不会静默直连。
+- **条目默认参数**：目标条目可声明 `default_params`（如通道默认温度），
+  网关只补齐调用方未设置的采样字段；调用方显式值优先。
+- **日志**：命中 / 回落记录一条 `logger.info`（策略名、原角色、生效角色、
+  reason；不打印消息内容）。
+
+## 内置亲密策略（roles:intimate）
 
 长期陪伴对话允许把一个**独立的 OpenAI 兼容端点**接成亲密回复通道：运营可
 为该端点单独调模型 / 采样温度 / 输出策略，而主对话端点（`roles:chat`）
 保持原样。该通道**默认关闭**，未开启时全部请求走既有 chat 角色通道，请求
 字节零变化。
 
-通道标识 `roles:intimate` 只存在于本 env 面，**不进入** config.yaml 的
-模型注册表（`ModelRole` 维持 chat / duty / dream / look_at / embed 五角色，
-注册表管理 API 面不变）。
+**实现形态**：通道不再由网关特判，而是在装配期转译为一条内置条件路由
+策略（`name="__intimate_builtin"`、源角色 `chat`、目标角色 `intimate`、
+优先级最低 `-999`、`requires_summary=true`、`fallback_to_source=true`），
+并把通道条目登记为 `intimate` 路由别名。用户 `route_policies` 的优先级
+高于内置策略，因此可覆盖。`LLM_INTIMATE_*` env 面、配置类与语义保持不变
+（与「条件路由策略」节共用同一求值路径）。
+
+通道标识 `roles:intimate` 只存在于本 env 面 / 路由别名，**不进入**
+config.yaml 的模型注册表（`ModelRole` 维持 chat / duty / dream / look_at /
+embed 五角色，注册表管理 API 面不变）。
 
 ### 配置键表（`.env.example` / Setup Wizard「亲密回复通道配置」步骤同源）
 
@@ -93,27 +199,27 @@ app 装配从 `Settings.llm.top_logprobs` / `Settings.llm.prompt_logprobs`
 - 通道可用 = `LLM_INTIMATE_ENABLED=true` **且** `base_url` / `api_key` /
   `model` 三项全部非空；
 - **半配置（锁定）**：开关为真但必填项缺任一项时，整通道视为未启用，
-  网关在首次裁决时记**一条** warning（列出缺失的 `LLM_INTIMATE_*` 变量名），
-  本进程后续裁决不再重复记录；不因半配置抛错阻断回复；
+  网关在装配期记**一条** warning（列出缺失的 `LLM_INTIMATE_*` 变量名），
+  不因半配置抛错阻断回复；
 - 未配置任何 `LLM_INTIMATE_*`（默认部署形态）等同于关闭——不产生 warning。
 
 ### 路由矩阵
 
 调用方（chat 域）只传本轮关系摘要的 `intimacy_level`（0-3；摘要缺失 /
-读取降级传 `None` / 0）；端点、模型、凭据与阈值判定全部在
-`llm.intimate_router.evaluate_intimate_route` 完成。判定顺序固定，先命中
-者即结论：
+读取降级传 `None` / 0）。内置策略的命中条件 = 关系摘要可用（
+`requires_summary=true`）且等级 ≥ `min_intimacy_level`；开关关闭 / 半配置
+时不生成内置策略，等价于无策略直连。判定顺序固定，先命中者即结论：
 
-| 开关 | 配置齐全 | 本轮等级 | 裁决原因 | 实际通道 |
+| 开关 | 配置齐全 | 本轮等级 | 等价裁决原因 | 实际通道 |
 |---|---|---|---|---|
-| 关 | 任意 | 任意 | `disabled` | 默认（chat 角色条目） |
-| 开 | 否 | 任意 | `incomplete_config` | 默认（并记一条 warning） |
-| 开 | 是 | `None`（摘要不可用） | `relationship_unavailable` | 默认 |
-| 开 | 是 | 低于 `min_intimacy_level` | `below_threshold` | 默认 |
-| 开 | 是 | ≥ `min_intimacy_level` | `selected` | 亲密通道 |
+| 关 | 任意 | 任意 | `direct`（无内置策略） | 默认（chat 角色条目） |
+| 开 | 否 | 任意 | `direct`（无内置策略，并记一条 warning） | 默认 |
+| 开 | 是 | `None`（摘要不可用） | `direct`（条件不命中） | 默认 |
+| 开 | 是 | 低于 `min_intimacy_level` | `direct`（条件不命中） | 默认 |
+| 开 | 是 | ≥ `min_intimacy_level` | `routed`（`__intimate_builtin`） | 亲密通道 |
 
-关系摘要读取失败时 chat 域降级为空摘要（stranger / 0），因此该回合按
-`below_threshold` 回退默认通道——亲密通道不自行读库、不猜关系状态。
+关系摘要读取失败时 chat 域降级为空摘要（stranger / 0），因此该回合不满足
+`min_intimacy_level` 并回退默认通道——亲密通道不自行读库、不猜关系状态。
 `reply` 与 swipes 变体重生成同源：两者都经事实读取面派生关系摘要并把
 `intimacy_level` 传给网关；swipe 的关系读取面未接线时输入为 `None`，读取失败
 按空摘要（0）降级——均回退默认通道。
@@ -122,12 +228,12 @@ app 装配从 `Settings.llm.top_logprobs` / `Settings.llm.prompt_logprobs`
 
 ```
 chat_by_role(role, messages, params, intimacy_level=N)
-    ↓ ① evaluate_intimate_route(IntimateChannelConfig, N)    纯函数裁决
-    ↓ ② build_intimate_entry(config)                         条目键 = llm-intimate-channel
-    ↓ ③ build_intimate_request_params(config, params)        通道温度仅补调用方未设置的字段
+    ↓ ① evaluate_route(..., policies=[用户策略, __intimate_builtin])  条件路由求值
+    ↓ ② router.resolve_optional("intimate")                 内置条目别名（装配期登记）
+    ↓ ③ build_intimate_entry(config)                         条目键 = llm-intimate-channel；通道默认温度挂 default_params
     ↓ ④ pools.entry_gate(条目)                               公共池：专属信号量 + 熔断器
     ↓ ⑤ llm.client.chat / stream                             共享 HTTP 池；wire 凭据 = LLM_INTIMATE_API_KEY
-    ↓ ⑥ 用量发射（purpose 保持调用方用途，model_entry=llm-intimate-channel）
+    ↓ ⑥ 用量发射（purpose 保持原角色用途，model_entry=llm-intimate-channel）
 ```
 
 消息序列、原生工具面、输出协议与合规重试语义完全复用——只有端点 / 模型 /

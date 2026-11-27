@@ -96,12 +96,12 @@
 | R3-2 限流与背压 | QQ 入站有界 / 实时语音 TTS 队列与会话帽 / LLM 日预算闸 / 多 worker 语义 / 最小观测面 / 前端 Node 护栏与构建体积基线（P1×1 + P2×7；复审 6×P2 闭环） | ✅ merged（PR #36；证据 `fe261c9a`；PR body 引用的 `0276c1a5` 为首提交树证据，终态以 `fe261c9a` 为准） |
 | R3-3 性能基线 | `bench_core.py` 6 项纯函数微基准 + `api_smoke.py` 4 端点进程内冒烟 + 门禁链落位（复审 4×P2 闭环；终局复核 7×P2 闭环） | ✅ merged（PR #37 → main `3f313a6`；评审 head `66b14b3`，终态含 `ecb7714`/`ee9381a`；canonical 证据 `16b07c7c`，历史 `bc71f261`） |
 
-| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（R4-6a PoC 门制品 + 本机栈实测，已合并 PR #45 → `b065bf4`；R4-6b 通道本体，已合并 PR #46 → `232e38e`；Live 推迟）；R4-7 平台化扩展（R4-7a 外部 HTTP 工具扩展注册；R4-7b 多角色模型路由待开工）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 已合并（PR #44 → main `215317c`）；R4-6a 已合并（PR #45 → main `b065bf4`）；R4-6b 已合并（PR #46 → main `232e38e`）；R4-7a 本分支（`feat/r4-7-platform`）工作区（外部 HTTP 工具扩展注册）；R4-1 / R4-2 / R4-3 已合并；R4-7b / R4-8 待开工 |
+| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（R4-6a PoC 门制品 + 本机栈实测，已合并 PR #45 → `b065bf4`；R4-6b 通道本体，已合并 PR #46 → `232e38e`；Live 推迟）；R4-7 平台化扩展（R4-7a 外部 HTTP 工具扩展注册；R4-7b 条件路由策略 + 内置亲密策略）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 已合并（PR #44 → main `215317c`）；R4-6a 已合并（PR #45 → main `b065bf4`）；R4-6b 已合并（PR #46 → main `232e38e`）；R4-7a 本分支（`feat/r4-7-platform`）工作区（外部 HTTP 工具扩展注册）；R4-7b 本分支工作区（条件路由策略 + 内置亲密策略）；R4-1 / R4-2 / R4-3 已合并；R4-8 待开工 |
 
 **当前分支状态**：
 - main：`232e38e`（PR#34–#46 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
 - `feat/r3-perf`：R3-3 性能基线，已合并（PR #37），可删除。
-- R4：R4-4 已合并（PR #43 → `f8eb398`）；R4-5 已合并（PR #44 → `215317c`）；R4-6a 已合并（PR #45 → `b065bf4`）；R4-6b 已合并（PR #46 → `232e38e`）；R4-7a（外部 HTTP 工具扩展注册）在当前分支 `feat/r4-7-platform` 工作区；R4-1 / R4-2 / R4-3 已合并；R4-7b / R4-8 待排期。
+- R4：R4-4 已合并（PR #43 → `f8eb398`）；R4-5 已合并（PR #44 → `215317c`）；R4-6a 已合并（PR #45 → `b065bf4`）；R4-6b 已合并（PR #46 → `232e38e`）；R4-7a（外部 HTTP 工具扩展注册）与 R4-7b（条件路由策略 + 内置亲密策略）在当前分支 `feat/r4-7-platform` 工作区；R4-1 / R4-2 / R4-3 已合并；R4-8 待排期。
 - 历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入 main，可删除；工作区 clean。
 
 ## 4. 全部拍板记录（原文语义）
@@ -2826,6 +2826,84 @@ Live 前风险（Live 阶段验证）：`open_chat` 在 Ctrl+F 后立即粘贴�
 - 全部执行器测试经 `httpx.MockTransport` 零真实网络；未接真实日历服务
   做端到端联调（端点契约由 JSON 示例与 MockTransport 守卫）。
 - R4-7b 多角色模型路由未开工。
+
+### 已完成切片：R4-7b 条件路由策略 + 内置亲密策略（本分支工作区）
+
+**背景**：R4-7a 外部 HTTP 工具扩展注册已在本分支工作区。本片把角色路由从
+「固定角色 → 条目」扩展为「条件命中时原角色改由目标角色条目承接」，并把
+既有亲密通道从网关特判转译为内置策略（env 面与语义不变）。
+
+**改动面（文件）**：
+- 模型（Unit 文件）：`packages/harness/llm/route_policy_models.py`——
+  `RoutePolicyModel` / `RouteConditionModel` / `TimeWindowModel` /
+  `RouteDecisionModel`（含 `RouteDecisionReason`；内置策略名 / 最低优先级 /
+  目标角色常量）。
+- 求值（纯函数）：`packages/harness/llm/route_policy.py`——源角色过滤 →
+  优先级降序（同优先级声明序）→ 条件 AND（亲密度区间 / 摘要三态 / 时段 /
+  用途）→ 目标绑定检查（`routed` / `fallback_unbound` / `MODEL_NOT_FOUND`；
+  无命中 `direct`）。时段以注入 `now_ms` + `zoneinfo` 换算，跨午夜窗口按
+  两段并集。
+- 配置面：`config/models.py` 增 `llm.route_policies`（与 `role_bindings`
+  同级）+ `role_bindings` 允许策略源 / 目标角色；`config/loader.py` 解析
+  策略并在重建解析器后登记路由别名；`config/registry_admin.py` 读改写保留
+  策略与条目 `default_params`；`LlmModelEntry` 增可选 `default_params`。
+- 网关：`chat_by_role` / `stream_by_role` 删除亲密特判，统一经
+  `_evaluate_route`（注入策略 / 时钟 / 解析器）；`effective_role` 用于条目
+  解析，`resolved_purpose` 仍按原角色。内置亲密策略在装配期由
+  `intimate_config` 转译（`__intimate_builtin`，priority=-999，
+  requires_summary=true，fallback=true），条目登记为 `intimate` 路由别名；
+  通道凭据经路由目标凭据覆盖注入（条目 `api_key_env` 保持既有空值契约），
+  通道默认温度挂 `default_params`。热重建后网关在下次调用前补登记别名。
+- 示例 / 装配：`scripts/generate_examples_yaml.py` 增 `route_policies` /
+  目标角色绑定 / `chat-night` 示例与字段 schema 注释；`app/main.py` 装配
+  传入 `runtime_llm_config.route_policies`；`config.example.yaml` 已重生成。
+- 测试：`tests/unit/test_llm_route_policy.py`（条件矩阵 / 优先级 / 回落
+  两态 / 直连 / 模型校验 / 网关时段与用途 / 热重建补登记 / 与内置亲密策略
+  的逐场景等价性）。
+- 门禁：`backend/red_manifest.toml` 增两条探针；断言基线并入新测试文件。
+
+**向后兼容转译规则**：`LLM_INTIMATE_ENABLED=true` 且 base_url / api_key /
+model 齐备 → 内置策略（源 chat → 目标 intimate，最低优先级，摘要可用 +
+等级 ≥ `min_intimacy_level`，允许回落）+ 条目注册；开关关闭 / 半配置 →
+不生成策略（等价直连），半配置装配期记一条 warning。既有
+`test_llm_intimate_channel.py` 全部用例零改动通过。
+
+**等价性证据（用例清单）**：`test_equivalence_builtin_vs_generic_route_decision`
+（等级 None/0/1/2/3 双路径请求字节 / 凭据头 / 用量签名一致）、
+`test_equivalence_disabled_and_incomplete_config`（关闭 / 半配置直连字节一致
++ 单条 warning）、`test_equivalence_temperature_and_independent_credential`
+（默认温度只补空缺 / 显式温度优先 / 目标凭据独立）、
+`test_equivalence_failure_does_not_switch`（失败上抛、两侧均不改走默认）、
+`test_equivalence_stream_routing`（流式增量块与请求字节一致）。
+
+**命令 + 退出码（本分支工作区）**：
+- `cd backend && pixi run pytest src/tests/unit/test_llm_gateway.py
+  src/tests/unit/test_llm_intimate_channel.py
+  src/tests/unit/test_llm_route_policy.py --asyncio-mode=auto` → 0
+  （82 passed；其中既有亲密通道用例零改动通过）。
+- 同批追加 `test_config_loader.py` / `test_config_examples_generation.py` /
+  `test_config_model_resolver.py` / `test_config_model_entry.py` /
+  `test_models_api.py` → 0（68 passed）。
+- 改动源文件 `pixi run mypy ...` → 0（9 source files）；改动文件
+  `pixi run ruff check ...` → 0。
+- `cd backend && pixi run gen-examples` 连跑两次 `config.example.yaml`
+  sha256 一致 → 0（幂等）；`pixi run python ../scripts/generate_examples_yaml.py`
+  → 0。
+- `pixi run python ../scripts/assertion_freeze.py --update` → 0；随后
+  `--enforce` → 0。
+- `pixi run red-probe --gate` → 0；新增两条探针红验证（见下）。
+- `pixi run comment-gates` → 0。
+
+**偏离与未验证**：
+- 未跑 `verify-slice` / 全量 tests-all / coverage-gates（按任务纪律由主
+  Agent 执行）。
+- `build_intimate_entry` 的 `api_key_env` 保持既有空串契约（既有断言要求），
+  通道凭据由网关的路由目标凭据覆盖注入；通用策略目标的凭据仍走条目
+  `api_key_env` 解析链。
+- 仓库无时区配置键；时段时区来自策略 `time_window.timezone`（IANA 名校验），
+  未新增 env 键——`route_policies` 为结构化 YAML 面。
+- Setup Wizard 只管理 env 步骤（llm 结构化面经 `config.example.yaml` 模板
+  复制），无 env 键变更，故未改 wizard 步骤定义。
 
 ## 6. 遗留与部署台账（非阻塞）
 

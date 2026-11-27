@@ -2,9 +2,9 @@
   "version": 1,
   "note": "单元测试断言基线——计数只降不升；再生成: python scripts/assertion_freeze.py --update",
   "totals": {
-    "asserts": 9970,
-    "raises": 766,
-    "files": 239
+    "asserts": 10049,
+    "raises": 776,
+    "files": 240
   },
   "files": {
     "backend/src/tests/unit/test_admin_auth.py": {
@@ -581,6 +581,11 @@
       "asserts": 25,
       "raises": 4,
       "digest": "f35a4042edd6ae169a20703e15497413fbf74009dd84f8830641e3718356c76d"
+    },
+    "backend/src/tests/unit/test_llm_route_policy.py": {
+      "asserts": 79,
+      "raises": 10,
+      "digest": "0954a716c249409726d8f8de0ef84b3650e3a3a2ea1dbd3efbf3da12bcbcfc1a"
     },
     "backend/src/tests/unit/test_llm_tool_calling.py": {
       "asserts": 38,

@@ -134,6 +134,17 @@ llm:
       multimodal: false                    # 多模态输入支持标志
   role_bindings:                           # 显式角色绑定（优先于 roles 声明）
     chat: "main-chat"
+  route_policies:                          # 条件路由策略（默认空列表）
+    - name: "night-chat"
+      source_role: "chat"
+      target_role: "chat_night"
+      priority: 100
+      condition:
+        time_window:
+          start_hour: 22
+          end_hour: 6
+          timezone: "Asia/Shanghai"
+      fallback_to_source: true
   multimodal_fallback:                     # look_at 非多模态时的回退链
     local:                                 # 第一级：本地视觉端点（低延迟）
       name: "local-vision"
@@ -161,6 +172,7 @@ llm:
 | `roles` | `list[ModelRole]` | `[]` | 承接角色集；值域 chat / duty / dream / look_at / embed |
 | `concurrency` | `int \| None (ge=1)` | `None` | per-entry 并发上限（None = `POOLS_LLM_SEMAPHORE_LIMIT` 回落） |
 | `multimodal` | `bool` | `false` | 多模态输入支持（look_at 回退判据） |
+| `default_params` | `ChatRequestParams \| None` | `None` | 条目级缺省采样参数（只补齐调用方未设置的字段——内置通道默认温度挂载面） |
 
 ### 角色解析链（顺序）
 
@@ -175,6 +187,21 @@ resolve(role)
 ```
 
 热重建语义：`ModelResolver.rebuild` 原子替换内部索引（条目表 + 角色→条目索引）；在途已解析条目引用不受影响（不可变 Pydantic 模型）。loader 每次加载 config.yaml 后经 `rebuild_model_resolver` 重建全局索引。
+
+### 条件路由策略（route_policies）
+
+`llm.route_policies` 与 `role_bindings` 同级，声明「原角色在条件命中时改由
+目标角色条目承接」。求值算法、字段表、时段/时区语义与回落规则见
+[llm.md 条件路由策略](llm.md#条件路由策略)；本节只记录配置面约束：
+
+- 目标 / 源角色若不是注册表五角色，须经 `role_bindings` 绑定到具体条目
+  （条目 `roles` 声明仅接受 `ModelRole` 五值）；loader 重建解析器后会把这
+  些绑定登记为路由别名，绑定指向不存在条目名时按未绑定处理（目标未绑定
+  由策略 `fallback_to_source` 决定回落或 `MODEL_NOT_FOUND`）；
+- `route_policies` 默认空列表——零行为变更；非法时区 / 区间倒置 / 目标角色
+  等于源角色在加载期即 `CONFIG_INVALID`；
+- 注册表管理 API 的 `llm` 段读改写保留 `route_policies`（与 `models` /
+  `role_bindings` / `multimodal_fallback` 同序序列化）。
 
 ### 多模态回退链（顺序）
 

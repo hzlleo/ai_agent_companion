@@ -302,6 +302,7 @@ async def startup_app_state(
         usage_counter=wire_default_usage_counter(),
         top_logprobs=settings.llm.top_logprobs,
         prompt_logprobs=settings.llm.prompt_logprobs,
+        route_policies=config_loader.runtime_llm_config.route_policies,
     )
     app.state.memory_store = build_memory_store(settings)
     _assemble_memory_services(app)

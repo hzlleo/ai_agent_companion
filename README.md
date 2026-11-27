@@ -8,6 +8,7 @@
 - **三层记忆**：情景（append-only 事件日志 + 每日日记）/ 策展（MEMORY.md + USER.md + 关系状态）/ 夜间梦境整理（规则门控 + provenance 分级）
 - **统一检索**：SeekDB（向量 + BM25 + 标量过滤单一引擎，MySQL 协议原生 async）+ SeekDB 权威关系库（与检索同实例、不同库名）；双时间线先以关系建模落地
 - **值班轮 + 调度**：任务书（charter）模式 + 写入类平台工具经 safety 审批门接入（规划中）+ 全量审计
+- **模型路由**：config.yaml 角色绑定 + 条件路由策略（亲密度 / 时段 / 对话类型条件命中时改由目标角色条目承接）；亲密回复独立通道经内置策略等价承接（`LLM_INTIMATE_*`，默认关闭）
 - **工具层**：OpenAI 兼容原生工具调用 + docker 沙盒隔离执行 + `look_at` 视觉理解（本地 Qwen3-VL，主模型无需多模态）+ 管理员声明式外部 HTTP 工具扩展（`extensions_config.json`，默认关闭；见 [docs/backend/tools.md](docs/backend/tools.md)）
 - **管理后台**：人格/记忆/配置/工具全管理 + Token 用量多维分析（时间 × 模型 × 用途 × 输入/输出/总量）
 - **语音**：CosyVoice3-0.5B TTS + Qwen3-ASR-0.6B 流式识别，独立本地服务进程

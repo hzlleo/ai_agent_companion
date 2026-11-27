@@ -18,6 +18,8 @@
     - ``concurrency``  —— 该条目并发上限（per-entry 信号量限值；None = 用
       全局默认 ``POOLS_LLM_SEMAPHORE_LIMIT``）
     - ``multimodal``   —— 是否支持多模态输入（look_at 链路回退判据）
+    - ``default_params`` —— 条目级缺省采样参数（None = 端点默认；仅在
+      调用方未提供对应参数时补位——内置通道的通道默认参数挂载面）
 
 :func:`parse_model_entry` 是单条目归一化的唯一入口（config.yaml 加载
 与后续配置推送通道共用），:func:`resolve_api_key` 从环境变量解析密钥。
@@ -32,6 +34,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from packages.harness.core.errors import BusinessException, ErrorCode
+from packages.harness.llm.llm_models import ChatRequestParams
 
 __all__ = [
     "ModelRole",
@@ -78,6 +81,8 @@ class LlmModelEntry(BaseModel):
         roles: 该条目承接的角色集（可为空——仅供显式角色绑定引用）。
         concurrency: 条目并发上限（None = 全局默认）。
         multimodal: 是否支持多模态输入。
+        default_params: 条目级缺省采样参数（None = 端点默认；调用方显式
+            字段优先——只补齐调用方未设置的字段）。
     """
 
     model_config = ConfigDict(protected_namespaces=())
@@ -90,6 +95,10 @@ class LlmModelEntry(BaseModel):
     roles: list[ModelRole] = Field(default_factory=list, description="条目承接的角色集")
     concurrency: int | None = Field(default=None, ge=1, description="条目并发上限（None=全局默认）")
     multimodal: bool = Field(default=False, description="是否支持多模态输入")
+    default_params: ChatRequestParams | None = Field(
+        default=None,
+        description="条目级缺省采样参数（None=端点默认；只补齐调用方未设置的字段）",
+    )
 
     @field_validator("name", "base_url", "model")
     @classmethod
@@ -188,6 +197,13 @@ def parse_model_entry(
     concurrency_raw = raw.get("concurrency")
     concurrency = int(concurrency_raw) if concurrency_raw is not None else None
 
+    default_params_raw = raw.get("default_params")
+    default_params = (
+        ChatRequestParams.model_validate(default_params_raw)
+        if default_params_raw is not None
+        else None
+    )
+
     return LlmModelEntry(
         name=str(raw.get("name", "")),
         provider=str(raw.get("provider", "openai_compatible")),
@@ -197,4 +213,5 @@ def parse_model_entry(
         roles=[ModelRole(role) for role in roles],
         concurrency=concurrency,
         multimodal=bool(raw.get("multimodal", False)),
+        default_params=default_params,
     )

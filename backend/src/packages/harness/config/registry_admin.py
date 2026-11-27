@@ -120,6 +120,8 @@ def _entry_to_section(entry: LlmModelEntry) -> dict[str, Any]:
     }
     if entry.concurrency is not None:
         payload["concurrency"] = entry.concurrency
+    if entry.default_params is not None:
+        payload["default_params"] = entry.default_params.model_dump(exclude_none=True)
     return payload
 
 
@@ -140,7 +142,7 @@ def _fallback_to_section(fallback: MultimodalFallbackConfig) -> dict[str, Any]:
 
 
 def _llm_section(config: LlmConfig) -> dict[str, Any]:
-    """LlmConfig → ``llm`` 段 dict（注册表 / 显式绑定 / 回退链全量）。
+    """LlmConfig → ``llm`` 段 dict（注册表 / 显式绑定 / 回退链 / 策略全量）。
 
     Args:
         config: 待序列化的 LlmConfig。
@@ -152,6 +154,10 @@ def _llm_section(config: LlmConfig) -> dict[str, Any]:
         "models": [_entry_to_section(entry) for entry in config.models],
         "role_bindings": dict(config.role_bindings),
         "multimodal_fallback": _fallback_to_section(config.multimodal_fallback),
+        "route_policies": [
+            policy.model_dump(mode="json", exclude_none=True)
+            for policy in config.route_policies
+        ],
     }
 
 
@@ -334,6 +340,7 @@ class RegistryAdminService(ConfigSectionAdmin[LlmConfig]):
                 models=[*current.models, entry],
                 role_bindings=dict(current.role_bindings),
                 multimodal_fallback=current.multimodal_fallback.model_copy(deep=True),
+                route_policies=list(current.route_policies),
             )
             logger.info("注册表新增条目: name={}, path={}", req.name, path)
             await self._persist_and_rebuild(
@@ -393,6 +400,7 @@ class RegistryAdminService(ConfigSectionAdmin[LlmConfig]):
                 models=[updated if item.name == name else item for item in current.models],
                 role_bindings=dict(current.role_bindings),
                 multimodal_fallback=current.multimodal_fallback.model_copy(deep=True),
+                route_policies=list(current.route_policies),
             )
             logger.info("注册表更新条目: name={}, path={}", name, path)
             await self._persist_and_rebuild(
@@ -452,6 +460,7 @@ class RegistryAdminService(ConfigSectionAdmin[LlmConfig]):
                 models=[item for item in current.models if item.name != name],
                 role_bindings=dict(current.role_bindings),
                 multimodal_fallback=current.multimodal_fallback.model_copy(deep=True),
+                route_policies=list(current.route_policies),
             )
             logger.info("注册表删除条目: name={}, path={}", name, path)
             await self._persist_and_rebuild(
