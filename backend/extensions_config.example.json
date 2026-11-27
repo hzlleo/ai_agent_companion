@@ -1,22 +1,35 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$comment": "ai_agent_companion LLM 工具配置模板（function calling schema）。用法：复制为 extensions_config.json 并按需调整。每个 tool 定义一个 LLM 可调用的函数，parameters 遵循 JSON Schema 规范。\n\nExtensionTool 字段:\n  - name (str): 工具名称（唯一标识）\n  - description (str): 工具描述（LLM 调用时机说明）\n  - parameters (JsonSchema): 工具参数 schema（JSON Schema）\n\nExtensionsConfig 顶层字段:\n  - tools: LLM 工具列表（function calling schema）",
+  "$comment": "ai_agent_companion LLM 工具配置模板（function calling schema）。用法：复制为 extensions_config.json 并按需调整。每个 tool 定义一个 LLM 可调用的函数，parameters 遵循 JSON Schema 规范。\n\nExtensionTool 字段:\n  - name (str): 工具名称（唯一标识）\n  - description (str): 工具描述（LLM 调用时机说明）\n  - parameters (JsonSchema): 工具参数 schema（JSON Schema）\n  - kind (Literal): 执行面类型（http）\n  - http (packages.harness.config.models.HttpToolTargetModel | None): HTTP 目标端点（kind=http 时必填）\n\nExtensionsConfig 顶层字段:\n  - enabled: 外部工具扩展总开关\n  - allow_override_builtin: 是否允许扩展工具覆盖已注册工具\n  - tools: 外部工具列表（function calling schema + HTTP 目标）",
+  "enabled": false,
+  "allow_override_builtin": false,
   "tools": [
     {
-      "name": "look_at_image",
-      "description": "查看用户发送的图像并描述内容（多模态 look_at 链路的工具面示例；实际视觉调用由 look_at 角色模型承担）。",
+      "name": "query_local_calendar",
+      "description": "查询本地日历服务在指定日期的日程事件。",
       "parameters": {
         "type": "object",
         "properties": {
-          "image_path": {
+          "date": {
             "type": "string",
-            "description": "图像文件路径（会话媒体目录内相对路径）"
+            "description": "日期（YYYY-MM-DD）"
           }
         },
         "required": [
-          "image_path"
+          "date"
         ],
         "additionalProperties": false
+      },
+      "kind": "http",
+      "http": {
+        "url": "http://127.0.0.1:8091/calendar/query",
+        "method": "POST",
+        "headers": {
+          "X-Auth-Token": "{env:CALENDAR_API_TOKEN}"
+        },
+        "timeout_ms": 5000,
+        "response_max_bytes": 65536,
+        "result_path": "events"
       }
     }
   ]

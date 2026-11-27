@@ -318,7 +318,14 @@ def load_extensions_config(
         raise _wrap_config_invalid(str(json_path), exc) from exc
 
     extensions_config = config
-    logger.info("extensions_config.json 已加载: {} 个工具配置", len(config.tools))
+    if config.enabled and config.tools:
+        logger.info("extensions_config.json 已加载: {} 个工具配置", len(config.tools))
+    else:
+        logger.debug(
+            "extensions_config.json 已加载（未启用外部工具）: enabled={}, tools={}",
+            config.enabled,
+            len(config.tools),
+        )
     return config
 
 

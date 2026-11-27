@@ -2,9 +2,9 @@
   "version": 1,
   "note": "单元测试断言基线——计数只降不升；再生成: python scripts/assertion_freeze.py --update",
   "totals": {
-    "asserts": 9832,
-    "raises": 754,
-    "files": 235
+    "asserts": 9970,
+    "raises": 766,
+    "files": 239
   },
   "files": {
     "backend/src/tests/unit/test_admin_auth.py": {
@@ -481,6 +481,26 @@
       "asserts": 50,
       "raises": 2,
       "digest": "4d419b9702786b6964c80a6e6d7a263024d65d6391b847ba68c74e51f6acf592"
+    },
+    "backend/src/tests/unit/test_extension_app_lifespan.py": {
+      "asserts": 10,
+      "raises": 0,
+      "digest": "a7003e7bbe6c96c646719f4763142383ad4e8e4e2822f0a20fa7986ddc7c4fd0"
+    },
+    "backend/src/tests/unit/test_extension_models.py": {
+      "asserts": 24,
+      "raises": 10,
+      "digest": "633266360eb4a529e4ca8bfd32c8bce143dd6d7a2e4b1982e85215ca749cb944"
+    },
+    "backend/src/tests/unit/test_extension_registry.py": {
+      "asserts": 36,
+      "raises": 0,
+      "digest": "6c1dbdc07a59bbf8c81554ba32ff8c4ee70d37d8d31634b00dc3b2c1b7f10093"
+    },
+    "backend/src/tests/unit/test_extension_tools.py": {
+      "asserts": 47,
+      "raises": 2,
+      "digest": "1cecbaef2fe5335c2d54cc1ddf71e702d27e0afa143d94eb5b6a3b15d239c1bc"
     },
     "backend/src/tests/unit/test_facts_api.py": {
       "asserts": 37,
@@ -1123,14 +1143,14 @@
       "digest": "26d131f48d5f27645337dacd20a021f7d928df8d0386ed52ea26923c527ef236"
     },
     "backend/src/tests/unit/test_wechat_gui_runner.py": {
-      "asserts": 38,
+      "asserts": 56,
       "raises": 3,
-      "digest": "3062186c27f99db8b078ab08408ab12afa30ae3b7ccfc1c0e80ada1438bfcdf4"
+      "digest": "8ef670cdebe763de7cc42bb2fd0f31b275f60f7ef225ef4538febc35fdd3da96"
     },
     "backend/src/tests/unit/test_wechat_gui_watermark.py": {
-      "asserts": 20,
+      "asserts": 23,
       "raises": 1,
-      "digest": "63e8799c9fd92d9569e1c77b17dbc69f791e7f14673537ac4c15eb420aa6e514"
+      "digest": "73dedfb91de5c76dcd9eec2413afcb071afd86ba5d6a262dac64bcf475514e70"
     },
     "backend/src/tests/unit/test_wechat_gui_window_mutex.py": {
       "asserts": 6,

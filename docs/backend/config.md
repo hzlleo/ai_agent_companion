@@ -305,26 +305,42 @@ search:
 
 `build_llm_wire_config(entry, fallback_api_key=None)` 构建 `LlmClientConfigModel`（provider / base_url / api_key / model / concurrency / multimodal）。密钥解析收口于此：条目 `api_key_env` → 环境变量明文；声明了变量但未设置且给兜底 → 兜底明文；免鉴权条目（`api_key_env=""`）恒空串（不注入兜底）。`api_key` 字段 repr 隐藏（不落日志）。
 
-## extensions_config.json — 工具清单
+## extensions_config.json — 外部工具扩展
 
 ```json
 {
+    "enabled": false,
+    "allow_override_builtin": false,
     "tools": [
         {
-            "name": "look_at_image",
-            "description": "查看用户发送的图像并描述内容……",
+            "name": "query_local_calendar",
+            "description": "查询本地日历服务在指定日期的日程事件。",
             "parameters": {
                 "type": "object",
-                "properties": {"image_path": {"type": "string"}},
-                "required": ["image_path"],
+                "properties": {"date": {"type": "string"}},
+                "required": ["date"],
                 "additionalProperties": false
+            },
+            "kind": "http",
+            "http": {
+                "url": "http://127.0.0.1:8091/calendar/query",
+                "method": "POST",
+                "headers": {"X-Auth-Token": "{env:CALENDAR_API_TOKEN}"},
+                "timeout_ms": 5000,
+                "response_max_bytes": 65536,
+                "result_path": "events"
             }
         }
     ]
 }
 ```
 
-`ExtensionTool.parameters` 为 `JsonSchema` Model Class（`extra="allow"` 容纳全部 JSON Schema 键；`additionalProperties` 键经 alias 映射）。
+`enabled` 为总开关（默认关闭）；`allow_override_builtin` 控制扩展工具能否
+覆盖已注册工具（默认拒绝）。`ExtensionTool.parameters` 为 `JsonSchema` Model
+Class（`extra="allow"` 容纳全部 JSON Schema 键；`additionalProperties` 键经
+alias 映射）；`http` 为 `HttpToolTargetModel`（协议白名单 / 超时上限 /
+响应帽 / `{env:}` 密钥间接 / 禁重定向）。字段表、占位与密钥规则、信任边界
+与错误语义见 [tools.md](tools.md)。
 
 ## 加载器 API（loader.py）
 

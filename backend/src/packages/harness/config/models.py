@@ -65,9 +65,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any, Literal
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -1974,13 +1975,154 @@ class JsonSchema(BaseModel):
     )
 
 
-class ExtensionTool(BaseModel):
-    """单个 LLM 工具配置（function calling schema）。
+#: 请求头名称合法字符集（RFC 7230 token）。
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+#: 请求头值中的环境变量占位（``{env:VAR_NAME}``）。
+_ENV_PLACEHOLDER_RE = re.compile(r"\{env:[A-Za-z_][A-Za-z0-9_]*\}")
+#: 请求头字面值长度上限（超过即视为内联密钥——改用 ``{env:}`` 占位）。
+_HEADER_LITERAL_MAX_LENGTH: int = 32
+#: 结果点路径形态（``a`` / ``a.b`` / ``a.b.c``——段非空且不含点）。
+_RESULT_PATH_RE = re.compile(r"^[^.]+(\.[^.]+)*$")
+
+
+class HttpToolTargetModel(BaseModel):
+    """外部 HTTP 扩展工具的目标端点（管理员在本地配置文件中声明）。
+
+    信任边界：端点由管理员在 ``extensions_config.json`` 中定义，不做私网
+    拦截（允许 ``127.0.0.1`` 等本地服务）；重定向被显式禁用，防止端点把
+    请求带到配置之外的地址。
 
     Attributes:
-        name: 工具名称（唯一标识）。
+        url: 目标地址（http/https；可含 ``{参数名}`` 占位，执行期按参数值
+            做 URL 编码替换）。
+        method: HTTP 方法（GET / POST，默认 POST）。
+        headers: 请求头固定键值面（值可含 ``{env:VAR_NAME}`` 占位——密钥
+            只存环境变量名，不存明文）。
+        timeout_ms: 单次请求超时毫秒数（默认 5000，上限 30000）。
+        response_max_bytes: 响应体字节上限（默认 65536；超限受控失败）。
+        result_path: 从响应 JSON 提取结果的点路径（空 = 整个 JSON 文档）。
+    """
+
+    model_config = {"extra": "forbid"}
+
+    url: str = Field(description="目标地址（http/https，可含参数占位）")
+    method: Literal["GET", "POST"] = Field(default="POST", description="HTTP 方法")
+    headers: Mapping[str, str] = Field(
+        default_factory=dict,
+        description="请求头（值可含 {env:VAR_NAME} 占位——不存明文密钥）",
+    )
+    timeout_ms: int = Field(
+        default=5000, ge=1, le=30000, description="单次请求超时毫秒数（上限 30000）"
+    )
+    response_max_bytes: int = Field(
+        default=65536, ge=1, description="响应体字节上限（默认 65536）"
+    )
+    result_path: str = Field(
+        default="", description="响应 JSON 结果点路径（空 = 整个文档）"
+    )
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url_scheme(cls, value: str) -> str:
+        """校验 URL 协议与主机名（仅 http/https）。
+
+        Args:
+            value: 原始 URL 字符串（可含 ``{参数名}`` 占位）。
+
+        Returns:
+            校验通过的原值。
+
+        Raises:
+            ValueError: 协议非法或主机名缺失。
+        """
+        parsed = urlparse(value)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError("扩展工具 url 必须是 http/https 协议且包含主机名")
+        return value
+
+    @field_validator("method", mode="before")
+    @classmethod
+    def _normalize_method(cls, value: object) -> object:
+        """归一 HTTP 方法大小写（GET / post → GET / POST）。
+
+        Args:
+            value: 原始字段值。
+
+        Returns:
+            字符串值统一大写；非字符串原样交给后续校验。
+        """
+        if isinstance(value, str):
+            return value.upper()
+        return value
+
+    @field_validator("headers")
+    @classmethod
+    def _validate_headers(cls, value: Mapping[str, str]) -> Mapping[str, str]:
+        """校验请求头名称与字面值（密钥只经环境变量占位引用）。
+
+        Args:
+            value: 请求头映射。
+
+        Returns:
+            校验通过的映射。
+
+        Raises:
+            ValueError: 头名非法 / 字面值像密钥（``Bearer `` / ``sk-`` /
+                长度超过 32） / ``{env:}`` 占位语法非法。
+        """
+        for name, header_value in value.items():
+            if _HEADER_NAME_RE.fullmatch(name) is None:
+                raise ValueError(f"扩展工具请求头名称非法: {name!r}")
+            if "{env:" in header_value:
+                cleaned = _ENV_PLACEHOLDER_RE.sub("", header_value)
+                if "{env:" in cleaned:
+                    raise ValueError(
+                        f"扩展工具请求头 {name} 的 {{env:}} 占位语法非法: {header_value!r}"
+                    )
+                continue
+            if (
+                header_value.startswith("Bearer ")
+                or header_value.startswith("sk-")
+                or len(header_value) > _HEADER_LITERAL_MAX_LENGTH
+            ):
+                raise ValueError(
+                    f"扩展工具请求头 {name} 疑似直接写入密钥；请改用 "
+                    f"{{env:VAR_NAME}} 占位（值长度上限 {_HEADER_LITERAL_MAX_LENGTH}）"
+                )
+        return value
+
+    @field_validator("result_path")
+    @classmethod
+    def _validate_result_path(cls, value: str) -> str:
+        """校验结果点路径形态（空 = 整个 JSON 文档）。
+
+        Args:
+            value: 点路径字符串。
+
+        Returns:
+            校验通过的原值。
+
+        Raises:
+            ValueError: 路径非空且不符合 ``a`` / ``a.b`` 形态。
+        """
+        if not value:
+            return value
+        if _RESULT_PATH_RE.fullmatch(value) is None:
+            raise ValueError("扩展工具 result_path 必须是 a 或 a.b 形态的点路径")
+        return value
+
+
+class ExtensionTool(BaseModel):
+    """单个外部工具配置（LLM function calling schema + HTTP 执行面）。
+
+    Attributes:
+        name: 工具名称（唯一标识；与已注册工具同名时按
+            ``ExtensionsConfig.allow_override_builtin`` 决定是否覆盖）。
         description: 工具描述（告诉 LLM 何时调用此工具）。
-        parameters: 工具参数 schema（JSON Schema 格式）。
+        parameters: 工具参数 schema（JSON Schema 格式；执行前按此 schema
+            校验参数）。
+        kind: 执行面类型（当前仅 ``http``）。
+        http: HTTP 目标端点（``kind=http`` 时必填）。
     """
 
     name: str = Field(default="", description="工具名称（唯一标识）")
@@ -1988,46 +2130,80 @@ class ExtensionTool(BaseModel):
     parameters: JsonSchema = Field(
         default_factory=JsonSchema, description="工具参数 schema（JSON Schema）"
     )
+    kind: Literal["http"] = Field(default="http", description="执行面类型（http）")
+    http: HttpToolTargetModel | None = Field(
+        default=None, description="HTTP 目标端点（kind=http 时必填）"
+    )
+
+    @model_validator(mode="after")
+    def _require_http_target(self) -> ExtensionTool:
+        """校验 ``kind=http`` 时执行目标已声明。
+
+        Returns:
+            校验通过的实例。
+
+        Raises:
+            ValueError: ``kind=http`` 但缺少 ``http`` 目标。
+        """
+        if self.kind == "http" and self.http is None:
+            raise ValueError("扩展工具 kind=http 时必须声明 http 目标")
+        return self
 
 
 class ExtensionsConfig(BaseModel):
     """extensions_config.json 的运行时表示。
 
     Attributes:
-        tools: LLM 工具列表（每个工具定义一个 function calling schema）。
+        enabled: 外部工具扩展总开关（默认关闭；关闭时零注册）。
+        allow_override_builtin: 是否允许扩展工具覆盖已注册工具（默认
+            关闭——防止误覆盖 ``search_memory`` / ``get_current_time``）。
+        tools: 外部工具列表（每个工具定义 function calling schema + HTTP
+            执行目标）。
     """
 
+    enabled: bool = Field(default=False, description="外部工具扩展总开关")
+    allow_override_builtin: bool = Field(
+        default=False, description="是否允许扩展工具覆盖已注册工具"
+    )
     tools: list[ExtensionTool] = Field(
-        default_factory=list, description="LLM 工具列表（function calling schema）"
+        default_factory=list, description="外部工具列表（function calling schema + HTTP 目标）"
     )
 
     @classmethod
     def default_tools(cls) -> list[dict[str, Any]]:
-        """返回 extensions_config.example.json 中的示例工具定义列表。
+        """返回 extensions_config.example.json 中的真实可执行示例工具列表。
 
         示例数据的单一真相源——根 scripts/generate_examples_json.py 调用
-        此方法生成示例 JSON，保证示例永不与模型契约漂移。
+        此方法生成示例 JSON，保证示例永不与模型契约漂移。示例经
+        :class:`ExtensionTool` 校验后序列化，模型收紧时示例同步失败。
 
         Returns:
             示例工具定义 dict 列表。
         """
-        return [
+        example = ExtensionTool.model_validate(
             {
-                "name": "look_at_image",
-                "description": (
-                    "查看用户发送的图像并描述内容（多模态 look_at 链路的"
-                    "工具面示例；实际视觉调用由 look_at 角色模型承担）。"
-                ),
+                "name": "query_local_calendar",
+                "description": "查询本地日历服务在指定日期的日程事件。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "image_path": {
+                        "date": {
                             "type": "string",
-                            "description": "图像文件路径（会话媒体目录内相对路径）",
+                            "description": "日期（YYYY-MM-DD）",
                         }
                     },
-                    "required": ["image_path"],
+                    "required": ["date"],
                     "additionalProperties": False,
                 },
-            },
-        ]
+                "kind": "http",
+                "http": {
+                    "url": "http://127.0.0.1:8091/calendar/query",
+                    "method": "POST",
+                    "headers": {"X-Auth-Token": "{env:CALENDAR_API_TOKEN}"},
+                    "timeout_ms": 5000,
+                    "response_max_bytes": 65536,
+                    "result_path": "events",
+                },
+            }
+        )
+        return [example.model_dump(exclude_none=True, by_alias=True)]

@@ -56,6 +56,8 @@ def _write_config(
                             "required": ["a"],
                             "additionalProperties": False,
                         },
+                        "kind": "http",
+                        "http": {"url": "http://127.0.0.1:8091/t1"},
                     }
                 ]
             }

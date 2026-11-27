@@ -156,6 +156,7 @@ from packages.harness.channels.whatsapp.whatsapp_client import WhatsAppCloudClie
 from packages.harness.channels.whatsapp.whatsapp_models import WhatsAppServiceWindow
 from packages.harness.channels.whatsapp.whatsapp_runner import WhatsAppWebhookRunner
 from packages.harness.chat.service import ChatService
+from packages.harness.config import loader as config_loader
 from packages.harness.config import search_registry
 from packages.harness.config.auth_policy import ensure_auth_policy
 from packages.harness.config.loader import load_all_config, setup_logging_from_settings
@@ -165,6 +166,7 @@ from packages.harness.config.search_registry import load_search_config
 from packages.harness.core.background_tasks import background_task_manager
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.thread_pool import shutdown_shared_thread_pool
+from packages.harness.core.time_utils import now_ms
 from packages.harness.database.engine import close_database, init_database
 from packages.harness.database.session import session_scope
 from packages.harness.duty.duty_models import DutyRunConfigModel
@@ -225,6 +227,7 @@ from packages.harness.tools.browser import (
     register_browser_sidecar_tools,
 )
 from packages.harness.tools.browser_models import BROWSER_LLM_TOOL_NAMES
+from packages.harness.tools.extension_registry import register_extension_tools
 from packages.harness.tools.registry import ToolRegistry, register_builtin_tools
 from packages.harness.tools.sandbox import (
     build_sandbox_client,
@@ -1369,6 +1372,21 @@ async def _startup_scheduler(app: FastAPI, settings: Settings) -> None:
             and search_registry.runtime_search_config.web_search.tool_enabled
         ):
             register_web_search_tool(registry, search_service)
+        # 外部工具扩展（管理员在 extensions_config.json 声明的 HTTP 工具）：
+        # 在所有平台工具之后注册——同名冲突检查以实际注册表为准；端点
+        # 由管理员本地文件定义，装配层不做私网拦截。
+        pool_manager = get_pool_manager()
+        if pool_manager is None or not pool_manager.started:
+            raise BusinessException(
+                code=ErrorCode.INTERNAL_ERROR,
+                message="外部工具扩展装配前置失败：公共池未启动（lifespan 装配顺序破坏）",
+            )
+        register_extension_tools(
+            registry,
+            config_loader.extensions_config,
+            http_client_factory=pool_manager.get_http_client,
+            clock=now_ms,
+        )
         duty_service = DutyService(
             gateway=app.state.gateway,
             registry=registry,

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from generate_examples_helpers import _get_field_description
@@ -53,6 +54,8 @@ def generate_extensions_example_json() -> str:
     data: dict[str, Any] = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$comment": comment_text,
+        "enabled": False,
+        "allow_override_builtin": False,
         "tools": ExtensionsConfig.default_tools(),
     }
 
@@ -60,6 +63,22 @@ def generate_extensions_example_json() -> str:
     return raw + "\n"
 
 
+def main() -> int:
+    """命令行入口：生成并写入 ``backend/extensions_config.example.json``。
+
+    Returns:
+        进程退出码（0 = 成功）。
+    """
+    output = Path(__file__).resolve().parent.parent / "backend" / "extensions_config.example.json"
+    output.write_text(generate_extensions_example_json(), encoding="utf-8")
+    print(f"已生成 {output}")
+    return 0
+
+
 __all__ = [
     "generate_extensions_example_json",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

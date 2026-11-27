@@ -96,12 +96,12 @@
 | R3-2 限流与背压 | QQ 入站有界 / 实时语音 TTS 队列与会话帽 / LLM 日预算闸 / 多 worker 语义 / 最小观测面 / 前端 Node 护栏与构建体积基线（P1×1 + P2×7；复审 6×P2 闭环） | ✅ merged（PR #36；证据 `fe261c9a`；PR body 引用的 `0276c1a5` 为首提交树证据，终态以 `fe261c9a` 为准） |
 | R3-3 性能基线 | `bench_core.py` 6 项纯函数微基准 + `api_smoke.py` 4 端点进程内冒烟 + 门禁链落位（复审 4×P2 闭环；终局复核 7×P2 闭环） | ✅ merged（PR #37 → main `3f313a6`；评审 head `66b14b3`，终态含 `ecb7714`/`ee9381a`；canonical 证据 `16b07c7c`，历史 `bc71f261`） |
 
-| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（R4-6a PoC 门制品 + 本机栈实测，已合并 PR #45 → `b065bf4`；R4-6b 通道本体本分支实现态；Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 已合并（PR #44 → main `215317c`）；R4-6a 已合并（PR #45 → main `b065bf4`）；R4-6b 本分支（`feat/r4-6b-wechat-gui-channel`）工作区（沙盒 agent + 后端通道实现态；Live 待统一阶段）；R4-1 / R4-2 / R4-3 已合并；R4-7 / R4-8 待开工 |
+| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（R4-6a PoC 门制品 + 本机栈实测，已合并 PR #45 → `b065bf4`；R4-6b 通道本体，已合并 PR #46 → `232e38e`；Live 推迟）；R4-7 平台化扩展（R4-7a 外部 HTTP 工具扩展注册；R4-7b 多角色模型路由待开工）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 已合并（PR #44 → main `215317c`）；R4-6a 已合并（PR #45 → main `b065bf4`）；R4-6b 已合并（PR #46 → main `232e38e`）；R4-7a 本分支（`feat/r4-7-platform`）工作区（外部 HTTP 工具扩展注册）；R4-1 / R4-2 / R4-3 已合并；R4-7b / R4-8 待开工 |
 
 **当前分支状态**：
-- main：`b065bf4`（PR#34–#45 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
+- main：`232e38e`（PR#34–#46 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
 - `feat/r3-perf`：R3-3 性能基线，已合并（PR #37），可删除。
-- R4：R4-4 已合并（PR #43 → `f8eb398`）；R4-5 已合并（PR #44 → `215317c`）；R4-6a 已合并（PR #45 → `b065bf4`）；R4-6b（通道本体）在当前分支 `feat/r4-6b-wechat-gui-channel` 工作区；R4-1 / R4-2 / R4-3 已合并；R4-7 / R4-8 待排期。
+- R4：R4-4 已合并（PR #43 → `f8eb398`）；R4-5 已合并（PR #44 → `215317c`）；R4-6a 已合并（PR #45 → `b065bf4`）；R4-6b 已合并（PR #46 → `232e38e`）；R4-7a（外部 HTTP 工具扩展注册）在当前分支 `feat/r4-7-platform` 工作区；R4-1 / R4-2 / R4-3 已合并；R4-7b / R4-8 待排期。
 - 历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入 main，可删除；工作区 clean。
 
 ## 4. 全部拍板记录（原文语义）
@@ -2746,6 +2746,86 @@ Live 前风险（Live 阶段验证）：`open_chat` 在 Ctrl+F 后立即粘贴�
 **修复 C 最终树验证（`162f863c` 树，提交 `e1db542`）**：`cd backend && VITEST_MAX_WORKERS=6 pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-6b-fix` → 0，10/10 PASS：tests-all=3555 / coverage-gates=24 组 / lint / typecheck=224 / gates / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build；证据 `docs/evidence/r4-6b-fix-162f863c.json`（sha8=`162f863c`，779 文件）；沙盒 151 passed / 92.74%；同步测试棘轮通过；断言基线未变（新增断言不拦截）。上一行「最终树验证」记录的是修复 C 之前的 `36e3449d` 树，现为历史。
 
 **修复 D 最终树验证（`9f45be4d` 树）**：同上命令 → 0，10/10 PASS：tests-all=3557 / coverage-gates=24 组 / lint / typecheck=224 / gates / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build；证据 `docs/evidence/r4-6b-fix-9f45be4d.json`（sha8=`9f45be4d`，779 文件）。修复 D = Oracle 三审的 2×P2：水位代价文档按只读探针实测改写（仅整段同指纹才吞；上滚后滚回仍有重叠时屏底已投递消息会再次入站）并补用例 `test_scroll_up_then_down_redelivers_scrolled_off_tail`；「修复 C」改动面条目与 `fail` 语义变更入台账；停机汇总日志加 `disabled_targets`；补用例 `test_title_mismatch_fail_disables_target_after_threshold`。水位算法与停采行为未改。上一行 `162f863c` 树现为历史。
+
+### 已完成切片：R4-7a 外部 HTTP 工具扩展注册（本分支工作区）
+
+**背景**：R4-6b 已合并 PR #46 → `232e38e`。本片交付「管理员经
+`extensions_config.json` 声明 HTTP 工具 → 装配进 `ToolRegistry` → LLM
+经 function calling 调用」的可执行外部工具扩展；R4-7b 多角色模型路由
+不在本片范围。
+
+**改动面（文件）**：
+- 配置模型：`packages/harness/config/models.py`——`HttpToolTargetModel`
+  （url / method / headers / timeout_ms / response_max_bytes / result_path；
+  协议白名单、超时上限、密钥字面值拒绝、结果路径形态校验）；
+  `ExtensionTool` 增 `kind` / `http`（`kind=http` 时必填）；
+  `ExtensionsConfig` 增 `enabled` / `allow_override_builtin`；
+  `default_tools()` 改为真实可执行的 `query_local_calendar` 示例；
+  `config/loader.py` 在外部工具未启用 / 空列表时把加载日志降为 debug
+  （默认部署零 info 噪声）。
+- 执行器：`packages/harness/tools/extension_tools.py`——参数 JSON Schema
+  编译为 pydantic 校验模型（复用 registry 校验面）；`{env:VAR}` 构造期
+  解析；URL / header 参数占位替换（URL 编码、header 禁换行）；共享 httpx
+  池发送（超时 / 响应字节帽 / `follow_redirects=False`）；状态码 / JSON /
+  `result_path` 受控失败；成功返回文本结果。
+- 装配：`packages/harness/tools/extension_registry.py`——总开关 / 同名
+  保护 / 构造失败逐工具隔离 / 注册报告；`packages/harness/tools/tool_models.py`
+  增报告模型；`app/main.py` 在全部平台工具之后消费 loader 运行时
+  `extensions_config` 并调用装配函数（app 层只调用）。
+- 示例：`scripts/generate_examples_json.py` 增命令行入口与
+  `enabled` / `allow_override_builtin` 字段；重生成
+  `backend/extensions_config.example.json`；`test_config_loader.py`  fixture
+  同步新必填面。
+- 测试：`test_extension_models.py` / `test_extension_tools.py` /
+  `test_extension_registry.py` / `test_extension_app_lifespan.py`。
+- 门禁：`backend/red_manifest.toml` 增两条探针（执行器 / 装配）；
+  `scripts/.assertion_baseline.json` 并入四个新测试文件。
+- 文档：`docs/backend/tools.md`（字段表 / 完整示例 / 占位与密钥规则 /
+  信任边界 / 错误语义 / 优先级）；`docs/backend/config.md` 分节；
+  `docs/backend/README.md` 索引；根 `README.md` 工具层一行。
+
+**安全决策**：
+- 重定向恒禁用（请求级 `follow_redirects=False`；3xx 即非 2xx 受控失败）——
+  防止端点把请求带向配置之外的地址；
+- header 值只存 `{env:VAR_NAME}` 占位，模型拒绝 `Bearer …` / `sk-…` /
+  长度超过 32 的字面值；env 缺失 → 装配期跳过该工具并 warning；
+- 同名默认拒绝覆盖任何已注册工具（含 `search_memory` / `get_current_time`）；
+  `allow_override_builtin=true` 才放行；
+- 信任边界是管理员本地配置文件本身——装配层不做私网拦截；运行时仍保证
+  协议白名单、超时上限、响应字节帽与占位编码。
+
+**命令 + 退出码（本分支工作区）**：
+- `cd backend && pixi run pytest src/tests/unit/test_extension_models.py
+  src/tests/unit/test_extension_tools.py
+  src/tests/unit/test_extension_registry.py
+  src/tests/unit/test_extension_app_lifespan.py
+  src/tests/unit/test_tools_registry.py --asyncio-mode=auto` → 0（57 passed）。
+- 同批追加 `test_config_loader.py` / `test_config_examples_generation.py`
+  → 0（81 passed，模板加载与生成闭环）。
+- 改动源文件 `pixi run mypy`（config/models.py / tool_models.py /
+  extension_tools.py / extension_registry.py / app/main.py）→ 0
+  （5 source files）；改动文件 `pixi run ruff check` → 0。
+- `pixi run python ../scripts/generate_examples_json.py` 连跑两次
+  sha256 一致 → 0（幂等）。
+- `pixi run python ../scripts/assertion_freeze.py --update` → 0
+  （基线 239 文件 / asserts=9970 / raises=766）；随后 `--enforce` → 0。
+- `pixi run red-probe --gate` → 0（39 条探针 / 190 <= 基线 190）；
+  `--symbol ...extension_tools:build_extension_tool` →
+  RED（failed=1）、`--symbol ...extension_registry:register_extension_tools`
+  → RED（failed=1）。
+- `pixi run comment-gates` → 0（新增源文件零违规、零 hint）。
+
+**偏离与未验证**：
+- 未跑 `verify-slice` / 全量 tests-all / coverage-gates（按任务纪律由主
+  Agent 执行）；`check_sandbox_dtos_drift.py` 不涉及（非沙盒契约）。
+- `app/main.py` 消费 `config/loader.py` 的运行时 `extensions_config`（启动
+  早期由 `load_all_config(config_dir=...)` 解析）——仓库无独立 extensions
+  路径 Settings 键，故沿用既有加载器的实际路径，不重复读盘。
+- 示例文件默认 `enabled=false`（真实可执行形态，但需管理员显式开启；
+  避免默认部署因 `CALENDAR_API_TOKEN` 缺失产生跳过告警）。
+- 全部执行器测试经 `httpx.MockTransport` 零真实网络；未接真实日历服务
+  做端到端联调（端点契约由 JSON 示例与 MockTransport 守卫）。
+- R4-7b 多角色模型路由未开工。
 
 ## 6. 遗留与部署台账（非阻塞）
 
