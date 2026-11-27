@@ -2053,6 +2053,8 @@ _SECRET_QUERY_KEYS: frozenset[str] = frozenset(
 )
 #: URL 查询串密钥参数的字面值长度阈值（达到即拒绝——改走 header 占位）。
 _SECRET_QUERY_MIN_LENGTH: int = 16
+#: URL 查询串参数值中的 ``{...}`` 占位（执行期按参数值替换——不是字面密钥）。
+_QUERY_VALUE_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
 #: 结果点路径形态（``a`` / ``a.b`` / ``a.b.c``——段非空且不含点）。
 _RESULT_PATH_RE = re.compile(r"^[^.]+(\.[^.]+)*$")
 
@@ -2116,9 +2118,10 @@ class HttpToolTargetModel(BaseModel):
                 "扩展工具 url 不支持 userinfo（密钥请改用 header 的 {env:} 占位）"
             )
         for key, query_value in parse_qsl(parsed.query, keep_blank_values=True):
+            literal_value = _QUERY_VALUE_PLACEHOLDER_RE.sub("", query_value)
             if (
                 key.lower() in _SECRET_QUERY_KEYS
-                and len(query_value) >= _SECRET_QUERY_MIN_LENGTH
+                and len(literal_value) >= _SECRET_QUERY_MIN_LENGTH
             ):
                 raise ValueError(
                     f"扩展工具 url 查询参数 {key} 疑似内联密钥；"

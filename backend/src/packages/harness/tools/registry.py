@@ -200,7 +200,8 @@ class ToolRegistry:
         started_ms = now_ms()
         entry = self._entries.get(name)
         if entry is None:
-            return self._failure(name, started_ms, f"未注册工具: {name}（可用: {self.tool_names}）")
+            logger.debug("未注册工具（可用清单仅排障面，不进模型上下文）: name={}, available={}", name, self.tool_names)
+            return self._failure(name, started_ms, f"未注册工具: {name}")
         args = arguments if arguments is not None else {}
         validated_args = self._validate_args(entry, args)
         if validated_args is None:

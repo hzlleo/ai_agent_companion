@@ -323,6 +323,21 @@ async def test_header_unicode_encoding_failure_is_controlled() -> None:
             [1, 2],
             id="maxItems",
         ),
+        pytest.param(
+            {"type": "array", "items": {"type": "integer", "minimum": 5}},
+            [1],
+            id="items-minimum",
+        ),
+        pytest.param(
+            {"type": "array", "items": {"type": "string", "pattern": r"^[a-z]+$"}},
+            ["123"],
+            id="items-pattern",
+        ),
+        pytest.param(
+            {"type": "array", "items": {"type": "string", "enum": ["a", "b"]}},
+            ["c"],
+            id="items-enum",
+        ),
     ],
 )
 async def test_json_schema_constraints_reject_violations(
@@ -402,6 +417,34 @@ async def test_json_schema_constraints_accept_valid_values() -> None:
         registry, _, _ = _register(tool, lambda: client)
         result = await registry.execute(
             tool.name, {"date": "2026-01-01", "tags": ["a", "b"]}
+        )
+    assert result.ok is True
+
+
+async def test_json_schema_items_constraints_accept_valid_elements() -> None:
+    """items 元素级约束：满足 minimum / pattern 的元素通过校验并执行。"""
+    parameters = {
+        "type": "object",
+        "properties": {
+            "scores": {
+                "type": "array",
+                "items": {"type": "integer", "minimum": 5, "maximum": 10},
+            },
+            "codes": {
+                "type": "array",
+                "items": {"type": "string", "pattern": r"^[a-z]+$", "minLength": 2},
+            },
+        },
+        "required": ["scores"],
+    }
+    tool = _extension(parameters=parameters)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))
+    ) as client:
+        registry, _, _ = _register(tool, lambda: client)
+        result = await registry.execute(
+            tool.name, {"scores": [5, 10], "codes": ["ab", "xyz"]}
         )
     assert result.ok is True
 

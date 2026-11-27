@@ -35,7 +35,7 @@ import json
 import os
 import re
 from collections.abc import Callable, Mapping
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 import httpx
@@ -111,7 +111,8 @@ def _annotation_for(sub_schema: Mapping[str, Any]) -> Any:
         sub_schema: 属性子模式。
 
     Returns:
-        Python 类型（enum → ``Literal``；array → 元素类型列表；未知 /
+        Python 类型（enum → ``Literal``；array → 元素类型列表——``items``
+        自身的元素级约束包进 ``Annotated[元素, Field(...)]``；未知 /
         复合模式回落 ``Any``）。
     """
     enum_values = sub_schema.get("enum")
@@ -125,6 +126,10 @@ def _annotation_for(sub_schema: Mapping[str, Any]) -> Any:
         items = sub_schema.get("items")
         item_schema: Mapping[str, Any] = items if isinstance(items, Mapping) else {}
         item_annotation = _annotation_for(item_schema)
+        item_constraints = _field_constraints(item_schema)
+        item_constraints.pop("description", None)
+        if item_constraints:
+            item_annotation = Annotated[item_annotation, Field(**item_constraints)]
         return list.__class_getitem__(item_annotation)
     if isinstance(raw_type, str):
         mapped = _SCHEMA_PYTHON_TYPES.get(raw_type)

@@ -103,6 +103,16 @@ async def test_url_userinfo_and_secret_query_rejected() -> None:
     assert HttpToolTargetModel(url="https://h/x?token={token}").url.endswith("token={token}")
 
 
+async def test_url_secret_query_placeholder_value_not_rejected() -> None:
+    """查询串密钥参数的值是 {...} 占位：剔除占位后不按字面长度拒绝。"""
+    accepted = HttpToolTargetModel(
+        url="https://h/x?access_token={user_access_token}&token={token}"
+    )
+    assert accepted.url.endswith("access_token={user_access_token}&token={token}")
+    with pytest.raises(ValidationError):
+        HttpToolTargetModel(url="https://h/x?access_token=abcdefghijklmnop")
+
+
 async def test_tool_name_pattern_rejected() -> None:
     """ExtensionTool / ToolSpecModel 工具名：空 / CJK / 空格 / 超长拒绝。"""
     for bad in ("", "中文", "has space", "a" * 65, "dot.name"):

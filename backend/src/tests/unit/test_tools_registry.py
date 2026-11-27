@@ -130,15 +130,16 @@ async def test_register_same_name_overwrites() -> None:
 
 
 async def test_execute_unknown_tool_isolated() -> None:
-    """未知工具：ok=False + error 携带工具名与可用清单；不上抛。"""
+    """未知工具：ok=False + error 仅携带工具名（不回显可用清单）；不上抛。"""
     registry = ToolRegistry()
     spec, executor = _echo_tool()
     registry.register(spec, executor)
     result = await registry.execute("nope")
     assert result.ok is False
     assert result.tool == "nope"
-    assert "未注册工具: nope" in (result.error or "")
-    assert "echo" in (result.error or "")
+    assert (result.error or "").startswith("未注册工具: " + "nope")
+    assert "可用" not in (result.error or "")
+    assert "echo" not in (result.error or "")
     assert result.result == {}
     assert result.latency_ms >= 0
 

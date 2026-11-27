@@ -608,6 +608,48 @@ async def test_alias_conflict_keeps_yaml_entry_credentials(
     assert _json_body(request)["model"] == "yaml-model"
 
 
+async def test_same_name_admin_entry_keeps_own_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """admin 建同名条目绑 intimate 别名：凭据按条目 api_key_env，不套通道密钥。"""
+    monkeypatch.setenv("SAME_NAME_KEY", "sk-admin-entry")
+    admin_entry = parse_model_entry(
+        {
+            "name": INTIMATE_CHANNEL_ENTRY_NAME,
+            "base_url": "http://same-name.test/v1",
+            "api_key_env": "SAME_NAME_KEY",
+            "model": "admin-model",
+        }
+    )
+    resolver = ModelResolver([_entry(), admin_entry])
+    resolver.register_route_target(INTIMATE_TARGET_ROLE, admin_entry)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """记录请求并返回固定回复。"""
+        requests.append(request)
+        return _ok_response("同名条目回复")
+
+    manager = await _make_pool_manager(handler)
+    try:
+        gateway = LlmGateway(
+            resolver=resolver,
+            pool_manager=manager,
+            settings=build_isolated_settings(pools=PoolsConfig(cb_fail_max=2)),
+            retry_attempts=1,
+            retry_wait_seconds=0.0,
+            intimate_config=_complete_config(),
+        )
+        response = await gateway.chat_by_role("chat", _messages(), intimacy_level=3)
+    finally:
+        await manager.stop()
+
+    assert response.content == "同名条目回复"
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.headers["Authorization"] == "Bearer sk-admin-entry"
+
+
 async def test_intimate_temperature_default_only_when_caller_silent() -> None:
     """温度：通道缺省温度在调用方未设置时进入请求体，显式参数优先。"""
     handler = DualEndpointHandler()

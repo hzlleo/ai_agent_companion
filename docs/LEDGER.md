@@ -3030,6 +3030,63 @@ model 齐备 → 内置策略（源 chat → 目标 intimate，最低优先级�
   触及该测试文件；未跑 tests-all / coverage-gates / verify-slice（按纪律由
   主 Agent 执行）。
 
+**修复 H（Oracle 深审 R4-7a+b 剩余项根修；只记事实，不复审结论）**：
+- **F1 执行面拦截（P1，`edit_core_memory` 既有洞的继承）**：此前 owner-only
+  只裁剪工具可见面（`_definitions_for_provenance`），`_tool_loop` 对模型
+  回传的任何 `call.name` 都直接进执行器——该缺口在引入 owner-only 自编辑
+  工具时即存在，扩展工具只是让「隐藏工具仍可执行」可被外部端点观测。
+  `chat/service.py::_tool_loop` 现按 `active_definitions` 求非 owner 回合
+  可执行名集（owner 为 `None` 不限制），面外调用不进执行器，直接归一为
+  `ToolResultModel(ok=False, error="未注册工具: <name>")`——与「不存在」
+  同一受控路径，不区分「存在但本轮不可见」。`tools/registry.py::execute`
+  的未注册错误文本去掉可用工具清单（仅 `未注册工具: <name>`，清单走
+  debug 日志，不进模型上下文）。收尾路径核对：chat 无 `_force_tool_call`
+  式强制工具调用，步数上限后是**无工具面**最终调用（final-report
+  forcing）；合规重试也不携带 tools 且不派发执行器——两路径均不会把
+  面外名送进执行器，无需额外判定，已由收尾用例锁定。
+- **F2 通道凭据对象身份（P2）**：`gateway._route_wire_api_key` 由
+  `entry.name == INTIMATE_CHANNEL_ENTRY_NAME` 改为
+  `entry is self._builtin_intimate_entry`（装配期持有
+  `build_intimate_entry` 返回实例）；admin 在 config.yaml 建同名条目绑
+  `intimate` 别名时走该条目 `api_key_env`，不再套通道密钥。
+- **F3 `items` 元素级约束（P2）**：`extension_tools._annotation_for` 的
+  array 分支对带 `type` 的 `items` 提取 `_field_constraints`（去掉
+  description）并包成 `Annotated[元素注解, Field(...)]`，
+  `items.minimum` / `maximum` / `minLength` / `maxLength` / `pattern`
+  在元素级生效；`enum` 仍由既有 `Literal` 分支拦截。`tools.md` 的
+  「实际执行面」清单与实现一致。
+- **小项 a 路由轨迹上下沿**：`gateway._format_route_condition` 把亲密度
+  上下沿写成 `intimacy.min` / `intimacy.max`（按 `detail` 的 `min=` /
+  `max=` 标记区分；模型面 `ConditionResultModel` 未改）。
+- **小项 b URL 占位误拒**：`config/models.py::_validate_url_scheme` 先
+  剔除查询值中的 `{...}` 占位再判长度，
+  `?access_token={user_access_token}` 通过；`?token=abcdefghijklmnop`
+  （真字面 16 字符）仍拒绝；`tools.md` 密钥规则同步。
+- 命令 + 退出码（本分支工作区）：`cd backend && pixi run pytest
+  src/tests/unit/test_chat_core_memory.py src/tests/unit/test_chat_tool_loop.py
+  src/tests/unit/test_chat_service.py src/tests/unit/test_tools_registry.py
+  src/tests/unit/test_extension_tools.py src/tests/unit/test_extension_models.py
+  src/tests/unit/test_extension_app_lifespan.py
+  src/tests/unit/test_llm_intimate_channel.py
+  src/tests/unit/test_llm_route_policy.py src/tests/unit/test_llm_gateway.py
+  src/tests/unit/test_models_api.py --asyncio-mode=auto` → 0（248 passed）；
+  改动源文件 `pixi run mypy` → 0（5 source files）；改动源 / 测试文件
+  `pixi run ruff check` → 0；`prose_pin_check.py --gate` → 0（prose 75 <=
+  基线 75，未新增文案钉）；`red-probe --gate` → 0（41 探针 / 227 源文件 <=
+  冻结基线 190）；`assertion_freeze.py --update` → 0（240 文件 /
+  asserts=10145 / raises=782）/ `--enforce` → 0。
+- 变异实证（临时改动后还原，`cmp` 确认源文件复原）：去掉
+  `executable_names` 判定（改 `if False`）→ peer 面外调用 / 未注册名 /
+  收尾步数上限 3 条用例 failed；registry 错误恢复可用清单 → 未注册工具
+  用例 failed；凭据判定改回按条目名 → 同名 admin 条目用例 failed；去掉
+  `items` 元素约束包装 → `items-minimum` / `items-pattern` 2 条 failed
+  （`items-enum` 由 `Literal` 分支拦截，仍 passed）；轨迹格式化退回仅
+  `dimension` → 轨迹日志 2 条用例 failed；URL 长度判断改回未剔除占位的
+  原值 → 占位参数用例 failed。
+- 偏离：`items.enum` 的元素级拒绝来自既有 `Literal` 注解而非新的
+  `Field` 包装，故「去掉元素约束」变异下该守卫不红（其余两条红）；
+  未跑 tests-all / coverage-gates / verify-slice（按纪律由主 Agent 执行）。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 ### 缓解台账（非根修，已排期）

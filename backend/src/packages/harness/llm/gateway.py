@@ -67,10 +67,7 @@ from packages.harness.core.context import persona_id_var, request_id_var
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.time_utils import now_ms
 from packages.harness.llm.client import LlmHttpClient
-from packages.harness.llm.intimate_models import (
-    INTIMATE_CHANNEL_ENTRY_NAME,
-    IntimateChannelConfig,
-)
+from packages.harness.llm.intimate_models import IntimateChannelConfig
 from packages.harness.llm.intimate_router import (
     build_intimate_entry,
     log_incomplete_intimate_config,
@@ -93,6 +90,7 @@ from packages.harness.llm.route_policy_models import (
     INTIMATE_BUILTIN_POLICY_NAME,
     INTIMATE_BUILTIN_PRIORITY,
     INTIMATE_TARGET_ROLE,
+    ConditionResultModel,
     PolicyEvalTraceModel,
     RouteConditionModel,
     RouteDecisionModel,
@@ -131,6 +129,25 @@ def _role_value(role: ModelRole | str) -> str:
     return role.value if isinstance(role, ModelRole) else str(role)
 
 
+def _format_route_condition(condition: ConditionResultModel) -> str:
+    """格式化单条条件结果（亲密度上下沿按 ``intimacy.min`` / ``intimacy.max`` 区分）。
+
+    Args:
+        condition: 条件求值结果（亲密度上下沿的 ``detail`` 含 ``min=`` /
+            ``max=`` 标记）。
+
+    Returns:
+        ``dimension:matched`` 文本；亲密度维度带上下沿后缀。
+    """
+    dimension: str = condition.dimension
+    if dimension == "intimacy":
+        if "min=" in condition.detail:
+            dimension = "intimacy.min"
+        elif "max=" in condition.detail:
+            dimension = "intimacy.max"
+    return f"{dimension}:{condition.matched}"
+
+
 def _format_route_trace(trace: Sequence[PolicyEvalTraceModel]) -> str:
     """格式化求值轨迹摘要（``policy→[dimension:matched,...]``，不含消息内容）。
 
@@ -138,13 +155,12 @@ def _format_route_trace(trace: Sequence[PolicyEvalTraceModel]) -> str:
         trace: 源角色匹配策略的求值轨迹。
 
     Returns:
-        紧凑轨迹摘要（多条策略以 ``; `` 分隔）。
+        紧凑轨迹摘要（多条策略以 ``; `` 分隔；亲密度上下沿分别写作
+        ``intimacy.min`` / ``intimacy.max``）。
     """
     return "; ".join(
         f"{entry.policy_name}→["
-        + ",".join(
-            f"{condition.dimension}:{condition.matched}" for condition in entry.conditions
-        )
+        + ",".join(_format_route_condition(condition) for condition in entry.conditions)
         + "]"
         for entry in trace
     )
@@ -656,7 +672,9 @@ class LlmGateway:
 
         凭据属于内置通道**条目本身**，不跟随 ``intimate`` 角色别名——当
         config.yaml 把 ``intimate`` 别名绑定到另一条目时，该条目仍走自身
-        ``api_key_env`` 解析链，通道密钥不会发往错误端点。
+        ``api_key_env`` 解析链，通道密钥不会发往错误端点。判定按装配期
+        持有的内置条目实例（对象身份），admin 在 config.yaml 建同名条目
+        也不会套上通道密钥。
 
         Args:
             entry: 本轮解析到的模型条目。
@@ -664,7 +682,7 @@ class LlmGateway:
         Returns:
             内置亲密通道条目的明文密钥；其余条目 ``None``（走条目密钥解析）。
         """
-        if entry.name != INTIMATE_CHANNEL_ENTRY_NAME:
+        if entry is not self._builtin_intimate_entry:
             return None
         return self._route_api_keys.get(INTIMATE_TARGET_ROLE)
 

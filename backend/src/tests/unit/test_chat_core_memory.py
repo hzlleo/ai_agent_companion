@@ -4,7 +4,8 @@
 截断）/ compose 链位置（人物事实之后、相关技能之前）/ ChatService 持久化
 会话注入四块（全空跳过 / 读取面未接线 / 纯内存形态零 I/O / 读取失败
 降级）/ 工具列表按发送者来源分级（owner 全量、peer 剔除
-``edit_core_memory``）/ 工具执行期的会话主键绑定与循环后复位。
+``edit_core_memory``）与执行面按可执行名集拦截（面外调用不进执行器）/
+工具执行期的会话主键绑定与循环后复位。
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from packages.harness.chat.prompts import render_core_memory_block
 from packages.harness.chat.service import ChatService, compose_messages
 from packages.harness.database.engine import db_engine_holder
 from packages.harness.llm.llm_models import (
+    ChatMessageRole,
     ChatResponseModel,
     ChatStreamChunkModel,
     ToolCallModel,
@@ -437,3 +439,130 @@ async def test_tool_loop_binds_and_resets_session_id() -> None:
     assert executor.calls[0].name == CORE_MEMORY_TOOL_NAME
     assert executor.session_ids == [42]
     assert core_memory_session_id_var.get() is None
+
+
+def _owner_only_specs() -> list[ToolSpecModel]:
+    """三工具面（两个 owner-only + 一个 peer 可见——执行面拦截对照）。"""
+    return [
+        ToolSpecModel(name="calendar_query", description="查询日历"),
+        ToolSpecModel(name="secret_tool", description="仅主人可用"),
+        ToolSpecModel(name="get_current_time", description="当前时间"),
+    ]
+
+
+async def test_peer_turn_out_of_face_tool_call_blocked_before_executor() -> None:
+    """peer 回合回传已剔除工具名：执行器零调用，反馈同「未注册」且不含清单。"""
+    gateway = FakeGateway(
+        responses=[
+            ("", [ToolCallModel(id="call-1", name="calendar_query", arguments={})]),
+            ("我看看", None),
+        ]
+    )
+    executor = RecordingExecutor()
+    service = ChatService(
+        gateway=gateway,
+        tools=_owner_only_specs(),
+        tool_executor=executor,
+        owner_only_tools=frozenset({"calendar_query", "secret_tool"}),
+    )
+
+    content = await service.reply(
+        _state(session_id=42), "群友路过", sender_provenance=MemoryProvenance.PEER
+    )
+
+    assert content == "我看看"
+    assert executor.calls == []
+    tool_rounds = [
+        message
+        for message in gateway.chat_calls[1]["messages"]
+        if message.role == ChatMessageRole.TOOL
+    ]
+    feedback = tool_rounds[-1].content
+    assert ("未注册工具: " + "calendar_query") in feedback
+    assert "可用" not in feedback
+    assert "secret_tool" not in feedback
+    follow_up = gateway.chat_calls[1]
+    assert [tool.name for tool in follow_up["tools"]] == ["get_current_time"]
+    assert "secret_tool" not in "".join(
+        message.content for message in follow_up["messages"]
+    )
+
+
+async def test_peer_turn_unknown_tool_feedback_has_no_available_list() -> None:
+    """peer 回合回传未注册名：同一受控失败路径，反馈不带可用工具清单。"""
+    gateway = FakeGateway(
+        responses=[
+            ("", [ToolCallModel(id="call-1", name="no_such_tool", arguments={})]),
+            ("收到", None),
+        ]
+    )
+    executor = RecordingExecutor()
+    service = ChatService(
+        gateway=gateway,
+        tools=_owner_only_specs(),
+        tool_executor=executor,
+        owner_only_tools=frozenset({"calendar_query", "secret_tool"}),
+    )
+
+    await service.reply(
+        _state(session_id=42), "群友路过", sender_provenance=MemoryProvenance.PEER
+    )
+
+    assert executor.calls == []
+    tool_rounds = [
+        message
+        for message in gateway.chat_calls[1]["messages"]
+        if message.role == ChatMessageRole.TOOL
+    ]
+    feedback = tool_rounds[-1].content
+    assert ("未注册工具: " + "no_such_tool") in feedback
+    assert "可用" not in feedback
+    assert "calendar_query" not in feedback
+    assert "secret_tool" not in feedback
+
+
+async def test_owner_turn_executes_owner_only_tool() -> None:
+    """owner 回合不设可执行名集：owner-only 工具照常进入执行器。"""
+    gateway = FakeGateway(
+        responses=[
+            ("", [ToolCallModel(id="call-1", name="calendar_query", arguments={})]),
+            ("查到两条", None),
+        ]
+    )
+    executor = RecordingExecutor()
+    service = ChatService(
+        gateway=gateway,
+        tools=_owner_only_specs(),
+        tool_executor=executor,
+        owner_only_tools=frozenset({"calendar_query", "secret_tool"}),
+    )
+
+    content = await service.reply(_state(session_id=42), "看看我的日程")
+
+    assert content == "查到两条"
+    assert [call.name for call in executor.calls] == ["calendar_query"]
+
+
+async def test_peer_turn_step_cap_keeps_out_of_face_calls_out_of_executor() -> None:
+    """收尾强制路径：步数上限后的无工具面最终调用不重放面外名到执行器。"""
+    responses = [
+        ("", [ToolCallModel(id=f"call-{index}", name="calendar_query", arguments={})])
+        for index in range(5)
+    ]
+    responses.append(("没有更多了", None))
+    gateway = FakeGateway(responses=responses)
+    executor = RecordingExecutor()
+    service = ChatService(
+        gateway=gateway,
+        tools=_owner_only_specs(),
+        tool_executor=executor,
+        owner_only_tools=frozenset({"calendar_query", "secret_tool"}),
+    )
+
+    content = await service.reply(
+        _state(session_id=42), "群友路过", sender_provenance=MemoryProvenance.PEER
+    )
+
+    assert content == "没有更多了"
+    assert executor.calls == []
+    assert "tools" not in gateway.chat_calls[-1]

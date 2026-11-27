@@ -947,11 +947,35 @@ async def test_gateway_logs_trace_on_fallback_and_direct_miss() -> None:
 
     fallback_logs = [message for message in messages if "条件路由回落" in message]
     assert len(fallback_logs) == 1
-    assert "equivalence-policy→[intimacy:True]" in fallback_logs[0]
+    assert "equivalence-policy→[intimacy.min:True]" in fallback_logs[0]
     direct_logs = [message for message in messages if "条件路由未命中" in message]
     assert len(direct_logs) == 1
-    assert "equivalence-policy→[intimacy:False]" in direct_logs[0]
+    assert "equivalence-policy→[intimacy.min:False]" in direct_logs[0]
     assert "今天想抱抱" not in fallback_logs[0] + direct_logs[0]
+
+
+async def test_gateway_logs_intimacy_bounds_distinctly() -> None:
+    """轨迹摘要：亲密度上下沿分别写作 intimacy.min / intimacy.max。"""
+    handler = DualEndpointHandler()
+    manager = await _make_pool_manager(handler)
+    messages: list[str] = []
+    handler_id = logger.add(lambda message: messages.append(str(message)), level="DEBUG")
+    policy = _intimacy_policy(min_intimacy_level=1, max_intimacy_level=3)
+    try:
+        gateway = _gateway(
+            manager,
+            resolver=ModelResolver([_chat_entry()]),
+            route_policies=[policy],
+        )
+        await gateway.chat_by_role("chat", _messages(), intimacy_level=2)
+    finally:
+        logger.remove(handler_id)
+        await manager.stop()
+
+    fallback_logs = [message for message in messages if "条件路由回落" in message]
+    assert len(fallback_logs) == 1
+    assert "intimacy.min:True" in fallback_logs[0]
+    assert "intimacy.max:True" in fallback_logs[0]
 
 
 async def test_gateway_user_policy_overrides_builtin_priority() -> None:

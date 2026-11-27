@@ -70,8 +70,9 @@
   `Basic ` / `sk-` 前缀（后跟非空字面）或剩余字面长度 > 32 → 拒绝。
 - URL **不支持** `{env:}`；URL 禁止 userinfo（`http://user:pass@host`）。
   查询串中的常见密钥参数名（`key` / `token` / `apikey` / `api_key` /
-  `api-key` / `secret` / `access_token` / `auth_token`）若值为 ≥16 字面
-  字符 → 拒绝，密钥必须改走 header 的 `{env:}` 占位。
+  `api-key` / `secret` / `access_token` / `auth_token`）先剔除 `{...}`
+  参数占位，剩余字面 ≥16 字符 → 拒绝，密钥必须改走 header 的 `{env:}`
+  占位（`?access_token={user_access_token}` 合法）。
 
 ## 装配与可见性
 
@@ -81,8 +82,11 @@
 
 可见性默认 **owner-only**：`expose_to_peer=false` 的扩展工具名交给
 `ChatService`，在非 owner 回合（群聊 peer / 平台 untrusted）从工具列表
-结构性剔除——模型看不到该工具即无从调用；`expose_to_peer=true` 才在
-peer 回合可见。内置 `edit_core_memory` 恒为 owner-only（不受扩展配置影响）。
+结构性剔除；执行面由服务端按本轮可执行名集拦截，不依赖模型是否看到——
+模型即使回传被剔除的名字也不进入执行器，反馈与「未注册工具」走同一
+受控路径（不区分「存在但本轮不可见」与「不存在」，隐藏工具名不进入
+模型上下文）。`expose_to_peer=true` 才在 peer 回合可见并可执行。内置
+`edit_core_memory` 恒为 owner-only（不受扩展配置影响）。
 
 ## 完整示例
 
