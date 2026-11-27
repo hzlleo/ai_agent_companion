@@ -2733,6 +2733,8 @@ Live 前风险（Live 阶段验证）：`open_chat` 在 Ctrl+F 后立即粘贴�
   （并入 `test_wechat_gui_watermark.py` 与 `test_wechat_gui_window_mutex.py`）。
 
 
+**修复 C 最终树验证（`162f863c` 树，提交 `e1db542`）**：`cd backend && VITEST_MAX_WORKERS=6 pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-6b-fix` → 0，10/10 PASS：tests-all=3555 / coverage-gates=24 组 / lint / typecheck=224 / gates / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build；证据 `docs/evidence/r4-6b-fix-162f863c.json`（sha8=`162f863c`，779 文件）；沙盒 151 passed / 92.74%；同步测试棘轮通过；断言基线未变（新增断言不拦截）。上一行「最终树验证」记录的是修复 C 之前的 `36e3449d` 树，现为历史。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 ### 缓解台账（非根修，已排期）
