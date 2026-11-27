@@ -96,12 +96,12 @@
 | R3-2 限流与背压 | QQ 入站有界 / 实时语音 TTS 队列与会话帽 / LLM 日预算闸 / 多 worker 语义 / 最小观测面 / 前端 Node 护栏与构建体积基线（P1×1 + P2×7；复审 6×P2 闭环） | ✅ merged（PR #36；证据 `fe261c9a`；PR body 引用的 `0276c1a5` 为首提交树证据，终态以 `fe261c9a` 为准） |
 | R3-3 性能基线 | `bench_core.py` 6 项纯函数微基准 + `api_smoke.py` 4 端点进程内冒烟 + 门禁链落位（复审 4×P2 闭环；终局复核 7×P2 闭环） | ✅ merged（PR #37 → main `3f313a6`；评审 head `66b14b3`，终态含 `ecb7714`/`ee9381a`；canonical 证据 `16b07c7c`，历史 `bc71f261`） |
 
-| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（R4-6a PoC 门制品 + 本机栈实测；R4-6b 通道本体待过门；Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 已合并（PR #44 → main `215317c`）；R4-6a 本分支（`feat/r4-6-wechat-gui`）工作区（本机栈 PoC PASS；R4-6b 待过门后实现）；R4-1 / R4-2 / R4-3 已合并；R4-7 / R4-8 待开工 |
+| R4 体验+平台+规模 | R4-1 前端体积治理（路由级 lazy split + 体积门）；R4-2 按 purpose 预算分面（ASR/TTS/voiceprint）；R4-3 实时语音增强（真流式 ASR/TTS + AEC + 移动端采集）；R4-4 SmsForwarder 通道；R4-5 WhatsApp Cloud API 通道；R4-6 GUI 微信容器化（R4-6a PoC 门制品 + 本机栈实测，已合并 PR #45 → `b065bf4`；R4-6b 通道本体本分支实现态；Live 推迟）；R4-7 平台化扩展（多角色模型路由 + 外部工具扩展注册）；R4-8 规模与压测（长会话/万级记忆/容量报告） | 🔄 R4-4 已合并（PR #43 → main `f8eb398`）；R4-5 已合并（PR #44 → main `215317c`）；R4-6a 已合并（PR #45 → main `b065bf4`）；R4-6b 本分支（`feat/r4-6b-wechat-gui-channel`）工作区（沙盒 agent + 后端通道实现态；Live 待统一阶段）；R4-1 / R4-2 / R4-3 已合并；R4-7 / R4-8 待开工 |
 
 **当前分支状态**：
-- main：`215317c`（PR#34–#44 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
+- main：`b065bf4`（PR#34–#45 已并入）；R2 归档点：`e95f5fe`（R2 全部批次）/ `6b54b2a`（R2b）/ `3872504`（R2c）/ `7fe68a0`（R2-defense）/ `1305420`（logprobs）。
 - `feat/r3-perf`：R3-3 性能基线，已合并（PR #37），可删除。
-- R4：R4-4 已合并（PR #43 → `f8eb398`）；R4-5 已合并（PR #44 → `215317c`）；R4-6a 在当前分支 `feat/r4-6-wechat-gui` 工作区（本机栈 PoC PASS）；R4-1 / R4-2 / R4-3 已合并；R4-6b（通道本体）待过门，R4-7 / R4-8 待排期。
+- R4：R4-4 已合并（PR #43 → `f8eb398`）；R4-5 已合并（PR #44 → `215317c`）；R4-6a 已合并（PR #45 → `b065bf4`）；R4-6b（通道本体）在当前分支 `feat/r4-6b-wechat-gui-channel` 工作区；R4-1 / R4-2 / R4-3 已合并；R4-7 / R4-8 待排期。
 - 历史堆叠分支（`feat/r2b-plus-intimacy` / `feat/r2f-realtime-voice` / `feat/llm-confidence-logprobs` 等）均已合入 main，可删除；工作区 clean。
 
 ## 4. 全部拍板记录（原文语义）
@@ -190,7 +190,7 @@ cd docker/tool-sandbox-agent && pixi run tests-unit；cd docker/browser-sidecar 
 ```
 - SeekDB 本地容器：`docker run -d --name seekdb-smoke -p 2881:2881 oceanbase/seekdb:1.4.0-100000172026082615`（root 空密码；就绪约 5-60s；网络中断后需重启）。
 - DTO 契约门：`scripts/export_dto_schemas.py` + `frontend/src/test/contract/dtoSchemas.json`（当前 94 组）；改后端 wire DTO 必须 `pixi run export-dto-schemas` 再提交，改前端 types 契约测试即红。
-- 漂移门：`scripts/check_sandbox_dtos_drift.py`（38 项，三树镜像契约 byte 级）。
+- 漂移门：`scripts/check_sandbox_dtos_drift.py`（53 项，三树镜像契约 byte 级；含 GUI 微信五工具结果模型与工具名 / 路径常量行）。
 - 沙盒树：`docker/tool-sandbox-agent`、`docker/browser-sidecar`（独立 pixi；CI 有对应 job；browser 镜像 ~2GB 不在 CI 构建）。
 - 模型子模组：`models/`（ModelScope；权重 lfs 延迟拉取；ModelScope UA 墙：`git config http.https://www.modelscope.cn/.userAgent "git/2.47.0"`）。
 - 测试环境：全异步 asyncio_mode=auto；SQLite 共享 fixture；不依赖真实配置；conftest 硬覆盖 env。
@@ -2528,6 +2528,224 @@ api-smoke / prose-pin）全绿。
   （`ignored_basis=udev_positive`），真实 float 路径以历史证据（规则安装前）
   与 hermetic 用例覆盖。
 - 部署机 udev 复验与微信客户端 Live 仍随统一阶段。
+
+### 已完成切片：R4-6b GUI 微信实验轨通道（沙盒 agent + 后端通道，本分支工作区）
+
+**背景**：R4-6a 的 Xorg + uinput PoC 门已通过并合并（PR #45 → `b065bf4`）。
+本片按「生产主轨仍为企微；GUI 微信为实验轨、默认关闭、Live 推迟」落地：
+沙盒树新增仅回环 HTTP agent（Bearer 鉴权 + 五工具），后端新增
+`channels/wechat_gui/` 通道（wire 镜像 / 设置 / 提示词 Unit / 客户端 /
+视觉解析 / 轮询 runner / 出站适配器）并接入 `ChannelType` / 配置四表面 /
+lifespan 装配。
+
+**改动面（文件）**：
+- 沙盒树：`docker/wechat-gui/src/wechat_gui_poc/wire_models.py`（新增 agent
+  HTTP 契约 + 五工具参数模型，三 wire 模型与后端文本镜像）、`agent.py`
+  （stdlib `ThreadingHTTPServer`；修复 B 已改 asyncio；`/health` 无鉴权；
+  `/invoke` Bearer 恒时比较；五工具；open_chat 有界等待；恒 200 `ok=false`
+  归一）、`uinputd.py`
+  （同步控制面客户端 + 共用响应解码）、`entrypoint.sh`（Xorg 就绪后以运行
+  用户启动 agent、token 文件解析）、`Dockerfile`（HEALTHCHECK 改查
+  `/health`）、`docker/docker-compose.wechat-gui.yml`（8090 回环映射 +
+  agent token secret）、`agent.token.default`、README、单测
+  `test_agent.py` / `test_entrypoint_password.py` 增补。
+- 后端：`channels/wechat_gui/{wechat_gui_wire_models,wechat_gui_models,
+  wechat_gui_prompts,wechat_gui_client,wechat_gui_reader,wechat_gui_runner,
+  wechat_gui_adapter}.py`；`channel_models.py`（`ChannelType.WECHAT_GUI`）；
+  `config/models.py`（`WechatGuiSettings` 聚合）；`app/main.py`（lifespan
+  装配 / 停机 / 默认关闭零对象）；`scripts/generate_examples_env.py` /
+  `config/wizard_generators.py` / `src/conftest.py` / `.env.example` /
+  `docs/backend/config.md`；`scripts/check_sandbox_dtos_drift.py`（纳入
+  wechat-gui 镜像对，块起点支持无括号 dataclass）；`backend/red_manifest.toml`
+  （7 条新探针）；单测 `test_wechat_gui_*` / `test_app_wechat_gui_channels_lifespan`
+  / `tests/wechat_gui_fakes.py` / `test_channels_models.py` 值域同步。
+- 文档：`docs/backend/channels.md`「GUI 微信实验轨」整节改实现态；
+  `docker/wechat-gui/README.md` agent 面 / 安全边界 / 测试面同步。
+
+**五工具 → uinputd / 子进程映射**：`screenshot` = `import -window root
+png:-`（base64 + sha256）；`click{x,y}` = `move` + `click`（左键）经
+uinputd 控制面；`type_text{text}` = `xclip -selection clipboard -in` +
+`ctrl+v` 序列（覆盖中文）；`press_key{key}` = 键名 / 组合键解析后的
+`key` 序列（按下 → 抬起逆序）；`open_chat{remark_name}` = `ctrl+f` → 粘贴
+备注名 → `enter` → 有界等待标题区域变化 → 标题区域 + 全屏截图。
+
+**标题校验与 fail-closed 用例**：入站解析标题与 open_chat 目标不一致默认
+`skip` 并计数（`skip` 与 `fail` 均计入当轮指数退避；连续 3 轮不一致的目标
+停采，进程生命周期内重启恢复）；出站 open_chat
+后先视觉校验标题，不一致拒绝发送；解析非 JSON / 缺字段 / 置信度低于阈值
+一律 `LLM_CALL_FAILED`；客户端把恒 200 `ok=false` / 401 / 超时 / wire 破坏
+归一 `CHANNEL_API_ERROR`；token 缺失时装配跳过且 invoke 短路失败。
+
+**命令 + 退出码（`128821d` 树）**：
+- `cd docker/wechat-gui && pixi run tests-unit` → 0（141 passed；总覆盖率
+  94.08%；agent 95%、wire_models 100%）；`pixi run lint` → 0；
+  `pixi run typecheck` → 0（7 源文件）。
+- `cd backend && pixi run pytest src/tests/unit -k "wechat_gui or channel_type"
+  --asyncio-mode=auto` → 0（58 passed）。
+- `cd backend && pixi run mypy src/packages/harness/channels/wechat_gui
+  src/app/main.py src/packages/harness/config/models.py src/tests/wechat_gui_fakes.py`
+  → 0（10 源文件）。
+- `cd backend && pixi run python ../scripts/check_sandbox_dtos_drift.py` → 0
+  （全部 53 项契约一致，含 wechat-gui 三 wire 模型 + 五结果模型 + 七常量行）。
+- `cd backend && pixi run red-probe --all` → 0（36 条探针全部 RED，含新增
+  7 条）、`pixi run red-probe --gate` → 0（190 <= 基线 190）。
+- `cd backend && pixi run docs-truth` → 0；`check_doc_counts.py` → 0（13 项）；
+  `conftest_env_check.py` → 0（登记 239 键 / 硬覆盖 239）；
+  `check_chinese_comments.py --tree backend` → 0（violations=0）、
+  `--tree wechat-gui` → 0（violations=0）。
+- 棘轮面：`assertion-freeze --update` → 0（基线 233 文件 / asserts=9763 /
+  raises=744；新增测试文件并入基线）后 `assertion-freeze --enforce` → 0；
+  `surface-check` → 0（env 键面 827 行）；`sync-test-ratchet` → 0（+0）；
+  `noqa-freeze` → 0；`prose-pin` → 0（prose 75 <= 基线 75）。
+
+**偏离与未验证**：
+- **Live 未验证**：镜像不装微信客户端——真实截图解析准确率、`open_chat`
+  命中率、中文输入法 / 字体 / 窗口管理器行为均待统一 Live 阶段；本片只测
+  到假数据层（fake 沙盒客户端 / fake 视觉网关 / 本机回环 MockTransport）。
+- 部署机宿主 udev 规则仍待复验（开发机已验；Wayland 会话依赖规则或 VM
+  隔离）。
+- `verify-slice --with-seekdb --with-frontend --slice r4-6b` → PASS（tests-all
+  3529 / coverage 24 组 / mypy 223 / SeekDB 15 / 前端 716 + 96.15；证据
+  `r4-6b-a6ca265f`）；提交 `128821d`。
+- 群聊按单会话处理（`is_group_chat=False`）；出站只支持文本；GUI 侧无平台
+  消息回执 ID（`message_ids` 恒空）。
+
+**Oracle 深审结论（提交 `128821d`；不通过——无 P0，P1×5 + P2×4；仅记录未修）**
+回归面全绿（tests-all 3529 / coverage 24 组 / mypy 223 / SeekDB 15 / 前端 716+96.15；
+沙盒 141 单测；漂移门 41 项一致；红探针 36 条全 RED；三条指定变异均成立）。
+源码隔离与 P4 比对（strip 后全等、空标题拒绝、skip/fail 强校验）成立。
+
+P1（入站/出站主链可复现逻辑缺陷）：
+1. `wechat_gui_runner.py:315-317`：截图哈希在 `reader.read` 成功**之前**登记，视觉解析瞬时失败后下一轮命中「截图未变化」直接返回——同一画面永久不再解析（复现：首轮 `LLM_CALL_FAILED` 后 `reader.calls=1 / inbound=[]`）。修复：sha 登记移到解析成功之后 + 补「首轮失败次轮成功」用例。
+2. `wechat_gui_runner.py:305-341`：`_current_target` 只赋值不复位；标题不一致后单联系人配置下轮询永久空转（复现：`open_calls=['小林']` 后无解析）。触发源：noVNC 人工操作、向非轮询联系人出站、容器重启。修复：skip/fail 两分支均置 `_current_target=None`。
+3. `wechat_gui_adapter.py:82-95` × `wechat_gui_runner.py:305-317`：单窗口无互斥，出站「校验→type_text→enter」与 runner 的 `open_chat`/`screenshot` 之间可被轮询切走会话——校验通过后文本与回车落进新会话并返回成功（复现：发给小林的消息 `sent_in=['阿青']`）；agent 侧 `agent.py:738` 每连接一线程同样无串行化。修复：装配处建一把 `asyncio.Lock` 注入 runner（仅 open_chat/截图/解析/校验段持锁，`handle_inbound` 在锁外）与 adapter（全程持锁）。
+4. `wechat_gui_models.py:95-96,499-500` + `wechat_gui_prompts.py:44-59`：去重键依赖 VLM 输出的 epoch 毫秒，但提示词不给当前时间参照（微信界面仅 `HH:MM`）——`ts_ms=0` 回落采集分桶时跨 5 分钟边界旧消息再次入站，幻觉值漂移时每次画面变化重复（复现均得 `['你好','你好']`）；首帧把全部可见消息当新消息投递；`is_self` 缺省 False、`messages` 缺省空与文档「缺字段一律 LLM_CALL_FAILED」不符。**需拍板**：甲 会话水位重叠比对（首帧只建基线，改动中等）/ 乙 注入当前时间 + 校验 ts 合理性（改动小，读不出时照旧）/ 丙 仅首帧基线（最小，跨边界重复仍在）。无论选哪个：`is_self`/`text`/`sender`/`ts_ms`/`messages` 改必填。
+5. 硬约束 4.1/4.3 未记录偏差：`agent.py` 用 `ThreadingHTTPServer` + 阻塞 `subprocess.run` + 新增同步控制面客户端，而同树 `uinputd.py`/`poc_gate.py` 已是 asyncio；台账/README 只陈述事实未写为何不能 async。**需拍板**：甲 改 `asyncio.start_server` + 既有 `UinputControlClient` + `create_subprocess_exec`（符合约束，删重复客户端，约 300 行重写）/ 乙 保留同步、台账「偏离」段写明理由并经用户确认 / 丙 仅 HTTP 面换 asyncio、工具执行仍下沉线程。
+
+P2：
+6. `agent.py:694,653-657`：`hmac.compare_digest` 直接比较 str（sidecar 比较 UTF-8 bytes），Bearer 含非 ASCII 抛 `TypeError`、深层嵌套 JSON 抛 `RecursionError`，均未捕获、连接无响应断连（前者无需正确 token 即可触发）。修复：比较前 `.encode("utf-8")`；except 增补 `RecursionError`；补两条用例。
+7. `wire_models.py:834-885` × `agent.py:668-685`：沙盒 `InvokeRequestModel`/`InvokeResponseModel` 生产零引用，handler 手拼裸 dict 响应——漂移门看护的不是实际 wire 出口；工具名/路径常量在后端 `wechat_gui_client.py:50-65` 另有一份字符串镜像、五工具结果字段只在两树逻辑代码里，均未入门禁（约束 5/18）。修复：handler 改用 `InvokeResponseModel(...).to_wire()`；五工具结果补 Model Class；工具名与路径常量行入漂移门。
+8. 死代码（约束 2.2/15.1）：`uinputd.py:650-683` `SyncUinputControlClient.emit_key/emit_move/emit_click`（零引用、覆盖 0）、`wire_models.py:632` `WECHAT_GUI_AGENT_TOOLS`、`wechat_gui_runner.py:395` `WECHAT_GUI_CHANNEL`、`wechat_gui_client.py:189` `probe_health` 与 `:307` `click`（仅测试用）、`wechat_gui_runner.py:57` 把导入常量列入 `__all__`（re-export）。
+9. 文档与代码不符（约束 7/15.4）：`docker/wechat-gui/README.md:386-394` 仍写「门阶段不产生 wire 契约、不接后端」且承诺的群聊区分/重名消歧/键迁移未实现；`README.md:262-268` compose 生产启动未导出 `WECHAT_GUI_AGENT_TOKEN_FILE_SECRET`（照此操作 agent 用仓库公开占位 token），全文未说明 `WECHAT_GUI_AGENT_TOKEN` 明文 env 优先于文件；`channels.md:108-109,113` 缺省 no-op 与停机链漏 GUI 微信、`:1287`「缺字段」过誉、`:1344` 联系人 JSON 无示例无字段表、`:1255` 语义不通；`LEDGER.md:102` main 仍写 `215317c`、`:193` 漂移门写 38 项（实为 41）、`:2578` 沙盒覆盖 93.96%（实测 94.08%）、`:2605-2606` 称全量门禁「由主 Agent 执行」但同提交已含 `r4-6b-a6ca265f` 证据且未记提交号。
+
+Live 前风险（Live 阶段验证）：`open_chat` 在 Ctrl+F 后立即粘贴再回车无稳定等待（焦点未切到搜索框时备注名会被当作消息发进当前会话，后端标题校验拦不住）；标题区域取顶部 140px 首次像素变化而搜索框回显的正是备注名（VLM 可能把搜索框文字读成标题）；`is_self` 全靠 VLM 判定，误判即自回声。
+
+流程观察：任务书 A1–D17 原文未落仓库，Oracle 无法逐字出具覆盖表——后续任务书要点应写入台账或 `docs/plans/`。
+修复顺序：P1 1/2（各一处改动 + 一条用例）→ P1 3 共享锁 → P1 4 待拍板后改（提示词变更需上调 byte-lock 版本）→ P1 5 待拍板 → P2 6/7/8 一起收 → P2 9 文档对齐 + 台账补 verify-slice 记录与提交号 → 重跑 `verify-slice` 出新证据后再推送。复现用例与已验证补丁副本在 `/tmp/opencode/audit/patched_copy/`（仓库外）。
+
+**修复 A（Oracle 深审 P1-1 / P1-2 / P1-3 / P1-4 与 P2-8 / P2-9 根修；只记事实，不复审结论）**
+
+- 入站截图：`_last_screenshot_sha` 仅在视觉解析成功且标题校验通过后登记；
+  瞬时 `LLM_CALL_FAILED` 不登记，同画面下一轮重新解析。标题不一致（skip /
+  fail 两分支）复位共享窗口目标并丢弃未接受画面的 sha，下一轮重新
+  `open_chat`。
+- 单窗口互斥：装配处建一把 `asyncio.Lock` 与一份 `WechatGuiWindowState`，
+  同实例注入 runner 与出站适配器；runner 仅页面读写段持锁，
+  `handle_inbound` 在锁外；适配器「校验 → type_text → enter」全程持锁。
+- 去重改为**会话水位**（新 Unit `wechat_gui_watermark.py`）：尾部重叠最大 k
+  + 末次出现定位；首帧 / 目标首次出现 / 无匹配 / 超出保留长度只建基线；
+  基线长度 = `WECHAT_GUI_MAX_MESSAGES_PER_POLL`；水位在投递尝试之后落基线
+  （失败不回退）。删除时间桶常量、`DedupWindow` 与旧去重键用例；
+  `VlmReadResultModel.messages` 与每条消息字段改必填。
+- 提示词：时间字段改为「尽力读取界面相对时间，读不出填 0」，`ts_ms` 仍为
+  整数；`WECHAT_GUI_PROMPTS_VERSION` / 任务书版本 1.0.0 → 1.1.0，byte-lock
+  摘要同步更新（仅任务书模板变更）。
+- 死代码 / 接线：删 `WECHAT_GUI_CHANNEL`、`__all__` re-export、客户端
+  `click` 方法与 `WECHAT_GUI_TOOL_CLICK`；`probe_health` 接入装配期
+  `/health` 探测（不可达记录并跳过，不抛出）。
+- 命令 + 退出码：`cd backend && pixi run pytest
+  src/tests/unit/test_wechat_gui_*.py
+  src/tests/unit/test_app_wechat_gui_channels_lifespan.py --asyncio-mode=auto`
+  → 0（76 passed）；`pixi run mypy src/packages/harness/channels/wechat_gui/
+  src/app/main.py` → 0（9 source files）；`pixi run ruff check`（同面 + 测试
+  基建）→ 0。
+- 变异矩阵（逐条守卫实测红）：sha 登记移回解析前 → 2 红；标题不一致不复位
+  目标 → 2 红；runner 不共享锁 → 2 红；适配器不共享锁 → 2 红；水位「末次
+  出现」改「首次出现」→ 1 红；移除超出保留长度重置 → 1 红；移除装配期
+  `/health` 探测跳过 → 1 红。
+
+**修复 B（Oracle 深审 P1-5 / P2-6 / P2-7 / P2-8 / P2-9 的沙盒与跨树部分根修；只记事实，不复审结论）**
+
+- P1-5（方案甲，全 asyncio）：`docker/wechat-gui/src/wechat_gui_poc/agent.py`
+  整体改写——`asyncio.start_server` + 手写最小 HTTP/1.1 解析（请求行 /
+  请求头 / 有界 `Content-Length` / 每连接一请求、`Connection: close`）；
+  解析器拆为纯函数 `parse_http_request(bytes) → ParsedHttpRequest`；
+  工具执行复用既有异步 `UinputControlClient`，截图 / 剪贴板改
+  `asyncio.create_subprocess_exec`（argv、无 shell、有界超时），
+  `open_chat` 有界等待改 `asyncio.sleep`；`/invoke` 工具执行由一把
+  `asyncio.Lock` 串行化（`/health` 不占锁）；CLI 改 `asyncio.run`。
+  `uinputd.py` 删除 `SyncUinputControlClient` 及其 `emit_*`。
+- P2-6：Bearer 比较前转 UTF-8 字节（非 ASCII 不再 `TypeError`）；`json.loads`
+  的 except 增补 `RecursionError`（深层嵌套 → 422）；handler 顶层兜底任何
+  未预期异常 → 受控 500 JSON（不再无响应断连）。守卫：非 ASCII Bearer →
+  401；深层嵌套 → 422；工具内未预期异常 → 恒 200 `ok=false`；handler
+  顶层异常 → 500。
+- P2-7：沙盒 `wire_models.py` 新增
+  `ScreenshotResultModel` / `ClickResultModel` / `TypeTextResultModel` /
+  `PressKeyResultModel` / `OpenChatResultModel`（`OpenChatResultModel` 含
+  `title_changed`：截止内未变化为 false，后端仍以视觉标题校验 fail-closed
+  落定）与 `WECHAT_GUI_HEALTH_PATH` / `WECHAT_GUI_INVOKE_PATH` /
+  `WECHAT_GUI_TOOL_*` 模块级 `Final` 常量；handler 改用
+  `InvokeRequestModel.from_wire` 解码与 `InvokeResponseModel(...).to_wire()`
+  序列化。后端 `wechat_gui_wire_models.py` 逐字镜像五结果模型与七常量行；
+  `wechat_gui_client.py` 删除本地字符串镜像、改引用镜像常量并用镜像
+  Result Model 解码 `result`（字段缺失 / 类型错 → `CHANNEL_API_ERROR`）。
+  漂移门 `scripts/check_sandbox_dtos_drift.py` 纳入结果模型块与常量行，
+  实跑 53 项一致（台账 `:193` 已同步）。
+- P2-8：删除 `wire_models.py` 的 `WECHAT_GUI_AGENT_TOOLS`（五工具名常量
+  已替代其作用）；随 P1-5 删除同步控制面客户端。
+- P2-9：`docker/wechat-gui/README.md` 会话键节改实现态（指向
+  `docs/backend/channels.md`，如实写群聊单会话 / 群聊个人区分 / 重名消歧 /
+  备注变更键迁移未实现）；compose 生产启动补
+  `WECHAT_GUI_AGENT_TOKEN_FILE_SECRET` 导出步骤与「明文 env 优先于文件」
+  说明；agent 节补 async 架构、401/404/413/422/500、`title_changed` 与超时
+  语义、剪贴板粘贴后不清空与 x11vnc clipboard 同步面；删同步客户端描述；
+  测试面表同步。`docs/backend/channels.md` 沙盒相关行（agent 面、结果字段、
+  常量来源、测试面）同步。
+- 命令 + 退出码：`cd docker/wechat-gui && pixi run tests-unit` → 0（150
+  passed；总覆盖率 92.72%；agent 93%、wire_models 92%）；`pixi run lint`
+  → 0；`pixi run typecheck` → 0（7 源文件）。`cd backend && pixi run pytest
+  src/tests/unit/test_wechat_gui_wire_models.py
+  src/tests/unit/test_wechat_gui_client.py
+  src/tests/unit/test_wechat_gui_adapter.py --asyncio-mode=auto` → 0（22
+  passed）；`pixi run python ../scripts/check_sandbox_dtos_drift.py` → 0
+  （全部 53 项契约一致）；改动的后端 wire / client / 两测试文件
+  `pixi run mypy` → 0、`pixi run ruff check` → 0。
+- 变异矩阵（逐条守卫实测红）：移除 `/invoke` 锁 → 串行化用例 1 红；Bearer
+  改回 str 比较 → 非 ASCII 用例 1 红；移除 `RecursionError` → 深层嵌套
+  用例 1 红（500）；移除 handler 顶层兜底 → 受控 500 用例 1 红（断连）；
+  移除 413 上限 → 解析矩阵 1 红；沙盒 `ScreenshotResultModel.width` 改
+  `float` → 漂移门 exit 1；后端 `title_changed` 缺省化 → 客户端用例 1 红；
+  恢复 `WECHAT_GUI_AGENT_TOOLS` → 死代码用例 1 红。
+- 未动修复 A 的后端文件：`wechat_gui_runner.py` / `wechat_gui_adapter.py` /
+  `wechat_gui_models.py` / `wechat_gui_prompts.py` / `wechat_gui_reader.py` /
+  `wechat_gui_watermark.py` / `app/main.py`。
+
+**最终树验证（`36e3449d` 树）**
+
+- 命令 + 退出码：`cd backend && VITEST_MAX_WORKERS=6 pixi run verify-slice
+  -- --with-seekdb --with-frontend --slice r4-6b-fix` → 0，10/10 PASS：
+  tests-all=3551 / coverage-gates=24 组 / lint / typecheck=224 / gates /
+  tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 /
+  frontend-lint / frontend-build；证据
+  `docs/evidence/r4-6b-fix-36e3449d.json`（sha8=`36e3449d`，779 文件）。
+- 沙盒 150 passed / 92.72%；漂移门 53 项一致；红探针 36→37（新增
+  `wechat-gui-watermark-removal`）；断言基线 233/9763/744 → 235/9832/754
+  （并入 `test_wechat_gui_watermark.py` 与 `test_wechat_gui_window_mutex.py`）。
+
+
+**修复 C（Oracle 二轮 P1/P2 根修：标题不一致退避 / 停采 / 沙盒 Content-Length 边界 / 水位代价文档；只记事实，不复审结论）**
+
+- 标题不一致退避（`skip`）：`_poll_once` 在本轮标题不一致计数增长时把整轮计为失败（`CHANNEL_API_ERROR`），`skip` 与 `fail` 走同一指数退避序列（基数 2s、封顶 60s）；此前 `skip` 只按轮询间隔裸转。
+- 停采（进程生命周期）：新增逐目标 `_title_mismatch_streak` 与 `_TITLE_MISMATCH_DISABLE_AFTER=3`；连续 3 轮不一致后该目标退出轮询（不再 `open_chat` / 截图 / 解析），`disabled_targets` 暴露观测面，重启恢复。**`fail` 语义变化**：由「封顶退避无限重试」变为「3 轮后停采」——停采对 `skip` 与 `fail` 同样生效；需要无限重试只能重启进程（取舍：持续不一致时限制 `open_chat` + VLM 成本）。
+- 沙盒 `Content-Length` 边界：`parse_http_request` / 有界读取对非 ASCII 数字（`²`）、缺失、重复不一致、负数、超上限的 `Content-Length` 及请求头/体超限统一 422（形态非法）/ 413（超限），不再经 `int()` 抛 `ValueError` 落 500 或断连。
+- 水位代价文档：`wechat_gui_watermark.py` 模块 docstring 与 `docs/backend/channels.md` 按只读探针实测改写——仅重叠窗口内基线尾部整段为同一指纹时吞同指纹新增（`[好]→[好,好]` 等）；部分重叠仍投递（`[M1,好]→[M1,好,好]` 投递一条）；上滚后滚回无重叠按视图重置、仍有重叠时滚走期间位于屏底的已投递消息会再次入站。算法未改（收紧判据会把合法部分重叠新增变丢失）；补用例 `test_scroll_up_then_down_redelivers_scrolled_off_tail` 钉住已知重投代价。
+- 命令 + 退出码：`cd docker/wechat-gui && pixi run tests-unit` → 0（151 passed；总覆盖率 92.74%）；`pixi run lint` → 0；`pixi run typecheck` → 0（7 源文件）；`cd backend && pixi run pytest src/tests/unit/test_wechat_gui_*.py --asyncio-mode=auto` → 0（78 passed）；改动文件 `pixi run mypy` / `pixi run ruff check` → 0。
+- 变异矩阵（逐条守卫实测红）：移除轮次失败注入（`skip` 裸转）→ 退避序列用例 1 红；移除停采跳过分支 → 停采用例 1 红（第 4 轮仍 `open_chat`）；`_TITLE_MISMATCH_DISABLE_AFTER` 改 4 → 停采用例 2 红；沙盒移除非 ASCII `Content-Length` 校验 → `test_non_ascii_content_length_is_422_not_500` 1 红；移除请求体上限 → `test_oversized_body_is_413_before_read` 1 红；水位收紧为整段后缀匹配 → `test_duplicate_text_tail_delivers_one` 1 红（合法新增变丢失）。
+
+**修复 C 最终树验证（`162f863c` 树，提交 `e1db542`）**：`cd backend && VITEST_MAX_WORKERS=6 pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-6b-fix` → 0，10/10 PASS：tests-all=3555 / coverage-gates=24 组 / lint / typecheck=224 / gates / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build；证据 `docs/evidence/r4-6b-fix-162f863c.json`（sha8=`162f863c`，779 文件）；沙盒 151 passed / 92.74%；同步测试棘轮通过；断言基线未变（新增断言不拦截）。上一行「最终树验证」记录的是修复 C 之前的 `36e3449d` 树，现为历史。
+
+**修复 D 最终树验证（`9f45be4d` 树）**：同上命令 → 0，10/10 PASS：tests-all=3557 / coverage-gates=24 组 / lint / typecheck=224 / gates / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build；证据 `docs/evidence/r4-6b-fix-9f45be4d.json`（sha8=`9f45be4d`，779 文件）。修复 D = Oracle 三审的 2×P2：水位代价文档按只读探针实测改写（仅整段同指纹才吞；上滚后滚回仍有重叠时屏底已投递消息会再次入站）并补用例 `test_scroll_up_then_down_redelivers_scrolled_off_tail`；「修复 C」改动面条目与 `fail` 语义变更入台账；停机汇总日志加 `disabled_targets`；补用例 `test_title_mismatch_fail_disables_target_after_threshold`。水位算法与停采行为未改。上一行 `162f863c` 树现为历史。
 
 ## 6. 遗留与部署台账（非阻塞）
 

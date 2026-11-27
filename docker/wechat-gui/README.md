@@ -1,10 +1,14 @@
-# wechat-gui — GUI 微信实验轨沙盒（PoC 门阶段）
+# wechat-gui — GUI 微信实验轨沙盒
 
 GUI 微信的**隔离执行面**：容器内以 Xorg（dummy 显卡）+ uinput 虚拟输入
 设备托管一个可截图、可注入键鼠的图形会话，经 x11vnc / noVNC 供人登录与
-观察。本树与后端**零代码共享**，是独立 pixi 工程 / 独立镜像 / 独立 CI
-job；本阶段只交付 **PoC 门制品与本机栈实测**，微信通道本身（收发、会话
-键、人格路由）在过门后才实现。
+观察；容器内的 agent 提供仅回环的 HTTP 工具面（``GET /health`` /
+``POST /invoke``），供后端通道做截图、解析、点击、输入与会话切换。本树与
+后端**零代码共享**（wire 契约各持一份文本镜像，由仓库根漂移门禁看护），
+是独立 pixi 工程 / 独立镜像 / 独立 CI job。
+
+微信客户端**不在镜像内**：真实截图解析与 ``open_chat`` 准确率、部署机
+udev 复验均待统一 Live 阶段验证；本树开发 / 测试只到假数据层。
 
 主轨与实验轨的关系（已拍板）：企微智能机器人长连接是**生产主轨**；
 GUI 微信是**实验轨**，用于企微覆盖不到的个人微信场景。实验轨不通过
@@ -17,17 +21,19 @@ docker/wechat-gui/
 ├── pixi.toml                 # 独立 pixi 项目（Python 3.12 + dev 工具 + tasks）
 ├── pyproject.toml            # 依赖单一数据源（纯 stdlib + Pillow；dev extras）
 ├── Dockerfile                # debian:bookworm-slim（tag+digest 固定）加固镜像
-├── entrypoint.sh             # 入口编排（uinputd → Xorg → x11vnc → noVNC）
+├── entrypoint.sh             # 入口编排（uinputd → Xorg → agent → x11vnc → noVNC）
 ├── src/wechat_gui_poc/
 │   ├── uinput_devices.py     # uinput ioctl 编码 / 设备创建 / 事件注入 / 节点发现
-│   ├── uinputd.py            # 设备持有守护进程 + Unix socket 控制面 + 客户端
-│   ├── wire_models.py        # 数据模型与 wire 契约（控制面请求/响应、设备制品、门报告）
+│   ├── uinputd.py            # 设备持有守护进程 + Unix socket 控制面 + 异步客户端
+│   ├── wire_models.py        # 数据模型与 wire 契约（控制面、agent HTTP、设备制品、门报告）
+│   ├── agent.py              # 仅回环 HTTP 工具面（Bearer 鉴权 + 五工具）
 │   ├── xorg.py               # Xorg 静态配置生成（evdev + dummy）
 │   └── poc_gate.py           # 七步 PoC 门 + 解析 / 校验 / 单行 JSON 报告
-├── src/tests/unit/           # hermetic 异步单测（零真实 X / 零真实 uinput）
+├── src/tests/unit/           # hermetic 异步单测（零真实 X / 零真实 uinput / 零外网）
 ├── poc/run_stack_poc.sh      # 宿主运行器（构建 + 特权容器内跑门 + 证据落盘）
 ├── udev/90-wechat-gui-ignore.rules  # 宿主 udev 参考件（LIBINPUT 忽略虚拟设备）
-└── vnc.pass.default          # compose 缺省 VNC 密码文件（开发占位，生产覆盖）
+├── vnc.pass.default          # compose 缺省 VNC 密码文件（开发占位，生产覆盖）
+└── agent.token.default       # compose 缺省 agent Bearer token（开发占位，生产覆盖）
 ```
 
 ## 架构与数据流
@@ -40,9 +46,43 @@ entrypoint（root）
   │     ├─ 事件节点 mknod（容器无 udev）并 chown 给 wechat 用户
   │     └─ 控制面 /run/wechat-gui/control.sock（JSON 行：ping/key/move/click/shutdown）
   ├─ Xorg :99（wechat 用户，dummy 1280x800x24，AutoAddDevices 关闭）
+  ├─ agent 127.0.0.1:8090（wechat 用户，asyncio HTTP；Bearer 鉴权）
+  │     ├─ GET /health（无鉴权存活面）
+  │     └─ POST /invoke（五工具：screenshot / click / type_text / press_key / open_chat）
   ├─ x11vnc 5900（-forever -shared -passwdfile）
   └─ websockify/noVNC 6080（--web=/usr/share/novnc）
 ```
+
+### agent HTTP 工具面（仅回环，asyncio）
+
+agent 与同树 uinputd / 门脚本一致，全异步实现：``asyncio.start_server`` +
+手写最小 HTTP/1.1 解析（请求行 / 请求头 / 有界 ``Content-Length`` 读取），
+每连接一请求、响应后关闭（``Connection: close``）；HTTP 解析器是纯函数
+（bytes → 请求模型），单测直接覆盖边界。工具执行全程经 uinputd 既有异步
+``UinputControlClient``；截图 / 剪贴板用 ``asyncio.create_subprocess_exec``
+（argv 列表、无 shell、有界超时）。
+
+``POST /invoke`` 载荷 ``{"tool": "...", "arguments": {...}}``，
+``Authorization: Bearer <token>``（token 经文件挂载；比较前转 UTF-8 字节，
+非 ASCII 不抛错）。工具级失败恒 HTTP 200 携带
+``{"ok":false,"result":{},"error":"...","latency_ms":N}``；401（鉴权失败）/
+404（路径未知）/ 413（请求体超过 1 MiB）/ 422（请求形态非法，含深层嵌套
+JSON 的 ``RecursionError``）属传输层失败；handler 顶层未预期异常回受控 500
+JSON。``/invoke`` 的工具执行由一把进程内 ``asyncio.Lock`` 串行化（单窗口
+键序不交错），``/health`` 不占锁。
+
+``type_text`` 经剪贴板粘贴（覆盖中文；粘贴后不清空剪贴板，后续按键可复用
+同一 selection；x11vnc 的剪贴板同步面默认透传 X selection，观察窗口与容器
+内共享同一 clipboard）。``open_chat`` 为 Ctrl+F → 输入备注名 → Enter →
+有界等待标题区域变化，返回标题区域与全屏截图；结果携带 ``title_changed``
+——截止内未变化时为 false（不把「没变化」伪装成变化），后端仍以视觉标题
+校验为 fail-closed 落定前提。五工具结果字段与工具名 / 路径常量在
+``wire_models.py`` 定义，与后端
+``channels/wechat_gui/wechat_gui_wire_models.py`` 文本镜像，漂移由根门禁
+``scripts/check_sandbox_dtos_drift.py`` 看护（含结果模型块与常量行）。
+
+**Live 待验证**：真实微信界面上的截图解析准确率、``open_chat`` 命中率、
+中文输入法 / 字体 / 窗口管理器行为；本树单测只覆盖假数据层。
 
 关键机制（实现时的事实约束）：
 
@@ -238,10 +278,17 @@ Xorg 前等待安全态完成标记。两种宿主状态都实测过：
 ```bash
 cd docker
 export WECHAT_GUI_VNC_PASSWORD_FILE=/secure/wechat-gui-vnc.pass  # 真实密码文件
+export WECHAT_GUI_AGENT_TOKEN_FILE_SECRET=/secure/wechat-gui-agent.token  # 真实 agent token
 docker compose -f docker-compose.wechat-gui.yml up -d
 docker compose -f docker-compose.wechat-gui.yml logs -f wechat-gui
 docker compose -f docker-compose.wechat-gui.yml down
 ```
+
+> agent token：必须导出 ``WECHAT_GUI_AGENT_TOKEN_FILE_SECRET`` 指向真实
+> 令牌文件，并与后端 ``WECHAT_GUI_TOKEN`` 同值；不导出时 compose 会回落到
+> 仓库公开占位 ``agent.token.default``（只能用于开发）。容器内
+> ``WECHAT_GUI_AGENT_TOKEN`` 明文 env 优先于 token 文件（入口解析顺序：
+> 明文 → 文件），生产可用明文 env 覆盖文件内容。
 
 > 迁移：旧布局用 `docker compose --profile wechat-gui up -d wechat-gui`
 > 启动，容器属于 compose 项目 `docker`。升级前先 `docker rm -f wechat-gui`
@@ -255,8 +302,9 @@ docker run -d --name wechat-gui \
   --device-cgroup-rule "c 13:* rwm" \
   --cap-drop ALL --cap-add MKNOD --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add KILL \
   --security-opt no-new-privileges:true \
-  -p 127.0.0.1:5900:5900 -p 127.0.0.1:6080:6080 \
+  -p 127.0.0.1:8090:8090 -p 127.0.0.1:5900:5900 -p 127.0.0.1:6080:6080 \
   -v /secure/wechat-gui-vnc.pass:/run/secrets/wechat_gui_vnc_password:ro \
+  -v /secure/wechat-gui-agent.token:/run/secrets/wechat_gui_agent_token:ro \
   wechat-gui:0.1.0 serve
 ```
 
@@ -358,24 +406,38 @@ docker run -d --name wechat-gui \
   阶段评估。
 - 截图 / 点击坐标以 1280x800 为基准；客户端缩放策略在 Live 阶段固化。
 
-## 会话键设计预告（过门后接后端）
+## 会话键与后端接入（实现态）
 
-按已拍板的 **B 方案（P4）**：GUI 微信会话键 = **联系人备注名 + VLM 校验**。
-门阶段不产生 wire 契约、不接后端；R4-6b 落地时再定义：
+R4-6b 已把本树接入后端 GUI 微信实验轨通道；会话键 = **联系人备注名 +
+视觉校验**（详见 ``docs/backend/channels.md`` 的「GUI 微信实验轨」节与本
+README「与后端的关系」）。本树只提供「截图 + 键鼠注入 + 剪贴板」原语，
+不感知微信业务语义：
 
-- 入站会话从当前聊天窗口标题 / 联系人备注提取候选键，截图经视觉模型
+- 入站：后端从当前聊天窗口标题 / 联系人备注提取候选键，截图经视觉模型
   校验联系人身份后才落定（防止同名 / 改备注串会话）；
-- 出站按同一键定位会话窗口（必要时搜索切换）；
-- 群聊与个人会话区分、重名消歧、备注变更后的键迁移均在通道层实现；
-- 本树只提供「截图 + 键鼠注入 + 剪贴板」原语，不感知微信业务语义。
+- 出站：后端按同一键定位会话窗口（必要时搜索切换），``open_chat`` 后先
+  校验标题，不一致拒绝发送（fail-closed）；
+- **未实现边界（如实记录）**：群聊按单会话处理（``is_group_chat=False``）；
+  群聊 / 个人会话区分、重名消歧、备注变更后的键迁移均未实现，属通道层
+  后续扩展面；
+- wire 契约（三 wire 模型 + 五工具结果模型 + 工具名 / 路径常量）与后端
+  ``wechat_gui_wire_models.py`` 文本镜像，漂移由根门禁
+  ``scripts/check_sandbox_dtos_drift.py`` 看护。
 
 ## 安全边界
 
 - **镜像**：debian:bookworm-slim（digest 固定）；无微信客户端、无
-  编译工具链；`tini` 作 PID 1；HEALTHCHECK 同时探测 X 与 noVNC。
+  编译工具链；`tini` 作 PID 1；HEALTHCHECK 同时探测 X 与 agent ``/health``。
 - **运行期**：生产不 privileged；只映射 `/dev/uinput`（可选 `/dev/dri`）；
   `cap_drop ALL` + MKNOD/CHOWN/SETUID/SETGID/KILL；`no-new-privileges`；
   端口仅宿主回环。
+- **agent 凭据**：Bearer token 走文件（compose secret
+  ``wechat_gui_agent_token``，缺省占位 ``agent.token.default``），生产必须
+  经 ``WECHAT_GUI_AGENT_TOKEN_FILE_SECRET`` 指向真实文件并与后端
+  ``WECHAT_GUI_TOKEN`` 同值；``WECHAT_GUI_AGENT_TOKEN`` 明文 env 优先于
+  文件（开发期覆盖形态）。agent 只监听 ``127.0.0.1``，compose 仅映射宿主
+  回环。token 文件对运行用户不可读时入口复制到运行目录
+  （``wechat:wechat 0400``），两者都不可读即启动失败。
 - **凭据**：VNC 密码走文件（compose secret），且必须对**运行用户**
   （`wechat`）可读——推荐 `wechat:wechat 0400`；root 持有（如部署机生成的
   0400 root 文件）时由入口在运行期复制为 `/run/wechat-gui/vnc.pass`
@@ -401,7 +463,8 @@ docker run -d --name wechat-gui \
 | `src/tests/unit/test_uinput_devices.py` | ioctl 编号 / `uinput_user_dev` 结构体布局 / 能力注册序列 / sysfs 发现 / mknod / 事件字节 / 销毁幂等 |
 | `src/tests/unit/test_uinputd.py` | 控制面五命令解码为具体模型 / 非法载荷矩阵 / 设备信息落盘与读取 / 属主调整 / Unix socket 服务与客户端 / 探测字段不完整与类型非法 / CLI 接线 |
 | `src/tests/unit/test_poc_gate.py` | xdpyinfo / xinput / xev 解析 / 截图校验 / 命令执行与超时 / 步骤编排与跳过 / 报告与退出码 / 七个门步骤（临时 PATH 假命令）/ 单轮注入与 Motion·ButtonRelease 断言 / 注入失败 / 剪贴板回读不一致 / noVNC 非 200 |
-| `src/tests/unit/test_entrypoint_password.py` | 入口密码解析：运行用户可读直接使用 / 明文密码回退（0400）/ 明文优先于文件 / 两者不可读即失败 / 探针注入区分 setpriv 与调用方口径 |
+| `src/tests/unit/test_entrypoint_password.py` | 入口密码解析：运行用户可读直接使用 / 明文密码回退（0400）/ 明文优先于文件 / 两者不可读即失败 / 探针注入区分 setpriv 与调用方口径；agent token 解析同样矩阵 |
+| `src/tests/unit/test_agent.py` | wire 序列化与五工具结果模型解码 / 五工具参数模型 / HTTP 纯函数解析（413 / 422 边界）/ Bearer 鉴权（含非 ASCII）/ 工具执行串行化与 health 不占锁 / 五工具命令映射与 open_chat title_changed / 未预期异常 200 ok=false 与受控 500 / ImageMagick 与 xclip 异步子进程映射 / CLI |
 | `src/tests/unit/test_run_stack_poc.py` | 宿主会话探测 fail-closed：无套接字 / 仅 X11 套接字 / 多 X 会话 / Wayland 套接字与 `/run/user` 回落（临时 socket 根）；3 条 float 用例：同名残留 floating+新设备 attached 不判 SAFE 且不 touch / 首轮 ABSENT 次轮 RETRY 不结算 / 部分 SAFE+恒 RETRY 不结算；全部同名行 floating 连续两轮才 SAFE / xinput 列举失败不冒充 ABSENT / udev 正证据与无 udevadm 回落 / 起容器前残留设备拒绝 |
 | `src/tests/unit/test_xorg.py` | 静态 evdev 段 / dummy 屏幕 / 配置落盘 |
 
@@ -421,6 +484,10 @@ docker run -d --name wechat-gui \
 
 ## 与后端的关系（零代码共享）
 
-本阶段不产生 wire 契约、不引入后端依赖。过门后的通道实现（R4-6b）按
-沙盒树范式经独立传输面接后端；届时再评估是否加入 sandbox-drift 门
-（当前无镜像契约，故未纳入）。
+本树不 import 后端任何 Python 模块。唯一的跨树耦合点是 agent HTTP wire
+契约：``src/wechat_gui_poc/wire_models.py`` 与后端
+``backend/src/packages/harness/channels/wechat_gui/wechat_gui_wire_models.py``
+各持一份**文本镜像**，由仓库根 ``scripts/check_sandbox_dtos_drift.py``
+逐字比对（纳入既有 sandbox-drift 门禁项）。后端通道经
+``WechatGuiSandboxClient`` 访问本容器（共享 httpx + Bearer），视觉解析在
+后端侧完成（``look_at`` 角色回退链）。

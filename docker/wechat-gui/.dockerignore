@@ -9,4 +9,5 @@ coverage.json
 src/tests
 poc
 vnc.pass.default
+agent.token.default
 udev

@@ -495,27 +495,7 @@ class UinputControlClient:
         finally:
             writer.close()
             await writer.wait_closed()
-        if not line:
-            raise UinputError("控制面连接提前关闭")
-        try:
-            raw = json.loads(line.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise UinputError(f"控制面响应不是合法 JSON：{exc}") from exc
-        if not isinstance(raw, dict):
-            raise UinputError("控制面响应根节点必须是对象")
-        ok = raw.get("ok")
-        command = raw.get("command")
-        error = raw.get("error")
-        if not isinstance(ok, bool) or not isinstance(command, str):
-            raise UinputError("控制面响应缺少 ok / command 字段")
-        if error is not None and not isinstance(error, str):
-            raise UinputError("控制面响应 error 字段类型非法")
-        return CommandOutcome(
-            command=command,
-            ok=ok,
-            error=error,
-            details=_decode_ping_details(raw),
-        )
+        return decode_command_outcome(line)
 
     async def ping(self) -> CommandOutcome:
         """健康探测。
@@ -567,6 +547,42 @@ class UinputControlClient:
             控制面响应。
         """
         return await self.send(ShutdownRequest())
+
+
+def decode_command_outcome(line: bytes) -> CommandOutcome:
+    """解码控制面单行响应（控制面客户端唯一解析面）。
+
+    Args:
+        line: 原始响应字节行（含换行符）。
+
+    Returns:
+        控制面响应模型。
+
+    Raises:
+        UinputError: 连接提前关闭 / JSON 非法 / 根节点非对象 / 字段缺失或
+            类型不符。
+    """
+    if not line:
+        raise UinputError("控制面连接提前关闭")
+    try:
+        raw = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise UinputError(f"控制面响应不是合法 JSON：{exc}") from exc
+    if not isinstance(raw, dict):
+        raise UinputError("控制面响应根节点必须是对象")
+    ok = raw.get("ok")
+    command = raw.get("command")
+    error = raw.get("error")
+    if not isinstance(ok, bool) or not isinstance(command, str):
+        raise UinputError("控制面响应缺少 ok / command 字段")
+    if error is not None and not isinstance(error, str):
+        raise UinputError("控制面响应 error 字段类型非法")
+    return CommandOutcome(
+        command=command,
+        ok=ok,
+        error=error,
+        details=_decode_ping_details(raw),
+    )
 
 
 def _decode_ping_details(payload: Mapping[str, object]) -> PingDetails | None:

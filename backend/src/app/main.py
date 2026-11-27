@@ -144,6 +144,11 @@ from packages.harness.channels.sms_forwarder.sms_models import parse_owner_numbe
 from packages.harness.channels.sms_forwarder.sms_runner import SmsForwarderWebhookRunner
 from packages.harness.channels.telegram.tg_client import TelegramClient
 from packages.harness.channels.telegram.tg_runner import TelegramChannelRunner
+from packages.harness.channels.wechat_gui.wechat_gui_adapter import WechatGuiChannelAdapter
+from packages.harness.channels.wechat_gui.wechat_gui_client import WechatGuiSandboxClient
+from packages.harness.channels.wechat_gui.wechat_gui_models import WechatGuiWindowState
+from packages.harness.channels.wechat_gui.wechat_gui_reader import WechatGuiReader
+from packages.harness.channels.wechat_gui.wechat_gui_runner import WechatGuiChannelRunner
 from packages.harness.channels.wecom.wecom_client import WeComLongConnectionClient
 from packages.harness.channels.wecom.wecom_runner import WeComChannelRunner
 from packages.harness.channels.whatsapp.whatsapp_adapter import WhatsAppAdapter
@@ -558,7 +563,8 @@ async def _startup_browser_sidecar(app: FastAPI, settings: Settings) -> None:
 
 
 async def _startup_channels(app: FastAPI, settings: Settings) -> None:
-    """装配通道层（Telegram 长轮询 runner / QQ 适配器 / 企微长连接 / 抖音 web runner）。
+    """装配通道层（Telegram 长轮询 runner / QQ 适配器 / 企微长连接 / 抖音 web
+    runner / GUI 微信实验轨）。
 
     装配链（单一 ChannelRouter 服务全部通道——会话按 ``channel:chat_id``
     维度天然隔离）：任一通道启用时先装配 rhythm / intent 会话性组件
@@ -570,7 +576,9 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     ``router.register_adapter`` + 启动校验 get_login_info + QqWebhookRunner
     （有界入站队列，托管后台任务）；企微启用时装配长连接
     runner；抖音 web 启用时装配轮询 runner（消费浏览器 sidecar 底座——底座
-    未就绪即跳过该通道，见 ``_startup_douyin_channel``）；SmsForwarder
+    未就绪即跳过该通道，见 ``_startup_douyin_channel``）；GUI 微信启用时装配
+    沙盒客户端 + 视觉解析 + 轮询 runner + 出站适配器（token 缺失即跳过该
+    通道，见 ``_startup_wechat_gui_channel``）；SmsForwarder
     启用时装配仅入站适配器 + webhook 有界队列 runner（出站恒丢弃，见
     ``SmsForwarderAdapter``）；WhatsApp Cloud API 启用时装配文本出站
     适配器 + webhook 有界队列 runner（24 小时客户服务窗状态由二者共享，
@@ -623,6 +631,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     app.state.channels_wecom_task = None
     app.state.channels_douyin_runner = None
     app.state.channels_douyin_task = None
+    app.state.channels_wechat_gui_runner = None
+    app.state.channels_wechat_gui_task = None
     app.state.channels_sms_forwarder_runner = None
     app.state.channels_sms_forwarder_task = None
     app.state.channels_whatsapp_runner = None
@@ -635,6 +645,7 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
     qq = settings.channels.qq
     wecom = settings.channels.wecom
     douyin = settings.channels.douyin
+    wechat_gui = settings.channels.wechat_gui
     sms_forwarder = settings.channels.sms_forwarder
     whatsapp = settings.channels.whatsapp
     if (
@@ -642,12 +653,14 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
         and not qq.enabled
         and not wecom.enabled
         and not douyin.enabled
+        and not wechat_gui.enabled
         and not sms_forwarder.enabled
         and not whatsapp.enabled
     ):
         logger.info(
             "通道层未启用（TELEGRAM_ENABLED / QQ_ENABLED / WECOM_ENABLED / "
-            "DOUYIN_ENABLED / SMS_FORWARDER_ENABLED / WHATSAPP_ENABLED 均关闭）"
+            "DOUYIN_ENABLED / WECHAT_GUI_ENABLED / SMS_FORWARDER_ENABLED / "
+            "WHATSAPP_ENABLED 均关闭）"
             "——跳过装配"
         )
         return
@@ -895,6 +908,8 @@ async def _startup_channels(app: FastAPI, settings: Settings) -> None:
         await _startup_wecom_channel(app, settings, router, manager.get_http_client())
     if douyin.enabled:
         await _startup_douyin_channel(app, settings, router)
+    if wechat_gui.enabled:
+        await _startup_wechat_gui_channel(app, settings, router, manager.get_http_client())
     app.state.channels_router = router
 
 
@@ -1055,10 +1070,105 @@ async def _startup_douyin_channel(
     )
 
 
+async def _startup_wechat_gui_channel(
+    app: FastAPI,
+    settings: Settings,
+    router: ChannelRouter,
+    http_client: httpx.AsyncClient,
+) -> None:
+    """装配 GUI 微信实验轨通道（token 缺失 / 配置不变式失败即跳过该通道）。
+
+    装配链：``WechatGuiSandboxClient``（共享池 + Bearer token）→ 装配期
+    ``/health`` 探测 → ``WechatGuiReader``（look_at 角色回退链——视觉解析）
+    → 单窗口共享 ``asyncio.Lock`` + ``WechatGuiWindowState`` →
+    ``WechatGuiChannelRunner``（轮询 / 变化检测 / 标题校验 / 会话水位 / 路由）
+    + ``WechatGuiChannelAdapter``（出站：标题校验后输入并发送）→
+    ``router.register_adapter(WECHAT_GUI, adapter)`` →
+    ``create_task(runner.run())`` + ``background_task_manager`` 托管。
+
+    **失败语义（与企微 / 抖音同范式）**：token 为空 / 配置不变式失败 /
+    沙盒 ``/health`` 不可达时记 ERROR 并**跳过该通道**——GUI 微信是实验轨，
+    其配置 / 沙盒时序瑕疵不应连带杀掉已在工作的其他通道；装配期探测只做
+    一次，运行期瞬时不可达仍由 runner 的指数退避消化。
+
+    Args:
+        app: 待装配的 FastAPI 应用（``channels_wechat_gui_runner`` /
+            ``channels_wechat_gui_task`` 槽位上挂）。
+        settings: 生效 Settings（读取 ``settings.channels.wechat_gui`` 分节）。
+        router: 通道路由器（注册出站适配器）。
+        http_client: 共享 HTTP 客户端（agent 请求——不私建连接）。
+    """
+    wechat_gui = settings.channels.wechat_gui
+    token = wechat_gui.token.get_secret_value().strip()
+    if not token:
+        logger.error(
+            "GUI 微信通道未装配（WECHAT_GUI_TOKEN 为空——其余通道继续工作）"
+        )
+        return
+    try:
+        client = WechatGuiSandboxClient(
+            http_client,
+            base_url=wechat_gui.sandbox_url,
+            token=token,
+            request_timeout_seconds=wechat_gui.request_timeout_seconds,
+        )
+        if not await client.probe_health():
+            logger.error(
+                "GUI 微信通道未装配（sandbox /health 不可达——其余通道继续工作）: "
+                "sandbox_url={}",
+                wechat_gui.sandbox_url,
+            )
+            return
+        reader = WechatGuiReader(
+            vlm_entry=wechat_gui.vlm_entry,
+            max_messages=wechat_gui.max_messages_per_poll,
+        )
+        gui_lock = asyncio.Lock()
+        window_state = WechatGuiWindowState()
+        runner = WechatGuiChannelRunner(
+            client=client,
+            reader=reader,
+            router=router,
+            contacts=wechat_gui.contacts,
+            poll_interval_seconds=wechat_gui.poll_interval_seconds,
+            backoff_base_seconds=wechat_gui.backoff_base_seconds,
+            backoff_max_seconds=wechat_gui.backoff_max_seconds,
+            max_messages_per_poll=wechat_gui.max_messages_per_poll,
+            title_mismatch_action=wechat_gui.title_mismatch_action,
+            gui_lock=gui_lock,
+            window_state=window_state,
+        )
+        adapter = WechatGuiChannelAdapter(
+            client=client,
+            reader=reader,
+            gui_lock=gui_lock,
+            window_state=window_state,
+        )
+    except ValueError as exc:
+        logger.error(
+            "GUI 微信通道未装配（配置不变式失败——其余通道继续工作）: {}", exc
+        )
+        return
+    router.register_adapter(ChannelType.WECHAT_GUI, adapter)
+    task = asyncio.create_task(runner.run(), name="wechat-gui-channel-runner")
+    background_task_manager.register(task)
+    task.add_done_callback(_log_channel_task_termination)
+    app.state.channels_wechat_gui_runner = runner
+    app.state.channels_wechat_gui_task = task
+    logger.info(
+        "GUI 微信实验轨通道 runner 已启动（managed background task）: sandbox_url={}, "
+        "targets={}, poll_interval_s={}",
+        wechat_gui.sandbox_url,
+        runner.targets,
+        wechat_gui.poll_interval_seconds,
+    )
+
+
 async def _shutdown_channels(app: FastAPI) -> None:
     """停机通道层（先于公共池——通道组件消费共享 HTTP client；幂等）。
 
-    停机链（telegram / QQ / 企微 / 抖音 / SmsForwarder / WhatsApp runner）：
+    停机链（telegram / QQ / 企微 / 抖音 / GUI 微信 / SmsForwarder / WhatsApp
+    runner）：
     ``request_stop``（优雅）→ bounded 等待任务收尾 → 超时 ``cancel`` 兜底
     （在途长轮询被取消——offset 已逐批持久化，重启安全）。QQ /
     SmsForwarder / WhatsApp runner 为有界队列消费面——``request_stop`` 后
@@ -1090,6 +1200,12 @@ async def _shutdown_channels(app: FastAPI) -> None:
     douyin_task: asyncio.Task[None] | None = getattr(
         app.state, "channels_douyin_task", None
     )
+    wechat_gui_runner: WechatGuiChannelRunner | None = getattr(
+        app.state, "channels_wechat_gui_runner", None
+    )
+    wechat_gui_task: asyncio.Task[None] | None = getattr(
+        app.state, "channels_wechat_gui_task", None
+    )
     sms_runner: SmsForwarderWebhookRunner | None = getattr(
         app.state, "channels_sms_forwarder_runner", None
     )
@@ -1110,6 +1226,8 @@ async def _shutdown_channels(app: FastAPI) -> None:
     app.state.channels_wecom_task = None
     app.state.channels_douyin_runner = None
     app.state.channels_douyin_task = None
+    app.state.channels_wechat_gui_runner = None
+    app.state.channels_wechat_gui_task = None
     app.state.channels_sms_forwarder_runner = None
     app.state.channels_sms_forwarder_task = None
     app.state.channels_whatsapp_runner = None
@@ -1123,6 +1241,9 @@ async def _shutdown_channels(app: FastAPI) -> None:
     await _stop_managed_channel_task(qq_runner, qq_task, label="QQ 通道")
     await _stop_managed_channel_task(wecom_runner, wecom_task, label="企微长连接通道")
     await _stop_managed_channel_task(douyin_runner, douyin_task, label="抖音 web 通道")
+    await _stop_managed_channel_task(
+        wechat_gui_runner, wechat_gui_task, label="GUI 微信实验轨通道"
+    )
     await _stop_managed_channel_task(
         sms_runner, sms_task, label="SmsForwarder 通道"
     )

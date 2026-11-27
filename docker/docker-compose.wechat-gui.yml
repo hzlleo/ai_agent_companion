@@ -23,7 +23,8 @@
 #   - cap_drop ALL + 仅补 MKNOD（容器内 /dev/input 事件节点无 udev，
 #     由 uinputd 按 sysfs dev 号 mknod）、CHOWN（把节点交给运行用户）
 #     与 SETUID/SETGID/KILL（runuser 降权 / 清理降权子进程）；
-#   - 端口仅回环：5900（x11vnc）/ 6080（noVNC）；VNC 密码经文件 secret；
+#   - 端口仅回环：8090（agent）/ 5900（x11vnc）/ 6080（noVNC）；VNC 密码
+#     与 agent Bearer token 均经文件 secret；
 #   - 入口以 root 启动、Xorg / x11vnc / websockify 降权到 wechat 用户；
 #   - no-new-privileges + 资源限额（Xorg / VNC 风暴隔离）；
 #   - VNC 密码文件必须对运行用户 wechat 可读（推荐 wechat:wechat 0400；
@@ -47,9 +48,12 @@ services:
     environment:
       # x11vnc 密码文件（compose secret 挂载点；文件内容为单行密码）。
       WECHAT_GUI_VNC_PASSWDFILE: /run/secrets/wechat_gui_vnc_password
+      WECHAT_GUI_AGENT_TOKEN_FILE: /run/secrets/wechat_gui_agent_token
+      WECHAT_GUI_AGENT_PORT: "8090"
       WECHAT_GUI_DISPLAY: ":99"
     secrets:
       - wechat_gui_vnc_password
+      - wechat_gui_agent_token
     devices:
       # uinput 主设备（生产不 privileged 时的唯一必需设备映射）。
       - /dev/uinput:/dev/uinput
@@ -60,7 +64,8 @@ services:
       # 必须显式放行该字符设备类别（映射 /dev/uinput 只放行 10:223）。
       - "c 13:* rwm"
     ports:
-      # 仅回环暴露：宿主浏览器访问 noVNC；VNC 直连亦仅本机。
+      # 仅回环暴露：后端 agent 工具面 / 宿主浏览器访问 noVNC / VNC 直连。
+      - "127.0.0.1:8090:8090"
       - "127.0.0.1:5900:5900"
       - "127.0.0.1:6080:6080"
     # 容器内 /dev/uinput 由 root 打开；事件节点 mknod/chown 需要最小能力集。
@@ -92,3 +97,8 @@ secrets:
   # 生产必须经 WECHAT_GUI_VNC_PASSWORD_FILE 指向真实密码文件（不入库）。
   wechat_gui_vnc_password:
     file: ${WECHAT_GUI_VNC_PASSWORD_FILE:-./wechat-gui/vnc.pass.default}
+  # agent Bearer token（后端 WECHAT_GUI_TOKEN 须与之同值）；缺省指向仓库
+  # 内开发占位文件，生产必须经 WECHAT_GUI_AGENT_TOKEN_FILE_SECRET 指向真实
+  # 令牌文件（不入库）。
+  wechat_gui_agent_token:
+    file: ${WECHAT_GUI_AGENT_TOKEN_FILE_SECRET:-./wechat-gui/agent.token.default}

@@ -23,10 +23,11 @@
     - ``ChannelsSettings``   —— 通道域分节（``Settings.channels``；telegram
       子模型 env_prefix=``TELEGRAM_``；qq 子模型 env_prefix=``QQ_``；
       wecom 子模型 env_prefix=``WECOM_``——企业微信智能机器人长连接；
-      douyin 子模型 env_prefix=``DOUYIN_``；sms_forwarder 子模型
-      env_prefix=``SMS_FORWARDER_``——手机端转发的短信 / 通知入站；
-      whatsapp 子模型 env_prefix=``WHATSAPP_``——WhatsApp Cloud API 入站 /
-      文本出站）
+      douyin 子模型 env_prefix=``DOUYIN_``；wechat_gui 子模型
+      env_prefix=``WECHAT_GUI_``——GUI 微信实验轨（沙盒截图 + 键鼠注入）；
+      sms_forwarder 子模型 env_prefix=``SMS_FORWARDER_``——手机端转发的
+      短信 / 通知入站；whatsapp 子模型 env_prefix=``WHATSAPP_``——WhatsApp
+      Cloud API 入站 / 文本出站）
     - ``DutySettings``       —— 值班轮分节（``Settings.duty``；env_prefix=
       ``DUTY_``——duty 域）
     - ``DreamScheduleSettings`` —— 梦境调度分节（``Settings.dream_schedule``；
@@ -71,6 +72,7 @@ from urllib.parse import quote_plus
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from packages.harness.channels.wechat_gui.wechat_gui_models import WechatGuiSettings
 from packages.harness.chat.flow_models import FlowGateSettings
 from packages.harness.chat.persona_rotation_models import GroupPersonaSettings
 from packages.harness.config.model_entry import LlmModelEntry, ModelRole
@@ -1243,7 +1245,8 @@ class ChannelsSettings(BaseModel):
     """通道域配置分节（``Settings.channels``——多平台通道聚合容器）。
 
     当前含 telegram、qq（NapCat / OneBot v11）、企业微信智能机器人长连接、
-    抖音 web、SmsForwarder 短信 / 通知转发与 WhatsApp Cloud API 六个子模型；
+    抖音 web、GUI 微信实验轨、SmsForwarder 短信 / 通知转发与 WhatsApp Cloud
+    API 七个子模型；
     多通道扩展（B站等）在此追加同级子模型（各自独立 env_prefix 的
     ``BaseSettings``——本工程约定：env 面子配置为 BaseSettings，聚合容器为
     普通 BaseModel）。
@@ -1253,6 +1256,7 @@ class ChannelsSettings(BaseModel):
         qq: QQ 通道配置（默认关闭——NapCat OneBot v11）。
         wecom: 企业微信智能机器人长连接配置（默认关闭）。
         douyin: 抖音 web 通道配置（默认关闭——浏览器 sidecar 底座）。
+        wechat_gui: GUI 微信实验轨配置（默认关闭——沙盒截图 + 键鼠注入）。
         sms_forwarder: SmsForwarder 短信 / 通知转发配置（默认关闭；仅入站）。
         whatsapp: WhatsApp Cloud API 配置（默认关闭；webhook 入站 + 文本出站）。
     """
@@ -1266,6 +1270,9 @@ class ChannelsSettings(BaseModel):
     )
     douyin: DouyinChannelSettings = Field(
         default_factory=DouyinChannelSettings, description="抖音 web 通道配置"
+    )
+    wechat_gui: WechatGuiSettings = Field(
+        default_factory=WechatGuiSettings, description="GUI 微信实验轨配置"
     )
     sms_forwarder: SmsForwarderChannelSettings = Field(
         default_factory=SmsForwarderChannelSettings,

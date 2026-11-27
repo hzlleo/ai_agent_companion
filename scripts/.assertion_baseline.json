@@ -2,9 +2,9 @@
   "version": 1,
   "note": "单元测试断言基线——计数只降不升；再生成: python scripts/assertion_freeze.py --update",
   "totals": {
-    "asserts": 9570,
-    "raises": 708,
-    "files": 225
+    "asserts": 9832,
+    "raises": 754,
+    "files": 235
   },
   "files": {
     "backend/src/tests/unit/test_admin_auth.py": {
@@ -76,6 +76,11 @@
       "asserts": 19,
       "raises": 0,
       "digest": "fb496f13f93205bb775e4d7d88264b8cc164f2ffe93896ec706be69d78307b20"
+    },
+    "backend/src/tests/unit/test_app_wechat_gui_channels_lifespan.py": {
+      "asserts": 38,
+      "raises": 0,
+      "digest": "0578615fb5e876874b48ba38453b4111ed5b48e1cc33c2ab8cff0d5c22dda5a0"
     },
     "backend/src/tests/unit/test_app_wecom_channels_lifespan.py": {
       "asserts": 33,
@@ -153,9 +158,9 @@
       "digest": "d0b191c5888498fa2d0e78825394b026c2802ae01b854666a720eb17bc7df2c5"
     },
     "backend/src/tests/unit/test_channels_models.py": {
-      "asserts": 57,
+      "asserts": 59,
       "raises": 9,
-      "digest": "208022eb133e84a2eeece764ba2d7c2a815f1d524ec094aef657651d2e0453db"
+      "digest": "4d0a6af040f73235ea6663d6b36605098a30d59ce5711808e29a963b310613ac"
     },
     "backend/src/tests/unit/test_channels_qq_api.py": {
       "asserts": 51,
@@ -1091,6 +1096,51 @@
       "asserts": 78,
       "raises": 11,
       "digest": "f1ffe4b5671ba3699f1a9cd3ae7b68a1c86c1a7cafee9794a4fbebdb0e2b2d9e"
+    },
+    "backend/src/tests/unit/test_wechat_gui_adapter.py": {
+      "asserts": 22,
+      "raises": 5,
+      "digest": "ab397c29a4ad66b5f6582ffa36d158e17d8e8d307d56464ad95f07ca34ee998f"
+    },
+    "backend/src/tests/unit/test_wechat_gui_client.py": {
+      "asserts": 31,
+      "raises": 9,
+      "digest": "92756b5473cb6ee555deee8d7d13a8c086493cfbe8a8aaff99c74537b4844bf0"
+    },
+    "backend/src/tests/unit/test_wechat_gui_models.py": {
+      "asserts": 56,
+      "raises": 18,
+      "digest": "a15774de14fe4d526240caf483e4be396b768f58965c2091dce625c0e5ff4397"
+    },
+    "backend/src/tests/unit/test_wechat_gui_prompts.py": {
+      "asserts": 12,
+      "raises": 0,
+      "digest": "0d50b68c319ef5c2dd402356b26d122b99f215d79119ddb89a77a7acc4a3ec62"
+    },
+    "backend/src/tests/unit/test_wechat_gui_reader.py": {
+      "asserts": 17,
+      "raises": 9,
+      "digest": "26d131f48d5f27645337dacd20a021f7d928df8d0386ed52ea26923c527ef236"
+    },
+    "backend/src/tests/unit/test_wechat_gui_runner.py": {
+      "asserts": 38,
+      "raises": 3,
+      "digest": "3062186c27f99db8b078ab08408ab12afa30ae3b7ccfc1c0e80ada1438bfcdf4"
+    },
+    "backend/src/tests/unit/test_wechat_gui_watermark.py": {
+      "asserts": 20,
+      "raises": 1,
+      "digest": "63e8799c9fd92d9569e1c77b17dbc69f791e7f14673537ac4c15eb420aa6e514"
+    },
+    "backend/src/tests/unit/test_wechat_gui_window_mutex.py": {
+      "asserts": 6,
+      "raises": 0,
+      "digest": "0062fa02b86c5a8b195d659559855014101234fba4f390dd5ebbb16125cccad7"
+    },
+    "backend/src/tests/unit/test_wechat_gui_wire_models.py": {
+      "asserts": 20,
+      "raises": 1,
+      "digest": "9fe85b3773f065c9020133d130674304aaf180b6b30bf49045fbca3f09b2dfa9"
     },
     "backend/src/tests/unit/test_wecom_client.py": {
       "asserts": 57,

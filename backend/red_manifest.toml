@@ -410,3 +410,59 @@ symbol = "packages.harness.usage.budget_limits:budget_count_capacity"
 tests = [
     "tests/unit/test_config_settings.py::test_daily_budget_limit_is_single_source_across_config_and_counters",
 ]
+
+[[probes]]
+name = "wechat-gui-wire-response-removal"
+symbol = "packages.harness.channels.wechat_gui.wechat_gui_wire_models:InvokeResponseModel"
+tests = [
+    "tests/unit/test_wechat_gui_wire_models.py::test_wire_models_serialization_shape",
+]
+
+[[probes]]
+name = "wechat-gui-chat-id-removal"
+symbol = "packages.harness.channels.wechat_gui.wechat_gui_models:build_wechat_gui_chat_id"
+tests = [
+    "tests/unit/test_wechat_gui_models.py::test_chat_id_grammar_round_trip_and_rejection",
+]
+
+[[probes]]
+name = "wechat-gui-prompts-render-removal"
+symbol = "packages.harness.channels.wechat_gui.wechat_gui_prompts:render_wechat_gui_reader_instruction"
+tests = [
+    "tests/unit/test_wechat_gui_prompts.py::test_render_instruction_replaces_max_messages",
+]
+
+[[probes]]
+name = "wechat-gui-client-removal"
+symbol = "packages.harness.channels.wechat_gui.wechat_gui_client:WechatGuiSandboxClient"
+tests = [
+    "tests/unit/test_wechat_gui_client.py::test_screenshot_success_wire_shape",
+]
+
+[[probes]]
+name = "wechat-gui-reader-removal"
+symbol = "packages.harness.channels.wechat_gui.wechat_gui_reader:WechatGuiReader"
+tests = [
+    "tests/unit/test_wechat_gui_reader.py::test_reader_success_and_purpose",
+]
+
+[[probes]]
+name = "wechat-gui-runner-removal"
+symbol = "packages.harness.channels.wechat_gui.wechat_gui_runner:WechatGuiChannelRunner"
+tests = [
+    "tests/unit/test_wechat_gui_runner.py::test_run_routes_messages_and_dedups_across_polls",
+]
+
+[[probes]]
+name = "wechat-gui-watermark-removal"
+symbol = "packages.harness.channels.wechat_gui.wechat_gui_watermark:WechatGuiWatermark"
+tests = [
+    "tests/unit/test_wechat_gui_watermark.py::test_append_one_and_three_messages",
+]
+
+[[probes]]
+name = "wechat-gui-adapter-removal"
+symbol = "packages.harness.channels.wechat_gui.wechat_gui_adapter:WechatGuiChannelAdapter"
+tests = [
+    "tests/unit/test_wechat_gui_adapter.py::test_send_after_title_verification",
+]
