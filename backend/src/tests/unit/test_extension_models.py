@@ -104,13 +104,20 @@ async def test_url_userinfo_and_secret_query_rejected() -> None:
 
 
 async def test_url_secret_query_placeholder_value_not_rejected() -> None:
-    """查询串密钥参数的值是 {...} 占位：剔除占位后不按字面长度拒绝。"""
+    """查询串密钥参数的值是合法参数名占位：剔除后不按字面长度拒绝。"""
     accepted = HttpToolTargetModel(
         url="https://h/x?access_token={user_access_token}&token={token}"
     )
     assert accepted.url.endswith("access_token={user_access_token}&token={token}")
-    with pytest.raises(ValidationError):
-        HttpToolTargetModel(url="https://h/x?access_token=abcdefghijklmnop")
+    for bad in (
+        "https://h/x?access_token=abcdefghijklmnop",
+        # 含连字符 = 非合法参数名占位：执行期原样保留，仍按字面密钥拒绝。
+        "https://h/x?token={sk-abcdefghijklmnop}",
+        # parse_qsl 先解码百分号编码，剔除面须按解码后的形态判定。
+        "https://h/x?token=%7Bsk-abcdefghijklmnop%7D",
+    ):
+        with pytest.raises(ValidationError):
+            HttpToolTargetModel(url=bad)
 
 
 async def test_tool_name_pattern_rejected() -> None:

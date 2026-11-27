@@ -3087,6 +3087,49 @@ model 齐备 → 内置策略（源 chat → 目标 intimate，最低优先级�
   `Field` 包装，故「去掉元素约束」变异下该守卫不红（其余两条红）；
   未跑 tests-all / coverage-gates / verify-slice（按纪律由主 Agent 执行）。
 
+**修复 I（Oracle 三审剩余 1×P2 + 3×P3 的根修；只记事实，不复审结论）**：
+- **P2-1 空可执行面无守卫**：`chat/service.py::_tool_loop` 的
+  `executable_names is not None` 判定本身正确（空 `frozenset` 仍拦截），
+  既有用例只覆盖「工具面为空」而未覆盖「模型仍回传面外名」；新增
+  `test_chat_core_memory.py::test_empty_executable_face_still_blocks_out_of_face_call`
+  锁定 peer 回合仅 `edit_core_memory` 时可执行名集为空、首请求
+  `tools is None`、回传仍不进执行器、反馈为
+  `未注册工具: edit_core_memory`。
+- **P3-1 URL 占位剔除过宽**：`config/models.py::_QUERY_VALUE_PLACEHOLDER_RE`
+  由 `\{[^{}]*\}` 收窄为与 `_ARG_PLACEHOLDER_RE` 同语法
+  `\{[A-Za-z_][A-Za-z0-9_]*\}`——仅剔合法参数名占位；
+  `?token={sk-abcdefghijklmnop}` 与百分号编码形态 `%7Bsk-...%7D`
+  （`parse_qsl` 已解码）按字面长度拒绝，`{user_access_token}` 仍通过。
+- **P3-2 混合类型 `Literal` × `Field` 约束裸 `TypeError`**：
+  `tools/registry.py::_validate_args` 捕获面改为
+  `except (ValidationError, TypeError)`——矛盾 schema（如
+  `{"type":"string","enum":[1,"a"],"pattern":"^a$"}`）校验 `[1]` 时
+  pydantic 抛裸 `TypeError`，现走既有受控失败路径（`ok=False`），
+  `registry.execute` 恒不抛。
+- **P3-3 路由轨迹 `detail` 契约半覆盖**：
+  `test_llm_route_policy.py::test_gateway_logs_intimacy_bounds_distinctly`
+  追加 `intimacy_level=None` 调用，断言未命中日志同时含
+  `intimacy.min:False` 与 `intimacy.max:False`（覆盖
+  `level unavailable < min=` / `level unavailable > max=` 两个变体）。
+- 命令 + 退出码（本分支工作区）：`cd backend && pixi run pytest
+  src/tests/unit/test_chat_core_memory.py src/tests/unit/test_chat_tool_loop.py
+  src/tests/unit/test_extension_tools.py src/tests/unit/test_tools_registry.py
+  src/tests/unit/test_llm_intimate_channel.py src/tests/unit/test_llm_route_policy.py
+  src/tests/unit/test_llm_gateway.py src/tests/unit/test_extension_models.py
+  --asyncio-mode=auto` → 0（187 passed）；改动源文件 `pixi run mypy
+  src/packages/harness/config/models.py src/packages/harness/tools/registry.py`
+  → 0（2 source files；测试目录按 `pyproject.toml` 既有配置不入严格门）；
+  `pixi run ruff check <改动 2 源文件 + 4 测试文件>` → 0；
+  `prose_pin_check.py --gate` → 0（prose 75 <= 基线 75）；
+  `red-probe --gate` → 0（41 探针 / 227 源文件 <= 冻结基线 190）；
+  `assertion_freeze.py --update` → 0（240 文件 / asserts=10155 /
+  raises=782）/ `--enforce` → 0。
+- 变异实证（临时改动后还原，`cmp` 确认源文件复原）：`executable_names
+  is not None` 改真值判断 → 空面拦截用例 failed；`_QUERY_VALUE_PLACEHOLDER_RE`
+  还原 `\{[^{}]*\}` → URL 占位用例 failed；去掉 `TypeError` 捕获 → 混合
+  schema 用例以裸 `TypeError` failed；`route_policy.py:256` 的 `max=` 改
+  `上限` → 上下沿区分用例 failed。
+
 ## 6. 遗留与部署台账（非阻塞）
 
 ### 缓解台账（非根修，已排期）

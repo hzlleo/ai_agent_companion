@@ -449,6 +449,31 @@ async def test_json_schema_items_constraints_accept_valid_elements() -> None:
     assert result.ok is True
 
 
+async def test_mixed_literal_with_incompatible_constraint_fails_controlled() -> None:
+    """混合类型 enum + 字符串约束：不兼容值走受控失败，registry.execute 不抛。"""
+    tool = _extension(
+        parameters={
+            "type": "object",
+            "properties": {
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": [1, "a"], "pattern": "^a$"},
+                },
+            },
+            "required": ["tags"],
+        }
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))
+    ) as client:
+        registry, _, _ = _register(tool, lambda: client)
+        result = await registry.execute(tool.name, {"tags": [1]})
+
+    assert result.ok is False
+    assert "参数校验失败" in (result.error or "")
+
+
 async def test_non_json_response_fails_controlled() -> None:
     """非 JSON 响应：受控失败。"""
     def handler(request: httpx.Request) -> httpx.Response:

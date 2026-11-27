@@ -968,6 +968,7 @@ async def test_gateway_logs_intimacy_bounds_distinctly() -> None:
             route_policies=[policy],
         )
         await gateway.chat_by_role("chat", _messages(), intimacy_level=2)
+        await gateway.chat_by_role("chat", _messages(), intimacy_level=None)
     finally:
         logger.remove(handler_id)
         await manager.stop()
@@ -976,6 +977,10 @@ async def test_gateway_logs_intimacy_bounds_distinctly() -> None:
     assert len(fallback_logs) == 1
     assert "intimacy.min:True" in fallback_logs[0]
     assert "intimacy.max:True" in fallback_logs[0]
+    unavailable_logs = [message for message in messages if "条件路由未命中" in message]
+    assert len(unavailable_logs) == 1
+    assert "intimacy.min:False" in unavailable_logs[0]
+    assert "intimacy.max:False" in unavailable_logs[0]
 
 
 async def test_gateway_user_policy_overrides_builtin_priority() -> None:

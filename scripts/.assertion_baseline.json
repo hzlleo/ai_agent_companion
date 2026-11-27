@@ -2,7 +2,7 @@
   "version": 1,
   "note": "单元测试断言基线——计数只降不升；再生成: python scripts/assertion_freeze.py --update",
   "totals": {
-    "asserts": 10145,
+    "asserts": 10155,
     "raises": 782,
     "files": 240
   },
@@ -198,9 +198,9 @@
       "digest": "b32b45c87af2bd2250269c0518a89492925640f34a027dc4e3f8cc47fbc9f222"
     },
     "backend/src/tests/unit/test_chat_core_memory.py": {
-      "asserts": 44,
+      "asserts": 49,
       "raises": 0,
-      "digest": "af52c023db1d17360eeaf052ce515633f3ba3398ea8548e62af0f7c9d5fa4737"
+      "digest": "e9c901d83680358007801d3dcee0857e511586e67eeff5cbc6de16594d17e086"
     },
     "backend/src/tests/unit/test_chat_directives.py": {
       "asserts": 20,
@@ -498,9 +498,9 @@
       "digest": "6c1dbdc07a59bbf8c81554ba32ff8c4ee70d37d8d31634b00dc3b2c1b7f10093"
     },
     "backend/src/tests/unit/test_extension_tools.py": {
-      "asserts": 65,
+      "asserts": 67,
       "raises": 2,
-      "digest": "c6fb157ad40c441d3b20e8e72808e3688dcae4e146199856640983cbd6d9d589"
+      "digest": "217700d840d25dc9dd70eb80c5c5f9205e807f676e457b5133e6d2a11e21de6e"
     },
     "backend/src/tests/unit/test_facts_api.py": {
       "asserts": 37,
@@ -583,9 +583,9 @@
       "digest": "f35a4042edd6ae169a20703e15497413fbf74009dd84f8830641e3718356c76d"
     },
     "backend/src/tests/unit/test_llm_route_policy.py": {
-      "asserts": 104,
+      "asserts": 107,
       "raises": 10,
-      "digest": "5ccd341351baefde5e4397407cd9dc8eff1565c434557313dd9c7e438b6a377c"
+      "digest": "2689643c8483ac69d69a7a0ab1f9fc15dded166c775351a3f81fcc459057c589"
     },
     "backend/src/tests/unit/test_llm_tool_calling.py": {
       "asserts": 38,

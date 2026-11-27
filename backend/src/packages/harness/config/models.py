@@ -2053,8 +2053,9 @@ _SECRET_QUERY_KEYS: frozenset[str] = frozenset(
 )
 #: URL 查询串密钥参数的字面值长度阈值（达到即拒绝——改走 header 占位）。
 _SECRET_QUERY_MIN_LENGTH: int = 16
-#: URL 查询串参数值中的 ``{...}`` 占位（执行期按参数值替换——不是字面密钥）。
-_QUERY_VALUE_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
+#: URL 查询串参数值中的 ``{参数名}`` 占位（与 :data:`_ARG_PLACEHOLDER_RE`
+#: 同语法——只剔合法参数名，``{sk-...}`` 等含非法字符的原样计入字面长度）。
+_QUERY_VALUE_PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
 #: 结果点路径形态（``a`` / ``a.b`` / ``a.b.c``——段非空且不含点）。
 _RESULT_PATH_RE = re.compile(r"^[^.]+(\.[^.]+)*$")
 

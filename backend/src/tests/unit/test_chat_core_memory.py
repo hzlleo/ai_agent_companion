@@ -415,6 +415,38 @@ async def test_peer_turn_with_only_core_memory_tool_omits_tool_face() -> None:
     assert gateway.chat_calls[0]["tools"] is None
 
 
+async def test_empty_executable_face_still_blocks_out_of_face_call() -> None:
+    """仅核心记忆工具 + peer 回合：可执行名集为空仍拦截面外回传，不进执行器。"""
+    gateway = FakeGateway(
+        responses=[
+            ("", [ToolCallModel(id="call-1", name=CORE_MEMORY_TOOL_NAME, arguments={})]),
+            ("好的", None),
+        ]
+    )
+    executor = RecordingExecutor()
+    service = ChatService(
+        gateway=gateway,
+        tools=[ToolSpecModel(name=CORE_MEMORY_TOOL_NAME, description="核心记忆自编辑")],
+        tool_executor=executor,
+    )
+
+    content = await service.reply(
+        _state(session_id=42), "群友路过", sender_provenance=MemoryProvenance.PEER
+    )
+
+    assert content == "好的"
+    assert gateway.chat_calls[0]["tools"] is None
+    assert executor.calls == []
+    tool_rounds = [
+        message
+        for message in gateway.chat_calls[1]["messages"]
+        if message.role == ChatMessageRole.TOOL
+    ]
+    feedback = tool_rounds[-1].content
+    assert ("未注册工具: " + CORE_MEMORY_TOOL_NAME) in feedback
+    assert "可用" not in feedback
+
+
 async def test_tool_loop_binds_and_resets_session_id() -> None:
     """工具执行期绑定会话主键（修订归属面），循环结束即复位。"""
     gateway = FakeGateway(
