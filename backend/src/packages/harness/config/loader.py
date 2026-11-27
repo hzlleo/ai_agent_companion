@@ -245,14 +245,24 @@ def _rebuild_runtime_resolver(config: LlmConfig) -> None:
         if role in SUPPORTED_MODEL_ROLES
     }
     resolver = rebuild_model_resolver(config.models, supported)
+    known_entries = {entry.name for entry in config.models}
+    for role, entry_name in config.role_bindings.items():
+        if role in SUPPORTED_MODEL_ROLES:
+            continue
+        if entry_name not in known_entries:
+            logger.warning(
+                "显式角色绑定指向不存在的条目名，按未绑定处理: role={}, entry={}",
+                role,
+                entry_name,
+            )
     for policy in config.route_policies:
         for role in (policy.source_role, policy.target_role):
             if role in SUPPORTED_MODEL_ROLES:
                 continue
-            entry_name = config.role_bindings.get(role)
-            if entry_name is None:
+            bound_entry_name = config.role_bindings.get(role)
+            if bound_entry_name is None:
                 continue
-            entry = resolver.get(entry_name)
+            entry = resolver.get(bound_entry_name)
             if entry is not None:
                 resolver.register_route_target(role, entry)
 

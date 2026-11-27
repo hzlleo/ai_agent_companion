@@ -33,13 +33,8 @@ from packages.harness.llm.gateway import LlmGateway
 from packages.harness.llm.intimate_models import (
     INTIMATE_CHANNEL_ENTRY_NAME,
     IntimateChannelConfig,
-    IntimateRouteReason,
 )
-from packages.harness.llm.intimate_router import (
-    build_intimate_entry,
-    build_intimate_request_params,
-    evaluate_intimate_route,
-)
+from packages.harness.llm.intimate_router import build_intimate_entry
 from packages.harness.llm.llm_models import (
     ChatMessageModel,
     ChatMessageRole,
@@ -47,6 +42,13 @@ from packages.harness.llm.llm_models import (
     LlmUsageEvent,
     ToolDefinitionModel,
     ToolParametersSchema,
+)
+from packages.harness.llm.route_policy import evaluate_route
+from packages.harness.llm.route_policy_models import (
+    INTIMATE_BUILTIN_POLICY_NAME,
+    INTIMATE_TARGET_ROLE,
+    RouteDecisionModel,
+    RouteDecisionReason,
 )
 from packages.harness.pools.manager import PoolManager
 
@@ -248,6 +250,37 @@ def _json_body(request: httpx.Request) -> dict[str, Any]:
     return parsed
 
 
+def _builtin_policy_decision(
+    config: IntimateChannelConfig,
+    *,
+    intimacy_level: int | None,
+    purpose: str = "chat",
+) -> RouteDecisionModel:
+    """经通用求值面裁决内置亲密策略（装配期快照 + 解析器路由别名）。
+
+    Args:
+        config: 亲密通道配置（网关构造期转译为内置策略或保持无策略）。
+        intimacy_level: 本轮关系摘要亲密等级（None = 摘要不可用）。
+        purpose: 本轮调用用途（内置策略不约束用途）。
+
+    Returns:
+        通用路由裁决（生效角色 / 原因 / 求值轨迹）。
+    """
+    manager = PoolManager(build_isolated_settings(pools=PoolsConfig(cb_fail_max=2)))
+    gateway = _gateway(manager, intimate_config=config)
+    resolver = gateway._resolver
+    assert resolver is not None
+    return evaluate_route(
+        "chat",
+        gateway._policies,
+        intimacy_level=intimacy_level,
+        now_ms=0,
+        has_summary=intimacy_level is not None,
+        purpose=purpose,
+        resolver=resolver,
+    )
+
+
 # ---------------------------------------------------------------------------
 # 配置面
 # ---------------------------------------------------------------------------
@@ -326,17 +359,17 @@ async def test_config_reads_intimate_env_keys(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.parametrize(
-    ("enabled", "complete", "level", "expected_intimate", "expected_reason"),
+    ("enabled", "complete", "level", "expected_intimate"),
     [
-        (False, True, 3, False, IntimateRouteReason.DISABLED),
-        (False, False, 3, False, IntimateRouteReason.DISABLED),
-        (True, False, 3, False, IntimateRouteReason.INCOMPLETE_CONFIG),
-        (True, False, None, False, IntimateRouteReason.INCOMPLETE_CONFIG),
-        (True, True, None, False, IntimateRouteReason.RELATIONSHIP_UNAVAILABLE),
-        (True, True, 0, False, IntimateRouteReason.BELOW_THRESHOLD),
-        (True, True, 1, False, IntimateRouteReason.BELOW_THRESHOLD),
-        (True, True, 2, True, IntimateRouteReason.SELECTED),
-        (True, True, 3, True, IntimateRouteReason.SELECTED),
+        (False, True, 3, False),
+        (False, False, 3, False),
+        (True, False, 3, False),
+        (True, False, None, False),
+        (True, True, None, False),
+        (True, True, 0, False),
+        (True, True, 1, False),
+        (True, True, 2, True),
+        (True, True, 3, True),
     ],
 )
 async def test_route_matrix(
@@ -344,33 +377,36 @@ async def test_route_matrix(
     complete: bool,
     level: int | None,
     expected_intimate: bool,
-    expected_reason: IntimateRouteReason,
 ) -> None:
     """路由矩阵：开关 × 配置齐全 × 等级 0-3（含摘要缺失）逐格裁决。"""
     config = _complete_config(enabled=enabled) if complete else _incomplete_config(enabled=enabled)
-    decision = evaluate_intimate_route(config, intimacy_level=level)
-    assert decision.use_intimate is expected_intimate
-    assert decision.reason is expected_reason
-    assert decision.channel_enabled is enabled
-    assert decision.channel_configured is complete
-    assert decision.intimacy_level == level
-    assert decision.min_intimacy_level == 2
+    decision = _builtin_policy_decision(config, intimacy_level=level)
+    if expected_intimate:
+        assert decision.reason is RouteDecisionReason.ROUTED
+        assert decision.effective_role == INTIMATE_TARGET_ROLE
+        assert decision.policy_name == INTIMATE_BUILTIN_POLICY_NAME
+    else:
+        assert decision.reason is RouteDecisionReason.DIRECT
+        assert decision.effective_role == "chat"
+        assert decision.policy_name is None
 
 
 async def test_route_threshold_override_matrix() -> None:
     """阈值配置化：min=3 时等级 2 回退、等级 3 命中；min=0 时等级 0 命中。"""
     strict = _complete_config(min_intimacy_level=3)
-    assert evaluate_intimate_route(strict, intimacy_level=2).use_intimate is False
-    assert evaluate_intimate_route(strict, intimacy_level=3).use_intimate is True
+    assert _builtin_policy_decision(strict, intimacy_level=2).reason is RouteDecisionReason.DIRECT
+    routed = _builtin_policy_decision(strict, intimacy_level=3)
+    assert routed.reason is RouteDecisionReason.ROUTED
+    assert routed.effective_role == INTIMATE_TARGET_ROLE
 
     loose = _complete_config(min_intimacy_level=0)
-    assert evaluate_intimate_route(loose, intimacy_level=0).use_intimate is True
+    assert _builtin_policy_decision(loose, intimacy_level=0).reason is RouteDecisionReason.ROUTED
 
 
 async def test_route_rejects_out_of_range_level() -> None:
     """等级越出 0-3 即调用方契约破坏（显式拒绝，不静默夹取）。"""
     with pytest.raises(ValueError):
-        evaluate_intimate_route(_complete_config(), intimacy_level=4)
+        _builtin_policy_decision(_complete_config(), intimacy_level=4)
 
 
 async def test_build_intimate_entry_requires_complete_config() -> None:
@@ -388,23 +424,28 @@ async def test_build_intimate_entry_requires_complete_config() -> None:
 
 async def test_intimate_request_params_merge_priority() -> None:
     """温度合并：通道缺省值只补调用方未设置的温度，显式参数优先。"""
-    config = _complete_config(temperature=1.1)
-    assert build_intimate_request_params(config, None) == ChatRequestParams(temperature=1.1)
+    handler = DualEndpointHandler()
+    manager = await _make_pool_manager(handler)
+    try:
+        warm = _gateway(manager, intimate_config=_complete_config(temperature=1.1))
+        await warm.chat_by_role("chat", _messages(), intimacy_level=3)
+        await warm.chat_by_role(
+            "chat", _messages(), ChatRequestParams(max_tokens=32), intimacy_level=3
+        )
+        await warm.chat_by_role(
+            "chat", _messages(), ChatRequestParams(temperature=0.4), intimacy_level=3
+        )
+        plain = _gateway(manager, intimate_config=_complete_config(temperature=None))
+        await plain.chat_by_role("chat", _messages(), intimacy_level=3)
+    finally:
+        await manager.stop()
 
-    explicit = ChatRequestParams(temperature=0.4, max_tokens=64)
-    merged = build_intimate_request_params(config, explicit)
-    assert merged is explicit
-
-    partial = ChatRequestParams(max_tokens=32)
-    merged_partial = build_intimate_request_params(config, partial)
-    assert merged_partial is not None
-    assert merged_partial.temperature == 1.1
-    assert merged_partial.max_tokens == 32
-
-    no_temperature = IntimateChannelConfig(
-        enabled=True, base_url="u", model="m", temperature=None
-    )
-    assert build_intimate_request_params(no_temperature, None) is None
+    bodies = [_json_body(request) for request in handler.intimate_requests]
+    assert bodies[0]["temperature"] == 1.1
+    assert bodies[1]["temperature"] == 1.1
+    assert bodies[1]["max_tokens"] == 32
+    assert bodies[2]["temperature"] == 0.4
+    assert "temperature" not in bodies[3]
 
 
 # ---------------------------------------------------------------------------
@@ -433,7 +474,7 @@ async def test_disabled_channel_keeps_request_bytes_identical() -> None:
 
 
 async def test_incomplete_config_falls_back_and_warns_once() -> None:
-    """半配置：回退默认通道，首个裁决记一条 warning（不逐回合刷屏）。"""
+    """半配置：回退默认通道，装配期记一条 warning（不逐回合刷屏）。"""
     handler = DualEndpointHandler()
     manager = await _make_pool_manager(handler)
     messages: list[str] = []
@@ -521,6 +562,50 @@ async def test_enabled_and_threshold_met_routes_to_intimate_endpoint() -> None:
     assert recorder.events[0].model_entry == INTIMATE_CHANNEL_ENTRY_NAME
     assert recorder.events[0].purpose == "chat"
     assert recorder.events[0].status == "success"
+
+
+async def test_alias_conflict_keeps_yaml_entry_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """intimate 别名改绑到 yaml 条目：请求与凭据均按该条目，不用通道密钥。"""
+    monkeypatch.setenv("YAML_INTIMATE_KEY", "sk-yaml-entry")
+    yaml_entry = parse_model_entry(
+        {
+            "name": "yaml-intimate",
+            "base_url": "http://yaml-intimate.test/v1",
+            "api_key_env": "YAML_INTIMATE_KEY",
+            "model": "yaml-model",
+        }
+    )
+    resolver = ModelResolver([_entry(), yaml_entry])
+    resolver.register_route_target(INTIMATE_TARGET_ROLE, yaml_entry)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """记录请求并返回固定回复。"""
+        requests.append(request)
+        return _ok_response("yaml 回复")
+
+    manager = await _make_pool_manager(handler)
+    try:
+        gateway = LlmGateway(
+            resolver=resolver,
+            pool_manager=manager,
+            settings=build_isolated_settings(pools=PoolsConfig(cb_fail_max=2)),
+            retry_attempts=1,
+            retry_wait_seconds=0.0,
+            intimate_config=_complete_config(),
+        )
+        response = await gateway.chat_by_role("chat", _messages(), intimacy_level=3)
+    finally:
+        await manager.stop()
+
+    assert response.content == "yaml 回复"
+    assert len(requests) == 1
+    request = requests[0]
+    assert str(request.url) == "http://yaml-intimate.test/v1/chat/completions"
+    assert request.headers["Authorization"] == "Bearer sk-yaml-entry"
+    assert _json_body(request)["model"] == "yaml-model"
 
 
 async def test_intimate_temperature_default_only_when_caller_silent() -> None:

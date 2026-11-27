@@ -20,9 +20,17 @@ import pytest
 
 import app.main as app_main
 from app.main import create_app, shutdown_app_state, startup_app_state
-from packages.harness.config.models import DatabaseConfig, DutySettings, Settings
+from packages.harness.chat.service import ChatService
+from packages.harness.config.models import (
+    ChannelsSettings,
+    DatabaseConfig,
+    DutySettings,
+    Settings,
+    TelegramSettings,
+)
 from packages.harness.config.settings import build_isolated_settings
 from packages.harness.multimodal.look_at import LOOK_AT_TOOL_NAME
+from packages.harness.persona.core_memory_models import CORE_MEMORY_TOOL_NAME
 
 _BUILTIN_TOOLS = ["get_current_time", "search_memory"]
 _LOOK_AT_TOOLS = [LOOK_AT_TOOL_NAME]
@@ -65,11 +73,48 @@ class FakeScheduler:
         return list(self.registered)
 
 
-def _settings(tmp_path: Path) -> Settings:
-    """构造隔离 Settings（tmp SQLite + duty 启用）。"""
+class FakeRunner:
+    """fake TelegramChannelRunner（通道装配——真实类零网络构造）。"""
+
+    def __init__(self, **kwargs: Any) -> None:
+        """初始化（记录构造参数与停机事件）。"""
+        self.kwargs = kwargs
+        self.stop_event = asyncio.Event()
+
+    def request_stop(self) -> None:
+        """fake 停机请求。"""
+        self.stop_event.set()
+
+    async def run(self) -> None:
+        """fake 长轮询循环（await 停机事件）。"""
+        await self.stop_event.wait()
+
+
+class RecordingChatService(ChatService):
+    """Recording ChatService——捕获通道工厂构造参数。"""
+
+    created: list[dict[str, Any]] = []
+
+    def __init__(self, **kwargs: Any) -> None:
+        """记录构造参数后委托真实构造。"""
+        type(self).created.append(kwargs)
+        super().__init__(**kwargs)
+
+
+def _settings(
+    tmp_path: Path, *, duty_enabled: bool = True, telegram_enabled: bool = False
+) -> Settings:
+    """构造隔离 Settings（tmp SQLite + 可选 duty / telegram 分节）。"""
     return build_isolated_settings(
         database=DatabaseConfig(type="sqlite", name=str(tmp_path / "app-extension.db")),
-        duty=DutySettings(enabled=True, daily_at="23:59"),
+        duty=DutySettings(enabled=duty_enabled, daily_at="23:59"),
+        channels=ChannelsSettings(
+            telegram=TelegramSettings(
+                enabled=telegram_enabled,
+                bot_token_env="TELEGRAM_TEST_BOT_TOKEN",
+                state_dir=str(tmp_path / "channels-state"),
+            )
+        ),
     )
 
 
@@ -86,7 +131,9 @@ def _write_extensions(
     )
 
 
-def _tool(*, headers: dict[str, str] | None = None) -> dict[str, Any]:
+def _tool(
+    *, headers: dict[str, str] | None = None, expose_to_peer: bool = False
+) -> dict[str, Any]:
     """构造合法扩展工具配置 dict。"""
     return {
         "name": _EXTENSION_TOOL,
@@ -98,6 +145,7 @@ def _tool(*, headers: dict[str, str] | None = None) -> dict[str, Any]:
             "additionalProperties": False,
         },
         "kind": "http",
+        "expose_to_peer": expose_to_peer,
         "http": {
             "url": "http://127.0.0.1:8091/calendar/query",
             "method": "POST",
@@ -187,5 +235,62 @@ async def test_missing_env_skips_extension_tool(
         registry = app.state.duty_registry
         assert registry is not None
         assert registry.tool_names == _BUILTIN_TOOLS + _LOOK_AT_TOOLS
+    finally:
+        await shutdown_app_state(app)
+
+
+async def test_duty_disabled_chat_registry_gets_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """duty 关闭时 chat 工具面仍装配扩展（owner-only 默认注入）。"""
+    monkeypatch.setattr(app_main, "Scheduler", FakeScheduler)
+    monkeypatch.setattr(app_main, "TelegramChannelRunner", FakeRunner)
+    monkeypatch.setattr(app_main, "ChatService", RecordingChatService)
+    RecordingChatService.created.clear()
+    _write_extensions(tmp_path, enabled=True, tools=[_tool()])
+    app = create_app()
+    await startup_app_state(
+        app,
+        _settings(tmp_path, duty_enabled=False, telegram_enabled=True),
+        config_dir=tmp_path,
+    )
+    try:
+        assert app.state.duty_registry is None
+        router = app.state.channels_router
+        assert router is not None
+        router._chat_service_factory()
+        factory_kwargs = RecordingChatService.created[-1]
+        tool_names = [spec.name for spec in factory_kwargs["tools"]]
+        assert _EXTENSION_TOOL in tool_names
+        assert _EXTENSION_TOOL in factory_kwargs["tool_executor"].tool_names
+        owner_only_tools = factory_kwargs["owner_only_tools"]
+        assert _EXTENSION_TOOL in owner_only_tools
+        assert CORE_MEMORY_TOOL_NAME in owner_only_tools
+    finally:
+        await shutdown_app_state(app)
+
+
+async def test_expose_to_peer_extension_not_owner_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """expose_to_peer=true：扩展进入 chat 工具面但不进 owner-only 集合。"""
+    monkeypatch.setattr(app_main, "Scheduler", FakeScheduler)
+    monkeypatch.setattr(app_main, "TelegramChannelRunner", FakeRunner)
+    monkeypatch.setattr(app_main, "ChatService", RecordingChatService)
+    RecordingChatService.created.clear()
+    _write_extensions(tmp_path, enabled=True, tools=[_tool(expose_to_peer=True)])
+    app = create_app()
+    await startup_app_state(
+        app,
+        _settings(tmp_path, duty_enabled=False, telegram_enabled=True),
+        config_dir=tmp_path,
+    )
+    try:
+        router = app.state.channels_router
+        assert router is not None
+        router._chat_service_factory()
+        factory_kwargs = RecordingChatService.created[-1]
+        assert _EXTENSION_TOOL in [spec.name for spec in factory_kwargs["tools"]]
+        assert _EXTENSION_TOOL not in factory_kwargs["owner_only_tools"]
     finally:
         await shutdown_app_state(app)

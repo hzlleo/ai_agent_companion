@@ -11,8 +11,8 @@
 | `gateway.py` | 角色路由门面（wire 构建 → entry_gate → client → 用量发射；chat 与 embed 双面；条件路由 + 内置亲密策略装配） | `LlmGateway` / `UsageRecorder` / `wire_default_usage_recorder` |
 | `route_policy_models.py` | 条件路由 Model Classes：策略 / 条件 / 时段 / 裁决契约（Unit 文件） | `RoutePolicyModel` / `RouteConditionModel` / `TimeWindowModel` / `RouteDecisionModel` / `RouteDecisionReason` |
 | `route_policy.py` | 条件路由纯函数：优先级排序 / 条件矩阵 / 时段换算 / 目标绑定检查（Unit 文件） | `evaluate_route` / `time_window_matches` |
-| `intimate_models.py` | 内置亲密策略 Model Classes：`LLM_INTIMATE_*` 配置面 / 裁决对照契约（Unit 文件） | `IntimateChannelConfig` / `IntimateRouteReason` / `IntimateRouteDecisionModel` / `INTIMATE_CHANNEL_ENTRY_NAME` |
-| `intimate_router.py` | 内置亲密策略装配面：配置裁决对照 / 条目构建 / 半配置告警（Unit 文件） | `evaluate_intimate_route` / `build_intimate_entry` / `build_intimate_request_params` / `log_incomplete_intimate_config` |
+| `intimate_models.py` | 内置亲密策略配置面：`LLM_INTIMATE_*` 环境契约（Unit 文件） | `IntimateChannelConfig` / `INTIMATE_CHANNEL_ENTRY_NAME` |
+| `intimate_router.py` | 内置亲密策略装配面：条目构建 / 半配置告警（Unit 文件） | `build_intimate_entry` / `log_incomplete_intimate_config` |
 
 依赖方向：llm → config（model_resolver / llm_wire / Settings）+ pools（entry_gate / 共享 HTTP 池）+ core（errors / context / time_utils）；**不硬依赖 usage 域**（经注入式记录器 + 惰性接线，见下文）。
 
@@ -45,7 +45,7 @@ embed 在角色解析之前。
 from packages.harness.llm.gateway import LlmGateway, wire_default_usage_recorder
 
 gateway = LlmGateway(
-    resolver=None,            # None = config 全局解析器（loader 热重建后自动生效）
+    resolver=None,            # None = config 全局解析器（loader 热重建后自动生效；条目与别名，策略集除外）
     pool_manager=None,        # None = pools 全局单例（调用时读取；未装配 fail loud INTERNAL_ERROR）
     settings=None,            # None = config 全局单例（llm 兜底密钥 + llm_request_timeout_seconds）
     usage_recorder=wire_default_usage_recorder(),  # None = 未接线（零记录）
@@ -159,7 +159,14 @@ evaluate_route(role, policies, intimacy_level, now_ms, has_summary, purpose, res
 - **条目默认参数**：目标条目可声明 `default_params`（如通道默认温度），
   网关只补齐调用方未设置的采样字段；调用方显式值优先。
 - **日志**：命中 / 回落记录一条 `logger.info`（策略名、原角色、生效角色、
-  reason；不打印消息内容）。
+  reason；不打印消息内容）；回落路径附带求值轨迹摘要
+  （`policy→[dimension:matched,...]`），未命中的 `direct` 在有源角色匹配
+  策略时记一条 `logger.debug` 轨迹。
+
+### 热重载边界
+
+`route_policies` 与内置亲密策略在网关构造期快照；运行中重载 config.yaml
+只刷新条目与 `intimate` 别名绑定，策略增删改须重启进程生效。
 
 ## 内置亲密策略（roles:intimate）
 
@@ -229,7 +236,7 @@ embed 五角色，注册表管理 API 面不变）。
 ```
 chat_by_role(role, messages, params, intimacy_level=N)
     ↓ ① evaluate_route(..., policies=[用户策略, __intimate_builtin])  条件路由求值
-    ↓ ② router.resolve_optional("intimate")                 内置条目别名（装配期登记）
+    ↓ ② resolver.resolve_optional("intimate")                内置条目别名（装配期登记）
     ↓ ③ build_intimate_entry(config)                         条目键 = llm-intimate-channel；通道默认温度挂 default_params
     ↓ ④ pools.entry_gate(条目)                               公共池：专属信号量 + 熔断器
     ↓ ⑤ llm.client.chat / stream                             共享 HTTP 池；wire 凭据 = LLM_INTIMATE_API_KEY
@@ -688,7 +695,7 @@ config.yaml 是 LLM 注册表**唯一真源**：`/api/v1/models` 管理面对注
 
 ## 测试与门禁
 
-- 测试位置：`src/tests/unit/test_llm_models.py` / `test_llm_client.py` / `test_llm_gateway.py` / `test_llm_embeddings.py` / `test_llm_logprobs.py`（5 份；预算与慢调用用例在 gateway 文件内）；
+- 测试位置：`src/tests/unit/test_llm_models.py` / `test_llm_client.py` / `test_llm_gateway.py` / `test_llm_embeddings.py` / `test_llm_logprobs.py` / `test_llm_route_policy.py` / `test_llm_intimate_channel.py`（7 份；预算与慢调用用例在 gateway 文件内，条件路由与内置策略等价性在 route_policy / intimate_channel 文件内）；
 - 全部 `async def test_`；HTTP 一律 `httpx.MockTransport`（零真实出站）；网关经注入解析器 + 隔离 Settings 的真实 PoolManager（共享 client 替换为 MockTransport）；重试等待零 sleep（Retry-After 0 / 等待策略直测）；熔断 open 经预开熔断器确定性触发；embeddings 面覆盖请求形态 / index 归位 / 数量与序号契约 / purpose=embed 用量发射 / persona 解析序 / 角色未绑定；
 - 默认接线全链测试：gateway → `wire_default_usage_recorder` → usage 服务 → 共享 SQLite 引擎（`test_llm_gateway.py::test_default_usage_recorder_full_chain`）；
 - 覆盖率（`pixi run tests-unit` 实测）：harness/llm 组 **95%**（client 95% / gateway 100% / llm_models 100%）；

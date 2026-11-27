@@ -67,7 +67,10 @@ from packages.harness.core.context import persona_id_var, request_id_var
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.core.time_utils import now_ms
 from packages.harness.llm.client import LlmHttpClient
-from packages.harness.llm.intimate_models import IntimateChannelConfig
+from packages.harness.llm.intimate_models import (
+    INTIMATE_CHANNEL_ENTRY_NAME,
+    IntimateChannelConfig,
+)
 from packages.harness.llm.intimate_router import (
     build_intimate_entry,
     log_incomplete_intimate_config,
@@ -90,8 +93,10 @@ from packages.harness.llm.route_policy_models import (
     INTIMATE_BUILTIN_POLICY_NAME,
     INTIMATE_BUILTIN_PRIORITY,
     INTIMATE_TARGET_ROLE,
+    PolicyEvalTraceModel,
     RouteConditionModel,
     RouteDecisionModel,
+    RouteDecisionReason,
     RoutePolicyModel,
 )
 from packages.harness.pools.llm_pool import LlmEntryPool
@@ -124,6 +129,25 @@ SLOW_CALL_WARN_MS: Final[int] = 10_000
 def _role_value(role: ModelRole | str) -> str:
     """角色归一为字符串值（ModelRole 成员 / 角色名兼容）。"""
     return role.value if isinstance(role, ModelRole) else str(role)
+
+
+def _format_route_trace(trace: Sequence[PolicyEvalTraceModel]) -> str:
+    """格式化求值轨迹摘要（``policy→[dimension:matched,...]``，不含消息内容）。
+
+    Args:
+        trace: 源角色匹配策略的求值轨迹。
+
+    Returns:
+        紧凑轨迹摘要（多条策略以 ``; `` 分隔）。
+    """
+    return "; ".join(
+        f"{entry.policy_name}→["
+        + ",".join(
+            f"{condition.dimension}:{condition.matched}" for condition in entry.conditions
+        )
+        + "]"
+        for entry in trace
+    )
 
 
 class LlmGateway:
@@ -195,8 +219,8 @@ class LlmGateway:
         self._intimate_config = (
             intimate_config if intimate_config is not None else IntimateChannelConfig()
         )
-        #: 路由目标的独立凭据覆盖（目标角色 → 明文密钥；内置通道的凭据
-        #: 不来自条目 ``api_key_env``——通道配置已持有 SecretStr）。
+        #: 路由目标的独立凭据覆盖（目标角色 → 明文密钥；仅内置通道条目
+        #: 身份消费——别名改绑到其它条目时不施加，见 _route_wire_api_key）。
         self._route_api_keys: dict[str, str] = {}
         #: 内置亲密策略的条目（配置齐全时构建——池键 / 熔断器稳定）。
         self._builtin_intimate_entry: LlmModelEntry | None = None
@@ -270,7 +294,7 @@ class LlmGateway:
             request_id=request_id,
             tools=tools,
             tool_choice=tool_choice,
-            wire_api_key=self._route_api_keys.get(decision.effective_role),
+            wire_api_key=self._route_wire_api_key(entry),
         )
 
     async def stream_by_role(
@@ -320,7 +344,7 @@ class LlmGateway:
             persona_id=persona_id,
             purpose=resolved_purpose,
             request_id=request_id,
-            wire_api_key=self._route_api_keys.get(decision.effective_role),
+            wire_api_key=self._route_wire_api_key(entry),
         ):
             yield chunk
 
@@ -627,6 +651,23 @@ class LlmGateway:
         if resolver.resolve_optional(INTIMATE_TARGET_ROLE) is None:
             resolver.register_route_target(INTIMATE_TARGET_ROLE, entry)
 
+    def _route_wire_api_key(self, entry: LlmModelEntry) -> str | None:
+        """路由目标的 wire 凭据覆盖（仅内置亲密通道条目，按条目身份判定）。
+
+        凭据属于内置通道**条目本身**，不跟随 ``intimate`` 角色别名——当
+        config.yaml 把 ``intimate`` 别名绑定到另一条目时，该条目仍走自身
+        ``api_key_env`` 解析链，通道密钥不会发往错误端点。
+
+        Args:
+            entry: 本轮解析到的模型条目。
+
+        Returns:
+            内置亲密通道条目的明文密钥；其余条目 ``None``（走条目密钥解析）。
+        """
+        if entry.name != INTIMATE_CHANNEL_ENTRY_NAME:
+            return None
+        return self._route_api_keys.get(INTIMATE_TARGET_ROLE)
+
     def _evaluate_route(
         self, role: ModelRole | str, intimacy_level: int | None, purpose: str
     ) -> RouteDecisionModel:
@@ -638,12 +679,15 @@ class LlmGateway:
             purpose: 本轮调用用途（对话类型维度输入）。
 
         Returns:
-            裁决结果（生效角色 / 策略名 / 原因）。
+            裁决结果（生效角色 / 策略名 / 原因 / 求值轨迹）；回落路径的 info
+            与未命中 direct 的 debug 日志附带轨迹摘要，routed 只记策略名与
+            原因。
         """
         self._ensure_builtin_route_target()
         resolver = self._resolver if self._resolver is not None else get_model_resolver()
+        source_role = _role_value(role)
         decision = evaluate_route(
-            _role_value(role),
+            source_role,
             self._policies,
             intimacy_level=intimacy_level,
             now_ms=self._route_now_ms(),
@@ -651,13 +695,33 @@ class LlmGateway:
             purpose=purpose,
             resolver=resolver,
         )
-        if decision.policy_name is not None:
+        if decision.reason in (
+            RouteDecisionReason.FALLBACK_UNBOUND,
+            RouteDecisionReason.FALLBACK_ERROR,
+        ):
+            logger.info(
+                "条件路由回落: policy={}, source_role={}, effective_role={},"
+                " reason={}, trace={}",
+                decision.policy_name,
+                source_role,
+                decision.effective_role,
+                decision.reason.value,
+                _format_route_trace(decision.trace),
+            )
+        elif decision.reason is RouteDecisionReason.ROUTED:
             logger.info(
                 "条件路由: policy={}, source_role={}, effective_role={}, reason={}",
                 decision.policy_name,
-                _role_value(role),
+                source_role,
                 decision.effective_role,
                 decision.reason.value,
+            )
+        elif decision.trace:
+            logger.debug(
+                "条件路由未命中: source_role={}, reason={}, trace={}",
+                source_role,
+                decision.reason.value,
+                _format_route_trace(decision.trace),
             )
         return decision
 

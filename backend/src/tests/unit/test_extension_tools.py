@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -11,8 +12,9 @@ import pytest
 from packages.harness.chat.chat_models import ChatSessionStateModel
 from packages.harness.chat.service import ChatService
 from packages.harness.config.models import ExtensionTool
-from packages.harness.core.errors import BusinessException
+from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.llm.llm_models import ChatResponseModel, ToolCallModel
+from packages.harness.memory.models import MemoryProvenance
 from packages.harness.persona.chara_card import CharaCardModel
 from packages.harness.tools.extension_tools import build_extension_tool
 from packages.harness.tools.registry import ToolRegistry
@@ -252,6 +254,158 @@ async def test_response_size_cap() -> None:
     assert "字节上限" in (result.error or "")
 
 
+class _CountingBodyStream(httpx.AsyncByteStream):
+    """可计数异步响应体（记录传输层实际被消费的字节数）。"""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = chunks
+        self.bytes_read = 0
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self.chunks:
+            self.bytes_read += len(chunk)
+            yield chunk
+
+
+async def test_response_size_cap_stops_stream_mid_read() -> None:
+    """超过字节帽：读到上限即停止消费（未读完整 body）并受控失败。"""
+    stream = _CountingBodyStream([b"x" * 10 for _ in range(10)])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """返回计数流响应。"""
+        return httpx.Response(200, stream=stream)
+
+    tool = _extension(response_max_bytes=25)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        registry, _, _ = _register(tool, lambda: client)
+        result = await registry.execute(tool.name, {"date": "2026-01-01"})
+    assert result.ok is False
+    assert "字节上限" in (result.error or "")
+    assert stream.bytes_read < 100
+
+
+async def test_header_unicode_encoding_failure_is_controlled() -> None:
+    """header 值含非 ASCII：编码异常转为受控中文错误（不上抛）。"""
+    tool = _extension(headers={"X-Note": "中文"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+    ) as client:
+        registry, _, _ = _register(tool, lambda: client)
+        result = await registry.execute(tool.name, {"date": "2026-01-01"})
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.startswith(f"{ErrorCode.INTERNAL_ERROR}: ")
+    assert "UnicodeEncodeError" in result.error
+
+
+@pytest.mark.parametrize(
+    ("property_schema", "value"),
+    [
+        pytest.param({"type": "string", "enum": ["a", "b"]}, "c", id="enum"),
+        pytest.param(
+            {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$"},
+            "2026/01/01",
+            id="pattern",
+        ),
+        pytest.param(
+            {"type": "array", "items": {"type": "integer"}},
+            [1, "2"],
+            id="items-strict",
+        ),
+        pytest.param(
+            {"type": "array", "items": {"type": "integer"}, "minItems": 2},
+            [1],
+            id="minItems",
+        ),
+        pytest.param(
+            {"type": "array", "items": {"type": "integer"}, "maxItems": 1},
+            [1, 2],
+            id="maxItems",
+        ),
+    ],
+)
+async def test_json_schema_constraints_reject_violations(
+    property_schema: dict[str, Any], value: object
+) -> None:
+    """enum / pattern / items / minItems / maxItems 越界：参数校验失败。"""
+    parameters = {
+        "type": "object",
+        "properties": {"date": property_schema},
+        "required": ["date"],
+    }
+    tool = _extension(parameters=parameters)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+    ) as client:
+        registry, _, _ = _register(tool, lambda: client)
+        result = await registry.execute(tool.name, {"date": value})
+    assert result.ok is False
+    assert "参数校验失败" in (result.error or "")
+
+
+@pytest.mark.parametrize(
+    ("property_schema", "value"),
+    [
+        pytest.param({"type": "integer"}, "2", id="integer-string"),
+        pytest.param({"type": "integer"}, True, id="integer-bool"),
+        pytest.param({"type": "number"}, "1.5", id="number-string"),
+        pytest.param({"type": "boolean"}, 1, id="boolean-int"),
+        pytest.param({"type": "string"}, 1, id="string-int"),
+    ],
+)
+async def test_json_schema_strict_types_reject_coercion(
+    property_schema: dict[str, Any], value: object
+) -> None:
+    """JSON Schema 语义不接受字符串/数字强转：严格类型拒绝。"""
+    parameters = {
+        "type": "object",
+        "properties": {"date": property_schema},
+        "required": ["date"],
+    }
+    tool = _extension(parameters=parameters)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+    ) as client:
+        registry, _, _ = _register(tool, lambda: client)
+        result = await registry.execute(tool.name, {"date": value})
+    assert result.ok is False
+    assert "参数校验失败" in (result.error or "")
+
+
+async def test_json_schema_constraints_accept_valid_values() -> None:
+    """合法 enum / pattern / 数组长度与元素类型：通过校验并执行。"""
+    parameters = {
+        "type": "object",
+        "properties": {
+            "date": {
+                "type": "string",
+                "enum": ["2026-01-01", "2026-01-02"],
+                "pattern": r"^\d{4}-\d{2}-\d{2}$",
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": 2,
+            },
+        },
+        "required": ["date"],
+    }
+    tool = _extension(parameters=parameters)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))
+    ) as client:
+        registry, _, _ = _register(tool, lambda: client)
+        result = await registry.execute(
+            tool.name, {"date": "2026-01-01", "tags": ["a", "b"]}
+        )
+    assert result.ok is True
+
+
 async def test_non_json_response_fails_controlled() -> None:
     """非 JSON 响应：受控失败。"""
     def handler(request: httpx.Request) -> httpx.Response:
@@ -277,7 +431,9 @@ async def test_result_path_miss_fails_controlled() -> None:
         registry, _, _ = _register(tool, lambda: client)
         result = await registry.execute(tool.name, {"date": "2026-01-01"})
     assert result.ok is False
-    assert "result_path 未命中" in (result.error or "")
+    assert result.result == {}
+    assert result.error is not None
+    assert result.error.startswith(f"{ErrorCode.INTERNAL_ERROR}: ")
 
 
 async def test_redirect_not_followed() -> None:
@@ -391,6 +547,71 @@ async def test_chat_tool_loop_end_to_end_with_extension_tool() -> None:
     feedback = gateway.requests[1]["messages"][-1]
     assert "站会" in feedback.content
     assert feedback.tool_call_id == "call-1"
+
+
+async def test_extension_tool_owner_only_hidden_from_peer() -> None:
+    """owner-only 扩展工具：owner 回合可见，peer 回合被结构性剔除。"""
+    tool = _extension()
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+    ) as client:
+        registry, spec, _ = _register(tool, lambda: client)
+        owner_gateway = _ScriptedGateway([ChatResponseModel(content="主人回复")])
+        owner_service = ChatService(
+            gateway=owner_gateway,
+            tools=[spec],
+            tool_executor=registry,
+            owner_only_tools=frozenset({tool.name}),
+        )
+        state = ChatSessionStateModel(
+            persona_id=7,
+            persona_name="test-persona",
+            display_name="测试人格",
+            card=CharaCardModel(name="test-persona"),
+        )
+        await owner_service.reply(state, "查日程")
+        peer_gateway = _ScriptedGateway([ChatResponseModel(content="群友回复")])
+        peer_service = ChatService(
+            gateway=peer_gateway,
+            tools=[spec],
+            tool_executor=registry,
+            owner_only_tools=frozenset({tool.name}),
+        )
+        await peer_service.reply(
+            state, "查日程", sender_provenance=MemoryProvenance.PEER
+        )
+
+    owner_tools = owner_gateway.requests[0]["kwargs"]["tools"]
+    assert [definition.name for definition in owner_tools] == [tool.name]
+    assert peer_gateway.requests[0]["kwargs"]["tools"] is None
+
+
+async def test_extension_tool_peer_visible_when_not_owner_only() -> None:
+    """expose_to_peer=true 的映射结果（不在 owner-only 集合）对 peer 可见。"""
+    tool = _extension()
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+    ) as client:
+        registry, spec, _ = _register(tool, lambda: client)
+        gateway = _ScriptedGateway([ChatResponseModel(content="群友回复")])
+        service = ChatService(
+            gateway=gateway,
+            tools=[spec],
+            tool_executor=registry,
+            owner_only_tools=frozenset(),
+        )
+        state = ChatSessionStateModel(
+            persona_id=7,
+            persona_name="test-persona",
+            display_name="测试人格",
+            card=CharaCardModel(name="test-persona"),
+        )
+        await service.reply(state, "查日程", sender_provenance=MemoryProvenance.PEER)
+
+    peer_tools = gateway.requests[0]["kwargs"]["tools"]
+    assert [definition.name for definition in peer_tools] == [tool.name]
 
 
 async def test_invalid_url_runtime_failure_isolated() -> None:

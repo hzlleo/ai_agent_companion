@@ -42,6 +42,7 @@ from packages.harness.llm.route_policy_models import (
     INTIMATE_BUILTIN_PRIORITY,
     INTIMATE_TARGET_ROLE,
     RouteConditionModel,
+    RouteDecisionModel,
     RouteDecisionReason,
     RoutePolicyModel,
     TimeWindowModel,
@@ -425,7 +426,7 @@ def _evaluate(
     has_summary: bool | None = None,
     purpose: str = "chat",
     resolver: ModelResolver | None = None,
-):
+) -> RouteDecisionModel:
     """求值辅助（默认摘要可用性与等级输入一致）。"""
     return evaluate_route(
         "chat",
@@ -541,6 +542,80 @@ async def test_no_policy_and_source_mismatch_are_direct() -> None:
     decision = _evaluate([other], level=3)
     assert decision.reason is RouteDecisionReason.DIRECT
     assert decision.effective_role == "chat"
+
+
+async def test_trace_records_all_source_matched_misses_with_blocking_dimension() -> None:
+    """求值轨迹：两条策略均不命中时逐条保留，并指出卡住的维度。"""
+    intimacy_miss = RoutePolicyModel(
+        name="needs-intimacy",
+        source_role="chat",
+        target_role=INTIMATE_TARGET_ROLE,
+        condition=RouteConditionModel(min_intimacy_level=2),
+    )
+    purpose_miss = RoutePolicyModel(
+        name="duty-only",
+        source_role="chat",
+        target_role=INTIMATE_TARGET_ROLE,
+        condition=RouteConditionModel(purposes=("duty",)),
+    )
+    decision = _evaluate([intimacy_miss, purpose_miss], level=1, purpose="chat")
+    assert decision.reason is RouteDecisionReason.DIRECT
+    assert [entry.policy_name for entry in decision.trace] == ["needs-intimacy", "duty-only"]
+    intimacy_condition = decision.trace[0].conditions[0]
+    assert intimacy_condition.dimension == "intimacy"
+    assert intimacy_condition.matched is False
+    # detail 是排障用的可读文本：只断言它带上了阈值数值，不钉措辞。
+    assert "2" in intimacy_condition.detail
+    purpose_condition = decision.trace[1].conditions[0]
+    assert purpose_condition.dimension == "purposes"
+    assert purpose_condition.matched is False
+    assert "duty" in purpose_condition.detail
+
+
+async def test_trace_keeps_prior_misses_when_later_policy_hits() -> None:
+    """求值轨迹：首条命中时仍保留其之前的未命中策略（按求值序）。"""
+    night_miss = RoutePolicyModel(
+        name="night-only",
+        source_role="chat",
+        target_role=INTIMATE_TARGET_ROLE,
+        priority=10,
+        condition=RouteConditionModel(
+            time_window=TimeWindowModel(start_hour=22, end_hour=6, timezone="Asia/Shanghai")
+        ),
+    )
+    intimacy_hit = RoutePolicyModel(
+        name="intimacy-hit",
+        source_role="chat",
+        target_role=INTIMATE_TARGET_ROLE,
+        priority=5,
+        condition=RouteConditionModel(min_intimacy_level=2),
+    )
+    decision = _evaluate(
+        [night_miss, intimacy_hit],
+        level=2,
+        now_ms=_shanghai_epoch_ms(hour=12),
+    )
+    assert decision.reason is RouteDecisionReason.ROUTED
+    assert decision.policy_name == "intimacy-hit"
+    assert [entry.policy_name for entry in decision.trace] == ["night-only", "intimacy-hit"]
+    night_condition = decision.trace[0].conditions[0]
+    assert night_condition.dimension == "time_window"
+    assert night_condition.matched is False
+    assert "12" in night_condition.detail
+
+
+async def test_trace_is_empty_without_source_matched_policy() -> None:
+    """求值轨迹：无源角色匹配策略时为空元组（不记录其它源角色的策略）。"""
+    other_source = RoutePolicyModel(
+        name="duty-policy",
+        source_role="duty",
+        target_role=INTIMATE_TARGET_ROLE,
+        condition=RouteConditionModel(),
+    )
+    assert _evaluate([], level=3).trace == ()
+    decision = _evaluate([other_source], level=3)
+    assert decision.reason is RouteDecisionReason.DIRECT
+    assert decision.trace == ()
 
 
 async def test_priority_and_declaration_order() -> None:
@@ -849,6 +924,34 @@ async def test_gateway_time_window_uses_injected_clock() -> None:
         await manager.stop()
     assert len(handler.target_requests) == 1
     assert len(handler.default_requests) == 1
+
+
+async def test_gateway_logs_trace_on_fallback_and_direct_miss() -> None:
+    """网关日志：回落 info 与未命中 direct debug 均附轨迹摘要（不含消息内容）。"""
+    handler = DualEndpointHandler()
+    manager = await _make_pool_manager(handler)
+    messages: list[str] = []
+    handler_id = logger.add(lambda message: messages.append(str(message)), level="DEBUG")
+    policy = _intimacy_policy(min_intimacy_level=2)
+    try:
+        gateway = _gateway(
+            manager,
+            resolver=ModelResolver([_chat_entry()]),
+            route_policies=[policy],
+        )
+        await gateway.chat_by_role("chat", _messages(), intimacy_level=3)
+        await gateway.chat_by_role("chat", _messages(), intimacy_level=1)
+    finally:
+        logger.remove(handler_id)
+        await manager.stop()
+
+    fallback_logs = [message for message in messages if "条件路由回落" in message]
+    assert len(fallback_logs) == 1
+    assert "equivalence-policy→[intimacy:True]" in fallback_logs[0]
+    direct_logs = [message for message in messages if "条件路由未命中" in message]
+    assert len(direct_logs) == 1
+    assert "equivalence-policy→[intimacy:False]" in direct_logs[0]
+    assert "今天想抱抱" not in fallback_logs[0] + direct_logs[0]
 
 
 async def test_gateway_user_policy_overrides_builtin_priority() -> None:

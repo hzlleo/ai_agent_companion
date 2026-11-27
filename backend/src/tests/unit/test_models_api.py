@@ -42,6 +42,7 @@ from packages.harness.config.registry_admin_dtos import (
     ModelEntryCreateDTO,
     ModelEntryUpdateDTO,
 )
+from packages.harness.core.errors import BusinessException, ErrorCode
 
 #: 密钥环境变量真实值（防泄漏断言真源——响应面出现即失败）。
 _SECRET_VALUE = "sk-super-secret-do-not-leak-9f3a"
@@ -381,6 +382,63 @@ async def test_delete_missing_404(client: AsyncClient, config_dir: Path) -> None
     response = await client.delete("/api/v1/models/entries/nope")
     assert response.status_code == 404
     assert response.json()["code"] == "NOT_FOUND"
+
+
+_ROUTE_POLICY_YAML = """
+llm:
+  models:
+    - name: main-chat
+      provider: openai_compatible
+      base_url: https://api.example.com/v1
+      api_key_env: MAIN_CHAT_API_KEY
+      model: glm-5.3
+      roles: [chat]
+    - name: chat-night
+      provider: openai_compatible
+      base_url: https://api.example.com/v1
+      api_key_env: CHAT_NIGHT_API_KEY
+      model: glm-5.3-night
+      roles: []
+  role_bindings:
+    chat_night: chat-night
+  multimodal_fallback:
+    local: null
+    remote: null
+  route_policies:
+    - name: night-chat
+      source_role: chat
+      target_role: chat_night
+      priority: 100
+      condition:
+        time_window:
+          start_hour: 22
+          end_hour: 6
+          timezone: Asia/Shanghai
+      fallback_to_source: true
+"""
+
+
+async def test_delete_guard_covers_route_role_bindings(tmp_path: Path) -> None:
+    """策略目标角色的显式绑定同样禁止删除（含 resolved_roles 同口径）。"""
+    directory = tmp_path / "route-policy-config"
+    directory.mkdir()
+    (directory / "config.yaml").write_text(_ROUTE_POLICY_YAML, encoding="utf-8")
+    config_loader.load_all_config(config_dir=directory)
+
+    service = RegistryAdminService()
+    state = await service.state()
+    night = next(entry for entry in state.entries if entry.name == "chat-night")
+    assert night.resolved_roles == ["chat_night"]
+
+    with pytest.raises(BusinessException) as exc_info:
+        await service.delete_entry("chat-night")
+    assert exc_info.value.code is ErrorCode.CONFLICT
+    assert exc_info.value.details is not None
+    assert exc_info.value.details["bound_roles"] == ["chat_night"]
+
+    on_disk = _read_yaml(directory / "config.yaml")
+    assert [model["name"] for model in on_disk["llm"]["models"]] == ["main-chat", "chat-night"]
+    assert on_disk["llm"]["role_bindings"] == {"chat_night": "chat-night"}
 
 
 # ---------------------------------------------------------------------------

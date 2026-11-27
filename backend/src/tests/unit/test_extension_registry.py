@@ -220,10 +220,12 @@ async def test_undeclared_placeholder_skips_tool() -> None:
 
 async def test_invalid_tool_spec_skipped() -> None:
     """工具规格校验失败（空名称）：跳过并记录原因，不阻塞启动。"""
+    config = _config()
+    config.tools[0] = config.tools[0].model_copy(update={"name": ""})
     registry = ToolRegistry()
     report = register_extension_tools(
         registry,
-        _config(name=""),
+        config,
         http_client_factory=lambda: httpx.AsyncClient(),
     )
     assert report.registered == []

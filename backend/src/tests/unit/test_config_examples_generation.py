@@ -76,6 +76,27 @@ async def test_config_example_yaml_loads_via_loader(tmp_path: Path) -> None:
     assert len(extensions.tools) >= 1
 
 
+async def test_config_example_yaml_disables_night_routing_by_default(
+    tmp_path: Path,
+) -> None:
+    """提交模板经真实 loader：route_policies 为空且 chat_night 未绑定。
+
+    夜间示例（chat-night 条目 / role_bindings / route_policies）在模板中
+    全部是注释——新装用户复制模板后不会在夜间被改道到占位端点。
+    """
+    import shutil
+
+    from packages.harness.config.loader import load_all_config
+
+    shutil.copy(_BACKEND_DIR / "config.example.yaml", tmp_path / "config.yaml")
+    shutil.copy(
+        _BACKEND_DIR / "extensions_config.example.json", tmp_path / "extensions_config.json"
+    )
+    llm, _ = load_all_config(config_dir=tmp_path)
+    assert llm.route_policies == []
+    assert "chat_night" not in llm.role_bindings
+
+
 async def test_config_example_yaml_carries_search_registry(tmp_path: Path) -> None:
     """config.example.yaml 的 search 段：字段齐全 + 经搜索域加载器闭环。"""
     import shutil

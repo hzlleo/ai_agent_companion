@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import types
-from typing import get_args, get_origin
+from typing import Literal, get_args, get_origin
 
 from generate_examples_helpers import _get_field_description
 from pydantic import BaseModel
@@ -143,7 +143,11 @@ def _search_section_lines() -> list[str]:
             "  providers:",
         ]
     )
-    for name, kind in (("bocha-main", "bocha"), ("zhipu-fallback", "zhipu")):
+    provider_specs: tuple[tuple[str, Literal["bocha", "zhipu"]], ...] = (
+        ("bocha-main", "bocha"),
+        ("zhipu-fallback", "zhipu"),
+    )
+    for name, kind in provider_specs:
         entry: dict[str, object] = SearchProviderEntry(name=name, kind=kind).model_dump()
         # base_url 被模型校验物化为 kind 官方缺省；示例按「空=按 kind 缺省」
         # 语义省略该键，缺省表仍是唯一真源。
@@ -156,6 +160,65 @@ def _search_section_lines() -> list[str]:
         if field_info.default is None:
             continue
         lines.append(f"    {field_name}: {_yaml_scalar(field_info.default)}")
+    return lines
+
+
+def _model_entry_lines(model: dict[str, object]) -> list[str]:
+    """渲染单个模型条目的相对 YAML 行（不含外层 4 空格缩进）。
+
+    Args:
+        model: ``LlmConfig.default_models()`` 条目（config.yaml 输入格式）。
+
+    Returns:
+        相对行列表（首行 ``- name: ...``，其后字段行以两空格缩进）。
+    """
+    lines = ["- name: " + _yaml_quote(str(model["name"]))]
+    lines.append(f"  provider: {_yaml_quote(str(model['provider']))}")
+    lines.append(f"  base_url: {_yaml_quote(str(model['base_url']))}")
+    api_key_env = model["api_key_env"]
+    if api_key_env:
+        lines.append(f"  api_key_env: {_yaml_quote(str(api_key_env))}")
+    else:
+        lines.append('  api_key_env: ""  # 本地免鉴权端点')
+    lines.append(f"  model: {_yaml_quote(str(model['model']))}")
+    roles_raw = model.get("roles", [])
+    roles = roles_raw if isinstance(roles_raw, list) else []
+    if roles:
+        lines.append(f"  roles: [{', '.join(_yaml_quote(str(r)) for r in roles)}]")
+    else:
+        lines.append("  roles: []")
+    concurrency = model.get("concurrency")
+    if concurrency is not None:
+        lines.append(f"  concurrency: {concurrency}")
+    if model.get("multimodal"):
+        lines.append("  multimodal: true")
+    return lines
+
+
+def _route_policy_lines(policy: dict[str, object]) -> list[str]:
+    """渲染单条路由策略的相对 YAML 行（不含外层 2 空格缩进）。
+
+    Args:
+        policy: ``LlmConfig.default_route_policies()`` 条目。
+
+    Returns:
+        相对行列表（首行 ``- name: ...``，其后字段行以两空格缩进）。
+    """
+    lines = ["- name: " + _yaml_quote(str(policy["name"]))]
+    lines.append(f"  source_role: {_yaml_quote(str(policy['source_role']))}")
+    lines.append(f"  target_role: {_yaml_quote(str(policy['target_role']))}")
+    lines.append(f"  priority: {policy['priority']}")
+    lines.append("  condition:")
+    condition = policy["condition"]
+    assert isinstance(condition, dict)
+    window = condition["time_window"]
+    assert isinstance(window, dict)
+    lines.append("    time_window:")
+    lines.append(f"      start_hour: {window['start_hour']}")
+    lines.append(f"      end_hour: {window['end_hour']}")
+    lines.append(f"      timezone: {_yaml_quote(str(window['timezone']))}")
+    fallback = "true" if policy["fallback_to_source"] else "false"
+    lines.append(f"  fallback_to_source: {fallback}")
     return lines
 
 
@@ -199,75 +262,48 @@ def generate_config_example_yaml() -> str:
         ]
     )
 
+    night_entry_name = "chat-night"
     for model in LlmConfig.default_models():
-        lines.append("    - name: " + _yaml_quote(model["name"]))
-        lines.append(f"      provider: {_yaml_quote(model['provider'])}")
-        lines.append(f"      base_url: {_yaml_quote(model['base_url'])}")
-        api_key_env = model["api_key_env"]
-        if api_key_env:
-            lines.append(f"      api_key_env: {_yaml_quote(api_key_env)}")
-        else:
-            lines.append('      api_key_env: ""  # 本地免鉴权端点')
-        lines.append(f"      model: {_yaml_quote(model['model'])}")
-        roles = model.get("roles", [])
-        if roles:
-            lines.append(f"      roles: [{', '.join(_yaml_quote(r) for r in roles)}]")
-        else:
-            lines.append("      roles: []")
-        concurrency = model.get("concurrency")
-        if concurrency is not None:
-            lines.append(f"      concurrency: {concurrency}")
-        if model.get("multimodal"):
-            lines.append("      multimodal: true")
+        if str(model["name"]) == night_entry_name:
+            lines.append("    # 条件路由示例条目（默认不启用——与 role_bindings /")
+            lines.append("    # route_policies 示例一同取消注释后生效）。")
+            lines.extend("    # " + line for line in _model_entry_lines(model))
+            continue
+        lines.extend("    " + line for line in _model_entry_lines(model))
 
-    bindings = LlmConfig.default_role_bindings()
     lines.extend(
         [
             "",
             "  # 显式角色绑定（角色 → 条目名；优先于条目自身 roles 声明）。",
-            "  # 注册表五角色由条目 roles 声明承接；此处仅绑定条件路由策略的",
-            "  # 目标角色（chat_night → 夜间条目）。",
-            '  # 示例：',
-            '  # role_bindings:',
+            "  # 注册表五角色由条目 roles 声明承接，默认无需绑定；下方示例展示",
+            "  # 条件路由目标角色（chat_night → 夜间条目）的写法。",
+            "  # 示例：",
+            "  # role_bindings:",
             '  #   chat: "main-chat"',
         ]
     )
-    if bindings:
-        lines.append("  role_bindings:")
-        for role, entry_name in bindings.items():
-            lines.append(f"    {role}: {_yaml_quote(entry_name)}")
-    else:
-        lines.append("  role_bindings: {}")
-
+    for role, entry_name in LlmConfig.default_role_bindings().items():
+        lines.append(f"  #   {role}: {_yaml_quote(entry_name)}")
     lines.extend(
         [
+            "  role_bindings: {}",
             "",
             "  # ===========================================================================",
             "  # route_policies — 条件路由策略（原角色在条件命中时改由目标角色条目",
             "  # 承接；默认空列表 = 零行为变更）。条件维度：亲密度区间 / 关系摘要",
             "  # 可用性 / 时段（IANA 时区，end<=start 视为跨午夜）/ 对话类型（用途名）。",
-            "  # 示例：夜间 chat → chat_night（Asia/Shanghai）。chat_night 须在",
-            "  # models 中有条目并经 role_bindings 绑定（示例已绑定到 chat-night）。",
+            "  # 下方为夜间 chat → chat_night（Asia/Shanghai）示例——默认不生效；",
+            "  # 启用须同时取消 chat-night 条目与 role_bindings 示例的注释。",
             "  # RoutePolicyModel 字段 schema:",
         ]
     )
     lines.extend(generate_yaml_field_comments(RoutePolicyModel))
     lines.extend(["  # RouteConditionModel 字段 schema:", *generate_yaml_field_comments(RouteConditionModel)])
     lines.extend(["  # TimeWindowModel 字段 schema:", *generate_yaml_field_comments(TimeWindowModel)])
-    lines.extend(["  route_policies:"])
+    lines.append("  # route_policies:")
     for policy in LlmConfig.default_route_policies():
-        lines.append(f"    - name: {_yaml_quote(policy['name'])}")
-        lines.append(f"      source_role: {_yaml_quote(policy['source_role'])}")
-        lines.append(f"      target_role: {_yaml_quote(policy['target_role'])}")
-        lines.append(f"      priority: {policy['priority']}")
-        lines.append("      condition:")
-        window = policy["condition"]["time_window"]
-        lines.append("        time_window:")
-        lines.append(f"          start_hour: {window['start_hour']}")
-        lines.append(f"          end_hour: {window['end_hour']}")
-        lines.append(f"          timezone: {_yaml_quote(window['timezone'])}")
-        fallback = "true" if policy["fallback_to_source"] else "false"
-        lines.append(f"      fallback_to_source: {fallback}")
+        lines.extend("  # " + line for line in _route_policy_lines(policy))
+    lines.append("  route_policies: []")
     lines.extend(
         [
             "",

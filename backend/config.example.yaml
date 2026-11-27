@@ -61,29 +61,31 @@ llm:
       model: "bge-m3"
       roles: ["embed"]
       concurrency: 4
-    - name: "chat-night"
-      provider: "openai_compatible"
-      base_url: "https://api.example.com/v1"
-      api_key_env: "CHAT_NIGHT_API_KEY"
-      model: "glm-5.3-night"
-      roles: []
-      concurrency: 2
+    # 条件路由示例条目（默认不启用——与 role_bindings /
+    # route_policies 示例一同取消注释后生效）。
+    # - name: "chat-night"
+    #   provider: "openai_compatible"
+    #   base_url: "https://api.example.com/v1"
+    #   api_key_env: "CHAT_NIGHT_API_KEY"
+    #   model: "glm-5.3-night"
+    #   roles: []
+    #   concurrency: 2
 
   # 显式角色绑定（角色 → 条目名；优先于条目自身 roles 声明）。
-  # 注册表五角色由条目 roles 声明承接；此处仅绑定条件路由策略的
-  # 目标角色（chat_night → 夜间条目）。
+  # 注册表五角色由条目 roles 声明承接，默认无需绑定；下方示例展示
+  # 条件路由目标角色（chat_night → 夜间条目）的写法。
   # 示例：
   # role_bindings:
   #   chat: "main-chat"
-  role_bindings:
-    chat_night: "chat-night"
+  #   chat_night: "chat-night"
+  role_bindings: {}
 
   # ===========================================================================
   # route_policies — 条件路由策略（原角色在条件命中时改由目标角色条目
   # 承接；默认空列表 = 零行为变更）。条件维度：亲密度区间 / 关系摘要
   # 可用性 / 时段（IANA 时区，end<=start 视为跨午夜）/ 对话类型（用途名）。
-  # 示例：夜间 chat → chat_night（Asia/Shanghai）。chat_night 须在
-  # models 中有条目并经 role_bindings 绑定（示例已绑定到 chat-night）。
+  # 下方为夜间 chat → chat_night（Asia/Shanghai）示例——默认不生效；
+  # 启用须同时取消 chat-night 条目与 role_bindings 示例的注释。
   # RoutePolicyModel 字段 schema:
 #   name (str): 策略名（日志与错误 details 引用）
 #   source_role (str): 原角色名
@@ -101,17 +103,18 @@ llm:
 #   start_hour (int): 窗口起始小时（0-23，含）
 #   end_hour (int): 窗口结束小时（0-23，不含；<= 起始小时视为跨午夜）
 #   timezone (str): IANA 时区名（默认 UTC）
-  route_policies:
-    - name: "night-chat"
-      source_role: "chat"
-      target_role: "chat_night"
-      priority: 100
-      condition:
-        time_window:
-          start_hour: 22
-          end_hour: 6
-          timezone: "Asia/Shanghai"
-      fallback_to_source: true
+  # route_policies:
+  # - name: "night-chat"
+  #   source_role: "chat"
+  #   target_role: "chat_night"
+  #   priority: 100
+  #   condition:
+  #     time_window:
+  #       start_hour: 22
+  #       end_hour: 6
+  #       timezone: "Asia/Shanghai"
+  #   fallback_to_source: true
+  route_policies: []
 
   # ===========================================================================
   # multimodal_fallback — look_at 角色非多模态时的回退链

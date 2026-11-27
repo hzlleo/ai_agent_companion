@@ -2,8 +2,8 @@
   "version": 1,
   "note": "单元测试断言基线——计数只降不升；再生成: python scripts/assertion_freeze.py --update",
   "totals": {
-    "asserts": 10049,
-    "raises": 776,
+    "asserts": 10119,
+    "raises": 781,
     "files": 240
   },
   "files": {
@@ -278,9 +278,9 @@
       "digest": "3a36ece6799e4e934e9300d6d47eea324e2744e5a089a5362f0a7633254f8e92"
     },
     "backend/src/tests/unit/test_config_examples_generation.py": {
-      "asserts": 16,
+      "asserts": 18,
       "raises": 0,
-      "digest": "8e776f98825c8154b09f4d697e6295a574817f45d033b1cd4eb6d987fe2bbc38"
+      "digest": "0d6c7c3199d2775e1ce74e9e0e33e1e2696382ae6d92f0544414e65ac1f08ce7"
     },
     "backend/src/tests/unit/test_config_llm_wire.py": {
       "asserts": 14,
@@ -288,9 +288,9 @@
       "digest": "613fbb0755cc9043a843c6d7769cbca3f9eaf47541a4f432c6f3f1d35e81533f"
     },
     "backend/src/tests/unit/test_config_loader.py": {
-      "asserts": 39,
+      "asserts": 41,
       "raises": 8,
-      "digest": "8c8d4127c26b7376cd591c4e7cba32830cdc5de0d47c3d73c7d505c6d900368d"
+      "digest": "23f6ec4010fe99b2d8735e3eca640c54a6dfaa766f1b858fd8170be41727f037"
     },
     "backend/src/tests/unit/test_config_model_entry.py": {
       "asserts": 31,
@@ -313,9 +313,9 @@
       "digest": "96c51f30e3a15373bb64aefcc7089d4b788b58d00e0f3929feb959f161449f21"
     },
     "backend/src/tests/unit/test_config_settings.py": {
-      "asserts": 86,
+      "asserts": 87,
       "raises": 6,
-      "digest": "4e93061979b5a02272b0f923405f24190f6c559bf86a2bd5c716d50b6fbca551"
+      "digest": "d23bedb4a5c111be908f5aa8a5b4069aba0c85830c329fd7718e6065e28ba0b0"
     },
     "backend/src/tests/unit/test_config_wizard.py": {
       "asserts": 134,
@@ -483,14 +483,14 @@
       "digest": "4d419b9702786b6964c80a6e6d7a263024d65d6391b847ba68c74e51f6acf592"
     },
     "backend/src/tests/unit/test_extension_app_lifespan.py": {
-      "asserts": 10,
+      "asserts": 19,
       "raises": 0,
-      "digest": "a7003e7bbe6c96c646719f4763142383ad4e8e4e2822f0a20fa7986ddc7c4fd0"
+      "digest": "3bb4bb0f518d0cc829836624b8a109be5b15df1fb9a0c865e3aff04cbc02687e"
     },
     "backend/src/tests/unit/test_extension_models.py": {
-      "asserts": 24,
-      "raises": 10,
-      "digest": "633266360eb4a529e4ca8bfd32c8bce143dd6d7a2e4b1982e85215ca749cb944"
+      "asserts": 29,
+      "raises": 14,
+      "digest": "bfb654a9254d7522fc1d5692444710268a7e6231a4660138c7a3fb1cd9a35872"
     },
     "backend/src/tests/unit/test_extension_registry.py": {
       "asserts": 36,
@@ -498,9 +498,9 @@
       "digest": "6c1dbdc07a59bbf8c81554ba32ff8c4ee70d37d8d31634b00dc3b2c1b7f10093"
     },
     "backend/src/tests/unit/test_extension_tools.py": {
-      "asserts": 47,
+      "asserts": 64,
       "raises": 2,
-      "digest": "1cecbaef2fe5335c2d54cc1ddf71e702d27e0afa143d94eb5b6a3b15d239c1bc"
+      "digest": "3a6df9143588e096ad391ad8fe0f6c642a8db08c6f25d8a74e9c4edffdc6d189"
     },
     "backend/src/tests/unit/test_facts_api.py": {
       "asserts": 37,
@@ -568,9 +568,9 @@
       "digest": "6df6ae2212cf6b785f63948a8e8109cbba0fdd33e4752f25e29c8ec8126c62c6"
     },
     "backend/src/tests/unit/test_llm_intimate_channel.py": {
-      "asserts": 75,
+      "asserts": 81,
       "raises": 6,
-      "digest": "a7b0aeba1ce5ac1ea60b72da134b9803541928a757c8751957f0614e3cd51242"
+      "digest": "05cfbe74b0679cca21dbef18831a0f5dbb4795bebe896711963239fd02f0c4a2"
     },
     "backend/src/tests/unit/test_llm_logprobs.py": {
       "asserts": 74,
@@ -583,9 +583,9 @@
       "digest": "f35a4042edd6ae169a20703e15497413fbf74009dd84f8830641e3718356c76d"
     },
     "backend/src/tests/unit/test_llm_route_policy.py": {
-      "asserts": 79,
+      "asserts": 101,
       "raises": 10,
-      "digest": "0954a716c249409726d8f8de0ef84b3650e3a3a2ea1dbd3efbf3da12bcbcfc1a"
+      "digest": "cf6a89c8b9b6707dda9fe2f01feee375a3046a293fda4b16467877e08a03a6d5"
     },
     "backend/src/tests/unit/test_llm_tool_calling.py": {
       "asserts": 38,
@@ -728,9 +728,9 @@
       "digest": "5e8f2a21835fa50656e3bf54af6889610c4f4cd0533359c8943a3744b62a713b"
     },
     "backend/src/tests/unit/test_models_api.py": {
-      "asserts": 122,
-      "raises": 0,
-      "digest": "bf0d62cde557daf91ddf3523eea3d58f11b34365c42c8efd07ff8da8a97252eb"
+      "asserts": 128,
+      "raises": 1,
+      "digest": "f2fa2b6874c20667569068d00030aed320259ca5f85072c4553dd793c8cc7142"
     },
     "backend/src/tests/unit/test_outbound_guard.py": {
       "asserts": 25,

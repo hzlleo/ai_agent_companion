@@ -39,7 +39,16 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    create_model,
+)
 
 from packages.harness.config.models import ExtensionTool, HttpToolTargetModel, JsonSchema
 from packages.harness.core.errors import BusinessException, ErrorCode
@@ -65,12 +74,12 @@ _ARG_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _ENV_PLACEHOLDER_RE = re.compile(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
 
 #: JSON Schema 基础类型 → Python 注解（动态参数模型编译面）。
+#: JSON Schema 语义不接受字符串强转——一律使用 pydantic 严格类型。
 _SCHEMA_PYTHON_TYPES: dict[str, Any] = {
-    "string": str,
-    "integer": int,
-    "number": float,
-    "boolean": bool,
-    "array": list[Any],
+    "string": StrictStr,
+    "integer": StrictInt,
+    "number": StrictFloat | StrictInt,
+    "boolean": StrictBool,
     "object": dict[str, Any],
 }
 
@@ -102,9 +111,21 @@ def _annotation_for(sub_schema: Mapping[str, Any]) -> Any:
         sub_schema: 属性子模式。
 
     Returns:
-        Python 类型（未知 / 复合模式回落 ``Any``）。
+        Python 类型（enum → ``Literal``；array → 元素类型列表；未知 /
+        复合模式回落 ``Any``）。
     """
+    enum_values = sub_schema.get("enum")
+    if isinstance(enum_values, list) and enum_values:
+        try:
+            return Literal[tuple(enum_values)]
+        except TypeError:
+            pass
     raw_type = sub_schema.get("type")
+    if raw_type == "array":
+        items = sub_schema.get("items")
+        item_schema: Mapping[str, Any] = items if isinstance(items, Mapping) else {}
+        item_annotation = _annotation_for(item_schema)
+        return list.__class_getitem__(item_annotation)
     if isinstance(raw_type, str):
         mapped = _SCHEMA_PYTHON_TYPES.get(raw_type)
         if mapped is not None:
@@ -113,7 +134,7 @@ def _annotation_for(sub_schema: Mapping[str, Any]) -> Any:
 
 
 def _field_constraints(sub_schema: Mapping[str, Any]) -> dict[str, Any]:
-    """提取属性子模式的校验约束（长度 / 数值范围 / 描述）。
+    """提取属性子模式的校验约束（长度 / 数值范围 / 正则 / 数组长度）。
 
     Args:
         sub_schema: 属性子模式。
@@ -129,17 +150,27 @@ def _field_constraints(sub_schema: Mapping[str, Any]) -> dict[str, Any]:
     if schema_type in ("integer", "number"):
         minimum = sub_schema.get("minimum")
         maximum = sub_schema.get("maximum")
-        if isinstance(minimum, (int, float)):
+        if isinstance(minimum, (int, float)) and not isinstance(minimum, bool):
             constraints["ge"] = minimum
-        if isinstance(maximum, (int, float)):
+        if isinstance(maximum, (int, float)) and not isinstance(maximum, bool):
             constraints["le"] = maximum
     elif schema_type == "string":
+        pattern = sub_schema.get("pattern")
+        if isinstance(pattern, str):
+            constraints["pattern"] = pattern
         min_length = sub_schema.get("minLength")
         max_length = sub_schema.get("maxLength")
-        if isinstance(min_length, int):
+        if isinstance(min_length, int) and not isinstance(min_length, bool):
             constraints["min_length"] = min_length
-        if isinstance(max_length, int):
+        if isinstance(max_length, int) and not isinstance(max_length, bool):
             constraints["max_length"] = max_length
+    elif schema_type == "array":
+        min_items = sub_schema.get("minItems")
+        max_items = sub_schema.get("maxItems")
+        if isinstance(min_items, int) and not isinstance(min_items, bool):
+            constraints["min_length"] = min_items
+        if isinstance(max_items, int) and not isinstance(max_items, bool):
+            constraints["max_length"] = max_items
     return constraints
 
 
@@ -394,53 +425,53 @@ async def _execute_http_call(
         for header_name, header_value in resolved_headers.items()
     }
     timeout = httpx.Timeout(target.timeout_ms / 1000)
+    body = bytearray()
     try:
         client = http_client_factory()
+        request_kwargs: dict[str, Any] = {
+            "headers": headers,
+            "timeout": timeout,
+            "follow_redirects": False,
+        }
         if target.method == "GET":
             query = {
                 key: value
                 for key, value in payload.items()
                 if key not in url_placeholder_names
             }
-            response = await client.request(
-                "GET",
-                url,
-                headers=headers,
-                params=query or None,
-                timeout=timeout,
-                follow_redirects=False,
-            )
+            request_kwargs["params"] = query or None
         else:
-            response = await client.request(
-                "POST",
-                url,
-                headers=headers,
-                json=payload,
-                timeout=timeout,
-                follow_redirects=False,
-            )
+            request_kwargs["json"] = payload
+        async with client.stream(target.method, url, **request_kwargs) as response:
+            status_code = response.status_code
+            async for chunk in response.aiter_bytes():
+                body.extend(chunk)
+                if not 200 <= status_code < 300:
+                    if len(body) >= _ERROR_SNIPPET_MAX_BYTES:
+                        break
+                elif len(body) > target.response_max_bytes:
+                    await response.aclose()
+                    raise _extension_error(
+                        tool_name, f"响应体超过 {target.response_max_bytes} 字节上限"
+                    )
     except httpx.TimeoutException as exc:
         raise _extension_error(
             tool_name, f"请求超时（{target.timeout_ms}ms）"
         ) from exc
-    except (httpx.HTTPError, httpx.InvalidURL) as exc:
+    except (httpx.HTTPError, httpx.InvalidURL, UnicodeError) as exc:
         raise _extension_error(
             tool_name, f"请求失败: {type(exc).__name__}"
         ) from exc
 
-    body = response.content
-    if not 200 <= response.status_code < 300:
-        snippet = _truncate_snippet(body)
+    body_bytes = bytes(body)
+    if not 200 <= status_code < 300:
+        snippet = _truncate_snippet(body_bytes)
         suffix = f": {snippet}" if snippet else ""
         raise _extension_error(
-            tool_name, f"返回非成功状态 {response.status_code}{suffix}"
-        )
-    if len(body) > target.response_max_bytes:
-        raise _extension_error(
-            tool_name, f"响应体超过 {target.response_max_bytes} 字节上限"
+            tool_name, f"返回非成功状态 {status_code}{suffix}"
         )
     try:
-        decoded = json.loads(body)
+        decoded = json.loads(body_bytes)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise _extension_error(tool_name, "响应不是合法 JSON") from exc
     extracted = _extract_result(decoded, target.result_path, tool_name)
@@ -450,7 +481,7 @@ async def _execute_http_call(
         text = json.dumps(extracted, ensure_ascii=False, separators=(",", ":"))
     return {
         "text": text,
-        "status_code": response.status_code,
+        "status_code": status_code,
         "fetched_at_ms": clock(),
     }
 

@@ -68,7 +68,7 @@ import re
 from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any, Literal
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import parse_qsl, quote_plus, urlparse
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -404,9 +404,6 @@ class LlmEndpointConfig(BaseSettings):
         daily_budget_persona: 单人格每日模型调用行数上限（0 = 不限；
             有效上限 10,000——计数页帽 50 页 × 每页 200 行；仅人格
             上下文调用受此档约束）。
-        route_policies: 条件路由策略列表（结构化配置面以 config.yaml
-            ``llm.route_policies`` 为权威——env 面字段默认空列表，仅作
-            声明面；非标量字段不进 ``.env.example``）。
     """
 
     base_url: str = Field(default="", description="默认端点 API 基础 URL")
@@ -439,10 +436,6 @@ class LlmEndpointConfig(BaseSettings):
             "单人格每日模型调用行数上限（0 = 不限；有效上限 10,000——计数页帽 50×200；"
             "仅人格上下文调用受约束）"
         ),
-    )
-    route_policies: list[RoutePolicyModel] = Field(
-        default_factory=list,
-        description="条件路由策略（结构化面以 config.yaml 为权威；env 面默认空列表）",
     )
 
     @field_validator("top_logprobs", "prompt_logprobs", mode="before")
@@ -2045,6 +2038,21 @@ _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _ENV_PLACEHOLDER_RE = re.compile(r"\{env:[A-Za-z_][A-Za-z0-9_]*\}")
 #: 请求头字面值长度上限（超过即视为内联密钥——改用 ``{env:}`` 占位）。
 _HEADER_LITERAL_MAX_LENGTH: int = 32
+#: URL 查询串中的常见密钥参数名（小写匹配——值过长即视为内联密钥）。
+_SECRET_QUERY_KEYS: frozenset[str] = frozenset(
+    {
+        "key",
+        "token",
+        "apikey",
+        "api_key",
+        "api-key",
+        "secret",
+        "access_token",
+        "auth_token",
+    }
+)
+#: URL 查询串密钥参数的字面值长度阈值（达到即拒绝——改走 header 占位）。
+_SECRET_QUERY_MIN_LENGTH: int = 16
 #: 结果点路径形态（``a`` / ``a.b`` / ``a.b.c``——段非空且不含点）。
 _RESULT_PATH_RE = re.compile(r"^[^.]+(\.[^.]+)*$")
 
@@ -2088,7 +2096,7 @@ class HttpToolTargetModel(BaseModel):
     @field_validator("url")
     @classmethod
     def _validate_url_scheme(cls, value: str) -> str:
-        """校验 URL 协议与主机名（仅 http/https）。
+        """校验 URL 协议 / 主机名 / userinfo / 密钥查询参数。
 
         Args:
             value: 原始 URL 字符串（可含 ``{参数名}`` 占位）。
@@ -2097,11 +2105,25 @@ class HttpToolTargetModel(BaseModel):
             校验通过的原值。
 
         Raises:
-            ValueError: 协议非法或主机名缺失。
+            ValueError: 协议非法 / 主机名缺失 / 含 userinfo / 查询串含
+                长字面密钥参数。
         """
         parsed = urlparse(value)
         if parsed.scheme not in ("http", "https") or not parsed.hostname:
             raise ValueError("扩展工具 url 必须是 http/https 协议且包含主机名")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError(
+                "扩展工具 url 不支持 userinfo（密钥请改用 header 的 {env:} 占位）"
+            )
+        for key, query_value in parse_qsl(parsed.query, keep_blank_values=True):
+            if (
+                key.lower() in _SECRET_QUERY_KEYS
+                and len(query_value) >= _SECRET_QUERY_MIN_LENGTH
+            ):
+                raise ValueError(
+                    f"扩展工具 url 查询参数 {key} 疑似内联密钥；"
+                    "请改用 header 的 {env:VAR_NAME} 占位"
+                )
         return value
 
     @field_validator("method", mode="before")
@@ -2124,6 +2146,9 @@ class HttpToolTargetModel(BaseModel):
     def _validate_headers(cls, value: Mapping[str, str]) -> Mapping[str, str]:
         """校验请求头名称与字面值（密钥只经环境变量占位引用）。
 
+        ``{env:}`` 占位剔除后的剩余字面仍按同一组检查判定（大小写不敏感）
+        ——占位存在不再豁免内联密钥。
+
         Args:
             value: 请求头映射。
 
@@ -2131,24 +2156,28 @@ class HttpToolTargetModel(BaseModel):
             校验通过的映射。
 
         Raises:
-            ValueError: 头名非法 / 字面值像密钥（``Bearer `` / ``sk-`` /
-                长度超过 32） / ``{env:}`` 占位语法非法。
+            ValueError: 头名非法 / 字面值像密钥（``Bearer `` / ``Basic `` /
+                ``sk-`` / 长度超过 32） / ``{env:}`` 占位语法非法。
         """
         for name, header_value in value.items():
             if _HEADER_NAME_RE.fullmatch(name) is None:
                 raise ValueError(f"扩展工具请求头名称非法: {name!r}")
             if "{env:" in header_value:
-                cleaned = _ENV_PLACEHOLDER_RE.sub("", header_value)
-                if "{env:" in cleaned:
+                literal = _ENV_PLACEHOLDER_RE.sub("", header_value)
+                if "{env:" in literal:
                     raise ValueError(
                         f"扩展工具请求头 {name} 的 {{env:}} 占位语法非法: {header_value!r}"
                     )
-                continue
-            if (
-                header_value.startswith("Bearer ")
-                or header_value.startswith("sk-")
-                or len(header_value) > _HEADER_LITERAL_MAX_LENGTH
-            ):
+            else:
+                literal = header_value
+            stripped = literal.strip()
+            lowered = stripped.lower()
+            has_scheme_secret = (
+                lowered.startswith("bearer ") and bool(stripped[len("bearer ") :].strip())
+            ) or (
+                lowered.startswith("basic ") and bool(stripped[len("basic ") :].strip())
+            ) or (lowered.startswith("sk-") and bool(stripped[len("sk-") :].strip()))
+            if has_scheme_secret or len(stripped) > _HEADER_LITERAL_MAX_LENGTH:
                 raise ValueError(
                     f"扩展工具请求头 {name} 疑似直接写入密钥；请改用 "
                     f"{{env:VAR_NAME}} 占位（值长度上限 {_HEADER_LITERAL_MAX_LENGTH}）"
@@ -2187,9 +2216,15 @@ class ExtensionTool(BaseModel):
             校验参数）。
         kind: 执行面类型（当前仅 ``http``）。
         http: HTTP 目标端点（``kind=http`` 时必填）。
+        expose_to_peer: 是否对非 owner 回合（群聊 peer / 平台 untrusted）
+            暴露本工具（默认 False——仅主人交互可触发外部副作用）。
     """
 
-    name: str = Field(default="", description="工具名称（唯一标识）")
+    name: str = Field(
+        default="",
+        pattern=r"^[A-Za-z0-9_-]{1,64}$",
+        description="工具名称（唯一标识）",
+    )
     description: str = Field(default="", description="工具描述（LLM 调用时机说明）")
     parameters: JsonSchema = Field(
         default_factory=JsonSchema, description="工具参数 schema（JSON Schema）"
@@ -2197,6 +2232,9 @@ class ExtensionTool(BaseModel):
     kind: Literal["http"] = Field(default="http", description="执行面类型（http）")
     http: HttpToolTargetModel | None = Field(
         default=None, description="HTTP 目标端点（kind=http 时必填）"
+    )
+    expose_to_peer: bool = Field(
+        default=False, description="是否对非 owner 回合暴露（默认仅 owner）"
     )
 
     @model_validator(mode="after")

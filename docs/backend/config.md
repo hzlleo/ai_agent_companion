@@ -186,7 +186,7 @@ resolve(role)
               与已绑定角色清单)
 ```
 
-热重建语义：`ModelResolver.rebuild` 原子替换内部索引（条目表 + 角色→条目索引）；在途已解析条目引用不受影响（不可变 Pydantic 模型）。loader 每次加载 config.yaml 后经 `rebuild_model_resolver` 重建全局索引。
+热重建语义：`ModelResolver.rebuild` 原子替换内部索引（条目表 + 角色→条目索引）；在途已解析条目引用不受影响（不可变 Pydantic 模型）。loader 每次加载 config.yaml 后经 `rebuild_model_resolver` 重建全局索引。`route_policies` 与内置亲密策略在网关构造期快照；运行中重载 config.yaml 只刷新条目与 `intimate` 别名绑定，策略增删改须重启进程生效。
 
 ### 条件路由策略（route_policies）
 

@@ -7,10 +7,12 @@
       由调用方注入（测试可用固定时刻构造时段判定）；
     - 求值顺序固定为：按原角色过滤 → 优先级降序（同优先级声明序）→ 首个
       条件全命中（AND）的策略 → 目标角色绑定检查；先命中者即结论；
+    - 每条源角色匹配的策略都进入求值轨迹（未命中策略也保留逐维结果，供
+      排障定位卡在哪个维度）；无源匹配策略时轨迹为空；
     - 目标未绑定且策略声明回落 → 原角色直连（``fallback_unbound``）；声明
       不回落 → ``BusinessException(MODEL_NOT_FOUND)``（details 含策略名）；
     - 无策略命中 → 原角色直连（``direct``）；
-    - 纯函数不产生日志副作用；命中/回落日志由网关在调用点记录。
+    - 纯函数不产生日志副作用；命中/回落/查询轨迹日志由网关在调用点记录。
 
 依赖方向：llm → config（``ModelResolver`` 类型，仅调用解析面）+ 本域
 ``route_policy_models``；不消费 pools / usage（网关持有）。
@@ -26,6 +28,8 @@ from packages.harness.config.model_entry import ModelRole
 from packages.harness.config.model_resolver import ModelResolver
 from packages.harness.core.errors import BusinessException, ErrorCode
 from packages.harness.llm.route_policy_models import (
+    ConditionResultModel,
+    PolicyEvalTraceModel,
     RouteConditionModel,
     RouteDecisionModel,
     RouteDecisionReason,
@@ -52,7 +56,8 @@ def evaluate_route(
 
         1. 仅保留 ``source_role`` 等于本轮原角色的策略；
         2. 按 ``priority`` 降序、同优先级按声明序排序；
-        3. 逐条检查条件（亲密度区间 / 摘要可用性 / 时段 / 用途——AND）；
+        3. 逐条检查条件（亲密度区间 / 摘要可用性 / 时段 / 用途——AND），
+           每条源匹配策略的逐维结果写入 ``trace``；
         4. 首个条件全命中的策略进入目标绑定检查：已绑定 → ``routed``；
            未绑定且允许回落 → ``fallback_unbound``；未绑定且禁止回落 →
            抛 ``MODEL_NOT_FOUND``（details 含策略名）；
@@ -68,7 +73,7 @@ def evaluate_route(
         resolver: 模型解析器（目标角色绑定检查）。
 
     Returns:
-        裁决结果（生效角色 + 命中策略名 + 原因）。
+        裁决结果（生效角色 + 命中策略名 + 原因 + 源匹配策略求值轨迹）。
 
     Raises:
         ValueError: ``intimacy_level`` 越出 0-3（调用方编程错误）。
@@ -83,22 +88,37 @@ def evaluate_route(
         enumerate(policies),
         key=lambda item: (-item[1].priority, item[0]),
     )
+    trace: list[PolicyEvalTraceModel] = []
     for _, policy in ordered:
         if policy.source_role != source_role:
             continue
-        if not _condition_matches(
+        results = _condition_matches(
             policy.condition,
             intimacy_level=intimacy_level,
             now_ms=now_ms,
             has_summary=has_summary,
             purpose=purpose,
-        ):
+        )
+        trace.append(
+            PolicyEvalTraceModel(
+                policy_name=policy.name,
+                source_matched=True,
+                conditions=results,
+            )
+        )
+        if any(result.constrained and not result.matched for result in results):
             continue
-        return _decide_target(source_role=source_role, policy=policy, resolver=resolver)
+        return _decide_target(
+            source_role=source_role,
+            policy=policy,
+            resolver=resolver,
+            trace=tuple(trace),
+        )
     return RouteDecisionModel(
         effective_role=source_role,
         policy_name=None,
         reason=RouteDecisionReason.DIRECT,
+        trace=tuple(trace),
     )
 
 
@@ -116,10 +136,23 @@ def time_window_matches(window: TimeWindowModel, *, now_ms: int) -> bool:
     Returns:
         True 表示该时刻在窗口内。
     """
-    hour = datetime.fromtimestamp(now_ms / 1000, tz=ZoneInfo(window.timezone)).hour
+    hour = _window_hour(window, now_ms=now_ms)
     if window.end_hour > window.start_hour:
         return window.start_hour <= hour < window.end_hour
     return hour >= window.start_hour or hour < window.end_hour
+
+
+def _window_hour(window: TimeWindowModel, *, now_ms: int) -> int:
+    """换算注入时刻在窗口时区的小时（判定与排障摘要同源）。
+
+    Args:
+        window: 时段窗口（时区已校验）。
+        now_ms: 判定时刻（epoch 毫秒）。
+
+    Returns:
+        该时刻在窗口时区的小时（0-23）。
+    """
+    return datetime.fromtimestamp(now_ms / 1000, tz=ZoneInfo(window.timezone)).hour
 
 
 def _decide_target(
@@ -127,6 +160,7 @@ def _decide_target(
     source_role: str,
     policy: RoutePolicyModel,
     resolver: ModelResolver,
+    trace: tuple[PolicyEvalTraceModel, ...],
 ) -> RouteDecisionModel:
     """检查目标角色绑定并给出裁决（未绑定按策略回落或抛错）。
 
@@ -134,6 +168,7 @@ def _decide_target(
         source_role: 本轮原角色名。
         policy: 已命中条件的策略。
         resolver: 模型解析器。
+        trace: 截至该策略的求值轨迹（随裁决返回供排障）。
 
     Returns:
         裁决结果（``routed`` / ``fallback_unbound`` / ``fallback_error``）。
@@ -150,6 +185,7 @@ def _decide_target(
                 effective_role=source_role,
                 policy_name=policy.name,
                 reason=RouteDecisionReason.FALLBACK_ERROR,
+                trace=trace,
             )
         raise
     if target_entry is not None:
@@ -157,12 +193,14 @@ def _decide_target(
             effective_role=policy.target_role,
             policy_name=policy.name,
             reason=RouteDecisionReason.ROUTED,
+            trace=trace,
         )
     if policy.fallback_to_source:
         return RouteDecisionModel(
             effective_role=source_role,
             policy_name=policy.name,
             reason=RouteDecisionReason.FALLBACK_UNBOUND,
+            trace=trace,
         )
     raise BusinessException(
         code=ErrorCode.MODEL_NOT_FOUND,
@@ -183,8 +221,8 @@ def _condition_matches(
     now_ms: int,
     has_summary: bool,
     purpose: str,
-) -> bool:
-    """判定条件是否全命中（各维度 AND；未声明的维度不约束）。
+) -> tuple[ConditionResultModel, ...]:
+    """求值条件各维度并返回逐项结果（各维度 AND；未声明维度不产生项）。
 
     Args:
         condition: 命中条件。
@@ -194,20 +232,68 @@ def _condition_matches(
         purpose: 本轮调用用途。
 
     Returns:
-        True 表示全部已声明维度均命中。
+        已声明维度的求值结果元组；全部项均非「已约束且未命中」时策略命中
+        （空元组即恒命中）。
     """
-    if condition.min_intimacy_level is not None and (
-        intimacy_level is None or intimacy_level < condition.min_intimacy_level
-    ):
-        return False
-    if condition.max_intimacy_level is not None and (
-        intimacy_level is None or intimacy_level > condition.max_intimacy_level
-    ):
-        return False
-    if condition.requires_summary is not None and has_summary is not condition.requires_summary:
-        return False
-    if condition.purposes and purpose not in condition.purposes:
-        return False
-    return condition.time_window is None or time_window_matches(
-        condition.time_window, now_ms=now_ms
-    )
+    results: list[ConditionResultModel] = []
+    if condition.min_intimacy_level is not None:
+        min_level = condition.min_intimacy_level
+        matched = intimacy_level is not None and intimacy_level >= min_level
+        detail = (
+            f"level unavailable < min={min_level}"
+            if intimacy_level is None
+            else f"level={intimacy_level} {'>=' if matched else '<'} min={min_level}"
+        )
+        results.append(
+            ConditionResultModel(
+                dimension="intimacy", constrained=True, matched=matched, detail=detail
+            )
+        )
+    if condition.max_intimacy_level is not None:
+        max_level = condition.max_intimacy_level
+        matched = intimacy_level is not None and intimacy_level <= max_level
+        detail = (
+            f"level unavailable > max={max_level}"
+            if intimacy_level is None
+            else f"level={intimacy_level} {'<=' if matched else '>'} max={max_level}"
+        )
+        results.append(
+            ConditionResultModel(
+                dimension="intimacy", constrained=True, matched=matched, detail=detail
+            )
+        )
+    if condition.requires_summary is not None:
+        matched = has_summary is condition.requires_summary
+        if condition.requires_summary:
+            detail = "summary available" if matched else "summary unavailable"
+        else:
+            detail = "summary unavailable" if matched else "summary available"
+        results.append(
+            ConditionResultModel(
+                dimension="summary", constrained=True, matched=matched, detail=detail
+            )
+        )
+    if condition.purposes:
+        matched = purpose in condition.purposes
+        allowed = "{" + ",".join(condition.purposes) + "}"
+        results.append(
+            ConditionResultModel(
+                dimension="purposes",
+                constrained=True,
+                matched=matched,
+                detail=f"purpose={purpose} {'in' if matched else 'not in'} {allowed}",
+            )
+        )
+    if condition.time_window is not None:
+        matched = time_window_matches(condition.time_window, now_ms=now_ms)
+        hour = _window_hour(condition.time_window, now_ms=now_ms)
+        window = f"[{condition.time_window.start_hour},{condition.time_window.end_hour})"
+        results.append(
+            ConditionResultModel(
+                dimension="time_window",
+                constrained=True,
+                matched=matched,
+                detail=f"hour={hour} {'in' if matched else 'not in'} {window}",
+            )
+        )
+    return tuple(results)

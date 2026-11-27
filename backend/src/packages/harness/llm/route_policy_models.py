@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -29,6 +30,8 @@ __all__ = [
     "INTIMATE_BUILTIN_POLICY_NAME",
     "INTIMATE_BUILTIN_PRIORITY",
     "INTIMATE_TARGET_ROLE",
+    "ConditionResultModel",
+    "PolicyEvalTraceModel",
     "RouteConditionModel",
     "RouteDecisionModel",
     "RouteDecisionReason",
@@ -236,6 +239,46 @@ class RouteDecisionReason(StrEnum):
     FALLBACK_ERROR = "fallback_error"
 
 
+class ConditionResultModel(BaseModel):
+    """单条策略条件的求值结果（排障轨迹——不含消息内容）。
+
+    Attributes:
+        dimension: 条件维度名（亲密度 / 摘要 / 时段 / 用途）。
+        constrained: 策略是否声明该维度（未声明维度不产生结果项）。
+        matched: 该维度本轮是否命中。
+        detail: 可读判定摘要（如 ``level=1 < min=2`` / ``hour=14 not in
+            [22,6)`` / ``summary unavailable`` / ``purpose=duty not in
+            {chat}``）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    dimension: Literal["intimacy", "summary", "time_window", "purposes"] = Field(
+        description="条件维度名"
+    )
+    constrained: bool = Field(description="策略是否声明该维度")
+    matched: bool = Field(description="该维度本轮是否命中")
+    detail: str = Field(description="可读判定摘要（不含消息内容）")
+
+
+class PolicyEvalTraceModel(BaseModel):
+    """单条策略的求值轨迹（装配期源角色过滤后的逐条记录）。
+
+    Attributes:
+        policy_name: 策略名。
+        source_matched: 策略源角色是否等于本轮原角色（轨迹只记录匹配项）。
+        conditions: 已声明维度的逐项求值结果（未声明维度不出现）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    policy_name: str = Field(min_length=1, description="策略名")
+    source_matched: bool = Field(description="策略源角色是否匹配本轮原角色")
+    conditions: tuple[ConditionResultModel, ...] = Field(
+        default=(), description="已声明维度的逐项求值结果"
+    )
+
+
 class RouteDecisionModel(BaseModel):
     """单轮条件路由裁决（纯函数产出——网关据此选择生效角色）。
 
@@ -243,6 +286,8 @@ class RouteDecisionModel(BaseModel):
         effective_role: 本轮实际生效的角色名（直连 = 原角色）。
         policy_name: 命中的策略名（None = 无策略命中）。
         reason: 裁决原因。
+        trace: 源角色匹配策略的逐条求值轨迹（首个命中之前的未命中策略
+            也保留；无源匹配策略时为空元组）。
     """
 
     model_config = ConfigDict(frozen=True)
@@ -250,3 +295,6 @@ class RouteDecisionModel(BaseModel):
     effective_role: str = Field(min_length=1, description="本轮实际生效的角色名")
     policy_name: str | None = Field(default=None, description="命中的策略名（None=未命中）")
     reason: RouteDecisionReason = Field(description="裁决原因")
+    trace: tuple[PolicyEvalTraceModel, ...] = Field(
+        default=(), description="源角色匹配策略的逐条求值轨迹"
+    )

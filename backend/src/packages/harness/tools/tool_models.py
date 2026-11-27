@@ -64,7 +64,10 @@ class ToolSpecModel(BaseModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    name: str = Field(min_length=1, max_length=64, description="工具名（唯一标识）")
+    name: str = Field(
+        pattern=r"^[A-Za-z0-9_-]{1,64}$",
+        description="工具名（唯一标识）",
+    )
     description: str = Field(default="", description="工具描述（模型调用时机说明）")
     args_schema: ToolParametersSchema = Field(
         default_factory=ToolParametersSchema, description="参数 JSON Schema"

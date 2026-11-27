@@ -32,22 +32,57 @@
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `name` | str | 工具名称（唯一标识，进入 LLM 工具面） |
+| `name` | str | 工具名称（唯一标识，进入 LLM 工具面；`^[A-Za-z0-9_-]{1,64}$`） |
 | `description` | str | 工具描述（模型调用时机说明） |
-| `parameters` | JSON Schema | 工具参数 schema；执行前按此 schema 校验并物化默认值 |
+| `parameters` | JSON Schema | 工具参数 schema；执行前按此 schema 校验并物化默认值（执行面见下节） |
 | `kind` | `"http"` | 执行面类型（当前仅 HTTP） |
 | `http` | HttpToolTargetModel | 执行目标（`kind=http` 时必填） |
+| `expose_to_peer` | bool | 默认 `false`：仅 owner 回合可见；`true` 才对群聊 peer / 平台 untrusted 回合暴露 |
 
 `HttpToolTargetModel`：
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `url` | str | — | 目标地址（http/https；可含 `{参数名}` 占位） |
+| `url` | str | — | 目标地址（http/https；可含 `{参数名}` 占位；**不支持** `{env:}`——密钥请走 header） |
 | `method` | `GET` / `POST` | `POST` | POST 发送 JSON body=参数；GET 发送未占位参数为查询串 |
 | `headers` | mapping[str, str] | `{}` | 请求头；值可含 `{env:VAR_NAME}` 占位（密钥只存变量名） |
 | `timeout_ms` | int | `5000` | 单次请求超时（上限 `30000`） |
-| `response_max_bytes` | int | `65536` | 响应体字节上限（超限受控失败） |
+| `response_max_bytes` | int | `65536` | 响应体字节上限（流式读取累计超限即中止并受控失败） |
 | `result_path` | str | `""` | 从响应 JSON 提取结果的点路径（空 = 整个文档） |
+
+## 参数 JSON Schema 执行面
+
+`parameters` 在构造期编译为参数校验模型，执行前按下列**实际执行面**校验；
+不在清单内的关键字不生效（声明了也不会拒绝越界值）：
+
+- 支持：`type`（严格类型——`string` / `integer` / `number` / `boolean` /
+  `array` / `object`，**不做字符串强转**，`"2"` 不满足 `integer`、`1` 不满足
+  `boolean`）、`required`、`enum`、`pattern`、`minimum` / `maximum`、
+  `minLength` / `maxLength`、`items`（数组元素类型与元素级上述约束）、
+  `minItems` / `maxItems`、`additionalProperties`（`false` = 拒绝额外键）。
+- 不支持：嵌套 `object` 内部属性的约束（`object` 只校验为映射）、`format`、
+  `oneOf` / `anyOf` / `allOf`、`const`、`$ref`。
+
+## 密钥规则
+
+- header 值以 `{env:VAR_NAME}` 引用进程环境变量；构造期缺失即装配失败。
+- 占位剔除后的剩余字面仍按密钥形态检查（大小写不敏感）：`Bearer ` /
+  `Basic ` / `sk-` 前缀（后跟非空字面）或剩余字面长度 > 32 → 拒绝。
+- URL **不支持** `{env:}`；URL 禁止 userinfo（`http://user:pass@host`）。
+  查询串中的常见密钥参数名（`key` / `token` / `apikey` / `api_key` /
+  `api-key` / `secret` / `access_token` / `auth_token`）若值为 ≥16 字面
+  字符 → 拒绝，密钥必须改走 header 的 `{env:}` 占位。
+
+## 装配与可见性
+
+聊天通道与 duty 两个工具面在启动期共用同一装配入口：总开关开启时，扩展
+工具同时进入 duty 注册表与通道 chat 注册表（chat 装配不依赖
+`DUTY_ENABLED`——只关 duty 时聊天工具面照常携带扩展）。
+
+可见性默认 **owner-only**：`expose_to_peer=false` 的扩展工具名交给
+`ChatService`，在非 owner 回合（群聊 peer / 平台 untrusted）从工具列表
+结构性剔除——模型看不到该工具即无从调用；`expose_to_peer=true` 才在
+peer 回合可见。内置 `edit_core_memory` 恒为 owner-only（不受扩展配置影响）。
 
 ## 完整示例
 
