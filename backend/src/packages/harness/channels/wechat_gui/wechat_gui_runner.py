@@ -246,11 +246,12 @@ class WechatGuiChannelRunner:
         finally:
             logger.info(
                 "GUI 微信通道 runner 已停机: watermark_targets={}, title_mismatch={}, "
-                "vlm_skipped={}, delivery_failures={}",
+                "vlm_skipped={}, delivery_failures={}, disabled_targets={}",
                 len(self._watermark.tracked_targets),
                 self._title_mismatch_count,
                 self._vlm_skipped_count,
                 self._delivery_failure_count,
+                self.disabled_targets,
             )
             self._task = None
 

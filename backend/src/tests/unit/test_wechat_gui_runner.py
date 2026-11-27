@@ -252,6 +252,36 @@ async def test_title_mismatch_streak_disables_target_after_threshold() -> None:
     assert router.inbound == []
 
 
+async def test_title_mismatch_fail_disables_target_after_threshold() -> None:
+    """``fail`` 处置同样连续 3 轮不一致后停采：第 4 轮不再 open / 截图 / 解析。
+
+    ``fail`` 不再按封顶退避无限重试——停采对 ``skip`` 与 ``fail`` 同样生效，
+    差别只在失败当轮是抛错（fail）还是计数后返回（skip）；两者都计入当轮
+    退避，达到阈值后都退出轮询（进程生命周期内，重启恢复）。
+    """
+    client = _client(hashes=["sha-1", "sha-2", "sha-3", "sha-4"])
+    reader = FakeWechatGuiReader(
+        [make_read_result(title="别人", messages=[make_message()]) for _ in range(4)]
+    )
+    router = FakeWechatGuiRouter()
+    gate = SleepGate(stop_after=4)
+    runner = _runner(
+        client=client,
+        reader=reader,
+        router=router,
+        sleep=gate,
+        title_mismatch_action=TitleMismatchAction.FAIL,
+    )
+    gate.runner = runner
+    await runner.run()
+    assert gate.delays == [2.0, 4.0, 8.0, 0.5]
+    assert runner.disabled_targets == ("小林",)
+    assert client.open_calls == ["小林", "小林", "小林"]
+    assert client.screenshot_calls == 3
+    assert len(reader.calls) == 3
+    assert router.inbound == []
+
+
 async def test_shared_window_state_from_outbound_forces_reopen() -> None:
     """出站已切换过窗口：runner 不得按旧记忆跳过 open_chat。"""
     client = _client(hashes=["sha-1", "sha-2"])

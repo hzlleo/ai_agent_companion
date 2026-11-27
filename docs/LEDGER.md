@@ -2570,7 +2570,8 @@ uinputd 控制面；`type_text{text}` = `xclip -selection clipboard -in` +
 备注名 → `enter` → 有界等待标题区域变化 → 标题区域 + 全屏截图。
 
 **标题校验与 fail-closed 用例**：入站解析标题与 open_chat 目标不一致默认
-`skip` 并计数（`title_mismatch_action=fail` 时触发退避）；出站 open_chat
+`skip` 并计数（`skip` 与 `fail` 均计入当轮指数退避；连续 3 轮不一致的目标
+停采，进程生命周期内重启恢复）；出站 open_chat
 后先视觉校验标题，不一致拒绝发送；解析非 JSON / 缺字段 / 置信度低于阈值
 一律 `LLM_CALL_FAILED`；客户端把恒 200 `ok=false` / 401 / 超时 / wire 破坏
 归一 `CHANNEL_API_ERROR`；token 缺失时装配跳过且 invoke 短路失败。
@@ -2733,7 +2734,18 @@ Live 前风险（Live 阶段验证）：`open_chat` 在 Ctrl+F 后立即粘贴�
   （并入 `test_wechat_gui_watermark.py` 与 `test_wechat_gui_window_mutex.py`）。
 
 
+**修复 C（Oracle 二轮 P1/P2 根修：标题不一致退避 / 停采 / 沙盒 Content-Length 边界 / 水位代价文档；只记事实，不复审结论）**
+
+- 标题不一致退避（`skip`）：`_poll_once` 在本轮标题不一致计数增长时把整轮计为失败（`CHANNEL_API_ERROR`），`skip` 与 `fail` 走同一指数退避序列（基数 2s、封顶 60s）；此前 `skip` 只按轮询间隔裸转。
+- 停采（进程生命周期）：新增逐目标 `_title_mismatch_streak` 与 `_TITLE_MISMATCH_DISABLE_AFTER=3`；连续 3 轮不一致后该目标退出轮询（不再 `open_chat` / 截图 / 解析），`disabled_targets` 暴露观测面，重启恢复。**`fail` 语义变化**：由「封顶退避无限重试」变为「3 轮后停采」——停采对 `skip` 与 `fail` 同样生效；需要无限重试只能重启进程（取舍：持续不一致时限制 `open_chat` + VLM 成本）。
+- 沙盒 `Content-Length` 边界：`parse_http_request` / 有界读取对非 ASCII 数字（`²`）、缺失、重复不一致、负数、超上限的 `Content-Length` 及请求头/体超限统一 422（形态非法）/ 413（超限），不再经 `int()` 抛 `ValueError` 落 500 或断连。
+- 水位代价文档：`wechat_gui_watermark.py` 模块 docstring 与 `docs/backend/channels.md` 按只读探针实测改写——仅重叠窗口内基线尾部整段为同一指纹时吞同指纹新增（`[好]→[好,好]` 等）；部分重叠仍投递（`[M1,好]→[M1,好,好]` 投递一条）；上滚后滚回无重叠按视图重置、仍有重叠时滚走期间位于屏底的已投递消息会再次入站。算法未改（收紧判据会把合法部分重叠新增变丢失）；补用例 `test_scroll_up_then_down_redelivers_scrolled_off_tail` 钉住已知重投代价。
+- 命令 + 退出码：`cd docker/wechat-gui && pixi run tests-unit` → 0（151 passed；总覆盖率 92.74%）；`pixi run lint` → 0；`pixi run typecheck` → 0（7 源文件）；`cd backend && pixi run pytest src/tests/unit/test_wechat_gui_*.py --asyncio-mode=auto` → 0（78 passed）；改动文件 `pixi run mypy` / `pixi run ruff check` → 0。
+- 变异矩阵（逐条守卫实测红）：移除轮次失败注入（`skip` 裸转）→ 退避序列用例 1 红；移除停采跳过分支 → 停采用例 1 红（第 4 轮仍 `open_chat`）；`_TITLE_MISMATCH_DISABLE_AFTER` 改 4 → 停采用例 2 红；沙盒移除非 ASCII `Content-Length` 校验 → `test_non_ascii_content_length_is_422_not_500` 1 红；移除请求体上限 → `test_oversized_body_is_413_before_read` 1 红；水位收紧为整段后缀匹配 → `test_duplicate_text_tail_delivers_one` 1 红（合法新增变丢失）。
+
 **修复 C 最终树验证（`162f863c` 树，提交 `e1db542`）**：`cd backend && VITEST_MAX_WORKERS=6 pixi run verify-slice -- --with-seekdb --with-frontend --slice r4-6b-fix` → 0，10/10 PASS：tests-all=3555 / coverage-gates=24 组 / lint / typecheck=224 / gates / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build；证据 `docs/evidence/r4-6b-fix-162f863c.json`（sha8=`162f863c`，779 文件）；沙盒 151 passed / 92.74%；同步测试棘轮通过；断言基线未变（新增断言不拦截）。上一行「最终树验证」记录的是修复 C 之前的 `36e3449d` 树，现为历史。
+
+**修复 D 最终树验证（`9f45be4d` 树）**：同上命令 → 0，10/10 PASS：tests-all=3557 / coverage-gates=24 组 / lint / typecheck=224 / gates / tests-seekdb=15 / frontend-test=716 / frontend-coverage=96.15 / frontend-lint / frontend-build；证据 `docs/evidence/r4-6b-fix-9f45be4d.json`（sha8=`9f45be4d`，779 文件）。修复 D = Oracle 三审的 2×P2：水位代价文档按只读探针实测改写（仅整段同指纹才吞；上滚后滚回仍有重叠时屏底已投递消息会再次入站）并补用例 `test_scroll_up_then_down_redelivers_scrolled_off_tail`；「修复 C」改动面条目与 `fail` 语义变更入台账；停机汇总日志加 `disabled_targets`；补用例 `test_title_mismatch_fail_disables_target_after_threshold`。水位算法与停采行为未改。上一行 `162f863c` 树现为历史。
 
 ## 6. 遗留与部署台账（非阻塞）
 

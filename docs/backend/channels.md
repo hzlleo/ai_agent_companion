@@ -1323,9 +1323,12 @@ handler 顶层异常回受控 500；``/invoke`` 工具执行在进程内锁内�
   序列为基线，按尾部重叠求最大 k，在最大 k 下取**最后一次出现**的结束
   位置 e，新消息 = ``cur[e+1:]``；指纹为 ``(sender, is_self, text)``，
   ``ts_ms`` 不参与（仅作观测字段）。
-- 末次出现的代价（边界，文档化）：同一发送者连发两条相同文本且旧的那条
-  仍在屏上时，第二条会被当作旧消息而不投递；上滚超出重叠范围再滚回会按
-  视图重置处理，重叠丢失期间的消息不投递。
+- 末次出现的代价（边界，文档化）：仅当重叠窗口内基线尾部整段为同一指纹
+  （屏上只看得到这一条 / 连发多条相同文本）时，新来的同指纹消息不投递；
+  部分重叠仍投递新增（``[M1,好] → [M1,好,好]`` 投递一条）。上滚后滚回：
+  无重叠按视图重置、其间新消息不投递；仍有重叠时，滚走期间位于屏底的
+  已投递消息会再次入站（重复回复——已知代价，用例
+  ``test_scroll_up_then_down_redelivers_scrolled_off_tail`` 钉住）。
 - 视图重置：首帧 / 目标首次出现 / 无任何 k 匹配（含用户滚动超出可见
   范围）/ 新增条数超过保留长度，一律只更新基线、**不投递**。
 - 基线保留长度 = ``WECHAT_GUI_MAX_MESSAGES_PER_POLL``；水位在**本轮全部
@@ -2020,8 +2023,8 @@ settings = build_isolated_settings(
 | `tests/unit/test_wechat_gui_prompts.py` | 提示词 byte-lock / 版本常量 / 渲染契约 |
 | `tests/unit/test_wechat_gui_client.py` | MockTransport：成功 wire 形状 / 后端四工具参数（click 仅沙盒侧）/ 镜像 Result Model 解码（含 title_changed 缺失与 false）/ 恒 200 ok=false / 401 / 超时 / wire 破坏 / token 缺失短路 / 健康探测矩阵 |
 | `tests/unit/test_wechat_gui_reader.py` | fake 网关：严格 JSON（含代码围栏）/ 非 JSON / 低置信度 / 缺字段 / 回退链失败 / vlm_entry 过滤 / base64 校验 |
-| `tests/unit/test_wechat_gui_watermark.py` | 会话水位：首帧基线 / 追加 1 与 3 条 / 重复文本尾随 / 滚动看历史 / 末次出现 / 目标首帧 / 超出保留长度 / 无匹配重置 / 自身回声对齐 / ts_ms 不参与 / diff-commit 分离 |
-| `tests/unit/test_wechat_gui_runner.py` | 轮询路由 / 截图变化跳过视觉 / 视觉瞬时失败重解析 / P4 skip 与 fail 复位重开 / 逐联系人隔离 / 退避封顶 / 路由异常隔离且水位前进 / 共享窗口目标 / 停机 / 单实例 |
+| `tests/unit/test_wechat_gui_watermark.py` | 会话水位：首帧基线 / 追加 1 与 3 条 / 重复文本尾随 / 滚动看历史 / 上滚后滚回重投已知代价 / 末次出现 / 目标首帧 / 超出保留长度 / 无匹配重置 / 自身回声对齐 / ts_ms 不参与 / diff-commit 分离 |
+| `tests/unit/test_wechat_gui_runner.py` | 轮询路由 / 截图变化跳过视觉 / 视觉瞬时失败重解析 / P4 skip 与 fail 复位重开 / 连续不一致停采（skip 与 fail 同口径） / 逐联系人隔离 / 退避封顶 / 路由异常隔离且水位前进 / 共享窗口目标 / 停机 / 单实例 |
 | `tests/unit/test_wechat_gui_window_mutex.py` | 单窗口互斥：出站持锁挡住轮询切会话 / 出站进行中轮询等待且新增消息不丢 |
 | `tests/unit/test_wechat_gui_adapter.py` | 标题校验后发送 / 标题不一致拒绝 / 视觉失败拒绝 / grammar / 空文本 / 失败上抛 / 附件不支持 |
 | `tests/unit/test_app_wechat_gui_channels_lifespan.py` | GUI 微信 enabled / disabled 装配 / token 缺失仅跳过 / /health 不可达仅跳过 / 适配器注册与共享锁/目标状态接线 / 参数接线 / 停机传导 |

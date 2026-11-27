@@ -72,6 +72,31 @@ async def test_scroll_up_history_delivers_nothing() -> None:
     assert advance.new_messages == ()
 
 
+async def test_scroll_up_then_down_redelivers_scrolled_off_tail() -> None:
+    """上滚 2 条再滚回：滚走期间屏底已投递的末两条再次入站（文档化已知代价）。
+
+    这是「末次出现 + 视图重置」的既有取舍，不是新消息误判的回归：上滚后
+    与基线无重叠 → 按视图重置重建基线；滚回时旧基线已丢，屏底两条落在
+    新基线之外而被当作新增。收紧判据会把合法的部分重叠新增变成丢失，
+    因此保留重投并在此钉住。
+    """
+    watermark = WechatGuiWatermark(retention=20)
+    messages = [make_message(text=f"M{index}") for index in range(1, 9)]
+    watermark.commit(watermark.diff("小林", messages))
+    scrolled_up = watermark.diff(
+        "小林",
+        [
+            make_message(text="H2"),
+            make_message(text="H1"),
+            *messages[:6],
+        ],
+    )
+    assert scrolled_up.new_messages == ()
+    watermark.commit(scrolled_up)
+    scrolled_back = watermark.diff("小林", messages)
+    assert _texts(scrolled_back.new_messages) == ["M7", "M8"]
+
+
 async def test_last_occurrence_prevents_false_new_messages() -> None:
     """末次出现定位：prev=[A]、cur=[A,B,A] 末次 A 之后为空——零投递。"""
     watermark = WechatGuiWatermark(retention=10)
